@@ -58,9 +58,11 @@ function expectStatuses(
   results: Awaited<ReturnType<typeof rebuildPortedAgentMemory>>,
   expected: Record<string, "rebuilt" | "failed">,
 ) {
-  expect(results.map(({ agentId, status }) => [agentId, status]).toSorted()).toEqual(
-    Object.entries(expected).toSorted(),
-  );
+  expect(
+    results
+      .toSorted((left, right) => left.agentId.localeCompare(right.agentId))
+      .map(({ agentId, status }) => [agentId, status]),
+  ).toEqual(Object.entries(expected).toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
 const fail = (message: string) => async () => {

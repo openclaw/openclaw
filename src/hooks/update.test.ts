@@ -23,6 +23,7 @@ import { readHookInstalls, recordHookInstall } from "./installs.js";
 
 const installNpm = vi.fn();
 
+// mock-isolation: Update fixtures control installation outcomes without registry access.
 vi.mock("./install.js", () => ({
   installHooksFromNpmSpec: (...args: unknown[]) => installNpm(...args),
   resolveHookInstallDir: (hookId: string) => `/tmp/hooks/${hookId}`,

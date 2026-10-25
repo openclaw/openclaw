@@ -20,8 +20,11 @@ const mocks = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
+// mock-isolation: CLI parsing must not connect to a real Gateway or execute an agent.
 vi.mock("../../commands/agent-via-gateway.js", () => ({ agentCliCommand: mocks.agent }));
+// mock-isolation: CLI parsing must not execute local agent turns.
 vi.mock("../../commands/agent-exec.js", () => ({ agentExecCommand: mocks.exec }));
+// mock-isolation: CLI parsing must not create persisted agents.
 vi.mock("../../commands/agents.commands.add.js", () => ({ agentsAddCommand: mocks.add }));
 vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/agents.commands.bind.js")>()),
@@ -29,15 +32,19 @@ vi.mock("../../commands/agents.commands.bind.js", async (importOriginal) => ({
   agentsUpdateBindingsCommand: mocks.bind,
 }));
 
+// mock-isolation: CLI parsing must not delete persisted agents.
 vi.mock("../../commands/agents.commands.delete.js", () => ({ agentsDeleteCommand: mocks.delete }));
 
+// mock-isolation: Agent enumeration is a controlled command collaborator.
 vi.mock("../../commands/agents.commands.list.js", () => ({ agentsListCommand: mocks.list }));
+// mock-isolation: Argument parsing must not mutate process-wide verbosity.
 vi.mock("../../global-state.js", () => ({ setVerbose: mocks.verbose }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
+// mock-isolation: One-shot command output must not exit the test process.
 vi.mock("../one-shot-exit.js", () => ({ requestExitAfterOneShotOutput: mocks.exit }));
 
 const handlers = vi.hoisted(() => ({

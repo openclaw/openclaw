@@ -19,10 +19,12 @@ const runCommand = vi.fn();
 const scanSource = vi.fn();
 const scanInstalled = vi.fn();
 
+// mock-isolation: Installation fixtures must not execute real package-manager commands.
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommand(...args),
 }));
 
+// mock-isolation: Controlled scan verdicts exercise installer admission and rollback.
 vi.mock("../plugins/install-security-scan.js", () => ({
   scanPackageInstallSource: (...args: unknown[]) => scanSource(...args),
   scanInstalledPackageDependencyTree: (...args: unknown[]) => scanInstalled(...args),
