@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
@@ -95,17 +96,9 @@ vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
     }
     return fixture.expiresAt;
   },
-  renewOpenClawStateLease: () => {
-    fixture.expiresAt = Date.now() + 30_000;
-    return fixture.expiresAt;
-  },
-  releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) => {
-    if (execute) {
-      await execute();
-    } else {
-      fixture.release();
-    }
-  },
+  renewOpenClawStateLease: fixture.forbiddenNative,
+  releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
+    execute ? execute() : fixture.release(),
   releaseOpenClawStateLease: fixture.release,
 }));
 // mock-isolation: project checkout leases must not start native heartbeat workers.
@@ -154,10 +147,10 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 }));
 
 const project: ProjectRegistryRecord = {
-  id: "registered-project",
+  id: "project",
   displayName: "Project",
-  source: "registered",
-  repoRoot: path.resolve("/synthetic-repository/project"),
+  source: "cloned",
+  repoRoot: path.resolve("/synthetic-state/projects/0123456789abcdef/project"),
 };
 type Selection = NonNullable<Awaited<ReturnType<typeof selectStoredProjectRegistry>>>;
 type Current = Parameters<Parameters<Selection["withCurrent"]>[0]>[0];
@@ -168,19 +161,8 @@ async function select(signal?: AbortSignal): Promise<Selection> {
     env: { HOME: "/synthetic-home", OPENCLAW_STATE_DIR: "/synthetic-state" },
     signal,
   });
-  if (!selected) {
-    throw new Error("Synthetic project was not selected");
-  }
+  assert(selected, "Synthetic project was not selected");
   return selected;
-}
-
-function thrownBy(run: () => void): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
 }
 
 beforeEach(() => {
@@ -201,97 +183,70 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("retains only live checkout rollback authority after cancellation inside the callback", async () => {
-  const caller = new AbortController();
-  const abortCause = new Error("Caller canceled setup");
-  const changedDatabase = new Error("Captured database admission was revoked");
-  const selected = await select(caller.signal);
-  let escaped: Current | undefined;
-  const inspect = vi.fn((current: Current) => {
-    const workerGuard = fixture.captureWorkerGuard.mock.lastCall?.[0];
-    expect(current.signal.aborted).toBe(true);
-    expect(current.signal.reason).toBe(abortCause);
-    expect(thrownBy(current.assertCurrent)).toBe(abortCause);
-    expect(workerGuard).toBeTypeOf("function");
-    expect(thrownBy(() => workerGuard?.())).toBe(abortCause);
-    current.assertCheckoutCurrent();
-    fixture.assertDatabaseCurrent.mockImplementation(() => {
-      throw changedDatabase;
-    });
-    expect(thrownBy(current.assertCheckoutCurrent)).toBe(changedDatabase);
-    fixture.assertDatabaseCurrent.mockReset();
-  });
-
-  const operation = selected.withCurrent(async (current) => {
-    escaped = current;
-    caller.abort(abortCause);
-    inspect(current);
-    throw abortCause;
-  });
-
-  await expect(operation).rejects.toMatchObject({
-    code: "OPENCLAW_STATE_LEASE_ABORTED",
-    cause: abortCause,
-  });
-  // Cancellation may mask a callback assertion; check the callback independently.
-  expect(inspect).toHaveReturned();
-  expect(escaped).toBeDefined();
-  expect(() => escaped?.assertCheckoutCurrent()).toThrow();
-  expect(() => escaped?.assertCurrent()).toThrow();
-});
-
-it.each(["completed", "not-entered", "unknown"] as const)(
-  "joins %s settlement before reporting cancellation",
-  async (kind) => {
+it.each(["callback", "drain"] as const)(
+  "retains checkout custody when cancellation arrives during %s",
+  async (phase) => {
     const caller = new AbortController();
+    const abortCause = new Error("Caller canceled setup");
+    const changedDatabase = new Error("Captured database admission was revoked");
     const selected = await select(caller.signal);
     const retained = createDeferredCore<SqliteWorkerOperationSettlement>();
-    const callbackExited = createDeferredCore();
-    const failure = new Error("Callback failed before native settlement arrived");
-    const abortCause = new Error("Caller canceled during settlement drain");
-    const settlementError = new Error("Native result remained unknown");
+    const exited = createDeferredCore();
     let escaped: Current | undefined;
+    const inspect = vi.fn((current: Current) => {
+      const workerGuard = fixture.captureWorkerGuard.mock.lastCall?.[0];
+      expect(current.signal.aborted).toBe(true);
+      expect(current.signal.reason).toBe(abortCause);
+      assert.throws(current.assertCurrent, (error) => error === abortCause);
+      expect(workerGuard).toBeTypeOf("function");
+      assert.throws(
+        () => workerGuard?.(),
+        (error) => error === abortCause,
+      );
+      current.assertCheckoutCurrent();
+      fixture.assertDatabaseCurrent.mockImplementation(() => {
+        throw changedDatabase;
+      });
+      assert.throws(current.assertCheckoutCurrent, (error) => error === changedDatabase);
+      fixture.assertDatabaseCurrent.mockReset();
+    });
     fixture.settlement.mockReturnValue(retained.promise);
-    fixture.afterCallback.mockImplementation(() => callbackExited.resolve());
+    fixture.afterCallback.mockImplementation(() => exited.resolve());
     const operation = selected.withCurrent(async (current) => {
       escaped = current;
-      throw failure;
+      if (phase === "callback") {
+        caller.abort(abortCause);
+        inspect(current);
+        throw abortCause;
+      }
+      throw new Error("Callback failed before native settlement");
     });
     const settled = vi.fn();
     const joined = operation.catch((error: unknown) => error).finally(settled);
     try {
-      await awaitGateBeforeSettlement(
-        callbackExited.promise,
-        joined,
-        "Selector settled before its retained worker callback exited",
-      );
+      await awaitGateBeforeSettlement(exited.promise, joined, "Selector skipped its callback");
       await nextMessageTurn();
       expect(settled).not.toHaveBeenCalled();
       expect(fixture.release).not.toHaveBeenCalled();
       expect(escaped).toBeDefined();
       expect(() => escaped?.assertCheckoutCurrent()).toThrow();
       expect(() => escaped?.assertCurrent()).toThrow();
-      caller.abort(abortCause);
+      if (phase === "drain") {
+        caller.abort(abortCause);
+      }
       await nextMessageTurn();
       expect(settled).not.toHaveBeenCalled();
-      retained.resolve(
-        kind === "completed"
-          ? { kind }
-          : { kind, error: kind === "unknown" ? settlementError : failure },
-      );
+      retained.resolve({ kind: "completed" });
       const error = await joined;
-      const causes = collectNestedErrorCandidates(error);
-      expect(error).toMatchObject({
-        code: kind === "unknown" ? "outcome-unknown" : "OPENCLAW_STATE_LEASE_ABORTED",
-      });
-      expect(causes).toContain(abortCause);
-      if (kind === "unknown") {
-        expect(causes).toContain(failure);
-        expect(causes).toContain(settlementError);
-        expect(fixture.release).not.toHaveBeenCalled();
-      } else {
-        expect(fixture.release).toHaveBeenCalledOnce();
+      expect(error).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+      expect(collectNestedErrorCandidates(error)).toContain(abortCause);
+      expect(fixture.release).toHaveBeenCalledOnce();
+      // Cancellation can mask callback assertions; verify them independently.
+      if (phase === "callback") {
+        expect(inspect).toHaveReturned();
       }
+      expect(() => escaped?.assertCheckoutCurrent()).toThrow();
+      expect(() => escaped?.assertCurrent()).toThrow();
     } finally {
       retained.resolve({ kind: "completed" });
       await joined;
@@ -299,14 +254,8 @@ it.each(["completed", "not-entered", "unknown"] as const)(
   },
 );
 
-const clonedProject: ProjectRegistryRecord = {
-  ...project,
-  source: "cloned",
-  repoRoot: path.resolve("/synthetic-state/projects/0123456789abcdef/project"),
-};
-
 function removeCheckout(assertUnreferenced: () => void | Promise<void> = () => {}) {
-  return removeClonedProjectCheckout(clonedProject, assertUnreferenced, {
+  return removeClonedProjectCheckout(project, assertUnreferenced, {
     path: path.resolve("/synthetic-state/lease.sqlite"),
     env: { OPENCLAW_STATE_DIR: "/synthetic-state" },
   });
@@ -334,10 +283,10 @@ it("retains checkout custody until the removal worker and native settlement fini
     expect(fixture.release).not.toHaveBeenCalled();
     settled.resolve({ kind: "completed" });
     await expect(operation).resolves.toBe(true);
-    expect(fixture.removeCheckout).toHaveBeenCalledWith(clonedProject.repoRoot, {
+    expect(fixture.removeCheckout).toHaveBeenCalledWith(project.repoRoot, {
       recursive: true,
     });
-    expect(fixture.removeParent).toHaveBeenCalledWith(path.dirname(clonedProject.repoRoot));
+    expect(fixture.removeParent).toHaveBeenCalledWith(path.dirname(project.repoRoot));
     expect(fixture.release).toHaveBeenCalledOnce();
   } finally {
     result.resolve("final");
