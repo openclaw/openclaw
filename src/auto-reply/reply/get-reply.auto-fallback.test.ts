@@ -85,14 +85,7 @@ function makeReasoningModelConfig(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function setupFallback(
-  params: {
-    modelSelectionLocked?: boolean;
-    resolvedReasoningLevel?: "off" | "on";
-    provider?: string;
-    model?: string;
-  } = {},
-) {
+function setupFallback(resolvedReasoningLevel?: "off" | "on") {
   const sessionKey = "agent:main:telegram:123";
   const sessionEntry: SessionEntry = {
     sessionId: "fallback-session",
@@ -102,7 +95,6 @@ function setupFallback(
     modelOverrideSource: "auto",
     modelOverrideFallbackOriginProvider: "openai",
     modelOverrideFallbackOriginModel: "gpt-5.5",
-    modelSelectionLocked: params.modelSelectionLocked,
   };
   // Admission re-reads SQLite; seed the same session the mocks describe.
   const storePath = path.join(tempDirs.make("auto-fallback-store"), "sessions.json");
@@ -127,12 +119,11 @@ function setupFallback(
       commandSource: "text",
       senderIsOwner: true,
       resetHookTriggered: false,
-      provider: params.provider ?? "anthropic",
-      model: params.model ?? "claude-fallback",
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
+      provider: "anthropic",
+      model: "claude-fallback",
+      resolvedReasoningLevel,
     }),
   );
-  return { sessionKey, storePath };
 }
 
 async function expectPrimaryProbe(
@@ -251,7 +242,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
   it.each(["agent", "model"] as const)(
     "honors per-%s thinking-off defaults and clears fallback reasoning",
     async (source) => {
-      setupFallback({ resolvedReasoningLevel: source === "model" ? "on" : "off" });
+      setupFallback(source === "model" ? "on" : "off");
       const agents: NonNullable<OpenClawConfig["agents"]> =
         source === "agent"
           ? { entries: { main: { thinkingDefault: "off" } } }
