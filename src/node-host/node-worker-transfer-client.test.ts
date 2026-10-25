@@ -5,10 +5,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, {
   createServer as createHttpServer,
+  type RequestListener,
   type RequestOptions,
   type ServerResponse,
 } from "node:http";
-import https, { createServer as createHttpsServer } from "node:https";
+import https, { createServer as createHttpsServer, type ServerOptions } from "node:https";
 import { connect as connectNet, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
@@ -40,6 +41,14 @@ function fixture(name: string) {
   const root = tempDirs.make(`node-worker-transfer-${name}-`);
   return { root, ...transferFixture(root, `environment-${name}`) };
 }
+
+const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
+const tlsServer = (handler: RequestListener, options: ServerOptions = {}) =>
+  createHttpsServer({ cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM, ...options }, handler);
+const workspaceServer = (...args: Parameters<typeof workspaceTransferHandler>) =>
+  createHttpServer(workspaceTransferHandler(...args));
+const stagingEntries = async (root: string) =>
+  (await fs.readdir(root)).filter((name) => name.startsWith(".workspace.workspace-transfer-"));
 
 type DrainProbe = {
   emitter: EventEmitter;
@@ -179,15 +188,13 @@ describe("node worker transfer client", () => {
         fileEntry("script.sh", original, 0o755),
       ]);
       let uploadedRaw: string | undefined;
-      const server = createHttpServer(
-        workspaceTransferHandler(
-          rawManifest,
-          new Map([[sha256, original]]),
-          ({ currentRaw, currentRef }) => {
-            uploadedRaw = currentRaw;
-            return currentRef;
-          },
-        ),
+      const server = workspaceServer(
+        rawManifest,
+        new Map([[sha256, original]]),
+        ({ currentRaw, currentRef }) => {
+          uploadedRaw = currentRaw;
+          return currentRef;
+        },
       );
       await using gateway = await serveTransfer(server);
       await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
@@ -249,11 +256,7 @@ describe("node worker transfer client", () => {
         "workspace-transfer-failed",
       );
       await expect(read("sentinel.txt")).resolves.toBe(sentinel);
-      expect(
-        (await fs.readdir(root)).filter((entry) =>
-          entry.startsWith(".workspace.workspace-transfer-"),
-        ),
-      ).toEqual([]);
+      expect(await stagingEntries(root)).toEqual([]);
       if (recovering) {
         await expect(fs.access(staleStaging)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -291,9 +294,7 @@ describe("node worker transfer client", () => {
           }
           if (req.url?.endsWith(`/blobs/${sha256}`)) {
             if (!substituted) {
-              const staging = (await fs.readdir(root)).find((name) =>
-                name.startsWith(".workspace.workspace-transfer-"),
-              );
+              const [staging] = await stagingEntries(root);
               if (!staging) {
                 throw new Error("test transfer has no staging directory");
               }
@@ -319,11 +320,7 @@ describe("node worker transfer client", () => {
         expect(await fs.readdir(outside)).toEqual([]);
       }
       expect(await read("sentinel.txt")).toBe("keep me\n");
-      expect(
-        (await fs.readdir(root)).filter((name) =>
-          name.startsWith(".workspace.workspace-transfer-"),
-        ),
-      ).toEqual([]);
+      expect(await stagingEntries(root)).toEqual([]);
     },
   );
 
@@ -337,8 +334,7 @@ describe("node worker transfer client", () => {
     let requestCount = 0;
     let connectionCount = 0;
     let uploadManifestRef: string | undefined;
-    const server = createHttpsServer(
-      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
+    const server = tlsServer(
       workspaceTransferHandler(
         rawManifest,
         new Map([[sha256, body]]),
@@ -354,7 +350,6 @@ describe("node worker transfer client", () => {
     });
     await using gateway = await serveTransfer(server);
     const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
-    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     const hashMemo = new Map<string, string>();
     const gatewayPort = Number(new URL(gatewayUrl).port);
     let hidPeerCertificate = false;
@@ -395,31 +390,18 @@ describe("node worker transfer client", () => {
     const sha256 = digest(body);
     const { rawManifest, manifestRef } = manifestFixture([fileEntry("result.txt", body)]);
     const sessionReuse: boolean[] = [];
-    const server = createHttpsServer(
-      {
-        cert: TEST_TLS_CERT_PEM,
-        key: TEST_TLS_KEY_PEM,
-        maxVersion: "TLSv1.2",
-      },
+    const handler = workspaceTransferHandler(
+      rawManifest,
+      new Map([[sha256, body]]),
+      undefined,
+      true,
+    );
+    const server = tlsServer(
       (req, res) => {
-        if (req.url?.endsWith("/manifest")) {
-          res.writeHead(200, {
-            connection: "close",
-            "content-length": String(Buffer.byteLength(rawManifest)),
-          });
-          res.end(rawManifest);
-          return;
-        }
-        if (req.url?.endsWith(`/blobs/${sha256}`)) {
-          res.writeHead(200, {
-            connection: "close",
-            "content-length": String(body.byteLength),
-          });
-          res.end(body);
-          return;
-        }
-        res.writeHead(404, { connection: "close" }).end();
+        res.setHeader("connection", "close");
+        handler(req, res);
       },
+      { maxVersion: "TLSv1.2" },
     );
     let secureConnections = 0;
     server.on("secureConnection", (socket) => {
@@ -430,7 +412,6 @@ describe("node worker transfer client", () => {
     });
     await using gateway = await serveTransfer(server);
     const gatewayUrl = gateway.gatewayUrl.replace(/^ws/u, "wss");
-    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     await expect(
       download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
     ).resolves.toBe(manifestRef);
@@ -441,13 +422,7 @@ describe("node worker transfer client", () => {
   it("preserves managed proxy routing for pinned transfers", async () => {
     const { download } = fixture("tls-proxy");
     const { rawManifest, manifestRef } = manifestFixture();
-    const target = createHttpsServer(
-      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
-      (_req, res) => {
-        res.writeHead(200, { "content-length": String(Buffer.byteLength(rawManifest)) });
-        res.end(rawManifest);
-      },
-    );
+    const target = tlsServer(workspaceTransferHandler(rawManifest, new Map(), undefined, true));
     const gatewayUrl = (await listen(target)).replace(/^ws/u, "wss");
     const proxyTunnels = new Set<{ client: Duplex; upstream: Duplex }>();
     let connectCount = 0;
@@ -479,7 +454,6 @@ describe("node worker transfer client", () => {
     });
     const proxyUrl = (await listen(proxy)).replace(/^ws/u, "http");
     const proxyHandle = installGlobalProxy({ mode: "managed", proxyUrl });
-    const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     try {
       await expect(
         download(gatewayUrl, manifestRef, { gatewayTlsFingerprint: fingerprint }),
@@ -512,13 +486,10 @@ describe("node worker transfer client", () => {
     const { download } = fixture("wrong-pin");
     const { rawManifest, manifestRef } = manifestFixture();
     let requestCount = 0;
-    const server = createHttpsServer(
-      { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM },
-      (_req, res) => {
-        requestCount += 1;
-        res.writeHead(200).end(rawManifest);
-      },
-    );
+    const server = tlsServer((_req, res) => {
+      requestCount += 1;
+      res.writeHead(200).end(rawManifest);
+    });
     await using gateway = await serveTransfer(server);
     await expect(
       download(gateway.gatewayUrl.replace(/^ws/u, "wss"), manifestRef, {
@@ -564,26 +535,24 @@ describe("node worker transfer client", () => {
     const { rawManifest: baseRaw, manifestRef: baseRef } = manifestFixture([
       fileEntry("result.txt", baseBody),
     ]);
-    const server = createHttpServer(
-      workspaceTransferHandler(
-        baseRaw,
-        new Map([[baseSha256, baseBody]]),
-        ({ body, fileHeader, currentRaw, currentRef }) => {
-          const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
-          const entry = current.entries.find(
-            (candidate) => candidate.path === "result.txt" && candidate.type === "file",
-          );
-          const uploaded = body.subarray(fileHeader + 8);
-          expect(entry).toMatchObject({
-            type: "file",
-            size: uploaded.length,
-            sha256: digest(uploaded),
-          });
-          expect(body.readBigUInt64BE(fileHeader)).toBe(BigInt(uploaded.length));
-          return currentRef;
-        },
-        true,
-      ),
+    const server = workspaceServer(
+      baseRaw,
+      new Map([[baseSha256, baseBody]]),
+      ({ body, fileHeader, currentRaw, currentRef }) => {
+        const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
+        const entry = current.entries.find(
+          (candidate) => candidate.path === "result.txt" && candidate.type === "file",
+        );
+        const uploaded = body.subarray(fileHeader + 8);
+        expect(entry).toMatchObject({
+          type: "file",
+          size: uploaded.length,
+          sha256: digest(uploaded),
+        });
+        expect(body.readBigUInt64BE(fileHeader)).toBe(BigInt(uploaded.length));
+        return currentRef;
+      },
+      true,
     );
     const gatewayUrl = await listen(server);
     const request = http.request.bind(http);
@@ -625,13 +594,11 @@ describe("node worker transfer client", () => {
     const sha256 = digest(body);
     const { rawManifest, manifestRef } = manifestFixture([fileEntry("large.bin", body)]);
     let uploadManifestRef: string | undefined;
-    const server = createHttpServer(
-      workspaceTransferHandler(
-        rawManifest,
-        new Map([[sha256, body]]),
-        () => uploadManifestRef,
-        true,
-      ),
+    const server = workspaceServer(
+      rawManifest,
+      new Map([[sha256, body]]),
+      () => uploadManifestRef,
+      true,
     );
     const requestProbes: DrainProbe[] = [];
     const request = http.request.bind(http);

@@ -64,6 +64,13 @@ import { runNodeHostWorker } from "./worker.js";
 const { prepareNodeHostRuntime } =
   await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
 
+function prepareRuntime(options: Parameters<typeof prepareNodeHostRuntime>[0]) {
+  fixture.prepare.mockImplementationOnce(async (params) => ({
+    ...(await prepareNodeHostRuntime({ ...params, ...options })),
+    start: fixture.start,
+  }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.loadConfig.mockResolvedValue(null);
@@ -235,16 +242,12 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     caps: ["sessions"],
     nodePluginTools: [],
   });
-  fixture.prepare.mockImplementationOnce(async (params) => ({
-    ...(await prepareNodeHostRuntime({
-      ...params,
-      config: {
-        nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
-      },
-      env: {},
-    })),
-    start: fixture.start,
-  }));
+  prepareRuntime({
+    config: {
+      nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
+    },
+    env: {},
+  });
   await withWorker(async ({ messages }) => {
     expect.soft(readyMessage(messages)).toMatchObject({
       manifest: { commands: expect.arrayContaining(["system.run"]) },
@@ -256,27 +259,21 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
 });
 
 it.each([
-  { desktopSharingEnabled: undefined, configured: false, enabled: false },
-  { desktopSharingEnabled: false, configured: true, enabled: false },
+  { desktopSharingEnabled: undefined, configured: false },
+  { desktopSharingEnabled: false, configured: true },
 ])(
   "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
-  async ({ desktopSharingEnabled, configured, enabled }) => {
-    fixture.prepare.mockImplementationOnce(async (params) => ({
-      ...(await prepareNodeHostRuntime({
-        ...params,
-        config: { desktop: { host: { enabled: configured } } },
-        env: {},
-        platform: "darwin",
-      })),
-      start: fixture.start,
-    }));
+  async ({ desktopSharingEnabled, configured }) => {
+    prepareRuntime({
+      config: { desktop: { host: { enabled: configured } } },
+      env: {},
+      platform: "darwin",
+    });
     await withWorker(
       async ({ messages }) => {
         expect(readyMessage(messages)).toMatchObject({
           manifest: {
-            commands: enabled
-              ? expect.arrayContaining(["desktop.stream"])
-              : expect.not.arrayContaining(["desktop.stream"]),
+            commands: expect.not.arrayContaining(["desktop.stream"]),
           },
         });
       },
@@ -626,10 +623,9 @@ it.each(["prepared failure", "later failure"] as const)(
         expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
         expectDiagnostic();
         const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
-        expect(output).not.toContain(secret);
-        expect(output).not.toContain(reason);
-        expect(output).not.toContain(action);
-        expect(output).not.toContain("worker hosting disabled");
+        for (const privateText of [secret, reason, action, "worker hosting disabled"]) {
+          expect(output).not.toContain(privateText);
+        }
         expect(messagesOfType(messages, "ready")).toHaveLength(1);
         expect(messages.some((message) => message.type === "manifest")).toBe(false);
         expect(messagesOfType(messages, "worker-hosting")).toEqual(

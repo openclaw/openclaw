@@ -20,15 +20,12 @@ import {
 type ScriptOperandFixture = {
   command: string[];
   scriptPath: string;
-  initialBody: string;
   expectedArgvIndex: number;
 };
 
 type RuntimeFixture = {
   name: string;
   argv: string[];
-  scriptName: string;
-  initialBody: string;
   expectedArgvIndex: number;
   binName?: string;
   binNames?: string[];
@@ -42,13 +39,7 @@ type UnsafeRuntimeInvocationCase = {
   files: [string, string][];
 };
 
-const shellFixture: RuntimeFixture = {
-  name: "shell script",
-  argv: ["/bin/sh", "./run.sh"],
-  scriptName: "run.sh",
-  initialBody: "#!/bin/sh\necho SAFE\n",
-  expectedArgvIndex: 1,
-};
+const shellFixture = runtimeFixture("shell script", ["/bin/sh", "./run.sh"], 1);
 
 function shellPlan(command: string, cwd: string) {
   return buildSystemRunApprovalPlan({
@@ -70,15 +61,18 @@ function sha256FileSync(filePath: string): string {
 }
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
-  const windows = process.platform === "win32";
-  const scriptName = fixture?.scriptName ?? (windows ? "run.js" : "run.sh");
-  return {
-    command: fixture?.argv ?? (windows ? [process.execPath, "./run.js"] : ["/bin/sh", "./run.sh"]),
-    scriptPath: path.join(tmp, scriptName),
-    initialBody:
-      fixture?.initialBody ?? (windows ? 'console.log("SAFE");\n' : "#!/bin/sh\necho SAFE\n"),
-    expectedArgvIndex: fixture?.expectedArgvIndex ?? 1,
-  };
+  const command =
+    fixture?.argv ??
+    (process.platform === "win32" ? [process.execPath, "./run.js"] : shellFixture.argv);
+  const expectedArgvIndex = fixture?.expectedArgvIndex ?? 1;
+  const scriptPath = path.join(tmp, path.basename(command[expectedArgvIndex]!));
+  const body = scriptPath.endsWith(".sh")
+    ? "#!/bin/sh\necho SAFE\n"
+    : /\.(py|lua)$/.test(scriptPath)
+      ? 'print("SAFE")\n'
+      : 'console.log("SAFE");\n';
+  fs.writeFileSync(scriptPath, body, { mode: 0o755 });
+  return { command, scriptPath, expectedArgvIndex };
 }
 
 let sharedFixtureRoot = "";
@@ -175,17 +169,6 @@ function uniqueRuntimeBinNames(
   ];
 }
 
-function expectShellPayloadApprovalDenied(fileName: string, body: string) {
-  if (process.platform === "win32") {
-    return;
-  }
-  const tmp = createFixtureDir("openclaw-shell-payload-");
-  const scriptPath = path.join(tmp, fileName);
-  fs.writeFileSync(scriptPath, body);
-  fs.chmodSync(scriptPath, 0o755);
-  expect(shellPlan(scriptPath, tmp)).toEqual(DENIED_RUNTIME_APPROVAL);
-}
-
 function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
   const prepared = buildSystemRunApprovalPlan({ command: fixture.command, cwd });
   requireSuccess(prepared);
@@ -196,17 +179,9 @@ function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd
   });
 }
 
-function writeScriptOperandFixture(fixture: ScriptOperandFixture) {
-  fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-  if (process.platform !== "win32") {
-    fs.chmodSync(fixture.scriptPath, 0o755);
-  }
-}
-
 function makeScriptFixture(prefix: string, runtime?: RuntimeFixture) {
   const tmp = createFixtureDir(prefix);
   const fixture = createScriptOperandFixture(tmp, runtime);
-  writeScriptOperandFixture(fixture);
   return { fixture, tmp };
 }
 
@@ -258,15 +233,7 @@ function runtimeFixture(
   if (operand === undefined) {
     throw new Error(`missing script operand for ${name}`);
   }
-  const scriptName = path.basename(operand);
-  return {
-    name,
-    argv,
-    expectedArgvIndex,
-    scriptName,
-    initialBody: /\.(py|lua)$/.test(scriptName) ? 'print("SAFE")\n' : 'console.log("SAFE");\n',
-    ...options,
-  };
+  return { name, argv, expectedArgvIndex, ...options };
 }
 
 const unsafeRuntimeInvocationCases = [
@@ -409,7 +376,6 @@ describe("hardenApprovedExecutionPaths", () => {
             return;
           }
           const fixture = createScriptOperandFixture(tmp, runtimeCase);
-          writeScriptOperandFixture(fixture);
           const executablePath = fixture.command[0];
           if (executablePath?.endsWith("pnpm.js")) {
             const shimPath = path.join(tmp, "pnpm.js");
@@ -536,16 +502,22 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", () => {
-    for (const [fileName, body] of [
-      ["run.sh", "#!/bin/sh\necho SAFE\n"],
-      ["empty", ""],
-      ["mz-script", "MZ not really a PE file\n"],
-      ["nul-script", "SAFE\u0000maybe-binary\n"],
-    ] as const) {
-      expectShellPayloadApprovalDenied(fileName, body);
-    }
-  });
+  it.runIf(process.platform !== "win32")(
+    "keeps fail-closed behavior for mutable or ambiguous shell payload files",
+    () => {
+      const tmp = createFixtureDir("openclaw-shell-payload-");
+      for (const [fileName, body] of [
+        ["run.sh", "#!/bin/sh\necho SAFE\n"],
+        ["empty", ""],
+        ["mz-script", "MZ not really a PE file\n"],
+        ["nul-script", "SAFE\u0000maybe-binary\n"],
+      ] as const) {
+        const scriptPath = path.join(tmp, fileName);
+        fs.writeFileSync(scriptPath, body, { mode: 0o755 });
+        expect(shellPlan(scriptPath, tmp)).toEqual(DENIED_RUNTIME_APPROVAL);
+      }
+    },
+  );
 
   it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
     if (process.platform === "win32") {
