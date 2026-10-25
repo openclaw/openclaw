@@ -121,34 +121,29 @@ it("reaps only the captured managed macOS tree", async () => {
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
-it.each<[string, Partial<KernelProcess>]>([
+it.each<[string, Partial<KernelProcess>, (() => unknown)?]>([
   ["live parent", { parentPid: 50 }],
   ["foreign user", { uid: 502 }],
   ["foreign executable with spoofed argv", { executable: "/other/llama-server" }],
   ["different argv zero", { argv: ["llama-server", ...rootArgs.slice(1)] }],
   ["different port", { argv: [...rootArgs.slice(0, -1), "19322"] }],
   ["different working directory", { cwd: "/other" }],
-])("leaves %s untouched", async (_name, change) => {
+  ["unknown host birth", {}, () => mocks.identity.mockReturnValueOnce(null)],
+  ["Linux PID 1", {}, () => Object.defineProperty(process, "platform", { value: "linux" })],
+  [
+    "unreadable foreign installation",
+    { command: "/other/llama-server" },
+    () => {
+      mocks.command.mockImplementation(() => {
+        throw new Error("unreadable");
+      });
+    },
+  ],
+])("leaves %s untouched", async (_name, change, prepare) => {
   add(100, change);
+  prepare?.();
   mocks.realpath.mockReturnValue("/state");
   await expectUntouched({ cwd: "/state-alias" });
-});
-it.each<[string, () => unknown]>([
-  ["unknown host birth", () => mocks.identity.mockReturnValueOnce(null)],
-  ["Linux PID 1", () => Object.defineProperty(process, "platform", { value: "linux" })],
-])("leaves %s untouched", async (_name, prepare) => {
-  add(100);
-  prepare();
-  await expectUntouched();
-  expect(mocks.ps).not.toHaveBeenCalled();
-});
-it("leaves an unreadable foreign installation untouched", async () => {
-  add(100, { command: "/other/llama-server" });
-  mocks.command.mockImplementation(() => {
-    throw new Error("unreadable");
-  });
-  await expectUntouched();
-  expect(mocks.command).not.toHaveBeenCalled();
 });
 it.each<[string, Partial<KernelProcess>, string?]>([
   ["unverifiable birth", { startedAt: null }, "Cannot verify orphaned process 100"],
