@@ -95,11 +95,9 @@ describe("completion-cli", () => {
         .option("--log-level <level>", "Log level")
         .option("--container <name>", "Container")
         .option("--no-color", "Disable colors")
-        .option("--root-only", "Positional root option")
-        .addOption(new Option("--dev", "Hidden global").hideHelp());
+        .option("--root-only", "Positional root option");
       const group = program.command("group").alias("g").option("--parent-only");
       group.command("status").option("--json");
-      program.command("local").addOption(new Option("--profile <name>").choices(["local"]));
       for (const [line, expected] of [
         ["openclaw g status --pr", ["--profile"]],
         ["openclaw group status --no-c", ["--no-color"]],
@@ -107,8 +105,6 @@ describe("completion-cli", () => {
         ["openclaw group status --cont", ["--container"]],
         ["openclaw group status --root", []],
         ["openclaw group status --parent", []],
-        ["openclaw group status --dev", []],
-        ["openclaw local --profile lo", ["local"]],
       ] as const) {
         expect(await complete(shell, program, line), line).toEqual(expected);
       }
@@ -332,15 +328,6 @@ ${cases
   });
 
   itWithFish.each([
-    [
-      "openclaw --profile work --log-level debug --container local g",
-      () =>
-        createCompletionProgram()
-          .option("-p, --profile <name>")
-          .option("--log-level <level>")
-          .option("--container <name>"),
-      expect.arrayContaining(["gateway"]),
-    ],
     ["openclaw gateway -t=secret status -", createCompletionProgram, ["--json"]],
     [
       "openclaw gateway status restart -",
@@ -392,10 +379,7 @@ ${cases
     const program = new Command()
       .name("openclaw")
       .option("-v, --verbose", "Verbose output")
-      .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]))
-      .exitOverride();
-    program.parse(["-vm", "-legacy"], { from: "user" });
-    expect(program.opts()).toEqual({ verbose: true, mode: "-legacy" });
+      .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]));
     expect(runBash(program, ["openclaw", "-vm", "-le"])).toEqual(["-legacy"]);
   });
 

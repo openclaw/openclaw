@@ -19,16 +19,7 @@ let revokeWork = async () => {};
 let responseGate: { method: string; entered: () => void; release: Promise<void> } | undefined;
 const configDirectories = new Set<string>();
 const mcpConfig = {
-  mcpServers: {
-    openclaw: {
-      type: "http",
-      url: "http://127.0.0.1:9999/mcp",
-      headers: {
-        Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-        "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-      },
-    },
-  },
+  mcpServers: { openclaw: { type: "http", url: "http://127.0.0.1:9999/mcp" } },
 };
 const grant = (sessionKey = "agent:main:main") => ({
   sessionKey,
@@ -185,38 +176,29 @@ describe("openclaw attach (action)", () => {
       ],
     } satisfies SessionsResolveResult;
     const gateway = vi.mocked(callGateway);
-    const originalImplementation = gateway.getMockImplementation();
     const spawnCount = vi.mocked(spawn).mock.calls.length;
-    gateway.mockReset();
-    // Any request after resolution must fail before a grant can reach config writing or spawn.
-    gateway.mockRejectedValue(new Error("Unexpected Gateway request after session resolution"));
-    gateway.mockResolvedValueOnce(response);
-    try {
-      const error = await runAttach("12345678").catch((caught: unknown) => caught);
-      if (!(error instanceof Error)) {
-        throw new Error("Expected ambiguous session target rejection");
-      }
-      expect(error.message).toBe(
-        [
-          "Session reference is ambiguous:",
-          "SESSION       ID PREFIX",
-          "界界界界界界  123456780aaa4000",
-          "Alpha         123456780bbb4000",
-          "Pass a longer reference. Run `openclaw sessions list` to choose a full session key.",
-        ].join("\n"),
-      );
-      expect(Buffer.from(error.message, "utf8").toString("utf8")).toBe(error.message);
-      expect(gateway).toHaveBeenCalledTimes(1);
-      expect(gateway).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "sessions.resolve", params: { shortId: "12345678" } }),
-      );
-      expect(vi.mocked(spawn).mock.calls.length).toBe(spawnCount);
-    } finally {
-      gateway.mockReset();
-      if (originalImplementation) {
-        gateway.mockImplementation(originalImplementation);
-      }
-    }
+    let resolved = false;
+    await gateway.withImplementation(
+      async ({ method }) => {
+        if (method !== "sessions.resolve" || resolved) {
+          throw new Error("Unexpected Gateway request after session resolution");
+        }
+        resolved = true;
+        return response;
+      },
+      async () => {
+        await expect(runAttach("12345678")).rejects.toMatchObject({
+          message: [
+            "Session reference is ambiguous:",
+            "SESSION       ID PREFIX",
+            "界界界界界界  123456780aaa4000",
+            "Alpha         123456780bbb4000",
+            "Pass a longer reference. Run `openclaw sessions list` to choose a full session key.",
+          ].join("\n"),
+        });
+        expect(vi.mocked(spawn).mock.calls.length).toBe(spawnCount);
+      },
+    );
   });
 
   it("preserves a global-scope URL main session when granting attach access", async () => {

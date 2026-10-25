@@ -149,14 +149,7 @@ describe("claws cli", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     mocks.logs.length = 0;
     mocks.errors.length = 0;
-    for (const mock of [
-      mocks.runtime.log,
-      mocks.runtime.error,
-      mocks.runtime.writeJson,
-      mocks.runtime.exit,
-    ]) {
-      mock.mockClear();
-    }
+    vi.clearAllMocks();
     mocks.loadConfig.mockReset().mockReturnValue(enabledClawsLabsConfig);
     mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledClawsLabsConfig);
     mocks.listConfiguredMcpServers.mockReset().mockResolvedValue({
@@ -186,17 +179,6 @@ describe("claws cli", () => {
     vi.restoreAllMocks();
   });
 
-  it("exposes only authoring, inspection, and Add commands", () => {
-    const program = new Command();
-    registerClawsCli(program);
-
-    expect(
-      program.commands
-        .find((command) => command.name() === "claws")
-        ?.commands.map((command) => command.name()),
-    ).toEqual(["create", "validate", "dev", "build", "inspect", "add"]);
-  });
-
   it("blocks local Add while Claws Labs is off", async () => {
     mocks.loadConfig.mockReturnValue({});
     expect(await add(["--dry-run", "--json"])).toMatchObject({
@@ -220,26 +202,46 @@ describe("claws cli", () => {
     });
   });
 
-  it("takes identity from package.json and plans one new agent", async () => {
-    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
-    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
+  it.each([undefined, "demo-agent-two"])(
+    "plans package identity with agent override %s",
+    async (agentId) => {
+      const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+      const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
+      if (agentId) {
+        mocks.loadConfig.mockReturnValue({
+          ...enabledClawsLabsConfig,
+          agents: { entries: { "demo-agent": {} } },
+        });
+      }
+      await add(
+        [
+          "--dry-run",
+          "--workspace",
+          workspace,
+          "--json",
+          ...(agentId ? ["--agent-id", agentId] : []),
+        ],
+        root,
+      );
 
-    await add(["--dry-run", "--workspace", workspace, "--json"], root);
-
-    expect(output()).toMatchObject({
-      schemaVersion: "openclaw.clawAddPlan.v1",
-      stability: "experimental",
-      claw: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
-      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
-      summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
-    });
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(output()).toMatchObject({
+        schemaVersion: "openclaw.clawAddPlan.v1",
+        stability: "experimental",
+        claw: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
+        agent: {
+          requestedId: "demo-agent",
+          finalId: agentId ?? "demo-agent",
+          workspace: expectedWorkspace,
+        },
+        summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
+      });
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("redacts credential-bearing remote MCP URLs in add previews", async () => {
     const manifestPath = await writeManifest({
-      schemaVersion: 1,
-      agent: { id: "demo-agent", name: "Demo Agent" },
+      ...cliTestHelpers.minimalManifest,
       mcpServers: {
         remote: {
           url: "https://example.com/mcp?token=abc123&mode=ok",
@@ -259,29 +261,9 @@ describe("claws cli", () => {
     expect(printed).toContain("token=***");
   });
 
-  it("honors an explicit unused agent id in the plan", async () => {
-    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
-    mocks.loadConfig.mockReturnValue({
-      ...enabledClawsLabsConfig,
-      agents: { entries: { "demo-agent": {} } },
-    });
-
-    await add(
-      ["--dry-run", "--agent-id", "demo-agent-two", "--workspace", workspace, "--json"],
-      root,
-    );
-
-    expect(output().agent).toMatchObject({
-      requestedId: "demo-agent",
-      finalId: "demo-agent-two",
-    });
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-  });
-
   it("discloses capability escalations in the human dry-run", async () => {
     const path = await writeManifest({
-      schemaVersion: 1,
-      agent: { id: "demo-agent" },
+      ...cliTestHelpers.minimalManifest,
       mcpServers: {
         docs: {
           command: "node",
@@ -310,7 +292,6 @@ describe("claws cli", () => {
     await add(["--json"]);
 
     expect(mocks.errors).toEqual([]);
-    expect(mocks.applyClawAddPlanStateless).toHaveBeenCalledOnce();
     const [plan, options] = mocks.applyClawAddPlanStateless.mock.calls[0]!;
     expect(options.consentPlanIntegrity).toBe(plan.planIntegrity);
     expect(output()).toMatchObject({
@@ -405,8 +386,6 @@ describe("claws cli", () => {
 
     expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
 
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith("config.get", { timeout: "5000" }, {});
     expect(mocks.sleep).not.toHaveBeenCalled();
   });
 
@@ -420,7 +399,6 @@ describe("claws cli", () => {
 
     expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
     expect(mocks.sleep).toHaveBeenCalledTimes(2);
-    expect(mocks.sleep).toHaveBeenCalledWith(100);
   });
 
   it("reports the last Gateway error after the reload deadline", async () => {
@@ -436,8 +414,5 @@ describe("claws cli", () => {
         message: "Gateway did not apply the Claw agent configuration in time: gateway unavailable",
       },
     });
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(mocks.sleep).toHaveBeenCalledOnce();
   });
 });

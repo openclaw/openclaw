@@ -4,12 +4,13 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnSyncReturns,
 } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { expect, it, type TestAPI } from "vitest";
+import { z } from "zod";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
@@ -134,11 +135,14 @@ export function runFishCompletionScript(script: string, commandLine: string): st
 const powerShellPath = findShell("pwsh", process.env.OPENCLAW_TEST_PWSH);
 export const itWithPowerShell: TestAPI["skip"] = powerShellPath ? it : it.skip;
 
-type PowerShellCompletionResponse =
-  | { version: 1; id: string; ok: true; completions: string[] }
-  | { version: 1; id: string; ok: false; error: string };
+const responseEnvelope = z.object({ version: z.literal(1), id: z.string() });
+const completionResponse = z.discriminatedUnion("ok", [
+  responseEnvelope.extend({ ok: z.literal(true), completions: z.array(z.string()) }),
+  responseEnvelope.extend({ ok: z.literal(false), error: z.string() }),
+]);
 
 type PendingPowerShellCompletion = {
+  id: string;
   reject: (error: Error) => void;
   resolve: (completions: string[]) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -192,34 +196,6 @@ while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
   return base64(script, "utf16le");
 }
 
-function decodePowerShellCompletionResponse(encoded: string): PowerShellCompletionResponse {
-  const value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("PowerShell completion response was not an object");
-  }
-  const response = value as Record<string, unknown>;
-  if (
-    response.version !== 1 ||
-    typeof response.id !== "string" ||
-    typeof response.ok !== "boolean"
-  ) {
-    throw new Error("PowerShell completion response had an invalid envelope");
-  }
-  if (response.ok) {
-    if (
-      !Array.isArray(response.completions) ||
-      !response.completions.every((completion) => typeof completion === "string")
-    ) {
-      throw new Error("PowerShell completion response had invalid completions");
-    }
-    return { version: 1, id: response.id, ok: true, completions: response.completions };
-  }
-  if (typeof response.error !== "string") {
-    throw new Error("PowerShell completion response had no error text");
-  }
-  return { version: 1, id: response.id, ok: false, error: response.error };
-}
-
 /** One live PowerShell process per test file; cases remain sequential and state-isolated. */
 export class PowerShellCompletionRunner {
   private child: ChildProcessWithoutNullStreams | undefined;
@@ -227,7 +203,8 @@ export class PowerShellCompletionRunner {
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
   private failure: Error | undefined;
   private readonly framePrefix = `OPENCLAW_PWSH_V1:${randomBytes(8).toString("hex")}:`;
-  private pending = new Map<string, PendingPowerShellCompletion>();
+  private pending: PendingPowerShellCompletion | undefined;
+  private nextId = 0;
   private queue: Promise<void> = Promise.resolve();
   private readyPromise: Promise<void> | undefined;
   private stdoutLines: ReadlineInterface | undefined;
@@ -249,10 +226,7 @@ export class PowerShellCompletionRunner {
     commandLine: string,
     cursorPosition = commandLine.length,
   ): Promise<string[]> {
-    const caseId = createHash("sha256")
-      .update([script, commandLine, String(cursorPosition)].join("\0"))
-      .digest("hex")
-      .slice(0, 20);
+    const caseId = String(this.nextId++);
     const result = this.queue.then(() =>
       this.completeCase(caseId, script, commandLine, cursorPosition),
     );
@@ -329,7 +303,7 @@ export class PowerShellCompletionRunner {
       const timeout = setTimeout(() => {
         this.poison(new Error(`PowerShell completion case ${caseId} timed out`));
       }, POWERSHELL_CASE_TIMEOUT_MS);
-      this.pending.set(caseId, { reject, resolve, timeout });
+      this.pending = { id: caseId, reject, resolve, timeout };
       child.stdin.write(`${request}\n`, (error) => {
         if (error) {
           this.poison(new Error(`PowerShell completion write failed: ${error.message}`));
@@ -410,14 +384,17 @@ export class PowerShellCompletionRunner {
           return;
         }
         try {
-          const response = decodePowerShellCompletionResponse(line.slice(this.framePrefix.length));
-          const pending = this.pending.get(response.id);
-          if (!pending) {
+          const encoded = line.slice(this.framePrefix.length);
+          const response = completionResponse.parse(
+            JSON.parse(Buffer.from(encoded, "base64").toString("utf8")),
+          );
+          const pending = this.pending;
+          if (!pending || pending.id !== response.id) {
             fail(`Unexpected PowerShell completion response id: ${response.id}`);
             return;
           }
           clearTimeout(pending.timeout);
-          this.pending.delete(response.id);
+          this.pending = undefined;
           if (response.ok) {
             pending.resolve(response.completions);
           } else {
@@ -455,11 +432,11 @@ export class PowerShellCompletionRunner {
       return;
     }
     this.failure = error;
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(error);
+    if (this.pending) {
+      clearTimeout(this.pending.timeout);
+      this.pending.reject(error);
+      this.pending = undefined;
     }
-    this.pending.clear();
     if (!this.closing) {
       this.child?.kill("SIGTERM");
     }

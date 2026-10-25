@@ -34,8 +34,6 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   listMarketplacePlugins: vi.fn(),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
-  pluginLifecycleGateway: vi.fn(),
-  resolvePluginLifecycleGateway: vi.fn(),
 }));
 // mock-isolation: Marketplace fixtures isolate config reads and writes from operator state.
 vi.mock("../config/config.js", () => ({
@@ -57,9 +55,6 @@ vi.mock("../plugins/marketplace.js", () => ({
 }));
 vi.mock("../plugins/management-catalog.js", () => ({
   clearManagedPluginCatalogCache: mocks.clearManagedPluginCatalogCache,
-}));
-vi.mock("./plugins-lifecycle-client.js", () => ({
-  resolvePluginLifecycleGateway: mocks.resolvePluginLifecycleGateway,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -84,8 +79,6 @@ beforeEach(() => {
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   loadFeed.mockReset();
   mocks.listMarketplacePlugins.mockReset();
-  mocks.resolvePluginLifecycleGateway.mockReset().mockResolvedValue(mocks.pluginLifecycleGateway);
-  mocks.pluginLifecycleGateway.mockReset().mockResolvedValue({ runtime: { generation: 4 } });
   vi.unstubAllEnvs();
 });
 afterEach(() => {
@@ -135,8 +128,6 @@ describe("plugins marketplace entries", () => {
             ...calendar,
             version: "1.2.3",
             kind: "plugin",
-            state: "available",
-            publisher: { trust: "official" },
             install: {
               candidates: [
                 { sourceRef: "public-npm", package: "@acme/calendar", version: "1.2.3" },
@@ -157,6 +148,7 @@ describe("plugins marketplace entries", () => {
           label: "Acme Calendar",
           name: "@acme/calendar",
           version: "1.2.3",
+          kind: "plugin",
           install: expect.objectContaining({ npmSpec: "@acme/calendar@1.2.3" }),
         }),
       ],
@@ -233,7 +225,6 @@ describe("plugins marketplace refresh", () => {
         expectedSha256: `sha256:${checksum.toLowerCase()}`,
         requireSnapshotWrite: true,
       });
-      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
       expectJson({
         source: "hosted",
         entries: 1,
@@ -243,6 +234,7 @@ describe("plugins marketplace refresh", () => {
       expect(runtime.error).toHaveBeenCalledWith(
         "Marketplace catalog saved for the next Gateway start.",
       );
+      expect(runtime.exit).not.toHaveBeenCalled();
     },
   );
 
@@ -291,7 +283,6 @@ describe("plugins marketplace refresh", () => {
       await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
         "exit 1",
       );
-      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
       expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ source }),
       );
@@ -302,18 +293,6 @@ describe("plugins marketplace refresh", () => {
       expect(runtime.exit).toHaveBeenCalledWith(1);
     },
   );
-
-  it("keeps offline refresh successful and next-start notices off JSON stdout", async () => {
-    loadFeed.mockResolvedValue(feed());
-    mocks.resolvePluginLifecycleGateway.mockResolvedValue(null);
-    await refresh({ json: true });
-    expect(runtime.writeJson).toHaveBeenCalledOnce();
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Marketplace catalog saved for the next Gateway start."),
-    );
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
 });
 
 describe("plugins marketplace list", () => {

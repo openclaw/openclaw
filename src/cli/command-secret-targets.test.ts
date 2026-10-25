@@ -50,7 +50,6 @@ function webProvider(
     credentialPath,
     getConfiguredCredentialValue: (config?: unknown) => readPath(config, credentialPath),
     getConfiguredCredentialFallback: (): undefined => undefined,
-    getCredentialValue: (): undefined => undefined,
   };
 }
 
@@ -85,8 +84,6 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
         path: SEARCH_KEY,
         value: readPath(params.config, SEARCH_KEY),
       }),
-      getCredentialValue: (fetchConfig?: { firecrawl?: { apiKey?: unknown } }) =>
-        fetchConfig?.firecrawl?.apiKey,
     },
     {
       ...webProvider("other-fetch", "webFetch", 100),
@@ -107,7 +104,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
       getConfiguredCredentialValue: (config?: unknown) =>
         readPath(config, "plugins.entries.brave.config.webSearch.apiKey") ??
         readPath(config, "tools.web.search.apiKey"),
-      getCredentialValue: (searchConfig?: { apiKey?: unknown }) => searchConfig?.apiKey,
     },
     {
       ...webProvider("firecrawl", "webSearch", 60),
@@ -121,11 +117,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
             };
       },
     },
-    {
-      ...webProvider("exa", "webSearch", 65),
-      getCredentialValue: (searchConfig?: { exa?: { apiKey?: unknown } }) =>
-        searchConfig?.exa?.apiKey,
-    },
+    webProvider("exa", "webSearch", 65),
     {
       ...webProvider("gemini", "webSearch", 20),
       getConfiguredCredentialValue: (): undefined => undefined,
@@ -290,29 +282,19 @@ describe("command secret target ids", () => {
     },
   );
 
-  it("uses Firecrawl web fetch credentials as search fallback targets", () => {
+  it.each([
+    [true, "firecrawl-key"],
+    [false, secretRef("FIRECRAWL_API_KEY")],
+  ] as const)("scopes Firecrawl search fallback (enabled=%s)", (enabled, apiKey) => {
     const scoped = getCapabilityWebSearchCommandSecretTargets(
-      webConfig("firecrawl", firecrawlWebKey("webFetch", "firecrawl-key")) as never,
+      webConfig("firecrawl", firecrawlWebKey("webFetch", apiKey), enabled) as never,
     );
-
+    expect(scoped.targetIds.has(FETCH_KEY)).toBe(enabled);
     expectScope(scoped, {
-      targetIds: [FETCH_KEY, SEARCH_KEY],
+      ...(enabled ? { targetIds: [FETCH_KEY, SEARCH_KEY] } : {}),
       allowedPaths: undefined,
-      forcedActivePaths: [FETCH_KEY],
+      forcedActivePaths: enabled ? [FETCH_KEY] : undefined,
     });
-  });
-
-  it("does not force search fallback refs when web search is disabled", () => {
-    const scoped = getCapabilityWebSearchCommandSecretTargets(
-      webConfig(
-        "firecrawl",
-        firecrawlWebKey("webFetch", secretRef("FIRECRAWL_API_KEY")),
-        false,
-      ) as never,
-    );
-
-    expect(scoped.targetIds.has(FETCH_KEY)).toBe(false);
-    expectScope(scoped, { allowedPaths: undefined, forcedActivePaths: undefined });
   });
 
   it("limits auto-detect wildcard fallback paths to the concrete configured path", () => {
