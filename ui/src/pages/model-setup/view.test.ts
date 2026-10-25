@@ -11,7 +11,15 @@ import {
   text,
   renderSetup,
   disposeViews,
+  type ModelSetupViewProps,
 } from "./test-helpers/view.test-support.tsx";
+
+function readyProps(
+  result: Partial<SystemAgentSetupDetectResult>,
+  overrides: Partial<ModelSetupViewProps> = {},
+) {
+  return props({ ...overrides, page: { phase: "ready", result: { ...detected, ...result } } });
+}
 
 function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
   return mount(
@@ -64,14 +72,8 @@ describe("renderModelSetup", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";
     const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
-          },
-        },
+      readyProps({
+        candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
       }),
     );
     const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
@@ -93,8 +95,7 @@ describe("renderModelSetup", () => {
     expect(ollama?.textContent).toContain("Choose connection");
     expect(llamaCpp?.textContent).toContain("Set up model");
     expect(
-      container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
-        ?.textContent,
+      container.querySelector('[data-prepare-choice="lmstudio"] button')?.textContent,
     ).toContain("Connect server");
     const llamaCppRow = container.querySelector('[data-prepare-choice="llama-cpp"]');
     expect(llamaCppRow?.querySelector('[data-provider-icon="llamacpp"]')).not.toBeNull();
@@ -105,23 +106,17 @@ describe("renderModelSetup", () => {
     expect(onStartPrepare).toHaveBeenCalledWith(expect.objectContaining({ id: "ollama" }));
 
     const withUsableOllama = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [
-              ...detected.candidates,
-              {
-                kind: "provider-auto:ollama",
-                label: "Ollama",
-                detail: "available locally",
-                modelRef: "ollama/qwen3:8b",
-                recommended: false,
-              },
-            ],
+      readyProps({
+        candidates: [
+          ...detected.candidates,
+          {
+            kind: "provider-auto:ollama",
+            label: "Ollama",
+            detail: "available locally",
+            modelRef: "ollama/qwen3:8b",
+            recommended: false,
           },
-        },
+        ],
       }),
     );
     expect(withUsableOllama.querySelector('[data-prepare-choice="ollama"]')).toBeNull();
@@ -190,14 +185,7 @@ describe("renderModelSetup", () => {
   });
 
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
-    const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: { ...detected, candidates: [], authOptions: [] },
-        },
-      }),
-    );
+    const container = mount(readyProps({ candidates: [], authOptions: [] }));
 
     expect(text(container)).toContain("Recommended installs");
     const card = container.querySelector('[data-recommended-install="ollama"]');
@@ -211,37 +199,28 @@ describe("renderModelSetup", () => {
     expect(link?.target).toBe("_blank");
     expect(link?.rel).toBe("noopener");
 
-    const withSignIn = mount(
-      props({
-        page: { phase: "ready", result: { ...detected, candidates: [] } },
-      }),
-    );
+    const withSignIn = mount(readyProps({ candidates: [] }));
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
   });
 
   it("uses explicit brand identity without guessing from labels or opaque ids", () => {
     const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "custom-login",
-                brandId: "claude",
-                label: "Company account",
-                icon: "https://cdn.example.com/custom.png",
-              },
-            ],
-          },
+      readyProps(
+        {
+          candidates: [],
+          authOptions: [],
+          recommendedInstalls: [],
+          manualProviders: [
+            {
+              id: "custom-login",
+              brandId: "claude",
+              label: "Company account",
+              icon: "https://cdn.example.com/custom.png",
+            },
+          ],
         },
-        manualProviderId: "custom-login",
-        iconUrls: {},
-      }),
+        { manualProviderId: "custom-login", iconUrls: {} },
+      ),
     );
 
     expect(
@@ -254,27 +233,21 @@ describe("renderModelSetup", () => {
     const iconUrl = "https://cdn.example.com/acme.png";
     const onIconError = vi.fn();
     const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "acme",
-                label: "Acme",
-                icon: iconUrl,
-              },
-            ],
-          },
+      readyProps(
+        {
+          candidates: [],
+          authOptions: [],
+          recommendedInstalls: [],
+          manualProviders: [
+            {
+              id: "acme",
+              label: "Acme",
+              icon: iconUrl,
+            },
+          ],
         },
-        manualProviderId: "acme",
-        iconUrls: { [iconUrl]: "blob:acme" },
-        onIconError,
-      }),
+        { manualProviderId: "acme", iconUrls: { [iconUrl]: "blob:acme" }, onIconError },
+      ),
     );
 
     const image = container.querySelector<HTMLImageElement>(".model-setup__manual img");
@@ -297,39 +270,35 @@ describe("renderModelSetup", () => {
       credentials: true,
     };
     const container = mount(
-      props({
-        onActivateCandidate,
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            configuredModel: savedCandidate.modelRef,
-            setupComplete: true,
-            candidates: [
-              {
-                kind: "existing-model",
-                brandId: "openai",
-                label: "Current model",
-                detail: "openai/gpt-5 — already configured",
-                modelRef: savedCandidate.modelRef,
-                recommended: false,
-                credentials: true,
-              },
-              { ...savedCandidate, kind: "provider-auto:openai", label: "OpenAI" },
-              savedCandidate,
-              {
-                kind: "claude-cli",
-                brandId: "claude",
-                label: "Claude Code",
-                detail: "logged in",
-                modelRef: "claude-cli/claude-opus-5",
-                recommended: false,
-                credentials: true,
-              },
-            ],
-          },
+      readyProps(
+        {
+          configuredModel: savedCandidate.modelRef,
+          setupComplete: true,
+          candidates: [
+            {
+              kind: "existing-model",
+              brandId: "openai",
+              label: "Current model",
+              detail: "openai/gpt-5 — already configured",
+              modelRef: savedCandidate.modelRef,
+              recommended: false,
+              credentials: true,
+            },
+            { ...savedCandidate, kind: "provider-auto:openai", label: "OpenAI" },
+            savedCandidate,
+            {
+              kind: "claude-cli",
+              brandId: "claude",
+              label: "Claude Code",
+              detail: "logged in",
+              modelRef: "claude-cli/claude-opus-5",
+              recommended: false,
+              credentials: true,
+            },
+          ],
         },
-      }),
+        { onActivateCandidate },
+      ),
     );
 
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
@@ -350,27 +319,19 @@ describe("renderModelSetup", () => {
     expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(savedCandidate);
   });
 
-  it("renders connection verification progress", () => {
-    const container = mount(
-      props({
-        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
-        verify: { phase: "checking" },
-        actionsDisabled: true,
-      }),
+  it("renders verification progress and then the answering model", () => {
+    const viewProps = readyProps(
+      { configuredModel: "openai/gpt-5" },
+      { verify: { phase: "checking" }, actionsDisabled: true },
     );
+    const container = mount(viewProps);
     expect(text(container)).toContain("Checking — asking openai/gpt-5 for a quick reply…");
     expect(
       container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
     ).toBe(true);
-  });
-
-  it("renders successful connection verification with the answering model", () => {
-    const container = mount(
-      props({
-        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
-        verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
-      }),
-    );
+    viewProps.verify = { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 };
+    viewProps.actionsDisabled = false;
+    renderSetup(viewProps, container);
     expect(text(container)).toContain("Ready · 1234 ms");
     const current = container.querySelector(".model-setup__current");
     expect(current?.textContent).toContain("Anthropic");
@@ -586,26 +547,24 @@ describe("renderModelSetup", () => {
         featured: false,
       };
       const container = mount(
-        props({
-          embedded: true,
-          agentLabel: "Writer",
-          credentialChoices: ["openai-oauth", "other-device", "openai", "gemini-api-key"],
-          manualProviderId: "special-token",
-          manualApiKey: "synthetic-token",
-          onStartAuth,
-          onManualConnect,
-          page: {
-            phase: "ready",
-            result: {
-              ...detected,
-              configuredModel: "openai/gpt-5.6-luna",
-              authOptions: [...(detected.authOptions ?? []), install, custom],
-              manualProviders: setupOnly
-                ? [{ id: "special-token", brandId: "openai", label: "Special account token" }]
-                : detected.manualProviders,
-            },
+        readyProps(
+          {
+            configuredModel: "openai/gpt-5.6-luna",
+            authOptions: [...(detected.authOptions ?? []), install, custom],
+            manualProviders: setupOnly
+              ? [{ id: "special-token", brandId: "openai", label: "Special account token" }]
+              : detected.manualProviders,
           },
-        }),
+          {
+            embedded: true,
+            agentLabel: "Writer",
+            credentialChoices: ["openai-oauth", "other-device", "openai", "gemini-api-key"],
+            manualProviderId: "special-token",
+            manualApiKey: "synthetic-token",
+            onStartAuth,
+            onManualConnect,
+          },
+        ),
       );
       expect(container.querySelector(".content-header")).toBeNull();
       expect(container.querySelector(".model-setup__current")).toBeNull();

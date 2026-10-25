@@ -17,6 +17,7 @@ import {
   callsFor,
   waitForElement,
   pageButton,
+  nativeModel,
 } from "./model-setup-first-run.test-support.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
@@ -72,17 +73,6 @@ describe("Model setup refresh continuity", () => {
     await waitForFast(() => expect(page.querySelector(".model-setup__manual")).not.toBeNull());
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
-  });
-
-  it("waits for route data without reading props during effect application", async () => {
-    const warnings = vi.spyOn(console, "warn");
-    const { context, request } = createFirstRunContext();
-    const page = createPage(context);
-    document.body.appendChild(page);
-    mountModelSetupPage(page);
-    await page.updateComplete;
-    expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(0);
-    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("keeps editable drafts and focus through a failed rescan and its retry", async () => {
@@ -181,13 +171,7 @@ describe("Model setup refresh continuity", () => {
 
   it("admits one native refresh on open and keeps cached choices through failure and retry", async () => {
     const { context, client, request } = createFirstRunContext();
-    const model = {
-      provider: "acp-opencode",
-      id: "fixture-model",
-      name: "Cached fixture model",
-      available: true,
-      agentRuntime: { id: "acp-opencode", source: "implicit" as const },
-    };
+    const model = nativeModel("Cached fixture model");
     const cached: ModelCatalogResult = { models: [model] };
     const pending = createDeferred<ModelCatalogResult>();
     const retry = createDeferred<ModelCatalogResult>();
@@ -279,13 +263,7 @@ describe("Model setup refresh continuity", () => {
 
   it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {
     const { context, client, request } = createFirstRunContext();
-    const model = {
-      provider: "acp-opencode",
-      id: "fixture-model",
-      name: "Fixture model",
-      available: true,
-      agentRuntime: { id: "acp-opencode", source: "implicit" as const },
-    };
+    const model = nativeModel();
     let catalog: ModelCatalogResult = { models: [model], pendingProviders: ["acp-qwen"] };
     const retry = createDeferred<ModelCatalogResult>();
     let discoveries = 0;

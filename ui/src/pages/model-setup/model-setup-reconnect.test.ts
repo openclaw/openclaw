@@ -99,6 +99,7 @@ describe("ModelSetupPage detection ownership", () => {
   it.each(["route", "gateway"] as const)(
     "waits for %s readiness before detection",
     async (ready) => {
+      const warnings = vi.spyOn(console, "warn");
       const { context, request, setGatewayPhase, detectCalls } = fixture;
       request.mockImplementation(async (method) =>
         method === "openclaw.setup.detect" ? detection : {},
@@ -108,6 +109,7 @@ describe("ModelSetupPage detection ownership", () => {
       }
       const page = await mountPage(context, ready !== "route");
       expect(request).not.toHaveBeenCalled();
+      expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
       if (ready === "gateway") {
         expect(authButton(page, "provider-auth")).toBeNull();
         setGatewayPhase("connected");
