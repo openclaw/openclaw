@@ -676,10 +676,6 @@ export function resolveModelRoutes(
   };
 }
 
-export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
-  return params.providerConfig;
-}
-
 export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyContext) {
   switch (params.provider.trim().toLowerCase()) {
     case "openai":

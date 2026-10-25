@@ -154,20 +154,8 @@ describe("provider public artifacts", () => {
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
-    expect(surface?.normalizeConfig).toBeTypeOf("function");
     expect(surface?.projectRealtimeVoicePublicProjection).toBeTypeOf("function");
 
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-completions",
-      models: [],
-    };
-    expect(
-      surface?.normalizeConfig?.({
-        provider: "openai",
-        providerConfig,
-      }),
-    ).toBe(providerConfig);
     expect(
       surface
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
