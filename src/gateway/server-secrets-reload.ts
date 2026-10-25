@@ -159,7 +159,10 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
               getActiveSecretsRuntimeSnapshotRevisionState() === previousRevision,
           });
           const changedPaths = diffConfigPaths(previousSnapshot.config, prepared.config);
-          const plan = buildGatewayReloadPlan(changedPaths);
+          const plan = buildGatewayReloadPlan(changedPaths, {
+            previousConfig: previousSnapshot.config,
+            candidateConfig: prepared.config,
+          });
           const nextGeneration = params.resolveSharedGatewaySessionGenerationForConfig(
             prepared.config,
           );

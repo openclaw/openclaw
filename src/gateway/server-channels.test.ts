@@ -781,29 +781,47 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("reports unfinished work to a strict caller joining a non-strict stop", async () => {
-    const releaseTask = createDeferred();
-    const stopAccount = vi.fn(async () => {});
-    const manager = setupChannel({ startAccount: async () => releaseTask.promise, stopAccount });
-    await manager.startChannels();
-    await flushMicrotasks();
-    const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
-    const strictStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
-      manual: false,
-      strict: true,
-    });
-    const rejected = expect(strictStop).rejects.toThrow("still owns running work");
-    try {
-      await vi.advanceTimersByTimeAsync(5_000);
-      await firstStop;
-      await rejected;
-      expect(stopAccount).toHaveBeenCalledOnce();
-    } finally {
-      releaseTask.resolve();
+  it.each(["task", "preparation"] as const)(
+    "reports unfinished %s to a strict caller joining a non-strict stop",
+    async (pending) => {
+      const preparing = createDeferred();
+      const releasePreparation = createDeferred();
+      const releaseTask = createDeferred();
+      const stopAccount = vi.fn(async () => {});
+      const manager = setupChannel({
+        startAccount: async () => releaseTask.promise,
+        stopAccount,
+        isConfigured: async () => {
+          if (pending === "preparation") {
+            preparing.resolve();
+            await releasePreparation.promise;
+          }
+          return true;
+        },
+      });
+      const starting = manager.startChannels();
+      await (pending === "preparation" ? preparing.promise : starting);
       await flushMicrotasks();
-      await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    }
-  });
+      const firstStop = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+      const strictStop = manager
+        .stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false, strict: true })
+        .catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await firstStop;
+        expect(await strictStop).toEqual(
+          expect.objectContaining({ message: expect.stringContaining("still owns running work") }),
+        );
+        expect(stopAccount).toHaveBeenCalledOnce();
+      } finally {
+        releasePreparation.resolve();
+        releaseTask.resolve();
+        await starting;
+        await flushMicrotasks();
+        await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+      }
+    },
+  );
 
   it("keeps a timed-out stop hook failure authoritative after late task settlement", async () => {
     const releaseTask = createDeferred();

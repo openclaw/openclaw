@@ -49,6 +49,7 @@ import { createHotTailPlan } from "./server-reload-handlers.config.test-support.
 import * as modelRuntimeReload from "./server-reload-model-runtime-scope.js";
 import {
   registerGatewaySecretCredentialReloadCases,
+  registerSecretAccountIdentityReloadCases,
   type CredentialReloadHarnessOptions,
 } from "./server-secrets-reload.test-support.js";
 import {
@@ -392,6 +393,12 @@ describe("gateway aux handlers", () => {
   });
 
   registerGatewaySecretCredentialReloadCases(createCredentialReloadHarness);
+  registerSecretAccountIdentityReloadCases((before, after) => {
+    activateSnapshot(before);
+    return createSecretsReloadHarnessWithChannelMocks({
+      prepareRuntimeSecretsSnapshot: mockResolvedSecrets(after),
+    });
+  });
 
   it("does not restart account targets already covered by a whole-channel target", async () => {
     activateSnapshot(slackConfig("old-secret"));

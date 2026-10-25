@@ -70,6 +70,7 @@ import {
 import { waitForChannelStopGracefully } from "./channel-stop-timeout.js";
 import {
   createChannelAccountLifetime,
+  resolveChannelAccountStopFallback,
   runChannelAccountStop,
   type ChannelAccountLifetime,
   type ChannelAccountStopOutcome,
@@ -1054,7 +1055,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const currentStop = store.stops.get(id);
         if (currentStop?.status === "stopping") {
           const outcome = await currentStop.attempt;
-          return optsLocal.strict && !currentStop.settled && outcome.status === "fulfilled"
+          const unsettled = !currentStop.settled || (retainCleanupOwner && store.starting.has(id));
+          return optsLocal.strict && unsettled && outcome.status === "fulfilled"
             ? {
                 status: "rejected",
                 error: new Error(`Channel ${channelId}/${id} still owns running work.`),
@@ -1079,17 +1081,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!canHandoff) {
             releaseRouteHandoff(store, id);
           }
-          const task = store.tasks.get(id);
-          // Disabled idle accounts need no credentials; admitted lifetimes retain their teardown.
-          const fallbackStop =
-            !lifetime && !explicitlyDisabled && plugin
-              ? runPluginCleanup(plugin, () => {
-                  const gateway = plugin.gateway;
-                  const stopAccount = gateway?.stopAccount;
-                  return gateway && stopAccount ? { gateway, stopAccount } : undefined;
-                })
-              : undefined;
-          if (!abort && !task && !lifetime?.teardown && !fallbackStop && !retainedCleanup) {
+          const task =
+            store.tasks.get(id) ??
+            (optsLocal.strict && retainCleanupOwner ? store.starting.get(id) : undefined);
+          const fallback = resolveChannelAccountStopFallback(
+            lifetime,
+            explicitlyDisabled ? undefined : plugin,
+            cfg,
+            id,
+            manual,
+          );
+          if (!abort && !task && !lifetime?.teardown && !fallback && !retainedCleanup) {
             stopState.settled = true;
             return { status: "fulfilled" };
           }
@@ -1111,7 +1113,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // Running and failed-stop accounts belong to their admitted plugin and config,
           // even after publication removes the account or replaces its registration.
           const teardown = lifetime?.teardown;
-          if (teardown || (fallbackStop && plugin) || retainedCleanup) {
+          if (teardown || fallback || retainedCleanup) {
             // Teardown can outlive the start task. Its own lease permits route and status
             // writes only until this stop attempt completes or times out.
             const stopLease = createPluginRuntimeCapabilityLease("channel account stop");
@@ -1128,10 +1130,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   rootScheduler: opts.scheduler,
                   lease: stopLease,
                   teardown,
-                  fallback:
-                    fallbackStop && plugin
-                      ? { ...fallbackStop, plugin, cfg, accountId: id }
-                      : undefined,
+                  fallback,
                   createFallbackContext: (account, scheduler) =>
                     createAccountContext(
                       channelId,
@@ -1277,6 +1276,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const failedStop = stopOutcomes.find((outcome) => outcome.status === "rejected");
     if (failedStop?.status === "rejected") {
       throw failedStop.error;
+    }
+    if (accountId && !manual && plugin) {
+      const currentAccountIds = runPluginCleanup(plugin, () =>
+        plugin.config.listAccountIds(getRuntimeConfig()),
+      );
+      evictStaleChannelAccountState(channelId, store, currentAccountIds);
     }
   };
 
