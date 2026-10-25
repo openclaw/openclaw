@@ -57,8 +57,10 @@ adjacent resources with their original relative layout, plus this exact
 Record the actual bundle SHA256 and Actions run/artifact IDs. Dispatch
 `aot-artifacts.yml` from `main` with `enable_aot=true`, those three identities,
 a full OpenClaw `source_sha` reachable from main, and `min_memory_gib` selected
-from measured JS build peak plus headroom. The workflow label `xcode-27` does not
-establish available RAM. There is no measured threshold default: inspect the
+from measured JS build peak plus headroom. The experiment uses the existing
+`xcode-27-xlarge` tier; the repository documents the standard `xcode-27` runner as
+3 CPUs with 7 GB RAM. The larger label alone does not establish sufficient RAM
+for AOT. There is no measured threshold default: inspect the
 retained host report and select sufficient physical RAM before dispatch.
 The job requires a macOS 27 or newer runner and rejects native architecture mismatch, insufficient physical RAM, or
 less than 25 GiB free on either internal or output storage. Memory pressure is

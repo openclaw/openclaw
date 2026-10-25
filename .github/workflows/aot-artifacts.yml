@@ -40,7 +40,7 @@ env:
 jobs:
   build:
     if: ${{ inputs.enable_aot && github.ref == 'refs/heads/main' }}
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 240
     permissions:
       contents: read
