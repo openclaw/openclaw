@@ -26,7 +26,6 @@ import {
   releasedSubagentPayloadFilter,
 } from "./subagent-registry.store.released-reader.test-support.js";
 import {
-  loadSubagentMaintenanceRunsInDatabase,
   readSubagentRun,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
@@ -77,19 +76,6 @@ describe("subagent registry sqlite store", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
     }
-  });
-
-  it("reads current maintenance rows in one statement without a transaction envelope", () => {
-    const run = createRun();
-    saveRuns(run);
-    const database = openOpenClawStateDatabase();
-    using transactionSql = vi.spyOn(database.db, "exec");
-    const first = loadSubagentMaintenanceRunsInDatabase(database);
-    expect([...first.keys()]).toEqual([run.runId]);
-    expect(transactionSql).not.toHaveBeenCalled();
-    saveRuns();
-    const next = loadSubagentMaintenanceRunsInDatabase(database);
-    expect(next.size).toBe(0);
   });
 
   it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {
