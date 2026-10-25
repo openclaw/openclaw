@@ -54,11 +54,6 @@ type ChatDetailsMobileRootDestination =
   | { kind: "outputs" }
   | { kind: "versions" };
 
-type ChatDetailsMobileRootOrigin = {
-  kind: "details-root";
-  trigger: HTMLButtonElement;
-};
-
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
@@ -96,7 +91,10 @@ export type ChatDetailsMobileRootProps = {
   versions?: ChatDetailsMobileEntry;
   onNavigate: (
     destination: ChatDetailsMobileRootDestination,
-    origin: ChatDetailsMobileRootOrigin,
+    origin: {
+      kind: "details-root";
+      trigger: HTMLButtonElement;
+    },
   ) => void;
 };
 

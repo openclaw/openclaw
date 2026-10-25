@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, type Mock } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -11,11 +11,8 @@ import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   listSessionEntryKeysReadOnly,
-  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -25,7 +22,6 @@ import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   type AdmittedRunContext,
-  type AdmittedRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
@@ -35,22 +31,20 @@ import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { closeSwarmScheduler, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { sessionReader } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
   holdSpawnCapacity,
   type createSpawnBoundaryParent,
+  type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 export type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
-export type SpawnBoundaryOptions = {
-  createBoundParent: (authority?: AdmittedRunOperatorAuthority) => Promise<BoundParent>;
-  createBoundGateway: (bound: BoundParent) => Promise<{
-    context: GatewayRequestContext;
-    runtime: ReturnType<typeof createGatewayInstanceRuntime>;
-  }>;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
-};
+export type SpawnBoundaryOptions = Pick<
+  NativePluginSpawnTestOptions,
+  "createBoundParent" | "createBoundGateway" | "runEmbeddedAgent"
+>;
 type ChildExecution = {
   admitted: AdmittedRunContext;
   signal: AbortSignal;
@@ -104,6 +98,7 @@ export function registerParticipantSpawnCases(
       const { source: aliceSource, person: alice } = participant("alice", "Alice");
       const { source: bobSource, person: bob } = participant("bob", "Bob");
       const bound = await createBoundParent(aliceSource.authority);
+      const readSession = sessionReader(bound.storePath);
       const parentEnvelope = expectDefined(
         envelopes.find((entry) => entry.runId === parentRunId),
         "parent admission",
@@ -244,13 +239,7 @@ export function registerParticipantSpawnCases(
                 };
                 const entry = queued
                   ? undefined
-                  : expectDefined(
-                      loadSessionEntry({
-                        storePath: bound.storePath,
-                        sessionKey: details.childSessionKey,
-                      }),
-                      "created child",
-                    );
+                  : expectDefined(readSession(details.childSessionKey), "created child");
                 const settled = visible
                   ? expectDefined(
                       getRpcSource(details.runId)?.input.settlement.promise,
@@ -283,10 +272,7 @@ export function registerParticipantSpawnCases(
                 expect(authority.profileId).toBe(profileId);
                 expectOrigin(requesterOrigin, profileId);
                 expect(requesterCreatorProfileId(requesterOrigin)).toBe("alice");
-                const persisted = loadSessionEntry({
-                  storePath: bound.storePath,
-                  sessionKey: details.childSessionKey,
-                });
+                const persisted = readSession(details.childSessionKey);
                 expect(persisted?.createdActor?.delegatedBy).toEqual({
                   type: "human",
                   source: "profile",

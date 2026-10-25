@@ -291,6 +291,30 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
   });
 
+  // #183556: Mistral rejects the whole batch by aggregate tokens, not by item count.
+  it("splits an aggregate-token rejection recursively until every batch fits", async () => {
+    const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (texts.join("").length > 60) {
+        throw new Error(
+          'openai-compatible embeddings failed: HTTP 400: {"object":"error","message":"Too many tokens overall, split into more batches.","type":"invalid_request_prompt","code":"3210"}',
+        );
+      }
+      return texts.map((text) => [Number.parseInt(text.slice(5), 10)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+    await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
+      items.map((_, index) => [index]),
+    );
+    const sizes = embedBatch.mock.calls.map(([texts]) => texts.length);
+    expect(sizes[0]).toBe(33);
+    expect(sizes.slice(1).every((size) => size < 33)).toBe(true);
+    expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+    expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       '{"error":{"code":"InvalidParameter","message":"The parameter input specified in the request is not valid. Request id: fixture-000597000","param":"input"}}',

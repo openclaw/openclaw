@@ -1,0 +1,127 @@
+{
+  "id": "knowledge",
+  "kind": "memory",
+  "name": "Knowledge",
+  "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "operatorRead": {
+        "type": "boolean"
+      },
+      "writesEnabled": {
+        "type": "boolean"
+      },
+      "stores": {
+        "type": "object",
+        "patternProperties": {
+          "^[a-z][a-z0-9-]{0,47}$": {
+            "type": "object",
+            "required": [
+              "agents"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "agents": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                },
+                "maxItems": 100
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "maintenance": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Run the scheduled maintenance pass over every configured store. Default true."
+          },
+          "schedule": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 100,
+            "description": "Five-field cron expression. Default 30 3 * * * (03:30 daily)."
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
+          },
+          "reviewJobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. Disable the automation to pause the review."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/60c08d9d3b59278097647bd1b8aa5c2ad6b102c4c93d91b4047f9033eba49aa0/index.js",
+    "styles": [
+      "dist/control-ui/60c08d9d3b59278097647bd1b8aa5c2ad6b102c4c93d91b4047f9033eba49aa0/index.css"
+    ]
+  },
+  "skills": [
+    "./skills"
+  ],
+  "contracts": {
+    "tools": [
+      "knowledge_annotate",
+      "knowledge_attach",
+      "knowledge_attach_file",
+      "knowledge_attachment",
+      "knowledge_chronicle_day",
+      "knowledge_chronicle_last_seen",
+      "knowledge_chronicle_since",
+      "knowledge_connections",
+      "knowledge_correct",
+      "knowledge_create_claim",
+      "knowledge_create_relationship",
+      "knowledge_diagnostics",
+      "knowledge_edit_body",
+      "knowledge_evidence_read",
+      "knowledge_grep",
+      "knowledge_history",
+      "knowledge_lookup",
+      "knowledge_merge",
+      "knowledge_mutation",
+      "knowledge_ontology",
+      "knowledge_publish_batch",
+      "knowledge_recall",
+      "knowledge_reconcile_evidence",
+      "knowledge_record",
+      "knowledge_records",
+      "knowledge_relink",
+      "knowledge_remember",
+      "knowledge_resume",
+      "knowledge_revision",
+      "knowledge_save_page",
+      "knowledge_source_check",
+      "knowledge_status",
+      "knowledge_timeline",
+      "knowledge_unmerge",
+      "knowledge_verify",
+      "knowledge_withdraw"
+    ]
+  }
+}

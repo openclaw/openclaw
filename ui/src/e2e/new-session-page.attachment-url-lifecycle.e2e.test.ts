@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -71,15 +72,7 @@ suite.define(() => {
         });
         await installMockGateway(page, {
           methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "writer", name: "Writer" },
-              ],
-            },
+            "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
             "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
           },
         });

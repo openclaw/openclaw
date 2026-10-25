@@ -13,7 +13,7 @@ import {
 import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import * as sqliteFiles from "../infra/sqlite-files.js";
+import * as sqliteHeaderProbe from "../infra/sqlite-header-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
@@ -167,8 +167,8 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       );
     }
     // Service-platform doubles do not change host SQLite helpers or their Node resolution.
-    const probeSqliteHeaders = sqliteFiles.probeSqliteDatabaseHeaders;
-    vi.spyOn(sqliteFiles, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
+    const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
+    vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
       using _ = selectHostPlatform();
       return probeSqliteHeaders(...args);
     });

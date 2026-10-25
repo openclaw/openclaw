@@ -8,11 +8,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ url: "https://example.test" })),
 }));
 

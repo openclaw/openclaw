@@ -81,6 +81,7 @@ export async function prepareCliTurnPromptContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
+    nativeDelegationTools?: readonly string[];
     requesterProfileId?: string;
     configuredTimezone?: string;
     prompt: string;
@@ -139,6 +140,7 @@ export async function prepareCliTurnPromptContext(
       buildProactiveSubagentOrchestrationSection({
         enabled: params.thinkLevel === "ultra",
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+        nativeDelegationTools: params.nativeDelegationTools,
       }).join("\n"),
       interruptedInputContext
         ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))

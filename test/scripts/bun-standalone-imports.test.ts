@@ -25,7 +25,11 @@ const embeddedPaths = {
   "../standalone-worker-threads.cjs": "/$bunfs/root/standalone-worker-threads.js",
 };
 
-function rewrite(contents: string, entries: Record<string, string> = embeddedPaths) {
+function rewrite(
+  contents: string,
+  entries: Record<string, string> = embeddedPaths,
+  preserveTypes = false,
+) {
   return rewriteStandaloneImports({
     contents,
     filename,
@@ -34,10 +38,42 @@ function rewrite(contents: string, entries: Record<string, string> = embeddedPat
     moduleAliases,
     workerThreadsShim,
     parse,
+    preserveTypes,
   });
 }
 
 describe("standalone import relocation", () => {
+  it("relocates free CommonJS paths while preserving local bindings and property names", () => {
+    const source = `[
+      { __dirname, __filename },
+      (({ __dirname }) => __dirname)({ __dirname: "local" }),
+      ({ __dirname: "property" }).__dirname,
+      class { __dirname() { return "method"; } },
+    ];`;
+    const contents = rewrite(source);
+    const result = vm.runInNewContext(contents, {
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
+    });
+    expect(result[0]).toEqual({
+      __dirname: "/relocated-app/runtime/dist",
+      __filename: "/relocated-app/runtime/dist/entry.mjs",
+    });
+    expect(result[1]).toBe("local");
+    expect(result[2]).toBe("property");
+    expect(new result[3]()["__dirname"]()).toBe("method");
+  });
+
+  it.each([
+    'import { __dirname as directory } from "./value.mjs"; export { directory as __filename };',
+    'export { value as __dirname } from "./value.mjs";',
+    'export * as __filename from "./value.mjs";',
+    "__dirname: for (;;) { break __dirname; }",
+  ])("preserves module names and labels: %s", (source) => {
+    const contents = rewrite(source);
+    expect(() => parse(contents, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+    expect(contents).toBe(source);
+  });
+
   it("defers a known unrendered URL without inventing a runtime path", () => {
     const contents = rewriteStandaloneImports({
       contents: "(() => import.meta.url)",
@@ -87,55 +123,69 @@ const result: string = readLoadedCommit("file:///explicit.mjs");
     expect(read).toThrow("OPENCLAW_UNRENDERED_MODULE_URL:dist/entry.mjs");
   });
 
-  it("retains the typed resolver's receiver, arguments, return and restoration contracts", () => {
-    const source = `type Resolver = (this: { calls: number }, request: string, parent: string | undefined, isMain: boolean, options?: { paths: string[] }) => string;
-const original: Resolver = function (request) { return request; };
-const holder: { module: { calls: number; _resolveFilename?: Resolver } } = { module: { calls: 0, _resolveFilename: original } };
-const seen: unknown[] = [];
-holder.module._resolveFilename = function (request, parent, isMain, options) {
+  it.each([
+    ["direct", "%s"],
+    ["satisfies", "(%s) satisfies Resolver"],
+    ["as", "(%s) as Resolver"],
+    ["non-null", "(%s)!"],
+    ["parenthesized", "(((%s)))"],
+  ])(
+    "retains the typed %s resolver's handoff, receiver, arguments and restoration",
+    (_, expression) => {
+      const resolver = expression.replace(
+        "%s",
+        `function (request, parent, isMain, options) {
   if (request === "throw") throw new Error("resolver failure");
   this.calls += 1;
   seen.push([parent, isMain, options?.paths]);
   return request;
-};
+}`,
+      );
+      const source = `type Resolver = (this: { calls: number }, request: string, parent: string | undefined, isMain: boolean, options?: { paths: string[] }) => string;
+const original: Resolver = function (request) { return request; };
+const holder: { module: { calls: number; _resolveFilename?: Resolver } } = { module: { calls: 0, _resolveFilename: original } };
+const resolverProperty = "_resolveFilename" as const;
+const seen: unknown[] = [];
+holder.module[resolverProperty] = ${resolver};
 const mapped: string = holder.module._resolveFilename("/physical/entry.js", "parent", false, { paths: ["root"] });
 const externalResult: string = holder.module._resolveFilename("/external/entry.js", undefined, true);
 let error: string | undefined;
 try { holder.module._resolveFilename("throw", undefined, false); } catch (caught) { error = caught instanceof Error ? caught.message : "unknown"; }
 holder.module._resolveFilename = original;
 [mapped, externalResult, holder.module.calls, holder.module._resolveFilename === original, error, seen];`;
-    const contents = rewriteStandaloneImports({
-      contents: source,
-      filename,
-      runtimeRoot,
-      embeddedPaths,
-      moduleAliases,
-      workerThreadsShim,
-      parse: createStandaloneSourceParser(),
-      preserveTypes: true,
-    });
-    const declarations = `declare var __openclawStandaloneEmbeddedPath: (path: string) => string | undefined;\n`;
-    expect(typeCheckSources({ "resolver.ts": declarations + contents })).toEqual([]);
-    const result = vm.runInNewContext(stripTypeScriptTypes(contents), {
-      __openclawStandaloneEmbeddedPath: (target: string) =>
-        target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
-    });
-    expect(result).toEqual([
-      "/$bunfs/root/entry.js",
-      "/external/entry.js",
-      2,
-      true,
-      "resolver failure",
-      [
-        ["parent", false, ["root"]],
-        [undefined, true, undefined],
-      ],
-    ]);
-  });
+      const contents = rewriteStandaloneImports({
+        contents: source,
+        filename,
+        runtimeRoot,
+        embeddedPaths,
+        moduleAliases,
+        workerThreadsShim,
+        parse: createStandaloneSourceParser(),
+        preserveTypes: true,
+      });
+      const declarations = `declare var __openclawStandaloneEmbeddedPath: (path: string) => string | undefined;\n`;
+      expect(typeCheckSources({ "resolver.ts": declarations + contents })).toEqual([]);
+      const result = vm.runInNewContext(stripTypeScriptTypes(contents), {
+        __openclawStandaloneEmbeddedPath: (target: string) =>
+          target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
+      });
+      expect(result).toEqual([
+        "/$bunfs/root/entry.js",
+        "/external/entry.js",
+        2,
+        true,
+        "resolver failure",
+        [
+          ["parent", false, ["root"]],
+          [undefined, true, undefined],
+        ],
+      ]);
+    },
+  );
 
   it("keeps a typed root's published module URL while its compiler input is staged elsewhere", async () => {
     const rewritten = rewriteStandaloneImports({
-      contents: "(async () => [import.meta.url, await import(target)])",
+      contents: "(async () => [import.meta.url, await import(target), __dirname, __filename])",
       filename: `${runtimeRoot}/.typed-source/core/src/entry.ts`,
       physicalFilename: `${runtimeRoot}/dist/entry.js`,
       runtimeRoot,
@@ -150,8 +200,14 @@ holder.module._resolveFilename = original;
       __openclawStandaloneRootUrl: relocatedRoot,
       __openclawStandaloneImport: async (parent: string, target: string) =>
         new URL(target, parent).href,
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
     });
-    expect(await load()).toEqual([`${relocatedRoot}dist/entry.js`, `${relocatedRoot}dist/next.js`]);
+    expect(await load()).toEqual([
+      `${relocatedRoot}dist/entry.js`,
+      `${relocatedRoot}dist/next.js`,
+      "/relocated-app/runtime/dist",
+      "/relocated-app/runtime/dist/entry.js",
+    ]);
   });
 
   it("retains the import type witness without evaluating computed arguments again", async () => {
@@ -415,24 +471,35 @@ const later = "./later.js";
     ).toThrow("Unsupported standalone plugin resolver: openclaw-plugin-sdk-alias");
   });
 
-  it.each(["key", '"_resolveFilename"', "direct"])(
+  it.each(["key", '"_resolveFilename"', "direct", "typed-arrow"])(
     "maps the CJS %s resolver handoff while preserving external paths and restoration",
     (property) => {
-      const access = property === "direct" ? "._resolveFilename" : `[${property}]`;
-      const source = `const key = "_resolveFilename";
+      const typed = property === "typed-arrow";
+      const access = property === "direct" ? "._resolveFilename" : `[${typed ? "key" : property}]`;
+      const resolver = typed
+        ? "((value) => { Module.calls += 1; return value; }) satisfies typeof original"
+        : "function (value) { this.calls += 1; return value; }";
+      const source = `const key = "_resolveFilename"${typed ? " as const" : ""};
         const original = (value) => value;
-        const Module = { _resolveFilename: original };
-        Module${access} = function (value) { this.calls += 1; return value; };
-        Module.calls = 0;
+        const Module = { calls: 0, _resolveFilename: original };
+        Module${access} = ${resolver};
         const mapped = Module${access}("/app/runtime/dist/plugin-sdk/entry.js");
         const external = Module${access}("/profile/plugins/entry.cjs");
         Module${access} = original;
         [mapped, external, Module.calls, Module${access} === original];`;
-      const result = vm.runInNewContext(rewrite(source), {
+      const context = {
         __openclawStandaloneEmbeddedPath: (target: string) =>
           target === "/app/runtime/dist/plugin-sdk/entry.js" ? "/$bunfs/root/sdk.js" : undefined,
-      });
-      expect(result).toEqual(["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true]);
+      };
+      const expected = ["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true];
+      expect(vm.runInNewContext(rewrite(stripTypeScriptTypes(source)), { ...context })).toEqual(
+        expected,
+      );
+      expect(
+        vm.runInNewContext(stripTypeScriptTypes(rewrite(source, embeddedPaths, typed)), {
+          ...context,
+        }),
+      ).toEqual(expected);
     },
   );
 });

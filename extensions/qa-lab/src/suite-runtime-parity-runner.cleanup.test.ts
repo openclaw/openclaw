@@ -17,8 +17,8 @@ import {
 } from "./qa-transport-registry.js";
 import type { RuntimeParityScenarioExecution } from "./runtime-parity.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
+import * as suiteRunStandard from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
 import {
   artifactPaths,
   childResult,
@@ -181,22 +181,17 @@ async function runCleanupTestSuite(params: {
   progressEnabled?: boolean;
   runChild: QaSuiteRunner;
 }) {
-  const repoRoot = await tempDirs.makeTempDir("qa-parity-cleanup-");
-  return runQaRuntimeParitySuite({
-    runQaFlowSuite: params.runChild,
+  vi.spyOn(suite, "shouldLogQaSuiteProgress").mockReturnValue(params.progressEnabled ?? false);
+  vi.spyOn(suiteRunStandard, "runQaFlowSuiteStandard").mockImplementation((childParams) =>
+    params.runChild(childParams),
+  );
+  return runFlow([makeQaSuiteTestScenario("runtime-cleanup")], {
     adapterFactories: [params.factory],
     channelDriver: "live",
     channelId: "leased",
-    repoRoot,
-    outputDir: path.join(repoRoot, "output"),
-    startedAt: new Date("2026-08-04T00:00:00.000Z"),
-    ...runtimeOptions,
     transportId: "qa-channel",
     fastMode: true,
-    concurrency: 1,
-    selectedScenarios: [makeQaSuiteTestScenario("runtime-cleanup")],
     startLab: async () => params.lab,
-    progressEnabled: params.progressEnabled ?? false,
     runtimePair: ["openclaw", "codex"],
   });
 }

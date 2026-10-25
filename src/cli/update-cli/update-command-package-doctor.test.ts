@@ -35,9 +35,10 @@ import * as stateSnapshots from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as configCapture from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
-import { processResult, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
 import { completeUpdateCommandRun, createUpdateRunProgress } from "./update-command-run.js";
 

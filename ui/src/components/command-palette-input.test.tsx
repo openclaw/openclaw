@@ -26,11 +26,16 @@ afterEach(() => {
 });
 
 it("reports full edit events and retires input refs and pending layout on removal", async () => {
-  const disconnect = vi.fn();
+  const observed = new Set<Element>();
+  const disconnect = vi.fn(() => observed.clear());
   vi.stubGlobal(
     "ResizeObserver",
     vi.fn(function () {
-      return { observe: vi.fn(), disconnect };
+      return {
+        observe: (target: Element) => observed.add(target),
+        unobserve: (target: Element) => observed.delete(target),
+        disconnect,
+      };
     }),
   );
   const [value, setValue] = createSignal("");
@@ -50,6 +55,7 @@ it("reports full edit events and retires input refs and pending layout on remova
   mockLayout(input, 48);
   await vi.advanceTimersByTimeAsync(20);
   expect(inputRef).toHaveBeenCalledWith(input);
+  expect(observed.size).toBeGreaterThan(0);
 
   const prompt = "🦞".repeat(4_097) + "\nFinish the task";
   input.value = prompt;
@@ -67,6 +73,7 @@ it("reports full edit events and retires input refs and pending layout on remova
   setValue("pending");
   flush();
   mounted.unmount();
+  expect(observed.size).toBe(0);
   expect(disconnect).toHaveBeenCalledOnce();
   expect(inputRef).toHaveBeenLastCalledWith(undefined, input);
   mockLayout(input, 100);
@@ -80,10 +87,12 @@ it("reports full edit events and retires input refs and pending layout on remova
   const restored = remounted.container.querySelector("textarea")!;
   mockLayout(restored, 72);
   await vi.advanceTimersByTimeAsync(20);
+  expect(observed.size).toBeGreaterThan(0);
   expect(restored.style.height).toBe("72px");
   restored.value = "Remounted";
   restored.dispatchEvent(new InputEvent("input", { bubbles: true }));
   expect(onValueChange).toHaveBeenLastCalledWith("Remounted", expect.any(InputEvent));
   remounted.unmount();
+  expect(observed.size).toBe(0);
   expect(disconnect).toHaveBeenCalledTimes(2);
 });

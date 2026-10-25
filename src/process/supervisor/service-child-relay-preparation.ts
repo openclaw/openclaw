@@ -50,13 +50,14 @@ export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null
 export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
   const nativeProcessOwner =
     getInheritedNativeProcessOwner() ??
-    (process.platform === "linux" &&
+    ((process.platform === "linux" || process.platform === "darwin") &&
     (typeof WORKER_DEPLOY_BUILD !== "boolean" || !WORKER_DEPLOY_BUILD)
       ? resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href
       : undefined);
-  const useLinuxSubreaper =
+  const useNativeProcessOwner =
     nativeProcessOwner !== undefined &&
     (!params.ownedWorker || params.nativeProcessOwnerSupported === true);
+  const useLinuxSubreaper = process.platform === "linux" && useNativeProcessOwner;
   if (!useLinuxSubreaper) {
     assertProcessGroupControl();
   }
@@ -97,7 +98,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
     return {
       useWindowsJobAnchor,
       useLinuxSubreaper,
-      nativeProcessOwner: useLinuxSubreaper ? nativeProcessOwner : undefined,
+      nativeProcessOwner: useNativeProcessOwner ? nativeProcessOwner : undefined,
       controlFd,
       lineageFd,
       ownership: params.ownedWorker
@@ -116,6 +117,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
               useWindowsJobAnchor ? "serviceChildWindowsJobAnchor" : "serviceChildRelay",
             ),
         env: params.ownedWorker ? params.env : process.env,
+        ...(useLinuxSubreaper ? { nativeProcessOwner } : {}),
         detached:
           useWindowsJobAnchor ||
           useLinuxSubreaper ||

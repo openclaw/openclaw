@@ -19,32 +19,6 @@ export class TranscriptRowRefs {
     return new Set([...this.virtualizer.elementsCache.values(), ...this.pendingRows.keys()]);
   }
 
-  private queueUpdate(): void {
-    if (this.updateQueued) {
-      return;
-    }
-    this.updateQueued = true;
-    // Both Lit and Solid refs can run before connection. Pruning in the same
-    // commit must wait too, or it can unobserve newly registered sibling rows.
-    queueMicrotask(() => {
-      this.updateQueued = false;
-      for (const [row, rowKey] of this.pendingRows) {
-        if (
-          row.isConnected &&
-          row.dataset.virtualRowKey === rowKey &&
-          this.callbacks.isCurrentRow(row, rowKey)
-        ) {
-          this.virtualizer.measureElement(row);
-        }
-      }
-      this.pendingRows.clear();
-      if (this.pruneQueued) {
-        this.pruneQueued = false;
-        this.virtualizer.measureElement(null);
-      }
-    });
-  }
-
   forKey(key: string): (element?: Element) => void {
     return (element?: Element) => {
       if (element instanceof HTMLElement) {
@@ -53,7 +27,29 @@ export class TranscriptRowRefs {
       } else {
         this.pruneQueued = true;
       }
-      this.queueUpdate();
+      if (this.updateQueued) {
+        return;
+      }
+      this.updateQueued = true;
+      // Both Lit and Solid refs can run before connection. Pruning in the same
+      // commit must wait too, or it can unobserve newly registered sibling rows.
+      queueMicrotask(() => {
+        this.updateQueued = false;
+        for (const [row, rowKey] of this.pendingRows) {
+          if (
+            row.isConnected &&
+            row.dataset.virtualRowKey === rowKey &&
+            this.callbacks.isCurrentRow(row, rowKey)
+          ) {
+            this.virtualizer.measureElement(row);
+          }
+        }
+        this.pendingRows.clear();
+        if (this.pruneQueued) {
+          this.pruneQueued = false;
+          this.virtualizer.measureElement(null);
+        }
+      });
     };
   }
 

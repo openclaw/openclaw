@@ -1,17 +1,10 @@
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+  const index: PluginMetadataSnapshot["index"] = createIndexFixture({
     policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
+  });
   return {
     policyHash: "",
     ...(workspaceDir !== undefined ? { workspaceDir } : {}),

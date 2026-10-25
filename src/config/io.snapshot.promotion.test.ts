@@ -21,7 +21,6 @@ import {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
-import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion.js";
 import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
 import {
   approveRecoveryCandidate,
@@ -63,9 +62,9 @@ describe("config observe recovery promotion", () => {
     const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
+      true,
+    );
     await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
       healthy.raw,
     );
@@ -73,20 +72,13 @@ describe("config observe recovery promotion", () => {
     const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
 
     await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({
-        deps,
-        snapshot: truncated,
-        logger: deps.logger,
-      }),
+      createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(truncated),
     ).resolves.toBe(false);
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
       "Config last-known-good promotion skipped",
     );
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
       "size-drop-vs-last-good",
-    );
-    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "missing-meta-vs-last-good",
     );
     await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
       healthy.raw,
@@ -119,9 +111,9 @@ describe("config observe recovery promotion", () => {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const healthyConfig = createRecoveryBaselineConfig();
     const healthy = await makeSnapshot(configPath, healthyConfig);
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: { warn } }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
+      true,
+    );
 
     // An accepted write grows the file beyond twice its size and advances the
     // last-known-good baseline, publishing the compensation record.
@@ -152,9 +144,9 @@ describe("config observe recovery promotion", () => {
         trustedProxies: Array.from({ length: 300 }, (_, index) => `192.0.2.${index}`),
       },
     });
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: newer, logger: { warn } }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(newer)).resolves.toBe(
+      true,
+    );
     const newerBaseline = readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood;
     expect(newerBaseline?.hash).not.toBe(compensation.candidate.hash);
 
@@ -173,9 +165,9 @@ describe("config observe recovery promotion", () => {
       gateway: { mode: "local" as const },
     });
 
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
+      true,
+    );
 
     const edited = await makeSnapshot(configPath, {
       meta: { lastTouchedVersion: "2026.4.22" },
@@ -183,13 +175,9 @@ describe("config observe recovery promotion", () => {
       gateway: { mode: "local" as const, port: 19187 },
     });
 
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({
-        deps,
-        snapshot: edited,
-        logger: deps.logger,
-      }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(
+      true,
+    );
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
       "Config last-known-good promotion skipped",
     );
@@ -247,16 +235,12 @@ describe("config observe recovery promotion", () => {
     }
 
     // The stored baseline permits matching healthy config and refuses truncation.
-    await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
-    ).resolves.toBe(true);
+    await expect(createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(
+      true,
+    );
     const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
     await expect(
-      promoteConfigSnapshotToLastKnownGoodCore({
-        deps,
-        snapshot: truncated,
-        logger: deps.logger,
-      }),
+      createConfigIO(deps).promoteConfigSnapshotToLastKnownGood(truncated),
     ).resolves.toBe(false);
 
     // Advancing the stored baseline retains its prior fingerprint for compensation.
@@ -340,7 +324,7 @@ describe("last-known-good promotion after accepted writes", () => {
 
   it.each([
     { anomaly: "size", proxies: 80 },
-    { anomaly: "metadata-only", proxies: 1 },
+    { anomaly: "gateway-mode", proxies: 1 },
   ])(
     "does not bless a pre-existing $anomaly truncation through an ordinary accepted edit",
     async ({ anomaly, proxies }) => {
@@ -359,15 +343,15 @@ describe("last-known-good promotion after accepted writes", () => {
           trustedProxies: Array.from({ length: proxies }, (_, index) => `192.0.2.${index}`),
         },
       });
-      expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "metadata-only");
+      expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "gateway-mode");
       const healthy = await io.readConfigFileSnapshot();
       await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
 
-      // Metadata-only loss must survive writer stamping even below the size-drop
+      // Missing gateway mode must survive writer stamping below the size-drop
       // threshold; an ordinary edit is not approval of either earlier anomaly.
       seedConfig(configPath, {
-        ...(anomaly === "size" ? { meta: { lastTouchedVersion: "2026.4.22" } } : {}),
-        gateway: { mode: "local", port: 18789 },
+        meta: { lastTouchedVersion: "2026.4.22" },
+        gateway: { ...(anomaly === "size" ? { mode: "local" } : {}), port: 18789 },
       });
       const truncated = await io.readConfigFileSnapshot();
       await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
@@ -430,7 +414,7 @@ describe("last-known-good promotion after accepted writes", () => {
     await expect(io.promoteConfigSnapshotToLastKnownGood(reducedSnapshot)).resolves.toBe(true);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
 
-    seedConfig(configPath, { gateway: { mode: "local", port: 19187 } });
+    seedConfig(configPath, { gateway: { port: 19187 } });
     const truncatedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
@@ -648,10 +632,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the inherited anomaly when a later accepted edit rolls back", async () => {
-    const initial = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: { mode: "local" as const, trustedProxies: ["192.0.2.1"] },
-    };
+    const initial = createRecoveryBaselineConfig();
     await withTempHomeConfig(initial, async ({ configPath }) => {
       const io = createConfigIO({ observe: true });
       const healthy = await io.readConfigFileSnapshot();

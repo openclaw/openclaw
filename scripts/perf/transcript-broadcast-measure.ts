@@ -1,3 +1,15 @@
+// Team-shaped stress: prepare team-shape-fixture.ts --sessions 10000 --runs 8000
+// --settled-runs, then run this script against the built Gateway with:
+// --state-dir <fixture> --scenario memory-soak --clients 65 --runs 4 --plugins 40
+// --stress-tools --row-mode sidebar --limit 200 --list-filter-churn
+// --list-interval-ms 10000 --poll-seed team-stress --duration-ms 600000
+// --soak-rounds 40 --warmup-ms 60000 --round-interval-ms 15000 --chunks 200
+// --chunk-interval-ms 50 --retained-profile-ms 0 --diagnostics.
+// Trace allocations in a separate pass with matching fixture treatment on both sides:
+// either fresh fixtures or consistently warmed post-timing state.
+// wholeSoakCpu includes idle gaps; listFilterCounts proves measured search coverage.
+// Team fanout checks use continuous foreground receipts and committed injection IDs;
+// timed event counts can split unrelated background broadcasts at window boundaries.
 // --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
 // Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
 // node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
@@ -16,7 +28,14 @@
 // Fixed-work comparison: omit --poll-seed and use --soak-rounds 16,
 // --round-interval-ms 37500 and --list-interval-ms 600000 (256 requests per RPC method).
 // Setup can restore cold histories; report setup-inclusive worker/CPU totals too.
+// --cold-idle-ms 310000 adds a quiet tail after the measured soak, then reads the
+// last cold-summary key reserved from load. Use 257 cold keys for 256 load reads.
+// The tail records worker lifetimes/heaps and the real history response separately
+// from timing gates. Background usage refresh can warm the reserved key; this is
+// a functional history-read check, not guaranteed cold-restoration proof.
 
+// Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
+// Add --final-answer-phase to exercise the visible projection during each delta.
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
@@ -58,6 +77,7 @@ import {
 import { createServer } from "node:http";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
+import { createHistogram } from "node:perf_hooks";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -107,11 +127,14 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
+import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 
 const { values } = parseArgs({
   options: {
     // Cold-history worker-churn instrumentation and fixture workload.
     "cold-history": { type: "boolean", default: false },
+    "cold-idle-ms": { type: "string" },
     "worker-creation-counts": { type: "boolean", default: false },
     "stress-worktree-fanout": { type: "boolean", default: false },
     "state-dir": { type: "string" },
@@ -160,6 +183,11 @@ const { values } = parseArgs({
     "poll-between-rounds": { type: "boolean", default: false },
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
+    "team-stress": { type: "boolean", default: false },
+    "operator-model-policy": { type: "boolean", default: false },
+    "team-stress-churn-ms": { type: "string", default: "1000" },
+    "team-stress-list-weight": { type: "string", default: "2" },
+    "team-stress-allocation-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -211,6 +239,8 @@ const { values } = parseArgs({
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
+    "answer-chunk": { type: "string", default: "Synthetic streamed answer. " },
+    "final-answer-phase": { type: "boolean", default: false },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
@@ -232,7 +262,8 @@ const { values } = parseArgs({
   },
 });
 // Fixture fanout keeps the same continuous polling as the explicit pacing option.
-const pollBetweenRounds = values["poll-between-rounds"] || values["stress-worktree-fanout"];
+const pollBetweenRounds =
+  values["poll-between-rounds"] || values["stress-worktree-fanout"] || values["team-stress"];
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
 }
@@ -271,6 +302,13 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
+if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
+  throw new Error(
+    `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
+  );
+}
+const syntheticPluginCount = values["team-stress"] ? 0 : pluginCount;
+const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
 }
@@ -329,14 +367,8 @@ const gatewayPreload = values["gateway-preload"]
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
-if (
-  values["list-filter-churn"] &&
-  scenario !== "sessions.list" &&
-  !(scenario === "memory-soak" && values["mixed-rpc"])
-) {
-  throw new Error(
-    "--list-filter-churn requires --scenario sessions.list or memory-soak --mixed-rpc",
-  );
+if (values["list-filter-churn"] && scenario !== "sessions.list" && scenario !== "memory-soak") {
+  throw new Error("--list-filter-churn requires --scenario sessions.list or memory-soak");
 }
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
@@ -745,6 +777,29 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
 if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
   throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
 }
+const teamStressChurnMs = integer(values["team-stress-churn-ms"], "--team-stress-churn-ms");
+const teamStressListWeight = integer(
+  values["team-stress-list-weight"],
+  "--team-stress-list-weight",
+  1,
+);
+if (teamStressListWeight > 64) {
+  throw new Error("--team-stress-list-weight must not exceed 64");
+}
+if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
+  throw new Error("--team-stress requires memory-soak and --mixed-rpc");
+}
+if (
+  values["team-stress-allocation-sampling"] &&
+  (!values["team-stress"] ||
+    values.allocations ||
+    values["stream-start-allocations"] ||
+    retainedProfileMs > 0)
+) {
+  throw new Error(
+    "--team-stress-allocation-sampling requires --team-stress and no other heap sampling (--retained-profile-ms 0)",
+  );
+}
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
 }
@@ -983,6 +1038,28 @@ if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds * r
   );
 }
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const teamStressTargets =
+  values["team-stress"] && Array.isArray(fixture.stressTargets)
+    ? fixture.stressTargets.map((target: unknown) => {
+        if (
+          !isRecord(target) ||
+          typeof target.sessionKey !== "string" ||
+          typeof target.agentId !== "string"
+        ) {
+          throw new Error("Team stress targets require sessionKey and agentId");
+        }
+        return { sessionKey: target.sessionKey, agentId: target.agentId };
+      })
+    : [];
+if (values["team-stress"] && teamStressTargets.length === 0) {
+  throw new Error("--team-stress requires unarchived fixture targets");
+}
+const teamStressFanout = values["team-stress"]
+  ? createTeamStressFanoutReceipts(
+      clientCount,
+      teamStressTargets.map((target) => target.sessionKey),
+    )
+  : undefined;
 type StartupTarget = {
   sessionKey: string;
   shortId?: string;
@@ -1069,6 +1146,17 @@ const coldHistoryKeys: string[] = values["cold-history"]
 if (values["cold-history"] && (!values["mixed-rpc"] || !coldHistoryKeys.length)) {
   throw new Error("--cold-history requires --mixed-rpc and a prepared worker-cold fixture");
 }
+const coldIdleMs =
+  values["cold-idle-ms"] === undefined
+    ? undefined
+    : integer(values["cold-idle-ms"], "--cold-idle-ms", 300_000);
+if (
+  coldIdleMs !== undefined &&
+  (!soakScenario || !values["cold-history"] || coldHistoryKeys.length < 2)
+) {
+  throw new Error("--cold-idle-ms requires memory-soak --cold-history with at least two cold keys");
+}
+const coldIdleKey = coldIdleMs === undefined ? undefined : coldHistoryKeys.pop();
 let coldHistorySequence = 0;
 let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
@@ -1211,6 +1299,14 @@ if (soakScenario) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
 }
+if (values["team-stress"]) {
+  const bundled = teamStressPlugins;
+  cfg.plugins.enabled = true;
+  cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), ...bundled])];
+  for (const id of bundled) {
+    cfg.plugins.entries[id] = { ...cfg.plugins.entries[id], enabled: true };
+  }
+}
 const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
 const dashboardPreviewTitle = "Synthetic dashboard issue";
@@ -1244,6 +1340,13 @@ const githubOptionsObservations: Array<{
 }> = [];
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 const startupObserverPreload = path.join(output, "startup-observer-preload.mjs");
+const teamStressPreload = path.join(output, "team-stress-preload.mjs");
+if (values["team-stress"]) {
+  writeFileSync(
+    teamStressPreload,
+    `import { isMainThread } from "node:worker_threads";\nimport { installTeamStressTelemetryIpc } from ${JSON.stringify(new URL("./team-shape-stress-telemetry.ts", import.meta.url).href)};\nif (isMainThread) installTeamStressTelemetryIpc();\n`,
+  );
+}
 if (scenario === "chat.startup") {
   writeFileSync(
     startupObserverPreload,
@@ -1334,9 +1437,9 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
-if (scenario === "plugins.reload" || scenario === "plugin.scope" || pluginCount > 0) {
+if (scenario === "plugins.reload" || scenario === "plugin.scope" || syntheticPluginCount > 0) {
   const plugin = writePluginFixtures(output, {
-    count: Math.max(1, pluginCount),
+    count: Math.max(1, syntheticPluginCount),
     activationOnStartup: true,
     nodePolicy: values["node-policy-churn"],
   });
@@ -1531,11 +1634,17 @@ const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
 const trustedProxyScenario =
+  values["operator-model-policy"] ||
   values["operator-access-policy"] ||
   values["github-options-connected"] ||
   values["presence-deltas"];
 const clientConnection = {
   url: `ws://127.0.0.1:${port}`,
+  // Long streamed replies plus allocation sampling can queue admission beyond the
+  // helper's interactive default. Keep the full delay in measured connect latency.
+  handshakeTimeoutMs: 60_000,
+  openTimeoutMs: 60_000,
+  openTimeoutMessage: "benchmark WebSocket admission exceeded 60s",
   ...(trustedProxyScenario
     ? {
         origin: authorityOrigin,
@@ -1641,6 +1750,15 @@ if (trustedProxyScenario) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
+          ...(values["operator-model-policy"]
+            ? {
+                modelPolicy: {
+                  sourceAgent: "main",
+                  allow: ["openai/*"],
+                  deny: ["openai/blocked-*"],
+                },
+              }
+            : {}),
           ...(values["operator-access-policy"]
             ? { accessPolicyPlugin: "synthetic-operator-access" }
             : {}),
@@ -1665,7 +1783,7 @@ const configPath = values["default-state-dir"]
   ? path.join(root, `${path.basename(output)}.json`)
   : path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
-const chunk = "Synthetic streamed answer. ";
+const chunk = values["answer-chunk"];
 function responseEvents(chunks: string[]) {
   const text = chunks.join("");
   const item = {
@@ -1673,6 +1791,7 @@ function responseEvents(chunks: string[]) {
     id: "msg_broadcast",
     role: "assistant",
     status: "completed",
+    ...(values["final-answer-phase"] ? { phase: "final_answer" } : {}),
     content: [{ type: "output_text", text, annotations: [] }],
   };
   return [
@@ -1842,6 +1961,7 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
       throw new Error("stress subagent spawn did not return an accepted native child");
     }
     state.accepted = { runId: accepted.runId, childSessionKey: accepted.childSessionKey };
+    teamStressFanout?.trackForeground([accepted.childSessionKey], false);
     state.phase = "yield-issued";
     return functionCallEvents(
       "sessions_yield",
@@ -2488,6 +2608,68 @@ const representativeFrames = new Map<string, FrameSizes>();
 let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
+let teamStressStartedAt: number | undefined;
+let teamStressTelemetryActive = false;
+let teamStressPrometheusScrapes = 0;
+let teamStressRpcBucket:
+  | {
+      minute: number;
+      methods: Map<string, { histogram: ReturnType<typeof createHistogram>; errors: number }>;
+    }
+  | undefined;
+const teamStressRpcMinutes: Array<{
+  minute: number;
+  startedAtEpochMs: number;
+  methods: Record<
+    string,
+    { count: number; errors: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number }
+  >;
+}> = [];
+function flushTeamStressRpcMinute() {
+  if (!teamStressRpcBucket || teamStressStartedAt === undefined) {
+    return;
+  }
+  const minute = {
+    minute: teamStressRpcBucket.minute,
+    startedAtEpochMs: teamStressStartedAt + teamStressRpcBucket.minute * 60_000,
+    methods: Object.fromEntries(
+      [...teamStressRpcBucket.methods].map(([method, { histogram, errors }]) => [
+        method,
+        {
+          count: histogram.count,
+          errors,
+          p50Ms: (histogram.percentile(50) - 1) / 1000,
+          p95Ms: (histogram.percentile(95) - 1) / 1000,
+          p99Ms: (histogram.percentile(99) - 1) / 1000,
+          maxMs: (histogram.max - 1) / 1000,
+        },
+      ]),
+    ),
+  };
+  teamStressRpcMinutes.push(minute);
+  appendFileSync(path.join(output, "stress-rpc-minutes.jsonl"), `${JSON.stringify(minute)}\n`);
+  teamStressRpcBucket = undefined;
+}
+function recordTeamStressRpc(method: string, elapsedMs: number, ok: boolean) {
+  if (!teamStressTelemetryActive || teamStressStartedAt === undefined) {
+    return;
+  }
+  const minute = Math.floor((Date.now() - teamStressStartedAt) / 60_000);
+  if (teamStressRpcBucket && teamStressRpcBucket.minute !== minute) {
+    flushTeamStressRpcMinute();
+  }
+  const { methods } = (teamStressRpcBucket ??= { minute, methods: new Map() });
+  let metric = methods.get(method);
+  if (!metric) {
+    metric = {
+      histogram: createHistogram({ lowest: 1, highest: 3_600_000_001, figures: 3 }),
+      errors: 0,
+    };
+    methods.set(method, metric);
+  }
+  metric.histogram.record(Math.min(3_600_000_000, Math.round(elapsedMs * 1000)) + 1);
+  metric.errors += Number(!ok);
+}
 let measuringWholeSoakAllocation = false;
 let wholeSoakDeliveredSessionEvents = 0;
 let capturingColdSetup = values["dashboard-rpc"];
@@ -2582,6 +2764,9 @@ const env = {
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
+    ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
+    : {}),
   ...(values["github-options-connected"]
     ? {
         GH_TOKEN: "synthetic-github-options",
@@ -2860,9 +3045,11 @@ const dashboardRpcShapes = values["dashboard-rpc"]
 const mixedRpcMethods = [
   "sessions.list",
   "chat.history",
+  ...(values["team-stress"] ? ["chat.startup"] : []),
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...(values["node-policy-churn"] ? ["node.list", "node.describe", "node.invoke"] : []),
+  ...(values["team-stress"] ? Array<string>(teamStressListWeight - 1).fill("sessions.list") : []),
   ...dashboardRpcShapes.map(({ method }) => method),
   ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
@@ -3203,6 +3390,56 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
     child.off("message", onMessage);
   }
 }
+async function controlTeamStressTelemetry(child: ChildProcess, action: "start" | "stop") {
+  await new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", finish);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onMessage = (message: unknown) => {
+      if (
+        !isRecord(message) ||
+        message.channel !== "team-shape-stress" ||
+        message.action !== action
+      ) {
+        return;
+      }
+      finish(
+        message.ok === true
+          ? undefined
+          : new Error(`Team stress telemetry ${action}: ${String(message.error)}`),
+      );
+    };
+    const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
+    const timeout = setTimeout(
+      () => finish(new Error(`Team stress telemetry ${action} timed out`)),
+      60_000,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", finish);
+    child.send(
+      {
+        channel: "team-shape-stress",
+        action,
+        output,
+        allocations: values["team-stress-allocation-sampling"],
+      },
+      (error) => {
+        if (error) {
+          finish(error);
+        }
+      },
+    );
+  });
+}
 function summarizeLatencies(latencies: number[]) {
   const sorted = latencies.toSorted((a, b) => a - b);
   return {
@@ -3274,8 +3511,15 @@ async function rpc(
 ) {
   assertGatewayAlive();
   const started = performance.now();
-  const response = await client.request(method, params, 180_000);
+  let response: Awaited<ReturnType<typeof client.request>>;
+  try {
+    response = await client.request(method, params, 180_000);
+  } catch (error) {
+    recordTeamStressRpc(method, performance.now() - started, false);
+    throw error;
+  }
   const rpcDurationMs = performance.now() - started;
+  recordTeamStressRpc(method, rpcDurationMs, response.ok);
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
@@ -3529,6 +3773,7 @@ async function startStressSubagent(
   client: ReturnType<typeof createGatewayWsClient>,
   current: NonNullable<typeof cohort>,
 ) {
+  teamStressFanout?.trackForeground([stressParentKey], false);
   await rpc(client, "sessions.reset", { key: stressParentKey });
   let releaseChild!: () => void;
   const childReady = new Promise<void>((resolve) => {
@@ -3634,11 +3879,13 @@ async function finishStressSubagent(
 }
 let completedSoakRounds = 0;
 let sessionResets = 0;
+let teamStressWrites = 0;
 async function runRound(
   client: ReturnType<typeof createGatewayWsClient>,
   measuredRound?: number,
   roundKeys = keys,
 ) {
+  teamStressFanout?.trackForeground(roundKeys);
   const cronOperatorJob = values["cron-operator-turn"] ? cronOperatorJobs[0] : undefined;
   if (values["cron-operator-turn"] && !cronOperatorJob?.id) {
     throw new Error("Cron operator fixture is not ready");
@@ -4077,18 +4324,23 @@ async function runRound(
     await captureWork;
   }
 }
-async function drainEvents() {
+async function drainEvents(requireSubscriberQuiet = true) {
   const started = performance.now();
   const timeoutMs = values["stress-worktree-fanout"] ? 60_000 : 15_000;
   while (performance.now() - started < timeoutMs) {
     assertGatewayAlive();
-    if (activeStreams === 0 && performance.now() - lastSubscriberEventAt >= 1000) {
+    if (
+      activeStreams === 0 &&
+      (!requireSubscriberQuiet ||
+        (performance.now() - lastSubscriberEventAt >= 1000 &&
+          !teamStressFanout?.pendingInjections().length))
+    ) {
       return;
     }
     await delay(50);
   }
   throw new Error(
-    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}, pendingInjectionReceipts=${JSON.stringify(teamStressFanout?.pendingInjections() ?? [])}`,
   );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
@@ -4313,6 +4565,7 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      teamStressFanout?.observe(index, event.event, payload);
       if (
         index === 0 &&
         event.event === "chat" &&
@@ -4474,6 +4727,7 @@ let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
+    flushTeamStressRpcMinute();
     cohort?.release();
     for (const id of [
       ...(stressCronJobId ? [stressCronJobId] : []),
@@ -4531,7 +4785,9 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      "./scripts/tsx.mjs",
+      values["team-stress"]
+        ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
+        : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
@@ -4547,6 +4803,7 @@ try {
         : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(values["team-stress"] ? ["--import", teamStressPreload] : []),
       ...(values["transport-counts"]
         ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
         : []),
@@ -4894,11 +5151,45 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
-  if (reloadPluginId || scopePluginId) {
-    writeFileSync(
-      path.join(output, "plugin-inventory.json"),
-      JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
-    );
+  if (values["operator-model-policy"]) {
+    const catalog = await rpc(sender, "models.list", { agentId: "main" });
+    if (
+      !isRecord(catalog) ||
+      !isRecord(catalog.modelSelectionPolicy) ||
+      catalog.modelSelectionPolicy.restricted !== true ||
+      catalog.modelSelectionPolicy.defaultModel !== "openai/gpt-4.1"
+    ) {
+      throw new Error("Synthetic operator did not acquire its model policy");
+    }
+    writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
+  }
+  if (reloadPluginId || scopePluginId || values["team-stress"]) {
+    const inventory = await rpc(sender, "plugins.list", {});
+    writeFileSync(path.join(output, "plugin-inventory.json"), JSON.stringify(inventory, null, 2));
+    if (values["team-stress"]) {
+      const plugins =
+        isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
+      // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
+      const requiredActive = new Set(["acpx", "codex", "diagnostics-prometheus", "openai"]);
+      const invalid = [...new Set([...teamStressPlugins, ...requiredActive])].filter(
+        (id) =>
+          !plugins.some(
+            (plugin: unknown) =>
+              isRecord(plugin) &&
+              plugin.id === id &&
+              plugin.enabled === true &&
+              isRecord(plugin.runtime) &&
+              !plugin.runtime.error &&
+              (plugin.runtime.state === "active" ||
+                (!requiredActive.has(id) && plugin.runtime.state === "unloaded")),
+          ),
+      );
+      if (invalid.length) {
+        throw new Error(
+          `Team stress plugins missing, failed, or required runtime inactive: ${invalid.join(", ")}; inspect plugin-inventory.json`,
+        );
+      }
+    }
   }
   const expectedSidebar =
     scenario === "reconnect"
@@ -4970,12 +5261,13 @@ try {
     {},
     { archived: false },
     { archived: true },
-    { search: "team-shape" },
+    { search: values["team-stress"] ? "Synthetic" : "team-shape" },
     { agentId: "main" },
     { excludeSubagents: true },
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;
+  const listFilterCounts = listFilterShapes.map(() => 0);
   const readStartup = async (
     client: ReturnType<typeof createGatewayWsClient>,
     target: StartupTarget,
@@ -5313,7 +5605,8 @@ try {
     }
     const started = performance.now();
     await runScenario(undefined, warmupOperations);
-    await drainEvents();
+    // Stress background publications need not stop after the warmup turns settle.
+    await drainEvents(!values["team-stress"]);
     if (!soakScenario) {
       break;
     }
@@ -5371,6 +5664,24 @@ try {
     }
   }
   const warmReadyAtEpochMs = Date.now();
+  if (values["team-stress"]) {
+    const shape: Record<string, number> = {};
+    for (const archived of ["all", false, true] as const) {
+      const page = await rpc(sender, "sessions.list", { agentId: "main", archived, limit: 1 });
+      if (!isRecord(page) || typeof page.totalCount !== "number") {
+        throw new Error("Team stress live session census did not return totalCount");
+      }
+      shape[String(archived)] = page.totalCount;
+    }
+    writeFileSync(path.join(output, "stress-shape.json"), JSON.stringify(shape, null, 2));
+    if (
+      shape.all! < fixtureSessionCount ||
+      shape.false! < fixtureSessionCount - Number(fixture.archivedCount) ||
+      shape.true! < Number(fixture.archivedCount)
+    ) {
+      throw new Error("Team stress session shape changed during Gateway startup maintenance");
+    }
+  }
   console.log("PHASE warmed");
   if (values["start-file"]) {
     while (!existsSync(values["start-file"])) {
@@ -5386,6 +5697,11 @@ try {
     await delay(startAt - Date.now());
   }
   const warmStartReleasedAtEpochMs = Date.now();
+  if (values["team-stress"]) {
+    await controlTeamStressTelemetry(gateway, "start");
+    teamStressStartedAt = Date.now();
+    teamStressTelemetryActive = true;
+  }
   const soakAllocationPath =
     soakScenario && values.allocations
       ? path.join(output, "allocation-soak.heapprofile")
@@ -5642,6 +5958,72 @@ try {
       const stopped = new Promise<void>((resolve) => {
         stopPolling = resolve;
       });
+      // Exercise the real transcript commit/publication path independently of model turns.
+      const churnWork = values["team-stress"]
+        ? (async () => {
+            while (true) {
+              if (!polling) {
+                break;
+              }
+              const started = performance.now();
+              const target = teamStressTargets[teamStressWrites % teamStressTargets.length]!;
+              const injected = await rpc(sender, "chat.inject", {
+                ...target,
+                message: `Synthetic Team stress timestamp churn ${teamStressWrites}.`,
+              });
+              if (
+                !isRecord(injected) ||
+                injected.ok !== true ||
+                typeof injected.messageId !== "string"
+              ) {
+                throw new Error("Team stress timestamp write did not commit");
+              }
+              teamStressWrites++;
+              teamStressFanout?.expectInjection(target.sessionKey, injected.messageId);
+              await Promise.race([
+                delay(Math.max(0, teamStressChurnMs - (performance.now() - started)), undefined, {
+                  ref: false,
+                }),
+                stopped,
+              ]);
+            }
+          })().catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            polling = false;
+            stopPolling();
+          })
+        : undefined;
+      const scrapeWork = values["team-stress"]
+        ? (async () => {
+            while (true) {
+              if (!polling) {
+                break;
+              }
+              const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+                signal: AbortSignal.timeout(10_000),
+                ...(trustedProxyScenario
+                  ? { headers: { ...clientConnection.headers, origin: authorityOrigin } }
+                  : {}),
+              });
+              if (!response.ok) {
+                throw new Error(`Team stress Prometheus scrape failed: HTTP ${response.status}`);
+              }
+              const text = await response.text();
+              if (!text.includes("openclaw_")) {
+                throw new Error("Team stress Prometheus scrape contained no OpenClaw metrics");
+              }
+              writeFileSync(
+                path.join(output, `stress-prometheus-${teamStressPrometheusScrapes++}.prom`),
+                text,
+              );
+              await Promise.race([delay(15_000, undefined, { ref: false }), stopped]);
+            }
+          })().catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+            polling = false;
+            stopPolling();
+          })
+        : undefined;
       const listWork = listIntervalMs
         ? Promise.all(
             clients
@@ -5784,16 +6166,21 @@ try {
                     ) {
                       throw new Error("node.invoke did not return the synthetic node's echo");
                     }
-                  } else if (method === "chat.history") {
+                  } else if (method === "chat.history" || method === "chat.startup") {
+                    const stressTarget = values["team-stress"]
+                      ? teamStressTargets[(clientIndex + round) % teamStressTargets.length]
+                      : undefined;
                     const history = await rpc(
                       client,
                       method,
                       {
-                        sessionKey: historyTurns
-                          ? keys[clientIndex % keys.length]
-                          : coldHistoryKeys.length
-                            ? coldHistoryKeys[coldHistorySequence++ % coldHistoryKeys.length]
-                            : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        ...(stressTarget ?? {
+                          sessionKey: historyTurns
+                            ? keys[clientIndex % keys.length]
+                            : coldHistoryKeys.length
+                              ? coldHistoryKeys[coldHistorySequence++ % coldHistoryKeys.length]
+                              : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        }),
                         limit: 50,
                       },
                       onResponse,
@@ -5803,9 +6190,7 @@ try {
                       !Array.isArray(history.messages) ||
                       !history.messages.length
                     ) {
-                      throw new Error(
-                        "chat.history did not return the retained fixture transcript",
-                      );
+                      throw new Error(`${method} did not return the retained fixture transcript`);
                     }
                   } else if (method === "sessions.diff") {
                     const target =
@@ -5848,7 +6233,12 @@ try {
                       ? { archived: "all", search }
                       : values["list-filter-churn"]
                         ? listFilterShapes[listSequence % listFilterShapes.length]
-                        : undefined;
+                        : values["team-stress"]
+                          ? listFilterShapes[
+                              (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                                listFilterShapes.length
+                            ]
+                          : undefined;
                     requestStarted = performance.now();
                     const page = await rpc(
                       client,
@@ -5856,6 +6246,7 @@ try {
                       {
                         rowMode,
                         limit,
+                        ...(values["team-stress"] ? { archived: "all" } : {}),
                         ...(listFilter ?? { archived: "all" }),
                         ...(values["list-profile-reference"]
                           ? { involvingProfileId: values["list-profile-reference"] }
@@ -5876,6 +6267,10 @@ try {
                           Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
+                    }
+                    if (values["list-filter-churn"] && search === undefined) {
+                      const filterIndex = listSequence % listFilterShapes.length;
+                      listFilterCounts[filterIndex] = listFilterCounts[filterIndex]! + 1;
                     }
                     if (search) {
                       worktreeToolSearches.set(search, (worktreeToolSearches.get(search) ?? 0) + 1);
@@ -5917,9 +6312,6 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (!values["dashboard-rpc"]) {
-          await drainEvents();
-        }
         if (values["dashboard-rpc"] || pollBetweenRounds) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
@@ -5939,6 +6331,8 @@ try {
         polling = false;
         stopPolling();
         await listWork;
+        await churnWork;
+        await scrapeWork;
       }
     };
     const measuredWorkload = async () => {
@@ -5947,13 +6341,13 @@ try {
       }
       try {
         if (turnScenario) {
-          await drainEvents();
+          await drainEvents(!values["team-stress"]);
         }
         measuring = true;
         await workload();
-        // Polling RPCs can publish after workload's first drain. Freeze counters
-        // at a quiet boundary, rather than midway through their recipient fanout.
-        if (turnScenario) {
+        // Polling has stopped and in-flight RPCs have completed; drain their
+        // remaining events before freezing measured counters.
+        if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
           await drainEvents();
@@ -6091,7 +6485,10 @@ try {
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
       );
     }
-    for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
+    teamStressFanout?.assertComplete();
+    for (const event of turnScenario && !teamStressFanout
+      ? ["session.message", "sessions.changed"]
+      : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
         throw new Error(
@@ -6453,6 +6850,11 @@ try {
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
     : undefined;
+  if (values["team-stress"]) {
+    teamStressTelemetryActive = false;
+    flushTeamStressRpcMinute();
+    await controlTeamStressTelemetry(gateway, "stop");
+  }
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
     // Long captures need room for a slower peer before either side forces GC.
@@ -6641,6 +7043,61 @@ try {
       }
     }
   }
+  let coldIdle;
+  if (coldIdleMs !== undefined && coldIdleKey !== undefined) {
+    // All polling has stopped and the synthetic stress cron is disabled above.
+    // Keep ordinary Gateway maintenance enabled; issue no workload requests during quiet.
+    await drainEvents();
+    const before = await readGatewayResources(gateway, { includeWorkers: true });
+    const startedAtEpochMs = Date.now();
+    console.log(
+      `PHASE cold-idle ${JSON.stringify({ startedAtEpochMs, durationMs: coldIdleMs, sessionKey: coldIdleKey })}`,
+    );
+    while (Date.now() - startedAtEpochMs < coldIdleMs) {
+      await delay(Math.min(30_000, coldIdleMs - (Date.now() - startedAtEpochMs)));
+      assertGatewayAlive();
+    }
+    const elapsedMs = Date.now() - startedAtEpochMs;
+    const after = await readGatewayResources(gateway, { includeWorkers: true });
+    const historyReadStartedAt = performance.now();
+    const history = await rpc(sender, "chat.history", { sessionKey: coldIdleKey, limit: 50 });
+    const historyReadMs = performance.now() - historyReadStartedAt;
+    if (
+      !isRecord(history) ||
+      !Array.isArray(history.messages) ||
+      !history.messages.length ||
+      !history.messages.some(
+        (message: unknown) => isRecord(message) && contentText(message.content).length > 0,
+      )
+    ) {
+      throw new Error("Post-idle chat.history did not return the reserved fixture transcript");
+    }
+    const responsePath = path.join(output, "cold-idle-history.json");
+    const response = JSON.stringify(history);
+    writeFileSync(responsePath, `${response}\n`);
+    const afterHistoryRead = await readGatewayResources(gateway, { includeWorkers: true });
+    const archiveStarts = (resources: typeof before) =>
+      resources.workers?.workerLifecycle
+        .filter((worker) =>
+          /^session-accessor\.sqlite-archive\.worker\.[cm]?[jt]s$/.test(worker.script),
+        )
+        .reduce((sum, worker) => sum + worker.started, 0) ?? 0;
+    coldIdle = {
+      requestedMs: coldIdleMs,
+      startedAtEpochMs,
+      elapsedMs,
+      sessionKey: coldIdleKey,
+      before,
+      after,
+      afterHistoryRead,
+      quietArchiveWorkerStarts: archiveStarts(after) - archiveStarts(before),
+      archiveWorkerStartsDuringHistoryRead: archiveStarts(afterHistoryRead) - archiveStarts(after),
+      historyReadMs,
+      messageCount: history.messages.length,
+      responsePath,
+      responseSha256: createHash("sha256").update(response).digest("hex"),
+    };
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   const wholeChatGc =
@@ -6669,9 +7126,10 @@ try {
   }
   const result = {
     output,
+    ...(coldIdle ? { coldIdle } : {}),
     gatewayPreload,
     gatewayReadyMs,
-    syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
+    syntheticPlugins: Math.max(syntheticPluginCount, reloadPluginId || scopePluginId ? 1 : 0),
     ...(values["plugin-update"]
       ? {
           pluginUpdate: {
@@ -6726,6 +7184,18 @@ try {
     pollBetweenRounds,
     mixedRpc: values["mixed-rpc"],
     usageRpc: values["usage-rpc"],
+    ...(values["team-stress"]
+      ? {
+          teamStress: {
+            churnIntervalMs: teamStressChurnMs,
+            committedWrites: teamStressWrites,
+            targets: teamStressTargets.length,
+            prometheusScrapes: teamStressPrometheusScrapes,
+            rpcMinutes: teamStressRpcMinutes,
+            telemetry: JSON.parse(readFileSync(path.join(output, "stress-telemetry.json"), "utf8")),
+          },
+        }
+      : {}),
     ...(values["dashboard-rpc"]
       ? {
           dashboardRpc: {
@@ -6921,6 +7391,8 @@ try {
       : {}),
     ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),
     chunks: chunkCount,
+    answerChunk: chunk,
+    finalAnswerPhase: values["final-answer-phase"],
     chunkIntervalMs,
     peakStreams,
     streamRequests,
@@ -6988,6 +7460,9 @@ try {
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,
           wholeSoakCpu,
+          ...(values["list-filter-churn"]
+            ? { listFilterCounts, listFilterShapes, listChurnPatches: listChurnSequence }
+            : {}),
           wholeSoakGc,
         }
       : {}),

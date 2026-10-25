@@ -328,10 +328,12 @@ async function archiveSessionColdBatch(
       if (!batch) {
         throw new Error("Cold archive worker returned no prepared batch");
       }
-      for (const sessionId of batch.oversizedSessionIds) {
+      for (const { sessionId, lowerBoundBytes } of batch.oversizedTranscripts) {
         oversizedUntil.set(`${storePath}\0${sessionId}`, Date.now() + RESTORE_COOLDOWN_MS);
         log.warn("Transcript remains in SQLite because its archive exceeds the 64 MiB limit", {
           agentId: input.databaseOptions.agentId,
+          sessionId,
+          lowerBoundBytes,
         });
       }
       const included = [
@@ -384,7 +386,7 @@ async function archiveSessionColdBatch(
         archivedTranscripts: result.archivedTranscripts,
         externalizedTranscripts: result.externalizedTranscripts,
         envelopeBytes: batch.envelopeBytes,
-        attemptedTranscripts: included.length + batch.oversizedSessionIds.length,
+        attemptedTranscripts: included.length + batch.oversizedTranscripts.length,
       };
     },
   });

@@ -608,37 +608,33 @@ function findSessionRowById(
 
 export function lookupSessionRow(
   query: records.Lookup,
-  owner: {
-    assertCurrent: () => void;
-    cfg: records.Inputs["cfg"];
-    rows: ReadonlyMap<string, records.Row>;
-    byKey: ReadonlyMap<string, ReadonlySet<string>>;
-    scope: ReturnType<typeof prepareSessionRowScopes> | undefined;
-    stores: ReadonlyMap<string, records.SessionRowStore>;
-  },
+  cfg: records.Inputs["cfg"],
+  rows: ReadonlyMap<string, records.Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  scope: ReturnType<typeof prepareSessionRowScopes> | undefined,
+  stores: ReadonlyMap<string, records.SessionRowStore>,
+  assertCurrent: () => void,
 ) {
   const { agentId } = query;
   const paths = query.storePath
-    ? (owner.scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
+    ? (scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
     : undefined;
   let key = query.key;
   do {
-    const candidates = owner.byKey.get(records.logicalSessionRowIdentity(agentId, key));
+    const candidates = byKey.get(records.logicalSessionRowIdentity(agentId, key));
     if (candidates?.size === 1) {
-      const row = owner.rows.get(candidates.values().next().value!);
+      const row = rows.get(candidates.values().next().value!);
       if (
         row &&
-        (paths
-          ? paths.includes(row.storeTarget.storePath)
-          : owner.stores.has(row.storeTarget.storePath))
+        (paths ? paths.includes(row.storeTarget.storePath) : stores.has(row.storeTarget.storePath))
       ) {
         return row;
       }
     } else if (candidates) {
       // Physical duplicates (including sentinels) retain the topology's store precedence.
-      for (const storePath of paths ?? owner.stores.keys()) {
+      for (const storePath of paths ?? stores.keys()) {
         for (const id of candidates) {
-          const row = owner.rows.get(id);
+          const row = rows.get(id);
           if (row?.storeTarget.storePath === storePath) {
             return row;
           }
@@ -649,14 +645,14 @@ export function lookupSessionRow(
       break;
     }
     key = resolveStoredSessionKeyForAgentStore({
-      cfg: owner.cfg,
+      cfg,
       sessionKey: key,
       agentId,
     });
     if (isIncognitoSessionKey(key)) {
       return readIncognitoSessionRow({
-        assertCurrent: owner.assertCurrent,
-        cfg: owner.cfg,
+        assertCurrent,
+        cfg,
         key,
         agentId,
         storePath: query.storePath,

@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectRuntimeProcessManifestEntries,
+  compileDynamicConsumerEdges,
+} from "../../config/knip-dynamic-consumers.mjs";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
@@ -11,6 +15,10 @@ import {
 import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import {
+  runtimeProcessScriptEntrypoints,
+  runtimeProcessToolingEntrypoints,
+} from "../../src/infra/runtime-process-manifest.ts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -34,6 +42,31 @@ const isEntry = (entries: readonly string[], file: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models the PostgreSQL broker fixture only when both consumers exist", () => {
+    const compile = knipConfig.compilers.mjs;
+    const filePath = "config/knip-dynamic-consumers.mjs";
+    expect(compile("// dynamic consumers", filePath)).toContain(
+      'import { createSqliteWorkerBackend as __dynamicPgPool_0 } from "../scripts/perf/pg-pool-broker.fixture.mts";',
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === path.resolve("scripts/perf/pg-pool-lifecycle.mts")
+        ? String(source).replace('moduleUrl: new URL("./pg-pool-broker.fixture.mts", self),', "")
+        : source;
+    });
+    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
+
+    vi.mocked(fs.readFileSync).mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === path.resolve("src/infra/sqlite-store.worker.ts")
+        ? String(source).replace('"createSqliteWorkerBackend"', '""')
+        : source;
+    });
+    expect(compile("// dynamic consumers", filePath)).not.toContain("pg-pool-broker.fixture.mts");
+  });
+
   it("makes tests in every workspace roots of the full-tree export audit", () => {
     expectEntries(knipConfig.workspaces["."].entry, [
       "config/knip.config.ts!",
@@ -94,6 +127,55 @@ describe("check-deadcode-exports", () => {
 
     expect(allExportsKnipConfig.workspaces["extensions/qa-lab"]?.entry).toContain(
       "src/gateway-child-artifacts-runtime.test-support.ts!",
+    );
+  });
+
+  it("derives generated script and tooling roots from the runtime manifest", () => {
+    expectEntries(knipConfig.workspaces["."].entry, [
+      "scripts/generate-kysely-types.mts!",
+      "scripts/generate-npm-package-lock.worker.mts!",
+      "scripts/lib/fs-safe-npm-cli-preload.entry.mjs!",
+      "scripts/lib/package-cli-node-probe.entry.mjs!",
+      "scripts/lib/package-cli-node-probe.generated.mjs!",
+      "scripts/lib/test-selector-source-facts.worker.mts!",
+      "src/infra/daemon-runtime-probe.entry.ts!",
+      "src/infra/node-runtime-probe.entry.ts!",
+    ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/gateway/worker-environments/workspace-quiescence-scripts.ts!",
+    );
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/infra/update-managed-service-handoff.ts!",
+    );
+
+    const { packageCliNodeProbe: _packageCliNodeProbe, ...withoutPackageCliNodeProbe } =
+      runtimeProcessScriptEntrypoints;
+    const withoutScriptDeclaration = collectRuntimeProcessManifestEntries(
+      withoutPackageCliNodeProbe,
+      runtimeProcessToolingEntrypoints,
+    );
+    expect(withoutScriptDeclaration).not.toContain("scripts/lib/package-cli-node-probe.entry.mjs");
+    expect(withoutScriptDeclaration).not.toContain(
+      "scripts/lib/package-cli-node-probe.generated.mjs",
+    );
+    expect(withoutScriptDeclaration).toContain("src/infra/node-runtime-probe.entry.ts");
+    const withoutGeneratedBinding = compileDynamicConsumerEdges(
+      "// dynamic consumers",
+      "config/knip-dynamic-consumers.mjs",
+      withoutPackageCliNodeProbe,
+    );
+    expect(withoutGeneratedBinding).not.toContain("PACKAGE_CLI_NODE_PROBE_SOURCE");
+    expect(withoutGeneratedBinding).toContain("NODE_RUNTIME_PROBE_SOURCE");
+
+    const { npmPackageLock: _npmPackageLock, ...withoutNpmPackageLock } =
+      runtimeProcessToolingEntrypoints;
+    const withoutToolingDeclaration = collectRuntimeProcessManifestEntries(
+      runtimeProcessScriptEntrypoints,
+      withoutNpmPackageLock,
+    );
+    expect(withoutToolingDeclaration).not.toContain("scripts/generate-npm-package-lock.worker.mts");
+    expect(withoutToolingDeclaration).toContain(
+      "scripts/lib/test-selector-source-facts.worker.mts",
     );
   });
 
@@ -264,6 +346,9 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).toContain(
       'import { r2Task as __dynamic12_0, r2SearchStart as __dynamic12_1, r2SearchMatch as __dynamic12_2, r2SearchBuild as __dynamic12_3, r2SearchEnd as __dynamic12_4, r2PresentCalled as __dynamic12_5, r2PresentMiss as __dynamic12_6, r2Presentation as __dynamic12_7, r2Consume as __dynamic12_8, r2Materialized as __dynamic12_9 } from "../scripts/perf/session-row-churn-probe.js";',
     );
+    expect(compiled).toMatch(
+      /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
+    );
 
     const readFileSync = fs.readFileSync.bind(fs);
     const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
@@ -306,6 +391,14 @@ const catalog = module.loadControlUiSourceCatalog();`;
           "",
         );
       }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/perf/trajectory-flush-preload.mts")
+      ) {
+        return String(source).replace(
+          "import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
       if (path.resolve(String(file)) === doctorConsumerPath) {
         return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
       }
@@ -318,6 +411,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
     expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
+    expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
   });
 
   it("removes projected MCP and Python edges with their actual consumers", () => {
@@ -355,6 +449,62 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).not.toContain("r2Task");
     expect(compiled).toContain("observeNativeMcpProbe");
     expect(compiled).toContain("r2Materialized");
+  });
+
+  it("models only declared materializer and emitted named-import consumers", () => {
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ isSqliteWalResetSafeVersion as __dynamic\d+_0 \} from "\.\.\/node-sqlite\.mjs";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ PACKAGE_CLI_NODE_PROBE_SOURCE as __dynamic\d+_0 \} from "\.\.\/scripts\/lib\/package-cli-node-probe\.generated\.mjs";/u,
+    );
+    expect(compiled).not.toContain("HANDOFF_SCRIPT");
+
+    const generatorPath = path.resolve("scripts/generate-runtime-script-assets.mjs");
+    const prepareHooksPath = path.resolve("scripts/prepare-git-hooks.mjs");
+    const workerArtifactsPath = path.resolve("test/scripts/vitest-worker-artifacts.test.ts");
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = String(readFileSync(file, options));
+      const resolved = path.resolve(String(file));
+      if (resolved === generatorPath) {
+        return replaceFixture(
+          source,
+          'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+          "",
+        );
+      }
+      if (resolved === prepareHooksPath) {
+        return replaceFixture(
+          source,
+          'import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";',
+          "",
+        );
+      }
+      if (resolved === workerArtifactsPath) {
+        return replaceFixture(
+          source,
+          'import { isSqliteWalResetSafeVersion as isSafeVersion } from "../../node-sqlite.mjs";\\n',
+          "const isSafeVersion = () => true;\\n",
+        );
+      }
+      return source;
+    });
+
+    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(withoutConsumers).not.toContain("materializeRuntimeProcessScriptFile");
+    expect(withoutConsumers).not.toContain("resolveRuntimeBootstrapToolingEntrypointUrl");
+    expect(withoutConsumers).not.toContain("isSqliteWalResetSafeVersion");
+    expect(withoutConsumers).toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).toContain("observeNativeMcpProbe");
   });
 
   it.each([

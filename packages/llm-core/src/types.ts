@@ -540,6 +540,8 @@ export interface AssistantMessage {
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+  /** Provider-reported access only; absent/null never confirms a requested program. */
+  responseAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
