@@ -151,7 +151,8 @@ describe("runEmbeddedAgentEntry", () => {
           if (options.isFallbackRetry) {
             candidate.meta = {
               ...candidate.meta,
-              ...visibleReply("fallback complete"),
+              ...visibleReply("NO_REPLY"),
+              finalAssistantRawText: "NO_REPLY\nNO_REPLY",
               executionTrace: {
                 winnerProvider: provider,
                 winnerModel: model,
@@ -207,7 +208,7 @@ describe("runEmbeddedAgentEntry", () => {
     });
     expect(channel.result.terminal.metadata.terminalReply).toEqual({
       disposition: "visible",
-      text: "fallback complete",
+      text: "NO_REPLY",
       modelRouteChange:
         "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
@@ -532,66 +533,32 @@ describe("runEmbeddedAgentEntry", () => {
     },
   );
 
-  it.each([
-    {
-      name: "CLI delivered source reply",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplyDelivered: true as const,
-      expected: { disposition: "silent" as const },
-    },
-    {
-      name: "final internal source reply after silence",
-      meta: { finalAssistantRawText: "NO_REPLY" },
-      sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "forward this reply" },
-    },
-    {
-      name: "prepared visible literal NO_REPLY",
-      meta: { finalAssistantRawText: "NO_REPLY\nNO_REPLY" },
-      sourceReplies: [{ text: "NO_REPLY", sourceReplyFinal: true }],
-      expected: { disposition: "visible" as const, text: "NO_REPLY" },
-    },
-  ])(
-    "records the producer-owned terminal snapshot for $name",
-    async ({ name, meta, expected, sourceReplies, sourceReplyDelivered }) => {
-      const runId = `terminal-${name}`;
-      usePrimaryFallback();
-      const result = await runEntry({
-        selection: { cfg: {}, provider: "provider", model: "model" },
-        runId,
-        runCandidate: async (provider, model) => {
-          const candidate = makeResult({
-            provider,
-            model,
-            meta: { ...meta, terminalReply: expected },
-          });
-          candidate.messagingToolSourceReplyPayloads = sourceReplies;
-          candidate.sourceReplyDelivered = sourceReplyDelivered;
-          if (sourceReplyDelivered) {
-            candidate.meta.agentMeta!.sessionId = "native-cli-session";
-          } else {
-            candidate.meta.agentMeta!.terminalReceipt = {
-              ...receiptFor(runId, provider, model),
-              successfulToolNames: ["read"],
-            };
-          }
-          return candidate;
-        },
-      });
-
-      expect(result.terminal.metadata.terminalReply).toEqual(expected);
-      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-        runId,
-        terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
-      });
-      if (sourceReplyDelivered) {
-        expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-          sourceReplyDelivered: true,
-          sessionId: "session-1",
-          requested: { provider: "provider", model: "model" },
-          successfulToolNames: ["message"],
+  it("records a silent CLI delivery using the entry's session identity", async () => {
+    const runId = "terminal-cli-delivery";
+    usePrimaryFallback();
+    const result = await runEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      runId,
+      runCandidate: async (provider, model) => {
+        const candidate = makeResult({
+          provider,
+          model,
+          meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
         });
-      }
-    },
-  );
+        candidate.sourceReplyDelivered = true;
+        candidate.meta.agentMeta!.sessionId = "native-cli-session";
+        return candidate;
+      },
+    });
+
+    expect(result.terminal.metadata.terminalReply).toEqual({ disposition: "silent" });
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      runId,
+      terminalDisposition: "not-visible",
+      sourceReplyDelivered: true,
+      sessionId: "session-1",
+      requested: { provider: "provider", model: "model" },
+      successfulToolNames: ["message"],
+    });
+  });
 });

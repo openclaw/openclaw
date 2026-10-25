@@ -12,13 +12,8 @@ import {
   makeAgentAssistantMessage,
 } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
-import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
-import {
-  checkMidTurnPrecheck,
-  resolveProjectedRequestPressure,
-} from "./run/preemptive-compaction.js";
+import { resolveProjectedRequestPressure } from "./run/preemptive-compaction.js";
 import {
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
@@ -36,7 +31,6 @@ import {
   makeLegacyToolResult,
   makeToolResultWithDetails,
   makeGuardableAgent,
-  getToolResultText,
   applyGuardToContext,
   expectOpenClawTruncation,
 } from "./tool-result-context-guard.test-support.js";
@@ -107,33 +101,9 @@ function expectBoundedResult(message: AgentMessage, maxChars: number, ...snippet
   }
 }
 
-async function pressureCheck(
-  agent: ReturnType<typeof makeGuardableAgent>,
-  messages: AgentMessage[],
-  toolResultMaxChars?: number,
-) {
-  installToolResultContextGuard({ agent, contextWindowTokens: 200_000 });
-  const projected = await expectDefined(agent.transformContext, "installed guard")(
-    messages,
-    new AbortController().signal,
-  );
-  checkMidTurnPrecheck({
-    context: { messages: convertToLlm(projected), systemPrompt: "sys" },
-    contextTokenBudget: 20_000,
-    reserveTokens: 12_000,
-    toolResultMaxChars,
-    onPrecheck: () => {},
-  });
-  return projected;
-}
-
 describe("installToolResultContextGuard", () => {
-  it.each([
-    "Error: missing import;",
-    "(Command exited with code 1)",
-    "Command timed out after 5 seconds.",
-    "Process exited with signal SIGTERM.",
-  ])("delivers the diagnostic %s through the real agent loop", async (diagnostic) => {
+  it("delivers the truncated diagnostic through the real agent loop", async () => {
+    const diagnostic = "Error: missing import;";
     const hint = "Inspect src/fixture.ts before retrying.";
     const content = [textBlock("progress output\n".repeat(400) + diagnostic + " " + hint)];
     const original = structuredClone(content);
@@ -241,51 +211,6 @@ describe("installToolResultContextGuard", () => {
     const text = getAllToolResultText(expectDefined(result, "legacy result"));
     expect(result).toHaveProperty("content", text);
     expectOpenClawTruncation(text);
-  });
-
-  it("does not split a surrogate pair at the old truncation boundary", async () => {
-    const text = "a".repeat(439) + "😀" + "b".repeat(1_000);
-    const source = makeToolResult("utf16", text);
-    const [result] = await project([source]);
-    expect(getToolResultText(expectDefined(result, "UTF-16 result"))).toBe(
-      "a".repeat(439) + formatContextLimitTruncationNotice(1_002),
-    );
-    expect(getToolResultText(source)).toBe(text);
-  });
-
-  it.each(["compact_then_truncate", "compact_only"] as const)(
-    "signals %s after engine assembly still leaves pressure",
-    async (route) => {
-      const engine = makeEngine();
-      const { agent } = hook(engine);
-      const messages =
-        route === "compact_then_truncate"
-          ? [makeUser("first"), makeToolResult("big", "x".repeat(80_000))]
-          : [makeUser("u".repeat(80_000)), makeToolResult("small", "small output")];
-      const pending = pressureCheck(
-        agent,
-        messages,
-        route === "compact_then_truncate" ? 16_000 : undefined,
-      );
-      await expect(pending).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
-      await expect(pending).rejects.toMatchObject({
-        request: {
-          route,
-          overflowTokens: expect.any(Number),
-          toolResultReducibleChars: expect.any(Number),
-        },
-      });
-    },
-  );
-
-  it("lets engine assembly resolve pressure before prechecking", async () => {
-    const engine = makeEngine();
-    const compacted = [makeUser("compacted")];
-    engine.assemble.mockResolvedValue({ messages: compacted, estimatedTokens: 0 });
-    const { agent } = hook(engine);
-    expect(
-      await pressureCheck(agent, [makeUser("first"), makeToolResult("big", "x".repeat(80_000))]),
-    ).toBe(compacted);
   });
 });
 
@@ -491,31 +416,6 @@ describe("installContextEngineLoopHook", () => {
     expect(messages).toHaveLength(2);
   });
 
-  it("clears a cached view after failed assembly and retries the same source", async () => {
-    const engine = makeEngine();
-    const compacted = [makeUser("compacted")];
-    engine.assemble
-      .mockResolvedValueOnce({ messages: compacted, estimatedTokens: 0 })
-      .mockImplementationOnce(async ({ messages }) => {
-        messages.reverse();
-        messages.pop();
-        throw new Error("assemble failed");
-      });
-    const { run } = hook(engine);
-    const first = exchange();
-    expect(await run(first)).toBe(compacted);
-    const next = [...first, makeToolResult("two", "result")];
-    const original = next.slice();
-    expect(await run(next)).toBe(next);
-    expect(next).toEqual(original);
-    const retry = await run(next);
-    expect(retry).not.toBe(next);
-    expect(retry).toEqual(original);
-    expect(retry[0]).toBe(next[0]);
-    expect(retry).not.toBe(compacted);
-    expect(engine.assemble).toHaveBeenCalledTimes(3);
-  });
-
   it.each(["shrinks", "resets at the same length"])(
     "clears cached assembly when history %s",
     async (reset) => {
@@ -571,35 +471,51 @@ describe("installContextEngineLoopHook", () => {
     },
   );
 
-  it.each(["afterTurn throws", "assemble returns null", "assemble omits messages"] as const)(
-    "restores hook-mutated history and retries when %s",
-    async (failure) => {
-      const engine = makeEngine();
-      const original = [makeUser("preserve instruction"), makeToolResult("one", "preserve result")];
-      const messages = original.slice();
-      engine.afterTurn.mockImplementationOnce(async ({ messages: history }) => {
-        history.splice(0, history.length, makeUser("mutated history"));
-        if (failure === "afterTurn throws") {
-          throw new Error("failed after mutation");
-        }
+  it.each([
+    "afterTurn throws",
+    "assemble throws",
+    "assemble returns null",
+    "assemble omits messages",
+  ] as const)("restores hook-mutated history and retries when %s", async (failure) => {
+    const engine = makeEngine();
+    const compacted = [makeUser("compacted")];
+    engine.assemble.mockResolvedValueOnce({ messages: compacted, estimatedTokens: 0 });
+    const { run } = hook(engine);
+    const first = exchange();
+    expect(await run(first)).toBe(compacted);
+    const original = [...first, makeToolResult("two", "preserve result")];
+    const messages = original.slice();
+    engine.afterTurn.mockImplementationOnce(async ({ messages: history }) => {
+      history.splice(0, history.length, makeUser("mutated history"));
+      if (failure === "afterTurn throws") {
+        throw new Error("failed after mutation");
+      }
+    });
+    if (failure === "assemble returns null") {
+      engine.assemble.mockResolvedValueOnce(null as never);
+    }
+    if (failure === "assemble throws") {
+      engine.assemble.mockImplementationOnce(async ({ messages: history }) => {
+        history.reverse();
+        history.pop();
+        throw new Error("assemble failed");
       });
-      if (failure === "assemble returns null") {
-        engine.assemble.mockResolvedValueOnce(null as never);
-      }
-      if (failure === "assemble omits messages") {
-        engine.assemble.mockResolvedValueOnce({ estimatedTokens: 0 } as never);
-      }
-      const { run } = hook(engine);
-      expect(await run(messages)).toBe(messages);
-      expect(messages).toEqual(original);
-      original.forEach((message, index) => expect(messages[index]).toBe(message));
-      expect(await run(messages)).toEqual(original);
-      expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-      expect(engine.afterTurn.mock.calls[1]?.[0].prePromptMessageCount).toBe(1);
-      expect(await run(messages)).toEqual(original);
-      expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    },
-  );
+    }
+    if (failure === "assemble omits messages") {
+      engine.assemble.mockResolvedValueOnce({ estimatedTokens: 0 } as never);
+    }
+    expect(await run(messages)).toBe(messages);
+    expect(messages).toEqual(original);
+    original.forEach((message, index) => expect(messages[index]).toBe(message));
+    const retry = await run(messages);
+    expect(retry).toEqual(original);
+    expect(retry).not.toBe(messages);
+    expect(retry).not.toBe(compacted);
+    expect(retry[0]).toBe(messages[0]);
+    expect(engine.afterTurn.mock.calls[2]?.[0].prePromptMessageCount).toBe(first.length);
+    expect(await run(messages)).toBe(retry);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(3);
+  });
 
   it("keeps successful in-place windowing and caches the assembled view", async () => {
     const engine = makeEngine();

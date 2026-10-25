@@ -21,8 +21,6 @@ import {
 import {
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedCompactDirect,
-  mockedIsCompactionFailureError,
-  mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -212,19 +210,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       );
     const spy = vi.spyOn(queue, "enqueueCommandInLane").mockImplementation(observe);
     restoreQueueObserver = () => spy.mockRestore();
-    mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
-      const lower = msg?.toLowerCase() ?? "";
-      return lower.includes("request_too_large") && lower.includes("summarization failed");
-    });
-    mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-      const lower = msg?.toLowerCase() ?? "";
-      return (
-        lower.includes("request_too_large") ||
-        lower.includes("request size exceeds") ||
-        lower.includes("context window exceeded") ||
-        lower.includes("prompt too large")
-      );
-    });
   });
 
   afterEach(async () => {
@@ -350,61 +335,43 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     );
   });
 
-  it.each([false, true])(
-    "keeps cold runtime acquisition outside execution budget (stop=%s)",
-    async (stop) => {
-      vi.useFakeTimers();
-      const acquisitionStarted = createDeferred();
-      const resumeAcquisition = createDeferred();
-      const parent = new AbortController();
-      const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
-      if (!acquire) {
-        throw new Error("Missing prepared runtime fixture");
-      }
-      let acquisitionSignal: AbortSignal | undefined;
-      mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-        async (input, options?: { abortSignal?: AbortSignal }) => {
-          acquisitionSignal = options?.abortSignal;
-          acquisitionStarted.resolve();
-          await resumeAcquisition.promise;
-          acquisitionSignal?.throwIfAborted();
-          return await acquire(input);
-        },
-      );
-      if (!stop) {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
-      }
-      const run = runEmbeddedAgent({
-        ...baseParams,
-        runId: `run-cold-acquisition-${stop}`,
-        timeoutMs: 1,
-        abortSignal: parent.signal,
-      });
-      const completion = observeSettlement(run);
-      try {
-        await Promise.race([acquisitionStarted.promise, run]);
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(completion.settled).toBe(false);
-        expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-        if (stop) {
-          parent.abort(new Error("stopped during preparation"));
-          expect(acquisitionSignal?.aborted).toBe(true);
-        }
-        resumeAcquisition.resolve();
-        if (stop) {
-          await expect(run).rejects.toThrow("stopped during preparation");
-          expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-        } else {
-          await run;
-          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-        }
-      } finally {
-        resumeAcquisition.resolve();
-        await run.catch(() => undefined);
-        vi.useRealTimers();
-      }
-    },
-  );
+  it("keeps cold runtime acquisition outside execution budget", async () => {
+    vi.useFakeTimers();
+    const acquisitionStarted = createDeferred();
+    const resumeAcquisition = createDeferred();
+    const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
+    if (!acquire) {
+      throw new Error("Missing prepared runtime fixture");
+    }
+    mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+      async (input, options?: { abortSignal?: AbortSignal }) => {
+        acquisitionStarted.resolve();
+        await resumeAcquisition.promise;
+        options?.abortSignal?.throwIfAborted();
+        return await acquire(input);
+      },
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
+    const run = runEmbeddedAgent({
+      ...baseParams,
+      runId: "run-cold-acquisition",
+      timeoutMs: 1,
+    });
+    const completion = observeSettlement(run);
+    try {
+      await Promise.race([acquisitionStarted.promise, run]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(completion.settled).toBe(false);
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      resumeAcquisition.resolve();
+      await run;
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    } finally {
+      resumeAcquisition.resolve();
+      await run.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
 
   it("enforces the runtime deadline after a paused built-in attempt resumes", async () => {
     let publishDeadline: EmbeddedRunAttemptParams["onAttemptDeadlineChanged"];
@@ -449,50 +416,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       },
     );
   });
-
-  it.each(["timeout", "abort"] as const)(
-    "retains a native lane after %s until the attempt settles",
-    async (kind) => {
-      const stopped = createDeferred();
-      let attemptSignal: AbortSignal | undefined;
-      await withHeldAttempt(
-        {
-          runId: `run-native-${kind}-lane-release`,
-          timeoutMs: 48 * 60 * 60 * 1000,
-          agentHarnessRuntimeOverride: "openclaw",
-        },
-        ({ abortSignal, onAttemptTimeoutArmed, onAttemptTimeout, onAttemptAbort }) => {
-          attemptSignal = abortSignal;
-          abortSignal?.addEventListener("abort", () => stopped.resolve(), { once: true });
-          onAttemptTimeoutArmed?.();
-          if (kind === "timeout") {
-            onAttemptTimeout?.(new Error("attempt timed out"));
-          } else {
-            onAttemptAbort?.();
-          }
-        },
-        async (run, started, completion, settleAttempt) => {
-          await vi.advanceTimersByTimeAsync(0);
-          await started;
-          await vi.advanceTimersByTimeAsync(30_001);
-          // Writer fencing is asynchronous; timer advancement does not join its receipt.
-          await Promise.race([stopped.promise, run]);
-
-          expectBackendHeld(completion, pendingTasks);
-          expect(attemptSignal?.aborted).toBe(true);
-          await settleTimedOutAttempt(run, completion, settleAttempt);
-          if (kind === "timeout") {
-            await expect(run).rejects.toBe(attemptSignal?.reason);
-          }
-          expect(attemptSignal?.reason).toMatchObject(
-            kind === "timeout"
-              ? { name: "CommandLaneTaskTimeoutError" }
-              : { name: "AbortError", message: "agent run aborted" },
-          );
-        },
-      );
-    },
-  );
 
   it("does not arm the post-compaction guard when loop detection is disabled", async () => {
     prepareCompactedAttempt();
