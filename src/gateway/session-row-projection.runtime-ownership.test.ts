@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentHarnessPreflightError } from "../agents/harness/errors.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { harnessRegistry } from "../agents/model-catalog-fixtures.test-support.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -10,7 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginPluginStatePublication } from "../plugin-state/plugin-state-publication.js";
 import { createPluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -28,6 +28,7 @@ import {
   createTestProjection,
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { requestSessionRow } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 // Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
@@ -58,20 +59,9 @@ function nativeHarness(
   sync?: AgentHarness["resolveSessionRuntimeOwnership"],
 ) {
   const previous = captureActivePluginRegistrySnapshot();
-  const registry = createEmptyPluginRegistry();
-  registry.agentHarnesses.push({
-    pluginId: "row-native",
-    source: "test",
-    harness: {
-      id: "row-native",
-      label: "Native row fixture",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("Presentation must not run a model");
-      },
-      resolveSessionRuntimeOwnershipAsync: resolve,
-      ...(sync ? { resolveSessionRuntimeOwnership: sync } : {}),
-    },
+  const registry = harnessRegistry("row-native", {
+    resolveSessionRuntimeOwnershipAsync: resolve,
+    ...(sync ? { resolveSessionRuntimeOwnership: sync } : {}),
   });
   setActivePluginRegistry(registry);
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
@@ -187,14 +177,13 @@ it("keeps archived native sessions searchable after catalog replacement", async 
     const respond = vi.fn();
     const list = async (search?: string, archived: boolean | "all" = "all") => {
       respond.mockClear();
-      await sessionReadHandlers["sessions.list"]!({
-        req: { type: "req", id: "archived-native-search", method: "sessions.list" },
-        params: { agentId: "main", search, archived, limit: 5, includeLastMessage: false },
-        client: null,
-        context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-        isWebchatConnect: () => false,
+      await requestSessionRow(
+        sessionReadHandlers["sessions.list"]!,
+        bindSessionRowProjection(requestContext(cfg), () => projection!),
+        "sessions.list",
+        { agentId: "main", search, archived, limit: 5, includeLastMessage: false },
         respond,
-      });
+      );
     };
     await list(undefined, true);
     expect(respond).toHaveBeenCalledWith(
@@ -262,14 +251,15 @@ it.for(["change", "failure"] as const)(
       sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
       const respond = vi.fn();
       const list = (id: string) =>
-        sessionReadHandlers["sessions.list"]!({
-          req: { type: "req", id, method: "sessions.list" },
-          params: {},
-          client: null,
-          context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-          isWebchatConnect: () => false,
+        requestSessionRow(
+          sessionReadHandlers["sessions.list"]!,
+          bindSessionRowProjection(requestContext(cfg), () => projection!),
+          "sessions.list",
+          {},
           respond,
-        });
+          null,
+          id,
+        );
       const request = list("ownership-change-list");
       if (change === "failure") {
         await expect(request).rejects.toBe(failure);

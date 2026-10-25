@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -13,6 +12,7 @@ import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const BACKEND_ID = "acp-native-model-fixture";
@@ -36,14 +36,8 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
   const state = await createOpenClawTestState({
     label: "acp-native-model",
     env: {
+      ...createGatewayBackgroundTestEnv(TOKEN),
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
     },
@@ -58,14 +52,16 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
       const body = JSON.parse(await readRequestText(request)) as (typeof requests)[number];
       requests.push(body);
       if (rejectNativeRequest) {
-        response.writeHead(400, { "content-type": "application/json" }).end(
-          JSON.stringify({
+        respondJson(
+          response,
+          {
             error: {
               message: "The selected native model is unavailable.",
               type: "invalid_request_error",
               code: "model_not_found",
             },
-          }),
+          },
+          400,
         );
         return;
       }
@@ -87,24 +83,21 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
     "https://native-auth-proof.invalid/v1",
     "native-missing-auth",
   );
-  const pluginDir = state.path("acp-plugin");
-  await fs.mkdir(pluginDir, { recursive: true });
-  const writePluginJson = (name: string, value: unknown) =>
-    fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
-  await writePluginJson("package.json", {
+  const pluginDir = state.statePath("acp-plugin");
+  await state.writeJson("acp-plugin/package.json", {
     name: BACKEND_ID,
     type: "commonjs",
     peerDependencies: { openclaw: ">=2026.9.5" },
     openclaw: { extensions: ["./index.cjs"] },
   });
-  await writePluginJson("openclaw.plugin.json", {
+  await state.writeJson("acp-plugin/openclaw.plugin.json", {
     id: BACKEND_ID,
     activation: { onStartup: true },
     configSchema: { type: "object", additionalProperties: false, properties: {} },
   });
   // The only substituted execution boundary is the external ACP backend.
-  await fs.writeFile(
-    path.join(pluginDir, "index.cjs"),
+  await state.writeText(
+    "acp-plugin/index.cjs",
     `const {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,

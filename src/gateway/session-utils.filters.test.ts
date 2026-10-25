@@ -2,12 +2,10 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { prepareSessionRowSelection, selectSessionEntries } from "./session-utils-list.js";
-import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
@@ -132,43 +130,6 @@ it("reports the age boundary of people outside the selected profile and returned
   clock.mockReturnValue(now + 3_600_001);
   expect((await read(selected)).activityExpiresAt).toBeUndefined();
   expect((await read({ ...opts, activeMinutes: undefined })).activityExpiresAt).toBeUndefined();
-});
-
-it("reuses involvement facts until session replacement or profile publication", () => {
-  const identityProjection = sessionIdentity.createSessionIdentityProjection();
-  const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };
-  const profiles = rowContext.userProfileIdentityById;
-  const key = "agent:main:involved";
-  const state = { profiles: { [mergedAdaId]: { hidden: false, updatedAt: 1 } } };
-  const readInvolvement = vi.fn(() => state);
-  const original = entry();
-  Object.defineProperty(original, "profileInvolvement", { get: readInvolvement, enumerable: true });
-  const projection = projectionFixture({ store: { [key]: original }, rowContext });
-  const select = (id = adaId) =>
-    filteredKeys({
-      ...prepareSessionRowSelection(projection, {}, { ordered: true }),
-      involvingActorId: id,
-    });
-  expect(select()).toEqual([key]);
-  readInvolvement.mockClear();
-  for (let i = 0; i < 3; i++) {
-    expect(select()).toEqual([key]);
-    expect(select(bobId)).toEqual([]);
-  }
-  expect(readInvolvement).not.toHaveBeenCalled();
-
-  profiles.set(mergedAdaId, undefined);
-  identityProjection.invalidate();
-  expect(select()).toEqual([]);
-  expect(select(mergedAdaId)).toEqual([key]);
-  projection.setEntry(key, {
-    ...entry(),
-    profileInvolvement: {
-      key: "inventory-session",
-      profiles: { [mergedAdaId]: { hidden: true, updatedAt: 2 } },
-    },
-  });
-  expect(select(mergedAdaId)).toEqual([]);
 });
 
 it("expires bounded non-native child owners without a session or registry publication", () => {

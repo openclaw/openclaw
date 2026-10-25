@@ -11,8 +11,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { getEmbeddedRunAttachment } from "../agents/embedded-agent-runner/run-state.js";
-import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
-import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
+import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -29,7 +28,6 @@ import { makeEmbeddedRunnerAttempt } from "../agents/test-helpers/embedded-agent
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import * as messageInjection from "../sessions/session-controller.message-injection.js";
@@ -179,20 +177,16 @@ it.for([
         ) {
           return persist;
         }
-        return async () => {
-          try {
-            await persist();
-            startCommitted.resolve();
-          } catch (error) {
-            startCommitted.reject(error);
-            throw error;
-          }
+        return () => {
+          const committed = persist();
+          void committed.then(startCommitted.resolve, startCommitted.reject);
+          return committed;
         };
       });
     onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
-      handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
+      handle: ReturnType<typeof prepareCatalogExecutor>["queueHandle"];
     }>();
     const disposition = createDeferred<"steered" | "followup">();
     dispatchInboundMessageMock.mockImplementation(async () => {
@@ -217,38 +211,19 @@ it.for([
         return result;
       });
       const controller = new AbortController();
-      const prepared = prepareEmbeddedAttemptStream({
+      const prepared = prepareCatalogExecutor({
         attempt,
-        agentSession: {
-          activeSession: session,
-          hookRunner: null,
-          clientToolCallSlots: [],
-          hasDeliveredSourceReply: () => false,
-          markSourceReplyDelivered: vi.fn(),
-          builtinToolNames: new Set(),
-          coreBuiltinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
-          codeModeExecToolNames: new Set(),
-          sourceReplyCapableToolNames: new Set(),
-          sideEffectToolOwners: new Map(),
-          trustedLocalMediaToolNames: new Set(),
-        },
-        hookAgentId: attempt.agentId ?? "main",
-        diagnosticTrace: createDiagnosticTraceContext(),
+        activeSession: session,
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, runId }),
-        nestedToolActivityState: createAttemptNestedToolActivityState(),
-        isReplaySafeTool: () => false,
         runAbortController: controller,
         abortRun: (_timeout, reason) => controller.abort(reason),
-        markExternalAbort: vi.fn(),
         getRunState: () => ({
           aborted: controller.signal.aborted,
           promptError: undefined,
           timedOut: false,
           yieldDetected: false,
         }),
-        onBlockReply: undefined,
-        onBlockReplyFlush: undefined,
+        streamReplies: false,
       });
       embeddedRunMock.activeIds.add(sessionId);
       const prompt = session.prompt(attempt.prompt);
