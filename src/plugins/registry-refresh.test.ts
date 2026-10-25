@@ -73,6 +73,31 @@ function expectInstalled(rootDir: string, env?: NodeJS.ProcessEnv) {
   );
 }
 
+function afterConfigRead(effect: () => void) {
+  const create = configIO.createConfigIO;
+  vi.spyOn(configIO, "createConfigIO").mockImplementation((options) => {
+    const io = create(options);
+    return {
+      ...io,
+      readConfigFileSnapshot: async () => {
+        const snapshot = await io.readConfigFileSnapshot();
+        effect();
+        return snapshot;
+      },
+    };
+  });
+}
+
+function expectUnpublished(
+  state: OpenClawTestState,
+  before: ReturnType<typeof readPersistedInstalledPluginIndexRowSync>,
+  warn: ReturnType<typeof vi.fn>,
+) {
+  expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+  expect(warn).not.toHaveBeenCalled();
+  expect(runtimeCache.clear).not.toHaveBeenCalled();
+}
+
 describe("plugin registry refresh config ownership", () => {
   it("verifies worker custody only at admission, publication, and settlement", async () => {
     await withOpenClawTestState(
@@ -110,24 +135,15 @@ describe("plugin registry refresh config ownership", () => {
   it("refuses worker registry publication when custody expires during config preparation", async () => {
     await withOpenClawTestState({ label: "registry-refresh-worker-expiry" }, async (state) => {
       const before = await seedDisabledState(state);
-      const create = configIO.createConfigIO;
-      vi.spyOn(configIO, "createConfigIO").mockImplementation((options) => {
-        const io = create(options);
-        return {
-          ...io,
-          readConfigFileSnapshot: async () => {
-            const snapshot = await io.readConfigFileSnapshot();
-            runOpenClawStateWriteTransaction(
-              ({ db }) => {
-                db.prepare("UPDATE state_leases SET expires_at = 0 WHERE scope = ?").run(
-                  "core:plugin-lifecycle",
-                );
-              },
-              { env: state.env },
+      afterConfigRead(() => {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare("UPDATE state_leases SET expires_at = 0 WHERE scope = ?").run(
+              "core:plugin-lifecycle",
             );
-            return snapshot;
           },
-        };
+          { env: state.env },
+        );
       });
       const warn = vi.fn();
 
@@ -141,9 +157,7 @@ describe("plugin registry refresh config ownership", () => {
         ),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
 
-      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
-      expect(warn).not.toHaveBeenCalled();
-      expect(runtimeCache.clear).not.toHaveBeenCalled();
+      expectUnpublished(state, before, warn);
     });
   });
 
@@ -179,18 +193,7 @@ describe("plugin registry refresh config ownership", () => {
       const refusal = new Error("plugin lease cancelled");
       const assertCurrent = vi.fn();
       const warn = vi.fn();
-      const create = configIO.createConfigIO;
-      vi.spyOn(configIO, "createConfigIO").mockImplementation((options) => {
-        const io = create(options);
-        return {
-          ...io,
-          readConfigFileSnapshot: async () => {
-            const snapshot = await io.readConfigFileSnapshot();
-            controller.abort(refusal);
-            return snapshot;
-          },
-        };
-      });
+      afterConfigRead(() => controller.abort(refusal));
       let registryError: unknown;
       await expect(
         withPluginLifecycleLease(
@@ -211,9 +214,7 @@ describe("plugin registry refresh config ownership", () => {
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
       expect(registryError).toBe(refusal);
       expect(assertCurrent).toHaveBeenCalled();
-      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
-      expect(warn).not.toHaveBeenCalled();
-      expect(runtimeCache.clear).not.toHaveBeenCalled();
+      expectUnpublished(state, before, warn);
     });
   });
 
@@ -246,9 +247,7 @@ describe("plugin registry refresh config ownership", () => {
             }
             expect(assertCurrent).toHaveBeenCalledOnce();
           });
-          expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
-          expect(warn).not.toHaveBeenCalled();
-          expect(runtimeCache.clear).not.toHaveBeenCalled();
+          expectUnpublished(state, before, warn);
         },
       );
     },
