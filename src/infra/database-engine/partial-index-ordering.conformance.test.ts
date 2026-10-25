@@ -14,7 +14,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { buildApprovalResolutionRef } from "../approval-resolution-ref.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { captureSqliteDatabaseAdmissions } from "../sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -138,6 +137,8 @@ async function readJournalPlans(
       `
     const { parentPort, workerData } = require("node:worker_threads");
     (async () => {
+      const { register } = await import(workerData.loader);
+      register();
       const load = (name) => import(workerData.modules[name]);
       const { installDatabaseEngineSelection } = await load("context");
       const { installSqliteDatabaseAdmissions } = await load("admissions");
@@ -191,8 +192,9 @@ async function readJournalPlans(
   `,
       {
         eval: true,
-        execArgv: resolveRuntimeWorkerThreadExecArgv(new URL(modules.state)),
+        execArgv: [],
         workerData: {
+          loader: import.meta.resolve("tsx/esm/api"),
           modules,
           path: state.path,
           claim,

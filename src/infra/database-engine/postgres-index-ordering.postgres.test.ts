@@ -35,18 +35,18 @@ describe.skipIf(!connection)("PostgreSQL index ordering migration", () => {
     "upgrades populated %s stores selectively and admits the result without more DDL",
     (kind) => {
       withEngineStoreAdmission(() => {
-        const current = kind === "state" ? stateEngineSchema : agentEngineSchema;
-        const migration = current.postgresMigrations?.find(
+        const currentSchema = kind === "state" ? stateEngineSchema : agentEngineSchema;
+        const migration = currentSchema.postgresMigrations?.find(
           (step) => step.version === (kind === "state" ? 32 : 34),
         );
         if (!migration) {
           throw new Error(`Missing non-null index ordering ${kind} PostgreSQL migration`);
         }
         const target: StoreSchema = {
-          ...current,
+          ...currentSchema,
           ...migration.schema,
           version: migration.version,
-          postgresMigrations: current.postgresMigrations?.filter(
+          postgresMigrations: currentSchema.postgresMigrations?.filter(
             (step) => step.version <= migration.version,
           ),
         };
