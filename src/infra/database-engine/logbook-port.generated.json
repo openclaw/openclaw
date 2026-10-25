@@ -1,6 +1,6 @@
 {
   "id": "logbook",
-  "version": 1,
+  "version": 2,
   "minimumPostgresVersion": 16,
   "schema": "",
   "sqlite": "\nCREATE TABLE IF NOT EXISTS batches (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  day TEXT NOT NULL,\n  start_ms INTEGER NOT NULL,\n  end_ms INTEGER NOT NULL,\n  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'error')),\n  error TEXT,\n  frame_count INTEGER NOT NULL DEFAULT 0,\n  model TEXT,\n  created_ms INTEGER NOT NULL,\n  updated_ms INTEGER NOT NULL\n) STRICT;\nCREATE INDEX IF NOT EXISTS idx_logbook_batches_pending ON batches (start_ms, id) WHERE status = 'pending';\nDROP INDEX IF EXISTS idx_logbook_batches_day;\nCREATE TABLE IF NOT EXISTS frames (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  captured_at_ms INTEGER NOT NULL,\n  day TEXT NOT NULL,\n  path TEXT NOT NULL,\n  screen_index INTEGER NOT NULL DEFAULT 0,\n  width INTEGER,\n  height INTEGER,\n  byte_size INTEGER NOT NULL DEFAULT 0,\n  content_hash TEXT NOT NULL,\n  idle INTEGER NOT NULL DEFAULT 0 CHECK (idle IN (0, 1)),\n  batch_id INTEGER REFERENCES batches(id) ON DELETE SET NULL\n) STRICT;\nCREATE INDEX IF NOT EXISTS idx_logbook_frames_day ON frames (day, captured_at_ms);\nCREATE INDEX IF NOT EXISTS idx_logbook_frames_captured_at ON frames (captured_at_ms);\nCREATE INDEX IF NOT EXISTS idx_logbook_frames_unbatched ON frames (batch_id) WHERE batch_id IS NULL;\nCREATE INDEX IF NOT EXISTS idx_logbook_frames_batch ON frames (batch_id, captured_at_ms) WHERE batch_id IS NOT NULL;\nCREATE TABLE IF NOT EXISTS observations (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,\n  day TEXT NOT NULL,\n  start_ms INTEGER NOT NULL,\n  end_ms INTEGER NOT NULL,\n  text TEXT NOT NULL\n) STRICT;\nCREATE INDEX IF NOT EXISTS idx_logbook_observations_day ON observations (day, start_ms);\nCREATE INDEX IF NOT EXISTS idx_logbook_observations_batch ON observations (batch_id);\nCREATE TABLE IF NOT EXISTS cards (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  day TEXT NOT NULL,\n  start_ms INTEGER NOT NULL,\n  end_ms INTEGER NOT NULL,\n  title TEXT NOT NULL,\n  summary TEXT NOT NULL,\n  detail TEXT NOT NULL DEFAULT '',\n  category TEXT NOT NULL DEFAULT 'other',\n  app_primary TEXT,\n  app_secondary TEXT,\n  distractions TEXT NOT NULL DEFAULT '[]',\n  keyframe_id INTEGER REFERENCES frames(id) ON DELETE SET NULL,\n  updated_ms INTEGER NOT NULL\n) STRICT;\nCREATE INDEX IF NOT EXISTS idx_logbook_cards_day ON cards (day, start_ms);\nCREATE INDEX IF NOT EXISTS idx_logbook_cards_keyframe ON cards (keyframe_id) WHERE keyframe_id IS NOT NULL;\nCREATE TABLE IF NOT EXISTS standups (\n  day TEXT PRIMARY KEY,\n  text TEXT NOT NULL,\n  updated_ms INTEGER NOT NULL\n) STRICT;\n",
@@ -448,6 +448,6 @@
   ],
   "postData": [
     2084,
-    3552
+    3420
   ]
 }

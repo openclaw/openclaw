@@ -12,6 +12,10 @@ import {
   requireNativeDatabaseFile,
 } from "../infra/database-engine/physical-facts.js";
 import { assertPostgresCatalog } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -159,9 +163,16 @@ const statePostgresSchema = {
     };
   }),
 };
-const statePostgresSchemaV30 = {
-  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchema.postgres),
+const statePostgresSchemaV31 = {
+  postgres: withLegacyPostgresIndexOrdering(statePostgresSchema.postgres),
   postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPostgresIndexOrdering(fragment.sql),
+  })),
+};
+const statePostgresSchemaV30 = {
+  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
+  postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
     ...fragment,
     tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
     sql: withLegacyLocalWorkspaceManifests(fragment.sql),
@@ -255,7 +266,7 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 31,
       fromSchema: statePostgresSchemaV30,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV31,
       sql: `DO $workspace$
         DECLARE baseline_constraint text;
         BEGIN
@@ -278,6 +289,15 @@ export const stateEngineSchema: StoreSchema = {
           END IF;
         END $workspace$;
         ${statePostgresVersionSql(31)}`,
+    },
+    {
+      version: 32,
+      fromSchema: statePostgresSchemaV31,
+      schema: statePostgresSchema,
+      sql: `${postgresIndexOrderingMigration(
+        [runtime.eagerSql, ...runtime.fragments.map((fragment) => fragment.sql)].join("\n"),
+      )}
+        ${statePostgresVersionSql(32)}`,
     },
   ],
 };
@@ -322,8 +342,9 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
-  db.exec(fragment.sql);
+  db.exec(facts.version < 32 ? withLegacyPostgresIndexOrdering(fragment.sql) : fragment.sql);
   admitPostgresPhysicalFacts({
     db,
     namespace: facts.namespace,
