@@ -8,6 +8,7 @@ import {
   NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
 } from "../worker/node-workspace-protocol.js";
 import { WORKSPACE_INSPECTION_COMMAND } from "../worker/workspace-inspection-protocol.js";
+import { NodeWorkerDeviceFolders } from "./node-worker-device-folder.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,6 +46,8 @@ const request = () => ({
 });
 const exec = (argv: string[], extra: Partial<Parameters<typeof runtime.exec>[0]> = {}) =>
   runtime.exec({ ...identity, deviceFolder: folder, argv, ...extra });
+const validate = (dir: string) => runtime.validateDeviceFolder(dir);
+const reject = (dir: string, error: string) => expect(() => validate(dir)).toThrow(error);
 const write = (name = "user.txt", value = "original") =>
   fs.writeFileSync(path.join(folder, name), value);
 const outside = () => {
@@ -78,28 +81,29 @@ it("accepts only absolute or home-relative configuration roots", () => {
   expect(NodeHostWorkerRunsSchema.parse({ folders: [] })).toMatchObject({ folders: [] });
 });
 
-it.each([
-  [(): string => "~/projects/project", "configured", (): string => folder],
-  [(): string => allowed, "configured", (): string => allowed],
-  [() => "projects/project", "configured", "absolute"],
-  [() => path.join(allowed, "missing"), "configured", "existing"],
-  [() => path.join(folder, "file.txt"), "configured", "directory"],
-  [() => path.join(allowed, "escape"), "configured", "not allowed"],
-  [() => path.join(home, "outside"), "default", () => path.join(home, "outside")],
-  [() => path.parse(folder).root, "default", "filesystem root"],
-  [() => root, "default", "private worker storage"],
-  [() => home, "default", "private worker storage"],
-  [() => folder, "disabled", "sessions are disabled"],
-] as const)("validates device-folder consent case %#", async (getDir, mode, expected) => {
-  runtime = makeRuntime(mode === "default" ? undefined : mode === "disabled" ? [] : [allowed]);
-  write("file.txt");
+it("requires an existing directory, configured root containment, and no private-root overlap", () => {
+  expect(validate("~/projects/project")).toBe(folder);
+  expect(validate(allowed)).toBe(allowed);
+  reject("projects/project", "absolute");
+  reject(path.join(allowed, "missing"), "existing");
+  const file = path.join(folder, "file.txt");
+  write("file.txt", "user content");
+  reject(file, "directory");
   fs.symlinkSync(outside(), path.join(allowed, "escape"), "dir");
-  const result = exec([NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND], { deviceFolder: getDir() });
-  if (typeof expected === "string") {
-    await expect(result).rejects.toThrow(expected);
-  } else {
-    await expect(result).resolves.toMatchObject({ workspaceDir: expected() });
-  }
+  reject(path.join(allowed, "escape"), "not allowed");
+  const broad = makeRuntime([home]);
+  expect(() => broad.validateDeviceFolder(root)).toThrow("private worker storage");
+  expect(() => broad.validateDeviceFolder(home)).toThrow("private worker storage");
+});
+
+it("allows any existing directory by default, but rejects filesystem roots and private storage", () => {
+  runtime = makeRuntime();
+  const dir = outside();
+  expect(validate(dir)).toBe(dir);
+  expect(validate(folder)).toBe(folder);
+  reject(path.parse(folder).root, "filesystem root");
+  reject(root, "private worker storage");
+  reject(home, "private worker storage");
 });
 
 it("does not reinterpret an unbound legacy worker cwd as a device folder", async () => {
@@ -107,19 +111,30 @@ it("does not reinterpret an unbound legacy worker cwd as a device folder", async
   await expect(runtime.acquirePreparedWorkspace(legacy)).resolves.toBeUndefined();
 });
 
+it("disables device-folder validation with an explicit empty list", async () => {
+  runtime = makeRuntime([]);
+  expect(() => runtime.validateDeviceFolder(folder)).toThrow("sessions are disabled");
+  await expect(exec([NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND])).rejects.toThrow(
+    "sessions are disabled",
+  );
+});
+
 it("revalidates a symlink on every operation and does not provision on validation", async () => {
   const alias = path.join(allowed, "alias");
   fs.symlinkSync(folder, alias, "dir");
-  const validateAlias = () =>
-    exec([NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND], { deviceFolder: alias });
-  expect(await validateAlias()).toMatchObject({
+  const input = {
+    ...identity,
+    deviceFolder: alias,
+    argv: [NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND],
+  };
+  expect(await runtime.exec(input)).toMatchObject({
     workspaceDir: folder,
     stdout: "validated\n",
   });
   expect([root, folder].map((dir) => fs.readdirSync(dir))).toEqual([[], []]);
   fs.unlinkSync(alias);
   fs.symlinkSync(outside(), alias, "dir");
-  await expect(validateAlias()).rejects.toThrow("not allowed");
+  await expect(runtime.exec(input)).rejects.toThrow("not allowed");
 });
 
 it("executes and inspects in place with private HOME, and leaves user files after retention", async () => {
@@ -146,7 +161,7 @@ it("executes and inspects in place with private HOME, and leaves user files afte
   fs.writeFileSync(path.join(acquired.homeDir!, "private.txt"), "private state");
   acquired.release();
   await retain();
-  expect(fs.existsSync(output.home)).toBe(false);
+  expectHomes([acquired.homeDir!, output.home], [false, false]);
   expect(fs.readdirSync(folder)).toEqual(["user.txt"]);
   expect(fs.readFileSync(path.join(folder, "user.txt"), "utf8")).toBe("original");
 });
@@ -196,14 +211,32 @@ it("drains the logical operation queue after the user folder disappears", async 
   expect(fs.existsSync(folder)).toBe(false);
 });
 
+it("binds an acquisition to the exact directory, not just an allowed path", () => {
+  const acquired = new NodeWorkerDeviceFolders({
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+    folders: [allowed],
+    privateRoots: [root],
+  }).acquire(request());
+  acquired.assertCurrent();
+  fs.renameSync(folder, `${folder}-original`);
+  fs.mkdirSync(folder);
+  expect(() => acquired.assertCurrent()).toThrow("acquired device folder changed");
+});
+
 it("rejects replacement, seeding, transfer, and quiescence even for direct runtime callers", async () => {
   write();
-  const key = "a".repeat(64);
   for (const extra of [
     { resetWorkspace: true },
     { resetWorkspace: false },
-    { seed: { action: "apply", key } },
-    { transfer: { direction: "download", token: "token", manifestRef: `sha256:${key}` } },
+    { seed: { action: "apply", key: "a".repeat(64) } },
+    {
+      transfer: {
+        direction: "download",
+        token: "token",
+        manifestRef: `sha256:${"a".repeat(64)}`,
+        attachments: true,
+      },
+    },
     { quiescence: { action: "acquire", nonce: "a".repeat(32), timeoutMs: 1000 } },
   ] as const) {
     await expect(exec(["node", "-e", ""], extra)).rejects.toThrow("device folders cannot");
