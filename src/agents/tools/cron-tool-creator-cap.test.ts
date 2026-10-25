@@ -56,6 +56,11 @@ function capture(
 }
 const agentPayload = { kind: "agentTurn" as const, message: "work" };
 const wakePayload = { kind: "systemEvent" as const, text: "wake" };
+const triggerJob = (toolsAllow?: string[]) => ({
+  trigger: { script: "return true" },
+  payload: { ...wakePayload, ...(toolsAllow ? { toolsAllow } : {}) },
+});
+const stream = (extra = {}) => ({ kind: "stream", command: ["node", "events.mjs"], ...extra });
 
 describe("cron tool creator cap", () => {
   it("distinguishes explicit stream creates from kindless stream update fields", () => {
@@ -65,23 +70,14 @@ describe("cron tool creator cap", () => {
     expect(cronCreateRequiresStreamExecAuthority(malformedCreate)).toBe(false);
     expect(cronMutationRequiresStreamExecAuthority(malformedCreate)).toBe(false);
     expect(
-      cronMutationRequiresStreamExecAuthority({
-        schedule: { command: ["node", "events.mjs"] },
-      }),
+      cronMutationRequiresStreamExecAuthority({ schedule: { command: ["node", "events.mjs"] } }),
     ).toBe(true);
-    expect(
-      cronCreateRequiresStreamExecAuthority({
-        schedule: { kind: "stream", command: ["node", "events.mjs"] },
-      }),
-    ).toBe(true);
+    expect(cronCreateRequiresStreamExecAuthority({ schedule: stream() })).toBe(true);
   });
 
   it("uses Gateway replacement semantics for stream schedule updates", () => {
-    const source = { kind: "stream", command: ["node", "events.mjs"] };
-    const current = {
-      enabled: true,
-      schedule: { ...source, cwd: "/workspace" },
-    };
+    const source = stream();
+    const current = { enabled: true, schedule: stream({ cwd: "/workspace" }) };
     expect(cronUpdateRequiresStreamExecAuthority({ schedule: current.schedule }, current)).toBe(
       false,
     );
@@ -101,24 +97,19 @@ describe("cron tool creator cap", () => {
   });
 
   it("lets default agent turns follow their owner while scripts and Codex apps keep the creator's tools", () => {
-    const triggerJob = {
-      trigger: { script: "return true" },
-      payload: { ...wakePayload },
-    };
+    const scriptedJob = triggerJob();
     const agentJob = { payload: { ...agentPayload } };
     const codexAppJob = { payload: { ...agentPayload } };
-    const plainJob = {
-      payload: { ...wakePayload },
-    };
+    const plainJob = { payload: { ...wakePayload } };
 
-    capCronJobToolsAllowOnCreate(triggerJob, ["read", "cron"]);
+    capCronJobToolsAllowOnCreate(scriptedJob, ["read", "cron"]);
     capCronJobToolsAllowOnCreate(agentJob, ["read", "cron"]);
     capCronJobToolsAllowOnCreate(codexAppJob, ["read", "cron"], true);
     capCronJobToolsAllowOnCreate(plainJob, ["read", "cron"]);
 
     // Legacy "cron" creator allowlists normalize to the canonical tool id.
     const creatorSnapshot = { toolsAllow: ["read", "automations"], toolsAllowIsDefault: true };
-    expect(triggerJob.payload).toEqual({ kind: "systemEvent", text: "wake", ...creatorSnapshot });
+    expect(scriptedJob.payload).toEqual({ ...wakePayload, ...creatorSnapshot });
     expect(agentJob.payload).toEqual({ kind: "agentTurn", message: "work", toolsAllow: ["*"] });
     expect(codexAppJob.payload).toEqual({ kind: "agentTurn", message: "work", ...creatorSnapshot });
     expect(plainJob.payload).toEqual(wakePayload);
@@ -144,20 +135,14 @@ describe("cron tool creator cap", () => {
         creatorToolAllowlist: ["read", "cron"],
       }),
     ).toThrow('Requested automation tool "exec" cannot be carried');
-    expect(input).toEqual({
-      payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] },
-    });
+    expect(input).toEqual({ payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] } });
   });
 
   it("preserves explicit narrower and default caps through canonical payload merge", () => {
-    const storedNarrowerPayload = {
-      kind: "agentTurn" as const,
-      message: "work",
-      toolsAllow: ["read"],
-    };
     for (const isDefault of [false, true]) {
       const payload = {
-        ...storedNarrowerPayload,
+        ...agentPayload,
+        toolsAllow: ["read"],
         ...(isDefault ? { toolsAllowIsDefault: true } : {}),
       };
       const patch = readyPatch({
@@ -183,15 +168,14 @@ describe("cron tool creator cap", () => {
   const pinned = { ...aliased, execTarget: pin };
   const nativeTools = { canonicalToolNames: ["exec", "process"] };
   const pinnedNative = { ...native, execTarget: { host: "gateway" as const } };
-  it.each<
-    [
-      name: string,
-      tools: AnyAgentTool[],
-      expected: CronCreatorToolAllowlistEntry[],
-      options?: Parameters<typeof capture>[1],
-      target?: { host: "gateway"; ask?: "always" },
-    ]
-  >([
+  type CaptureCase = [
+    string,
+    AnyAgentTool[],
+    CronCreatorToolAllowlistEntry[],
+    Parameters<typeof capture>[1]?,
+    { host: "gateway"; ask?: "always" }?,
+  ];
+  it.each<CaptureCase>([
     ["canonical alias", [makeAlias("always"), testTool("read")], [pinned, read], undefined, pin],
     ["unregistered literal", [testTool("gateway_exec")], [{ name: "gateway_exec" }]],
     ["later unpinned grant", [makeAlias(), testTool("exec")], [aliased]],
@@ -249,11 +233,12 @@ describe("cron tool creator cap", () => {
   it("keeps only restrictions shared by duplicate gateway aliases", () => {
     const guarded = gatewayExecAlias(testTool("exec"), "always");
     const unguarded = gatewayExecAlias(testTool("exec"));
-    const guardedFirst = capture([guarded, unguarded]);
-    const unguardedFirst = capture([unguarded, guarded]);
-
-    expect(resolveCronCreatorExecToolTarget(guardedFirst)).toEqual({ host: "gateway" });
-    expect(resolveCronCreatorExecToolTarget(unguardedFirst)).toEqual({ host: "gateway" });
+    for (const tools of [
+      [guarded, unguarded],
+      [unguarded, guarded],
+    ]) {
+      expect(resolveCronCreatorExecToolTarget(capture(tools))).toEqual({ host: "gateway" });
+    }
   });
 
   it("caps explicit alias-name requests to the canonical persisted tool id", () => {
@@ -261,20 +246,13 @@ describe("cron tool creator cap", () => {
     const creator = capture([alias, testTool("read")]);
 
     for (const requested of [["gateway_exec"], ["exec"], ["gateway_exec", "read"]]) {
-      const job = {
-        trigger: { script: "return { fire: false }" },
-        payload: { kind: "systemEvent", text: "wake", toolsAllow: [...requested] },
-      };
+      const job = triggerJob([...requested]);
       capCronJobToolsAllowOnCreate(job, creator);
       const expected = requested.includes("read") ? ["exec", "read"] : ["exec"];
       expect(job.payload.toolsAllow).toEqual(expected);
     }
 
-    const unrelated = {
-      trigger: { script: "return { fire: false }" },
-      payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
-    };
-    expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
+    expect(() => capCronJobToolsAllowOnCreate(triggerJob(["write"]), creator)).toThrow(
       'Requested automation tool "write" cannot be carried',
     );
   });
@@ -283,19 +261,8 @@ describe("cron tool creator cap", () => {
     const alias = gatewayExecAlias(testTool("exec"));
     const creator = capture([alias]);
 
-    const job = {
-      trigger: { script: "return { fire: false }" },
-      payload: { kind: "systemEvent", text: "wake", toolsAllow: ["gateway_exec"] },
-    };
+    const job = triggerJob(["gateway_exec"]);
     expect(cronCreateRequiresCreatorAuthority(job, creator)).toBe(false);
-    expect(
-      cronCreateRequiresCreatorAuthority(
-        {
-          trigger: { script: "return { fire: false }" },
-          payload: { kind: "systemEvent", text: "wake", toolsAllow: ["exec", "browser"] },
-        },
-        creator,
-      ),
-    ).toBe(true);
+    expect(cronCreateRequiresCreatorAuthority(triggerJob(["exec", "browser"]), creator)).toBe(true);
   });
 });

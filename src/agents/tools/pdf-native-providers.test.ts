@@ -186,14 +186,11 @@ describe("native PDF provider API calls", () => {
     );
 
     const error = await withTestTimeout(
-      analyzeAnthropic().catch((caught: unknown) => caught),
+      captureError(analyzeAnthropic()),
       500,
       "timed out waiting for bounded error body",
     );
 
-    if (!(error instanceof Error)) {
-      throw new Error("expected Anthropic PDF request to throw an Error");
-    }
     expect(error.message).toContain("Anthropic PDF request failed");
     expect(error.message.length).toBeLessThan(500);
     expect(canceled).toBe(true);
@@ -237,12 +234,6 @@ describe("native PDF provider API calls", () => {
     expect(error.message).not.toContain("Token-");
   });
 
-  it("anthropicAnalyzePdf throws when response has no text", async () => {
-    mockFetchResponse(anthropicResponse("   "));
-
-    await expect(analyzeAnthropic()).rejects.toThrow("Anthropic PDF returned no text");
-  });
-
   it.each([
     { name: "explicit private-network denial", redirect: false, allow: false, calls: 0 },
     {
@@ -277,17 +268,21 @@ describe("native PDF provider API calls", () => {
     expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
-  it("anthropicAnalyzePdf rejects oversized successful JSON responses", async () => {
-    mockFetchResponse(anthropicResponse("x".repeat(17 * 1024 * 1024)));
-
-    await expect(analyzeAnthropic()).rejects.toThrow("JSON response exceeds");
-  });
-
-  it("geminiAnalyzePdf throws when no candidates returned", async () => {
-    mockFetchResponse(Response.json({ candidates: [] }));
-
-    await expect(analyzeGemini()).rejects.toThrow("Gemini PDF returned no candidates");
-  });
+  it.each([
+    [analyzeAnthropic, () => anthropicResponse("   "), "Anthropic PDF returned no text"],
+    [
+      analyzeAnthropic,
+      () => anthropicResponse("x".repeat(17 * 1024 * 1024)),
+      "JSON response exceeds",
+    ],
+    [analyzeGemini, () => Response.json({ candidates: [] }), "Gemini PDF returned no candidates"],
+  ] as const)(
+    "rejects invalid successful responses: %s / %s / %s",
+    async (analyze, response, error) => {
+      mockFetchResponse(response());
+      await expect(analyze()).rejects.toThrow(error);
+    },
+  );
 
   it.each([analyzeAnthropic, analyzeGemini])("%s requires apiKey", async (analyze) => {
     await expect(analyze({ apiKey: "" })).rejects.toThrow("apiKey required");

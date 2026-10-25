@@ -147,10 +147,7 @@ describe("transcripts read actions", () => {
       await release.promise;
       return { ok: true, value: undefined };
     });
-    getProvider.mockReturnValue({
-      id: "voice",
-      accessControl: { channelId: "discord", authorize },
-    });
+    provider(authorize);
     const params = { action: "show", selector };
     const reading = run(params, true);
     try {
