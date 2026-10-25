@@ -34,6 +34,50 @@ function coordinate(harness: Awaited<ReturnType<typeof createHarness>>) {
   return coordinateWorkerPlacementDispatch(harness.service, (_request, run) => run());
 }
 
+function barrier() {
+  const entered = createDeferredCore();
+  const released = createDeferredCore();
+  return {
+    entered: entered.promise,
+    reject: entered.reject,
+    release: () => released.resolve(),
+    wait: async () => {
+      entered.resolve();
+      await released.promise;
+    },
+  };
+}
+
+async function seedActive(harness: Awaited<ReturnType<typeof createHarness>>) {
+  const active = await harness.placements.seedActive(2);
+  if (active.state !== "active") {
+    throw new Error("Fixture was not active");
+  }
+  harness.markEnvironmentOwnerEpoch(2);
+  return active;
+}
+
+async function seedFailed(
+  placements: ReturnType<typeof createStore>,
+  sessionId = REQUEST.sessionId,
+) {
+  const placement = await placements.startDispatch({
+    ...REQUEST,
+    sessionId,
+    sessionKey: sessionId === REQUEST.sessionId ? REQUEST.sessionKey : `agent:main:${sessionId}`,
+  });
+  await placements.fail({
+    sessionId,
+    expectedGeneration: placement.generation,
+    recoveryError: "finished fixture",
+  });
+  return placement;
+}
+
+const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
+const readCleanupRef = (root: string) =>
+  git(root, "for-each-ref", "--format=%(refname)", cleanupRef);
+
 function prepareTargetedAdmissionObserver(placements: ReturnType<typeof createStore>) {
   // The harness copies store methods. Install the spy before construction, then
   // arm it only when the test reaches its recovery observation boundary.
@@ -82,23 +126,16 @@ describe("placement recovery session admission with persisted placements", () =>
       const placements = createStore();
       const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
       const reads = vi.spyOn(placements, "readProjection");
-      const stopEntered = createDeferredCore();
-      const releaseStop = createDeferredCore();
-      const environmentEntered = createDeferredCore();
-      const releaseEnvironment = createDeferredCore();
+      const stopBarrier = barrier();
+      const environmentBarrier = barrier();
       const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
         runReclaimPreparation: async ({ run, authorize }) => {
-          stopEntered.resolve();
-          await releaseStop.promise;
+          await stopBarrier.wait();
           return run(authorize);
         },
       });
-      const active = await harness.placements.seedActive(2);
-      if (active.state !== "active") {
-        throw new Error("Stop fixture was not active");
-      }
-      harness.markEnvironmentOwnerEpoch(2);
+      const active = await seedActive(harness);
       await placements.startDrain({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -106,21 +143,20 @@ describe("placement recovery session admission with persisted placements", () =>
         expectedGeneration: active.generation,
       });
       const coordinated = coordinate(harness);
-      vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(async () => {
-        environmentEntered.resolve();
-        await releaseEnvironment.promise;
-      });
+      vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
+        environmentBarrier.wait,
+      );
       const stop = state === "busy" ? coordinated.reclaim(REQUEST) : undefined;
-      void stop?.catch(stopEntered.reject);
+      void stop?.catch(stopBarrier.reject);
       let sweep: Promise<void> | undefined;
       try {
         if (stop) {
-          await stopEntered.promise;
+          await stopBarrier.entered;
         }
         reads.mockClear();
         sweep = coordinated.reconcile("startup");
-        void sweep.catch(environmentEntered.reject);
-        await environmentEntered.promise;
+        void sweep.catch(environmentBarrier.reject);
+        await environmentBarrier.entered;
         expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
         if (state === "busy") {
           expect(reads).not.toHaveBeenCalled();
@@ -130,11 +166,11 @@ describe("placement recovery session admission with persisted placements", () =>
             { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
           ]);
         }
-        releaseEnvironment.resolve();
+        environmentBarrier.release();
         await sweep;
       } finally {
-        releaseEnvironment.resolve();
-        releaseStop.resolve();
+        environmentBarrier.release();
+        stopBarrier.release();
         await Promise.allSettled([sweep, stop]);
       }
       expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
@@ -146,24 +182,17 @@ describe("placement recovery session admission with persisted placements", () =>
     "%s recovery skips a dispatch registered after its candidate listing",
     async (mode) => {
       const placements = createStore();
-      const requested = await placements.startDispatch(REQUEST);
-      await placements.fail({
-        sessionId: REQUEST.sessionId,
-        expectedGeneration: requested.generation,
-        recoveryError: "previous attempt",
-      });
+      await seedFailed(placements);
       const readCandidates = placements.readRecoveryCandidates.bind(placements);
       const candidateReads = vi.spyOn(placements, "readRecoveryCandidates");
       const harness = await createHarness(support.testState.stateDb, placements, {
         environmentGeneration: 3,
       });
       const coordinated = coordinate(harness);
-      const tunnelEntered = createDeferredCore();
-      const releaseTunnel = createDeferredCore();
+      const tunnel = barrier();
       const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
       vi.mocked(harness.environments.startTunnel).mockImplementation(async (...args) => {
-        tunnelEntered.resolve();
-        await releaseTunnel.promise;
+        await tunnel.wait();
         return startTunnel(...args);
       });
       let listings = 0;
@@ -172,8 +201,8 @@ describe("placement recovery session admission with persisted placements", () =>
         const candidates = await readCandidates();
         if (++listings === (mode === "startup" ? 2 : 1)) {
           dispatch = coordinated.dispatch(REQUEST);
-          void dispatch.catch(tunnelEntered.reject);
-          await tunnelEntered.promise;
+          void dispatch.catch(tunnel.reject);
+          await tunnel.entered;
         }
         return candidates;
       });
@@ -185,7 +214,7 @@ describe("placement recovery session admission with persisted placements", () =>
         });
         expect(harness.environments.destroy).not.toHaveBeenCalled();
       } finally {
-        releaseTunnel.resolve();
+        tunnel.release();
         await dispatch?.catch(() => undefined);
       }
       expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
@@ -196,25 +225,23 @@ describe("placement recovery session admission with persisted placements", () =>
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
     const harness = await createHarness(support.testState.stateDb, placements);
-    const tunnelEntered = createDeferredCore();
-    const releaseTunnel = createDeferredCore();
+    const tunnel = barrier();
     const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
     vi.mocked(harness.environments.startTunnel).mockImplementation(async (...args) => {
-      tunnelEntered.resolve();
-      await releaseTunnel.promise;
+      await tunnel.wait();
       return startTunnel(...args);
     });
     const coordinated = coordinate(harness);
     const dispatch = coordinated.dispatch({ ...REQUEST, executionMode: "remote-exec" });
-    void dispatch.catch(tunnelEntered.reject);
-    await tunnelEntered.promise;
+    void dispatch.catch(tunnel.reject);
+    await tunnel.entered;
     const observation = observe(harness);
     const sweep = coordinated.reconcileActive(harness.ready.environmentId);
     try {
       await observation.unitReached;
       expect(placements.get(REQUEST.sessionId)?.state).toBe("syncing");
     } finally {
-      releaseTunnel.resolve();
+      tunnel.release();
       await dispatch;
       await sweep;
     }
@@ -230,17 +257,11 @@ describe("placement recovery session admission with persisted placements", () =>
       const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
-      const active = await harness.placements.seedActive(2);
-      if (active.state !== "active") {
-        throw new Error("Move fixture was not active");
-      }
-      harness.markEnvironmentOwnerEpoch(2);
+      const active = await seedActive(harness);
       const coordinated = coordinate(harness);
-      const localEntered = createDeferredCore();
-      const releaseDestination = createDeferredCore();
+      const destination = barrier();
       vi.spyOn(placements, "startDispatch").mockImplementation(async () => {
-        localEntered.resolve();
-        await releaseDestination.promise;
+        await destination.wait();
         throw new Error("fixture destination unavailable");
       });
       const move = coordinated.move({
@@ -252,10 +273,10 @@ describe("placement recovery session admission with persisted placements", () =>
         },
         target: { kind: "profile", profileId: "next" },
       });
-      void move.catch(localEntered.reject);
+      void move.catch(destination.reject);
       let sweep: Promise<void> | undefined;
       try {
-        await localEntered.promise;
+        await destination.entered;
         const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
         const observation = observe(harness);
@@ -271,7 +292,7 @@ describe("placement recovery session admission with persisted placements", () =>
         });
         expect(await placements.getPlacementMoveAsync(REQUEST.sessionId)).toEqual(intent);
       } finally {
-        releaseDestination.resolve();
+        destination.release();
         await expect(move).rejects.toThrow("fixture destination unavailable");
         await sweep;
       }
@@ -280,23 +301,17 @@ describe("placement recovery session admission with persisted placements", () =>
 
   it("lent result recovery leaves the admitted Move intent for its owner and later recovery", async () => {
     const placements = createStore();
-    const claimWaitEntered = createDeferredCore();
-    const releaseClaimWait = createDeferredCore();
+    const claimWait = barrier();
     const interruption = new Error("fixture Move interrupted after claim wait");
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
       runMoveBarrier: async ({ begin }) => {
         await begin();
-        claimWaitEntered.resolve();
-        await releaseClaimWait.promise;
+        await claimWait.wait();
         throw interruption;
       },
     });
-    const active = await harness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("Move fixture was not active");
-    }
-    harness.markEnvironmentOwnerEpoch(2);
+    const active = await seedActive(harness);
     const claim = await placements.claimTurn(
       makeClaimInput(active, "move-wait-claim", "move-wait-run"),
     );
@@ -310,10 +325,10 @@ describe("placement recovery session admission with persisted placements", () =>
       },
       target: { kind: "gateway" },
     });
-    void move.catch(claimWaitEntered.reject);
+    void move.catch(claimWait.reject);
     let recovery: Promise<void> | undefined;
     try {
-      await claimWaitEntered.promise;
+      await claimWait.entered;
       const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
       expect(intent).toBeDefined();
       recovery = coordinated.reconcileActive(active.environmentId);
@@ -328,7 +343,7 @@ describe("placement recovery session admission with persisted placements", () =>
       try {
         await placements.releaseTurn(claim);
       } finally {
-        releaseClaimWait.resolve();
+        claimWait.release();
         await Promise.allSettled([move, recovery]);
       }
     }
@@ -344,21 +359,16 @@ describe("placement recovery session admission with persisted placements", () =>
     const placements = createStore();
     const observe = prepareTargetedAdmissionObserver(placements);
     const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
-    const reconciliationEntered = createDeferredCore();
-    const releaseReconciliation = createDeferredCore();
+    const reconciliation = barrier();
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
-      afterReconcile: async () => {
-        reconciliationEntered.resolve();
-        await releaseReconciliation.promise;
-      },
+      afterReconcile: reconciliation.wait,
     });
-    const active = await harness.placements.seedActive(2);
-    harness.markEnvironmentOwnerEpoch(2);
+    const active = await seedActive(harness);
     const coordinated = coordinate(harness);
     const stop = coordinated.reclaim(REQUEST);
-    void stop.catch(reconciliationEntered.reject);
-    await reconciliationEntered.promise;
+    void stop.catch(reconciliation.reject);
+    await reconciliation.entered;
     expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
     const observation = observe(harness);
     abandon.mockClear();
@@ -366,7 +376,7 @@ describe("placement recovery session admission with persisted placements", () =>
     try {
       await observation.unitReached;
     } finally {
-      releaseReconciliation.resolve();
+      reconciliation.release();
       await stop;
       await sweep;
     }
@@ -417,19 +427,9 @@ describe("placement recovery session admission with persisted placements", () =>
       await fs.cp(template, root, { recursive: true });
       const sessionId = `orphan-scan-${String(index).padStart(2, "0")}`;
       rootsBySession.set(sessionId, root);
-      const placement = await placements.startDispatch({
-        ...REQUEST,
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-      });
-      await placements.fail({
-        sessionId,
-        expectedGeneration: placement.generation,
-        recoveryError: "finished fixture",
-      });
+      await seedFailed(placements, sessionId);
     }
     const orphanRoot = roots.at(-1)!;
-    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
     await git(orphanRoot, "update-ref", cleanupRef, tree);
     const harness = await createHarness(support.testState.stateDb, placements, {
       resolveWorkspace: async ({ sessionId }) => {
@@ -463,22 +463,12 @@ describe("placement recovery session admission with persisted placements", () =>
         byOperation.set(operation, (byOperation.get(operation) ?? 0) + event.count);
       }
     });
-    const startedAt = performance.now();
-    const measurement = (phase: string) => ({
-      phase,
-      checkouts: roots.length,
-      totalSpawns: gitSpawns().length,
-      inventoryCount: inventoryRoots().length,
-      elapsedMs: Math.round(performance.now() - startedAt),
-      rssBytes: process.memoryUsage().rss,
-    });
     try {
       await coordinated.reconcile("startup");
       expect(gitSpawns()).toHaveLength(0);
       for (let sweep = 0; sweep < 3; sweep++) {
         await coordinated.reconcileActive();
       }
-      console.info(JSON.stringify(measurement("first-three-sweeps")));
       expect(inventoryRoots().length).toBeGreaterThan(0);
       expect(inventoryRoots().length).toBeLessThanOrEqual(24);
 
@@ -497,19 +487,17 @@ describe("placement recovery session admission with persisted placements", () =>
       for (let sweep = 0; sweep < 8; sweep++) {
         await coordinated.reconcileActive();
       }
-      const completed = measurement("complete");
       {
         const sampleAt = performance.now() + 60_000;
         using sampleClock = vi.spyOn(performance, "now");
         sampleClock.mockReturnValue(sampleAt);
         spawnDiagnostics.emitChildProcessSpawnSample();
       }
-      console.info(JSON.stringify({ ...completed, byOperation: Object.fromEntries(byOperation) }));
       expect(inventoryRoots().toSorted()).toEqual(roots.toSorted());
       // One inventory per checkout plus the orphan's ref-queue lookup and deletion.
       expect(gitSpawns()).toHaveLength(66);
       expect(Object.fromEntries(byOperation)).toEqual({ "workspace.result-cleanup": 66 });
-      expect(await git(orphanRoot, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+      expect(await readCleanupRef(orphanRoot)).toBe("");
     } finally {
       stopDiagnostics();
       setDiagnosticsEnabledForProcess(false);
@@ -524,25 +512,10 @@ describe("placement recovery session admission with persisted placements", () =>
     await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
     await git(root, "add", "result.txt");
     const tree = await git(root, "write-tree");
-    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
     await git(root, "update-ref", cleanupRef, tree);
     const placements = createStore();
-    const requested = await placements.startDispatch(REQUEST);
-    await placements.fail({
-      sessionId: requested.sessionId,
-      expectedGeneration: requested.generation,
-      recoveryError: "finished fixture",
-    });
-    const sibling = await placements.startDispatch({
-      ...REQUEST,
-      sessionId: "sibling",
-      sessionKey: "agent:main:sibling",
-    });
-    await placements.fail({
-      sessionId: sibling.sessionId,
-      expectedGeneration: sibling.generation,
-      recoveryError: "finished fixture",
-    });
+    await seedFailed(placements);
+    const sibling = await seedFailed(placements, "sibling");
     let siblingAvailable = false;
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: root,
@@ -556,32 +529,30 @@ describe("placement recovery session admission with persisted placements", () =>
     });
     const coordinated = coordinate(harness);
     await coordinated.reconcile("startup");
-    const providerEntered = createDeferredCore();
-    const releaseProvider = createDeferredCore();
+    const provider = barrier();
     const create = vi.mocked(harness.environments.createWithRequest).getMockImplementation()!;
     vi.mocked(harness.environments.createWithRequest).mockImplementation(async (...args) => {
-      providerEntered.resolve();
-      await releaseProvider.promise;
+      await provider.wait();
       return create(...args);
     });
     const dispatch = coordinated.dispatch(REQUEST);
-    void dispatch.catch(providerEntered.reject);
+    void dispatch.catch(provider.reject);
     try {
-      await providerEntered.promise;
+      await provider.entered;
       await coordinated.reconcileActive();
-      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+      expect(await readCleanupRef(root)).toBe(cleanupRef);
       siblingAvailable = true;
       await coordinated.reconcileActive();
-      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+      expect(await readCleanupRef(root)).toBe(cleanupRef);
     } finally {
-      releaseProvider.resolve();
+      provider.release();
       await dispatch;
     }
     await coordinated.reclaim(REQUEST);
     expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+    expect(await readCleanupRef(root)).toBe(cleanupRef);
     await coordinated.reconcileActive();
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+    expect(await readCleanupRef(root)).toBe("");
   });
 
   it.each([1, 10])(
@@ -590,21 +561,11 @@ describe("placement recovery session admission with persisted placements", () =>
       const root = support.testState.root;
       await git(root, "init", "--quiet");
       const tree = await git(root, "write-tree");
-      const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
       await git(root, "update-ref", cleanupRef, tree);
       const placements = createStore();
       const sessionIds = Array.from({ length: count }, (_, index) => `idle-${index}`);
       for (const sessionId of sessionIds) {
-        const idle = await placements.startDispatch({
-          ...REQUEST,
-          sessionId,
-          sessionKey: `agent:main:${sessionId}`,
-        });
-        await placements.fail({
-          sessionId,
-          expectedGeneration: idle.generation,
-          recoveryError: "finished fixture",
-        });
+        await seedFailed(placements, sessionId);
       }
       const recoveredSession = sessionIds.at(-1);
       let workspaceAvailable = false;
@@ -622,7 +583,7 @@ describe("placement recovery session admission with persisted placements", () =>
       await coordinated.reconcile("startup");
       await coordinated.reconcileActive();
       expect(attempts).toEqual(sessionIds);
-      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+      expect(await readCleanupRef(root)).toBe(cleanupRef);
 
       attempts.length = 0;
       await coordinated.reconcileActive();
@@ -632,7 +593,7 @@ describe("placement recovery session admission with persisted placements", () =>
       await coordinated.reconcileActive();
       expect(attempts).toHaveLength(Math.min(count, 8));
       expect(attempts).toContain(recoveredSession);
-      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+      expect(await readCleanupRef(root)).toBe("");
       attempts.length = 0;
       await coordinated.reconcileActive();
       expect(attempts).toHaveLength(Math.min(count - 1, 8));
@@ -662,16 +623,12 @@ describe("placement recovery session admission with persisted placements", () =>
       expectedGeneration: provisioning.generation,
       recoveryError: "provider teardown required",
     });
-    const destroyEntered = createDeferredCore();
-    const releaseDestroy = createDeferredCore();
+    const destroy = barrier();
     const providerEntered = createDeferredCore();
     await support.seedReady("cloud-environment");
     const cloudEnvironments = support.createService(
       support.createProvider({
-        destroy: async () => {
-          destroyEntered.resolve();
-          await releaseDestroy.promise;
-        },
+        destroy: destroy.wait,
       }),
     );
     const originalGet = vi.mocked(harness.environments.get).getMockImplementation()!;
@@ -688,8 +645,8 @@ describe("placement recovery session admission with persisted placements", () =>
     });
     const coordinated = coordinate(harness);
     const sweep = coordinated.reconcileActive();
-    void sweep.catch(destroyEntered.reject);
-    const dispatch = destroyEntered.promise.then(() => {
+    void sweep.catch(destroy.reject);
+    const dispatch = destroy.entered.then(() => {
       bindDeviceWorkerAvailability(harness.environments, async () => ({
         available: true,
         node: createNodeWorkerBundleTestNode({
@@ -712,7 +669,7 @@ describe("placement recovery session admission with persisted placements", () =>
       });
     });
     releaseOwnedWork = async () => {
-      releaseDestroy.resolve();
+      destroy.release();
       await Promise.allSettled([sweep, dispatch]);
     };
     void dispatch.catch(providerEntered.reject);
@@ -720,7 +677,7 @@ describe("placement recovery session admission with persisted placements", () =>
       await providerEntered.promise;
       expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
     } finally {
-      releaseDestroy.resolve();
+      destroy.release();
       await sweep;
       await dispatch;
     }

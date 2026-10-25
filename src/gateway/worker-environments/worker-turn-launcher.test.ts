@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -177,9 +178,7 @@ describe("worker turn launcher local placement", () => {
         const placement = fx.placements.get(fx.SESSION_ID);
         expect(placement?.turnClaim).toMatchObject({ owner: "local", runId: "run-local" });
         const settle = resolveSessionPlacementForcedTerminalSettlement();
-        if (!settle) {
-          throw new Error("expected exact local claim cleanup");
-        }
+        assert(settle, "expected exact local claim cleanup");
         await fx.withWorkerCompactionAdoption("run-local", async (adopt) => {
           await expect(adopt("session-local-successor")).resolves.toBe(fx.SESSION_ID);
           expect(loadSessionEntry(fx.sessionTarget)?.sessionId).toBe("session-local-successor");
@@ -328,8 +327,8 @@ describe("worker turn launcher local placement", () => {
         recoveryOwnerLease: undefined,
         databaseClaim,
       });
-      const projection = vi.spyOn(fx.placements, "readProjection");
-      const standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
+      using projection = vi.spyOn(fx.placements, "readProjection");
+      using standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
       const acquire = fx.placements.claimTurn.bind(fx.placements);
       const preparationRequests: number[] = [];
       const claimTurn = vi.spyOn(fx.placements, "claimTurn").mockImplementation((...args) => {
@@ -351,8 +350,6 @@ describe("worker turn launcher local placement", () => {
         expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
       } finally {
         claimTurn.mockRestore();
-        standaloneEntry.mockRestore();
-        projection.mockRestore();
         operation.complete();
         expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
           settled: true,
@@ -466,9 +463,7 @@ describe("worker turn launcher local placement", () => {
     });
     await firstStarted.promise;
     const firstClaim = fx.placements.get(fx.SESSION_ID)?.turnClaim;
-    if (!firstClaim) {
-      throw new Error("Expected the first local turn claim");
-    }
+    assert(firstClaim, "Expected the first local turn claim");
     const firstClaimId = firstClaim.claimId;
     expect(settleFirst).toBeTypeOf("function");
     await settleFirst?.();
@@ -502,9 +497,7 @@ describe("worker turn launcher local placement", () => {
     let oldOperation: ReturnType<typeof createReplyOperation> | undefined;
     let settleOldPlacement: (() => Promise<void>) | undefined;
     const oldRun = withSessionTurn(admission, async (operation) => {
-      if (!operation) {
-        throw new Error("Expected the admitted native controller operation");
-      }
+      assert(operation, "Expected the admitted native controller operation");
       oldOperation = operation;
       return await localProvider.executeLocalTurn(
         { ...admission, runId: "run-cancelled" },
@@ -684,9 +677,7 @@ describe("worker turn launcher local placement", () => {
           ? {
               resolveWorkspace: async () => {
                 const placement = fx.placements.get(fx.SESSION_ID);
-                if (placement?.state !== "active") {
-                  throw new Error("expected an active placement");
-                }
+                assert(placement?.state === "active", "expected an active placement");
                 await fx.placements.startDrain({
                   sessionId: fx.SESSION_ID,
                   environmentId: placement.environmentId,
