@@ -1,17 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  createGatewayConfigPath,
+  removeGatewayTempHome,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type ProviderMessage = {
   role: string;
   content?: unknown;
@@ -27,34 +28,23 @@ it(
   { timeout: 90_000 },
   async () => {
     let arrival = "before";
-    const root = tempDirs.make("openclaw-encrypted-continuation-");
-    const workspace = path.join(root, "workspace");
-    const state = path.join(root, "state");
-    const plugins = path.join(root, "plugins");
-    await Promise.all([workspace, state, plugins].map((directory) => fs.mkdir(directory)));
+    const home = await setupGatewayTempHome({ prefix: "openclaw-encrypted-continuation-" });
+    onTestFinished(async () => {
+      resetGatewayTestState();
+      try {
+        await removeGatewayTempHome(home.tempHome);
+      } finally {
+        home.envSnapshot.restore();
+      }
+    });
+    const workspace = home.workspaceDir;
+    const token = "encrypted-continuation-fixture";
     const fixture = path.join(workspace, "fixture.txt");
     const marker = "ENCRYPTED_CONTINUATION_READ_RESULT";
     const answer = "ENCRYPTED_CONTINUATION_ACCEPTED";
     const rejectedAnswer = "The incomplete read was rejected; no file was read.";
     await fs.writeFile(fixture, marker);
-    const configPath = path.join(state, "openclaw.json");
-    const env = {
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_GATEWAY_TOKEN: "encrypted-continuation-fixture",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: plugins,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const snapshot = captureEnv(Object.keys(env));
-    for (const [key, value] of Object.entries(env)) {
-      setTestEnvValue(key, value);
-    }
+    const configPath = await createGatewayConfigPath(home.tempHome);
     const detail = {
       type: "reasoning.encrypted",
       id: "callsigned",
@@ -213,11 +203,11 @@ it(
             },
           },
           plugins: { slots: { memory: "none" } },
-          logging: { file: path.join(root, "gateway.log") },
-          gateway: { auth: { mode: "token", token: env.OPENCLAW_GATEWAY_TOKEN } },
+          logging: { file: path.join(home.tempHome, "gateway.log") },
+          gateway: { auth: { mode: "token", token } },
         },
         configPath,
-        token: env.OPENCLAW_GATEWAY_TOKEN,
+        token,
         onEvent: (event) => events.push(event),
       });
       for (const order of [
@@ -365,10 +355,6 @@ it(
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close();
       }
-      snapshot.restore();
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
     }
   },
 );

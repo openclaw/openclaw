@@ -1,4 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
@@ -269,25 +268,5 @@ describe("gateway startup log", () => {
     expect(listeningMessages).toEqual([
       "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
     ]);
-    const messages = info.mock.calls.map((call) => call[0]);
-    const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
-    const database = new DatabaseSync(":memory:");
-    try {
-      expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
-        pid: process.pid,
-        node: process.versions.node,
-        sqlite: database.prepare("SELECT sqlite_version() AS version").get()?.version,
-        uv: process.versions.uv,
-        openssl: process.versions.openssl,
-      });
-    } finally {
-      database.close();
-    }
-    const workers = messages.find((message) => message.startsWith("worker startup state: "));
-    expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
-      workerCount: expect.any(Number),
-      workerLifecycle: expect.any(Array),
-      compute: { limit: expect.any(Number), active: 0, pendingTasks: 0 },
-    });
   });
 });

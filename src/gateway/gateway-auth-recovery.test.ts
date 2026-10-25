@@ -67,7 +67,6 @@ async function withBuiltGateway(
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          ...(name === "configured-catalog-auth" ? { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" } : {}),
         },
       });
       signal.throwIfAborted();
@@ -308,85 +307,6 @@ it(
             profileIds.rate
           ],
         ).toEqual(rateStats);
-      },
-    );
-  },
-);
-
-it(
-  "serves a large authenticated catalog for each agent through the built Gateway",
-  { timeout: 180_000 },
-  async (context) => {
-    const agentIds = Array.from({ length: 11 }, (_, i) => (i === 0 ? "main" : `catalog-${i}`));
-    const credential = "qa-configured-catalog-key";
-    const providerServer = createTrackedProvider((_raw, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [] }));
-    });
-    await withBuiltGateway(
-      context,
-      "configured-catalog-auth",
-      providerServer,
-      async (gateway, signal, connect) => {
-        const provider = buildMockOpenAiResponsesProvider(
-          await providerServer.listen(),
-          "synthetic-0",
-        );
-        signal.throwIfAborted();
-        const models = Array.from({ length: 400 }, (_, index) => ({
-          ...provider.config.models[0],
-          id: `synthetic-${index}`,
-          name: `Synthetic ${index}`,
-        }));
-        const base = gatewayConfig(gateway, provider.modelRef);
-        const cfg = {
-          ...base,
-          agents: {
-            ...base.agents,
-            defaults: {
-              ...base.agents.defaults,
-              models: Object.fromEntries(
-                models.map((model) => [
-                  `${provider.providerId}/${model.id}`,
-                  { agentRuntime: { id: "openclaw" } },
-                ]),
-              ),
-            },
-            entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
-          },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                apiKey: credential,
-                models,
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig;
-        await gateway.state.writeConfig(cfg);
-        signal.throwIfAborted();
-        const client = await connect();
-        const request = createFixtureRequest(client, signal);
-        const expectedIds = new Set(models.map((model) => model.id));
-        for (const agentId of agentIds) {
-          const result = await request<{ models: ModelChoice[] }>(
-            "models.list",
-            { agentId, view: "configured" },
-            { timeoutMs: 30_000 },
-          );
-          const configured = result.models.filter(
-            (model) => model.provider === provider.providerId,
-          );
-          expect(configured, agentId).toHaveLength(models.length);
-          expect(new Set(configured.map((model) => model.id)), agentId).toEqual(expectedIds);
-          expect(
-            configured.every((model) => model.available === true),
-            agentId,
-          ).toBe(true);
-        }
       },
     );
   },

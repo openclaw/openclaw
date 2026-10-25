@@ -19,10 +19,10 @@ const messages = [
   message("last"),
 ];
 type Page = Partial<Parameters<typeof renderPublicSessionDocument>[0]>;
-const widget = { ...message("widget"), content: '[embed ref="cv_first" title="First" /]' };
-const twoWidgets = [
-  { role: "assistant", content: '[embed ref="cv_first" /] [embed ref="cv_second" /]' },
-];
+const widget = {
+  ...message("widget"),
+  content: '[embed ref="cv_first" title="First" /] [embed ref="cv_second" title="Second" /]',
+};
 function render(overrides: Page = {}) {
   return renderPublicSessionDocument({
     messages,
@@ -135,31 +135,17 @@ function fixture(overrides: Page = {}, initialRowHeight = 400) {
   };
 }
 
-it("keeps unchanged widget frames, their state, and measured height on the first refresh", async () => {
-  const page = { messages: twoWidgets, widgetUrls };
-  const f = fixture(page);
-  const frames = f.all<HTMLIFrameElement>("iframe");
-  const frameWindow = frames[0]!.contentWindow!;
-  frameWindow.name = "widget interaction state";
-  frames[0]!.style.height = "730px";
-  frames[1]!.style.height = "280px";
-  f.respond(page);
-  await f.refresh();
-  expect(f.all("iframe")[0]).toBe(frames[0]);
-  expect(f.all("iframe")[1]).toBe(frames[1]);
-  expect(frames[0]!.contentWindow).toBe(frameWindow);
-  expect(frameWindow.name).toBe("widget interaction state");
-  expect(Array.from(f.all("iframe"), (frame) => frame.style.height)).toEqual(["730px", "280px"]);
-});
-
-it("replaces surrounding rows and page content without detaching a kept widget", async () => {
+it("replaces surrounding rows and page content while preserving widget state and heights", async () => {
   const f = fixture({
     messages: [{ ...message("old"), role: "user" }, widget, message("old tail")],
     widgetUrls,
   });
   const main = f.find("main");
-  const frame = f.find<HTMLIFrameElement>("iframe");
-  const frameWindow = frame.contentWindow;
+  const frames = f.all<HTMLIFrameElement>("iframe");
+  const frameWindow = frames[0]!.contentWindow!;
+  frameWindow.name = "widget interaction state";
+  frames[0]!.style.height = "730px";
+  frames[1]!.style.height = "280px";
   f.respond({
     messages: [{ ...message("new"), role: "user" }, widget, message("new tail")],
     title: "Earlier conversation",
@@ -170,8 +156,11 @@ it("replaces surrounding rows and page content without detaching a kept widget",
   await f.refresh();
   expect(f.find("main")).toBe(main);
   expect(main.dataset.publicRefresh).toBe("false");
-  expect(f.find("iframe")).toBe(frame);
-  expect(frame.contentWindow).toBe(frameWindow);
+  expect(f.all("iframe")[0]).toBe(frames[0]);
+  expect(f.all("iframe")[1]).toBe(frames[1]);
+  expect(frames[0]!.contentWindow).toBe(frameWindow);
+  expect(frameWindow.name).toBe("widget interaction state");
+  expect(Array.from(f.all("iframe"), (frame) => frame.style.height)).toEqual(["730px", "280px"]);
   expect(f.all(".transcript > *")).toHaveLength(3);
   expect(f.text(".transcript")).toContain("new tail");
   expect(f.text(".transcript")).not.toContain("old");
