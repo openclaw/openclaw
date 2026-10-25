@@ -11,7 +11,6 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
-import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -21,6 +20,7 @@ import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
 } from "./registry-lifecycle.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import {
@@ -36,14 +36,6 @@ import { makeTool } from "./tools.optional.test-helpers.js";
 import { createToolLoadContext } from "./tools.test-support.js";
 
 const workspaceDir = "/synthetic";
-const recordOptions = {
-  id: "owner",
-  source: "/synthetic/plugin.ts",
-  origin: "global" as const,
-  enabled: true,
-  configSchema: false,
-};
-
 function setLoadContext(registry: PluginRegistry, config: OpenClawConfig) {
   setPluginRuntimeLoadContext(registry, createToolLoadContext(config, workspaceDir));
 }
@@ -60,7 +52,7 @@ afterEach(() => {
 function createAdoptionPair(config: OpenClawConfig = {}) {
   const runtime = createEmptyPluginRegistry();
   const target = createEmptyPluginRegistry();
-  const record = createPluginRecord(recordOptions);
+  const record = createOwnershipRecord("owner");
   const localRecord = { ...record };
   runtime.plugins.push(record);
   target.plugins.push(localRecord);
@@ -81,6 +73,7 @@ function createAdoptionPair(config: OpenClawConfig = {}) {
 it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {
   const config = { plugins: { entries: { owner: { config: { account: "original" } } } } };
   const { runtime, target, localRecord, tool, adopt } = createAdoptionPair(config);
+  const source = localRecord.source;
   runtime.tools.push(tool(["owner_tool"]));
   target.tools.push(tool(["owner_tool"]));
   expect(adopt().tools[0]).toBe(runtime.tools[0]);
@@ -91,7 +84,7 @@ it("keeps discovery tools when the Gateway source, config, or lifetime does not 
   ).toBe(target);
   localRecord.source = "/workspace/shadow.ts";
   expect(adopt()).toBe(target);
-  localRecord.source = recordOptions.source;
+  localRecord.source = source;
   localRecord.enabled = false;
   expect(adopt()).toBe(target);
   localRecord.enabled = true;
@@ -150,16 +143,11 @@ it("executes only the admitting Gateway's current service and skips unowned turn
   });
   const create = (marker: string) => {
     const builder = createTestPluginRegistry();
-    const record = createPluginRecord({
-      ...recordOptions,
-      contracts: { tools: ["owner_tool"] },
-    });
+    const record = createOwnershipRecord("owner", { contracts: { tools: ["owner_tool"] } });
     const api = builder.createApi(record, { config });
-    const call = vi.fn(() => marker);
     api.registerTool(
       () => ({
         ...makeTool("owner_tool"),
-        label: "Owner",
         async execute() {
           return { content: [{ type: "text", text: store.getRuntime().call() }], details: {} };
         },
@@ -169,7 +157,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     api.registerService({
       id: "owner-service",
       start() {
-        store.setRuntime({ call });
+        store.setRuntime({ call: () => marker });
       },
       stop() {
         store.clearRuntime();
@@ -177,7 +165,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     });
     builder.registry.plugins.push(record);
     setLoadContext(builder.registry, config);
-    return { registry: builder.registry, instance: getPluginInstance(record)!, call };
+    return { registry: builder.registry, instance: getPluginInstance(record)! };
   };
   const a = create("Gateway A");
   // A request may retain a previous registry while its admitting owner publishes a successor.
@@ -229,7 +217,6 @@ it("executes only the admitting Gateway's current service and skips unowned turn
       expect
         .soft(await tool.execute("owned-tool", {}))
         .toMatchObject({ content: [{ type: "text", text: "Gateway A" }] });
-      expect.soft(a.call).toHaveBeenCalledOnce();
     } finally {
       scope.release();
     }

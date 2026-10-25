@@ -37,10 +37,7 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
   const prompter = { confirm, note, text } as unknown as WizardPrompter;
   const options: KeyParams = {
     config: {},
-    env: {
-      MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
-      MINIMAX_OAUTH_TOKEN: process.env.MINIMAX_OAUTH_TOKEN,
-    },
+    env: { MINIMAX_API_KEY: process.env.MINIMAX_API_KEY },
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -62,7 +59,6 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
 
 function setMinimaxEnv(apiKey?: string) {
   vi.stubEnv("MINIMAX_API_KEY", apiKey);
-  vi.stubEnv("MINIMAX_OAUTH_TOKEN", undefined);
 }
 
 afterEach(() => {

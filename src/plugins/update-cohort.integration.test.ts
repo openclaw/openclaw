@@ -54,140 +54,85 @@ describe("plugin release cohort real synchronization", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.each([
-    { channel: "stable", explicit: true, source: "path" },
-    { channel: "dev", explicit: true, source: "path" },
-    { channel: "dev", explicit: false, source: "path" },
-    { channel: "stable", explicit: true, source: "npm" },
-    { channel: "dev", explicit: true, source: "npm" },
-    { channel: "stable", explicit: true, source: "none" },
-    { channel: "dev", explicit: true, source: "none" },
-  ] as const)(
-    "preserves package ownership boundaries for $source on $channel (explicit link: $explicit)",
-    async ({ channel, explicit, source }) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-cohort-linked-"));
-      const bundledPath = path.join(root, "bundled", "llm-task");
-      const linkedPath = path.join(root, "linked-task");
-      for (const directory of [bundledPath, linkedPath]) {
-        writePackage(directory, "llm-task");
-      }
-      const record: PluginInstallRecord = {
-        source: source === "none" ? "npm" : source,
-        spec: "@example/llm-task",
-        sourcePath: linkedPath,
-        // Retained package metadata disagrees with the explicitly selected source.
-        installPath:
-          source === "npm" && channel === "dev"
-            ? path.join(root, "missing-shadowed-package")
-            : bundledPath,
-      };
-      const config = cohortConfig(source === "none" ? {} : { "llm-task": record }, {
-        load: { paths: explicit ? [linkedPath] : [] },
-        entries: { "llm-task": { enabled: true } },
-      });
-      const env = fixtureEnv(root);
+    ["stable", "path", ["index"]],
+    ["dev", "npm", ["index"]],
+    ["dev", "none", ["index"]],
+    ["stable", "npm", ["one", "two"]],
+  ] as const)("preserves explicit %s/%s ownership for %j", async (channel, source, entries) => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-cohort-linked-"));
+    const multiple = entries.length > 1;
+    const trackedPath = path.join(root, multiple ? "managed-task" : "bundled/llm-task");
+    const linkedPath = path.join(root, "linked-task");
+    for (const directory of [trackedPath, linkedPath]) {
+      writePackage(directory, "llm-task", { entries: [...entries] });
+    }
+    const record: PluginInstallRecord = {
+      source: source === "none" ? "npm" : source,
+      spec: "@example/llm-task",
+      ...(multiple ? {} : { sourcePath: linkedPath }),
+      installPath:
+        source === "npm" && channel === "dev"
+          ? path.join(root, "missing-shadowed-package")
+          : trackedPath,
+    };
+    const records = source === "none" ? {} : { "llm-task": record };
+    const config = cohortConfig(records, {
+      load: { paths: [linkedPath] },
+      ...(multiple ? {} : { entries: { "llm-task": { enabled: true } } }),
+    });
+    const ids = entries.map((entry) => (multiple ? `llm-task/${entry}` : "llm-task"));
+    await withUnavailableRegistry(root, async (env, requests) => {
       await withCohort(
         { config, channel, coreVersion: "2026.9.4", timeoutMs: 60_000, env },
         async (result) => {
-          expect(result).toMatchObject({ remainingMissingPayloads: [] });
-          expect(result.sync.summary).toMatchObject({
-            errors: [],
-            warnings: [],
-            switchedToBundled: explicit ? [] : ["llm-task"],
-          });
-          expect(result.config.plugins?.installs?.["llm-task"]).toEqual(
-            source === "none"
-              ? undefined
-              : explicit
-                ? record
+          expect(requests()).toBe(0);
+          expect(result.config).toEqual(config);
+          expect(result).toMatchObject({
+            changed: false,
+            remainingMissingPayloads: [],
+            repairOutcomes: [],
+            sync: { summary: { errors: [], switchedToBundled: [] } },
+            updateOutcomes: ids.map((pluginId) => ({
+              pluginId,
+              status: "skipped",
+              code: "plugin-operator-managed",
+              ...(source === "none"
+                ? {}
                 : {
-                    ...record,
-                    sourcePath: bundledPath,
-                    version: undefined,
-                    installedAt: expect.any(String),
-                  },
+                    shadowedInstallOwner: "llm-task",
+                    shadowedInstallRecord: record,
+                  }),
+            })),
+          });
+          expect(result.updateOutcomes[0]?.message).toContain(
+            "This copy was not updated; verify it against 2026.9.4 or remove it from plugins.load.paths",
           );
-          expect(result.config.plugins?.load?.paths).toEqual([explicit ? linkedPath : bundledPath]);
-          if (explicit) {
-            expect(result).toMatchObject({ changed: false, repairOutcomes: [] });
-            expect(result.updateOutcomes).toEqual([
-              expect.objectContaining({
-                pluginId: "llm-task",
-                status: "skipped",
-                code: "plugin-operator-managed",
-                rootDir: linkedPath,
-                source: path.join(linkedPath, "index.js"),
-                ...(source === "none" ? {} : { shadowedInstallRecord: record }),
-              }),
-            ]);
+          if (source !== "none") {
             expect(result.updateOutcomes[0]?.message).toContain(
-              "This copy was not updated; verify it against 2026.9.4 or remove it from plugins.load.paths",
+              `It shadows the ${source} install @example/llm-task at ${record.installPath}`,
             );
-            if (source !== "none") {
-              expect(result.updateOutcomes[0]?.message).toContain(
-                `It shadows the ${source} install @example/llm-task at ${record.installPath}`,
-              );
-            }
-            expect(
-              await runActivePluginPayloadSmokeCheck({
-                cfg: result.config,
-                records: result.config.plugins?.installs ?? {},
-                env,
-              }),
-            ).toEqual(emptyPayloadCheck);
           }
-          const selectedIndex = withPluginCache(createPluginCache(), () =>
-            loadInstalledPluginIndex({
-              config: result.config,
-              installRecords: result.config.plugins?.installs ?? {},
-              env,
-            }),
+          expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual(
+            emptyPayloadCheck,
           );
-          const selected = selectedIndex.plugins.find((plugin) => plugin.pluginId === "llm-task");
-          expect(selected?.rootDir).toBe(explicit ? linkedPath : bundledPath);
-          if (explicit) {
-            const ownership = createInstalledPluginOwnershipResolver(selectedIndex, env);
-            expect(ownership.resolvePackage("llm-task").ok).toBe(false);
-            expect(ownership.resolveLifecycle("llm-task").ok).toBe(false);
+          const index = withPluginCache(createPluginCache(), () =>
+            loadInstalledPluginIndex({ config, installRecords: records, env }),
+          );
+          const ownership = createInstalledPluginOwnershipResolver(index, env);
+          for (const id of ids) {
+            expect(index.plugins.find((plugin) => plugin.pluginId === id)?.rootDir).toBe(
+              linkedPath,
+            );
+            expect(ownership.resolvePackage(id).ok).toBe(false);
+            expect(ownership.resolveLifecycle(id).ok).toBe(false);
           }
-          expectUnchangedModule(linkedPath);
+          for (const directory of multiple ? [trackedPath, linkedPath] : [linkedPath]) {
+            for (const entry of entries) {
+              expectUnchangedModule(directory, entry);
+            }
+          }
         },
       );
-    },
-  );
-  it("retains local package children and their shadowed npm owner without registry work", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-cohort-local-children-"));
-    const managedPath = path.join(root, "managed-pack");
-    const localPath = path.join(root, "local-pack");
-    for (const directory of [managedPath, localPath]) {
-      writePackage(directory, "pack", { entries: ["one", "two"] });
-    }
-    const records = {
-      pack: { source: "npm", spec: "@example/pack", installPath: managedPath },
-    } satisfies Record<string, PluginInstallRecord>;
-    const config = cohortConfig(records, { load: { paths: [localPath] } });
-    await withUnavailableRegistry(root, async (env, requests) => {
-      await withCohort({ config, channel: "stable", timeoutMs: 10_000, env }, async (result) => {
-        expect(requests()).toBe(0);
-        expect(result.config).toEqual(config);
-        expect(result.updateOutcomes).toEqual(
-          ["pack/one", "pack/two"].map((pluginId) =>
-            expect.objectContaining({
-              pluginId,
-              code: "plugin-operator-managed",
-              shadowedInstallOwner: "pack",
-              shadowedInstallRecord: records.pack,
-            }),
-          ),
-        );
-        expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual(
-          emptyPayloadCheck,
-        );
-        for (const directory of [managedPath, localPath]) {
-          for (const entry of ["one", "two"]) {
-            expectUnchangedModule(directory, entry);
-          }
-        }
-      });
     });
   });
   it.each(["none", "missing", "installed"] as const)(

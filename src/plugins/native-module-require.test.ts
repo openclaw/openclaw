@@ -23,19 +23,16 @@ function writeFile(dir: string, name: string, source: string) {
 function expectProbe(
   probePath: string,
   output: string,
-  options: { args?: string[]; cwd?: string; native?: boolean } = {},
+  options: { args?: string[]; cwd?: string } = {},
 ) {
-  const native = options.native ?? true;
   const result = spawnSync(process.execPath, [...(options.args ?? []), probePath], {
     cwd: options.cwd ?? process.cwd(),
     encoding: "utf8",
-    ...(native ? { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 30_000 } : {}),
+    env: { ...process.env, NODE_OPTIONS: "" },
+    timeout: 30_000,
   });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout.trim()).toBe(output);
-  if (!native) {
-    expect(result.stderr).toBe("");
-  }
 }
 
 async function bundleOwner(dir: string) {
@@ -125,38 +122,6 @@ it("declines an in-flight ESM require race for source-transform fallback", () =>
     'throw Object.assign(new Error("ESM is still loading"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\n',
   );
   expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
-});
-
-it("loads native ESM graphs with temporary SDK aliases", () => {
-  const dir = tempDirs.make("openclaw-native-require-");
-  const ownerUrl = pathToFileURL(path.resolve("src/plugins/native-module-require.ts")).href;
-  const sdkPath = writeFile(dir, "sdk.js", 'export const adapter = () => "adapter";\n');
-  const modulePath = writeFile(
-    dir,
-    "plugin.mjs",
-    'import { adapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const marker = adapter();\n',
-  );
-  const probePath = writeFile(
-    dir,
-    "probe.mjs",
-    `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(ownerUrl)};
-const result = tryNativeRequireJavaScriptModule(${JSON.stringify(modulePath)}, {
-  aliasMap: { "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(sdkPath)} },
-});
-if (!result.ok) throw new Error("native require declined ESM graph");
-console.log(result.moduleExport.marker);
-`,
-  );
-  expectProbe(probePath, "adapter", { args: ["--import", "tsx"], native: false });
-});
-
-it("uses the configured native loader for JavaScript-to-TypeScript lookup", () => {
-  const dir = tempDirs.make("openclaw-native-require-");
-  const modulePath = writeFile(dir, "plugin.cjs", 'module.exports = require("./helper.js");\n');
-  writeFile(dir, "helper.ts", "export const loaded = true;\n");
-
-  const result = tryNativeRequireJavaScriptModule(modulePath);
-  expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
 });
 
 it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {

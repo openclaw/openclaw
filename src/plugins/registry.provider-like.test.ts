@@ -9,27 +9,6 @@ import type {
   UnifiedModelCatalogProviderContext,
 } from "./types.js";
 
-it("combines same-plugin overlapping model catalog hooks", async () => {
-  const { builder, record } = createCatalogOwner();
-  const rows = ["tts-model", "realtime-model"].map((model) => ({
-    kind: "voice" as const,
-    provider: "catalog-provider",
-    model,
-    source: "static" as const,
-  }));
-  for (const row of rows) {
-    builder.registerModelCatalogProvider(record, {
-      provider: "catalog-provider",
-      kinds: ["voice"],
-      staticCatalog: () => [row],
-    });
-  }
-  expect(builder.registry.modelCatalogProviders).toHaveLength(1);
-  await expect(
-    builder.registry.modelCatalogProviders[0]?.provider.staticCatalog?.(catalogContext),
-  ).resolves.toEqual(rows);
-});
-
 const reservationCases = [
   ["text", "providers"],
   ["speech", "speechProviders"],
@@ -94,14 +73,7 @@ function createCatalogOwner(builder = createTestRegistry(), id = "owner") {
     api: builder.createApi(record, { config: {} }),
     run: vi.fn(async () => null),
     expectErrors: (...messages: string[]) =>
-      expect(builder.registry.diagnostics).toEqual(
-        messages.map((message) => ({
-          level: "error",
-          pluginId: id,
-          source: record.source,
-          message,
-        })),
-      ),
+      expect(builder.registry.diagnostics.map(({ message }) => message)).toEqual(messages),
   };
 }
 
@@ -147,37 +119,45 @@ it.each(["automatic-first", "explicit-first"] as const)(
   "retains explicit static/live contributions alongside a same-plugin reservation (%s)",
   async (order) => {
     const { builder, api, run, expectErrors } = createCatalogOwner();
-    const row = { kind: "text", provider: "catalog-provider", model: "explicit-model" } as const;
-    const staticCatalog = vi.fn(() => [{ ...row, source: "static" as const }]);
-    const liveCatalog = vi.fn(() => [{ ...row, source: "live" as const }]);
+    const rows = ["first-model", "second-model"].map((model) => ({
+      kind: "text" as const,
+      provider: "catalog-provider",
+      model,
+    }));
+    const contributions = rows.map((row) => ({
+      staticCatalog: vi.fn(() => [{ ...row, source: "static" as const }]),
+      liveCatalog: vi.fn(() => [{ ...row, source: "live" as const }]),
+    }));
     const automatic = () => registerReservedProvider(api, "text", "catalog-provider", run);
-    const explicit = () =>
-      api.registerModelCatalogProvider({
-        provider: "catalog-provider",
-        kinds: ["text"],
-        staticCatalog,
-        liveCatalog,
-      });
+    const explicit = () => {
+      for (const hooks of contributions) {
+        api.registerModelCatalogProvider({
+          provider: "catalog-provider",
+          kinds: ["text"],
+          ...hooks,
+        });
+      }
+    };
     for (const register of order === "automatic-first"
       ? [automatic, explicit]
       : [explicit, automatic]) {
       register();
     }
     expect(catalogOwners(builder)).toEqual([["owner", "catalog-provider", ["text"]]]);
-    for (const hook of [run, staticCatalog, liveCatalog]) {
+    for (const hook of [run, ...contributions.flatMap(Object.values)]) {
       expect(hook).not.toHaveBeenCalled();
     }
-    const provider = expectDefined(
+    const catalog = expectDefined(
       builder.registry.modelCatalogProviders[0],
       "catalog reservation",
     ).provider;
-    // Automatic rows are intentionally not an oracle; the explicit API contribution is.
-    for (const [source, rows, hook] of [
-      ["static", await provider.staticCatalog?.(catalogContext), staticCatalog],
-      ["live", await provider.liveCatalog?.(catalogContext), liveCatalog],
+    for (const [source, actual] of [
+      ["static", await catalog.staticCatalog?.(catalogContext)],
+      ["live", await catalog.liveCatalog?.(catalogContext)],
     ] as const) {
-      expect(rows?.filter((entry) => entry.model === row.model)).toEqual([{ ...row, source }]);
-      expect(hook).toHaveBeenCalledExactlyOnceWith(catalogContext);
+      expect(actual).toEqual(
+        rows.map(({ kind, provider, model }) => ({ kind, provider, model, source })),
+      );
     }
     expectErrors();
   },

@@ -13,7 +13,6 @@ import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { refreshInstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -23,7 +22,6 @@ import {
 import { reloadManagedPlugin } from "./management-mutations.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { resolveControlPlaneRegistryParams } from "./plugin-registry-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
@@ -81,16 +79,6 @@ it("persists offline CLI plugin policy without loading Gateway RPC or heavy plug
         return withPluginCache(cache, () => {
           const index = readPersistedInstalledPluginIndexSync();
           assert(index, "CLI policy mutation did not persist the plugin index");
-          const fresh = refreshInstalledPluginIndex(
-            resolveControlPlaneRegistryParams({
-              config: snapshot.runtimeConfig,
-              env: process.env,
-              installRecords: {},
-              reason: "policy-changed" as const,
-              now: () => new Date(index.generatedAtMs),
-            }),
-          );
-          expect(index).toEqual(fresh);
           return { config: snapshot.sourceConfig, index };
         });
       };

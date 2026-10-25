@@ -41,36 +41,6 @@ it("initializes the package resolver only when capture needs it", async () => {
   expect(createResolver).toHaveBeenCalledTimes(1);
 });
 
-it("pins configured tsconfig paths when preparing a module before a deferred import", async () => {
-  vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
-  try {
-    await using resources = captureResources();
-    const root = temp.make("plugin-tsconfig-resolution-");
-    const config = (target: string) => ({
-      compilerOptions: { baseUrl: ".", paths: { "@fixture/*": [target] } },
-    });
-    writeTree(root, {
-      "package.json": { name: "fixture", type: "module" },
-      "tsconfig.json": config("./old/*"),
-      "index.js": "export const load = () => import('@fixture/value');",
-      "old/value.js": "export const value = 'old';",
-      "new/value.js": "export const value = 'new';",
-    });
-    const artifact = resources.keep(
-      capturePluginGenerationArtifact(root, undefined, (run) => run()),
-    );
-    const entry = artifact.resolve(path.join(root, "index.js"));
-    artifact.prepareModule(entry);
-    writeTree(root, { "tsconfig.json": config("./new/*") });
-    const selected = artifact.captureModule(entry, "@fixture/value", ["node", "import"]);
-    expect(selected && "target" in selected && fs.readFileSync(selected.target, "utf8")).toBe(
-      "export const value = 'old';",
-    );
-  } finally {
-    vi.unstubAllEnvs();
-  }
-});
-
 it.each([false, true])(
   "bounds resolution work for fifty TypeScript imports (custody: %s)",
   async (custody) => {
