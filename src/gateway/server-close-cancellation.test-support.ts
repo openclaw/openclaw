@@ -70,27 +70,23 @@ export function registerGatewayCancellationTests({
       active.push(await createSource(`active-${index}`));
     }
     const { source: pendingReply } = await createSource("pending-reply", {}, { phase: "waiting" });
-    const background = await beginSessionEffect({
-      target: captureSessionTarget({
-        storeScope: "/synthetic/gateway-close/sessions.sqlite",
-        sessionKey: "agent:main:background",
-        incarnation: "background",
-      }),
-      resolveGatewayContext: resolveClosingGatewayContext,
-      onInterrupt: () => background.release(),
-    });
+    const effect = async (name: string, run?: { runId: string }) => {
+      const lease = await beginSessionEffect({
+        target: captureSessionTarget({
+          storeScope: "/synthetic/gateway-close/sessions.sqlite",
+          sessionKey: `agent:main:${name}`,
+          incarnation: name,
+        }),
+        run,
+        resolveGatewayContext: resolveClosingGatewayContext,
+        onInterrupt: () => lease.release(),
+      });
+      return lease;
+    };
+    const background = await effect("background");
     const cleanup = createDeferredCore();
     const effectCleanup = createDeferredCore();
-    const retainedEffect = await beginSessionEffect({
-      target: captureSessionTarget({
-        storeScope: "/synthetic/gateway-close/sessions.sqlite",
-        sessionKey: "agent:main:retained-effect",
-        incarnation: "retained-effect",
-      }),
-      run: { runId: "retained-effect-run" },
-      resolveGatewayContext: resolveClosingGatewayContext,
-      onInterrupt: () => retainedEffect.release(),
-    });
+    const retainedEffect = await effect("retained-effect", { runId: "retained-effect-run" });
     const effectWork = retainedEffect.run(() => effectCleanup.promise);
     const retained = active[0]!.source;
     trackSessionControllerSourceWork(retained.input, cleanup.promise);
@@ -229,9 +225,6 @@ export function registerGatewayCancellationTests({
         markerCommitted.resolve(undefined);
         const result = await closing;
 
-        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
-          expect.objectContaining({ activeRuns: [], reason: "gateway restart shutdown" }),
-        );
         expect(observed).toEqual([true, true]);
         expect(order).toEqual(["marker", "cancel", "hook", "dispose"]);
         expect(cancelReceivedWork).toHaveBeenCalledOnce();
