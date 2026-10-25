@@ -16,7 +16,7 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
-import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { expectNoCalls, mockCall } from "../test-utils/mock-call-assertions.js";
 import { configCliMutationRejectionCases } from "./config-cli-rejections.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
@@ -332,12 +332,6 @@ function runConfigSet(...args: string[]) {
 
 function runConfigPatch(file: string, ...args: string[]) {
   return runConfigCommand(["config", "patch", "--file", file, ...args]);
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function runDiscordRef(provider: string, source: string, id: string, ...options: string[]) {
