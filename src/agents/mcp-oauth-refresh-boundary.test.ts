@@ -51,14 +51,27 @@ function tokens() {
     expires_in: 3600,
   });
 }
-beforeEach(async () => {
+const read = () => readMcpOAuthStore(identity.storeKey);
+const refresh = (
+  fetchFn: typeof fetch,
+  options: { signal?: AbortSignal; rejectedAccessToken?: string } = {},
+) => resolveMcpOAuthAccessToken({ identity, fetchFn, ...options });
+async function reopen() {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+}
+async function expectFenced(fetchFn: typeof fetch) {
+  await expect(refresh(fetchFn)).rejects.toThrow(/uncertain/);
+  await reopen();
+  await expect(refresh(fetchFn)).rejects.toThrow(/uncertain/);
+  expect(fetchFn).toHaveBeenCalledTimes(1);
+}
+beforeEach(async () => {
+  await reopen();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("mcp-real-refresh-"));
 });
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await reopen();
   vi.unstubAllEnvs();
 });
 
@@ -71,26 +84,28 @@ describe("real MCP SDK token HTTP and durable owner", () => {
       expect(resolveRequestUrl(url)).toBe(endpoint);
       expect(init?.method).toBe("POST");
       const form = new URLSearchParams(await new Response(init?.body).text());
-      expect(form.get("grant_type")).toBe("refresh_token");
-      expect(form.get("refresh_token")).toBe("synthetic-old-refresh");
-      expect(form.get("client_id")).toBe("synthetic-client");
-      expect(form.get("resource")).toBe(identity.serverUrl);
+      expect(Object.fromEntries(form)).toMatchObject({
+        grant_type: "refresh_token",
+        refresh_token: "synthetic-old-refresh",
+        client_id: "synthetic-client",
+        resource: identity.serverUrl,
+      });
       entered.resolve();
       await release.promise;
       return tokens();
     });
-    const first = resolveMcpOAuthAccessToken({ identity, fetchFn });
-    const second = resolveMcpOAuthAccessToken({ identity, fetchFn });
+    const first = refresh(fetchFn);
+    const second = refresh(fetchFn);
     try {
       await awaitGateBeforeSettlement(entered.promise, first, "refresh settled before HTTP");
-      expect((await readMcpOAuthStore(identity.storeKey)).refreshClaim).toEqual(expect.any(String));
+      expect((await read()).refreshClaim).toEqual(expect.any(String));
       release.resolve();
       expect(await Promise.all([first, second])).toEqual([
         "synthetic-new-access",
         "synthetic-new-access",
       ]);
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      const row = await readMcpOAuthStore(identity.storeKey);
+      const row = await read();
       expect(row).toMatchObject({
         authorizationId: "synthetic-authorization",
         tokens: { refresh_token: "synthetic-new-refresh", issuer },
@@ -115,12 +130,10 @@ describe("real MCP SDK token HTTP and durable owner", () => {
     });
     const fetchFn = vi.fn<typeof fetch>(async () => tokens());
     try {
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow();
+      await expect(refresh(fetchFn)).rejects.toThrow();
       expect(fetchFn).not.toHaveBeenCalled();
-      expect((await readMcpOAuthStore(identity.storeKey)).refreshClaim).toBeUndefined();
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).resolves.toBe(
-        "synthetic-new-access",
-      );
+      expect((await read()).refreshClaim).toBeUndefined();
+      await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
       expect(fetchFn).toHaveBeenCalledOnce();
     } finally {
       spy.mockRestore();
@@ -139,18 +152,13 @@ describe("real MCP SDK token HTTP and durable owner", () => {
         expires_in: 3600,
       });
     });
-    await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).resolves.toBe(
-      "synthetic-new-access",
-    );
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    expect(await readMcpOAuthStore(identity.storeKey)).toMatchObject({
+    await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
+    await reopen();
+    expect(await read()).toMatchObject({
       authorizationId: "synthetic-authorization",
       tokens: { access_token: "synthetic-new-access", refresh_token: "synthetic-old-refresh" },
     });
-    await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).resolves.toBe(
-      "synthetic-new-access",
-    );
+    await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
@@ -178,13 +186,9 @@ describe("real MCP SDK token HTTP and durable owner", () => {
           token_type: "Bearer",
         });
       });
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow();
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(await readMcpOAuthStore(identity.storeKey)).toMatchObject({
+      await expect(refresh(fetchFn)).rejects.toThrow();
+      await expectFenced(fetchFn);
+      expect(await read()).toMatchObject({
         refreshClaim: expect.any(String),
         clientInformation: { client_id: "synthetic-client", issuer },
         tokens: { refresh_token: "synthetic-old-refresh" },
@@ -199,18 +203,10 @@ describe("real MCP SDK token HTTP and durable owner", () => {
       throw new TypeError("synthetic consumed response lost");
     });
     await expect(
-      resolveMcpOAuthAccessToken({
-        identity,
-        fetchFn,
-        rejectedAccessToken: "synthetic-old-access",
-      }),
+      refresh(fetchFn, { rejectedAccessToken: "synthetic-old-access" }),
     ).rejects.toThrow();
-    await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(await readMcpOAuthStore(identity.storeKey)).toMatchObject({
+    await expectFenced(fetchFn);
+    expect(await read()).toMatchObject({
       refreshClaim: expect.any(String),
       tokens: { access_token: "synthetic-old-access", refresh_token: "synthetic-old-refresh" },
     });
@@ -239,16 +235,16 @@ describe("real MCP SDK token HTTP and durable owner", () => {
           ),
         ),
     );
-    const refresh = resolveMcpOAuthAccessToken({ identity, fetchFn });
-    const outcome = refresh.catch((error: unknown) => error);
+    const pending = refresh(fetchFn);
+    const outcome = pending.catch((error: unknown) => error);
     try {
-      await awaitGateBeforeSettlement(reading.promise, refresh, "refresh settled before body read");
+      await awaitGateBeforeSettlement(reading.promise, pending, "refresh settled before body read");
       deadline.abort(new DOMException("Exchange deadline expired", "TimeoutError"));
       expect(await outcome).toMatchObject({ message: expect.stringContaining("uncertain") });
       expect(cancel).toHaveBeenCalledOnce();
-      await expect(resolveMcpOAuthAccessToken({ identity, fetchFn })).rejects.toThrow(/uncertain/);
+      await expect(refresh(fetchFn)).rejects.toThrow(/uncertain/);
       expect(fetchFn).toHaveBeenCalledOnce();
-      expect((await readMcpOAuthStore(identity.storeKey)).refreshClaim).toEqual(expect.any(String));
+      expect((await read()).refreshClaim).toEqual(expect.any(String));
     } finally {
       deadline.abort();
       await outcome;
@@ -268,20 +264,18 @@ describe("real MCP SDK token HTTP and durable owner", () => {
       await release.promise;
       return tokens();
     });
-    const first = resolveMcpOAuthAccessToken({ identity, fetchFn, signal: controller.signal });
+    const first = refresh(fetchFn, { signal: controller.signal });
     const outcome = first.catch((error: unknown) => error);
     try {
       await awaitGateBeforeSettlement(entered.promise, first, "refresh settled before HTTP");
       controller.abort();
       expect(transportSignal?.aborted).toBe(false);
       expect(await outcome).toMatchObject({ name: "AbortError" });
-      const second = resolveMcpOAuthAccessToken({ identity, fetchFn });
+      const second = refresh(fetchFn);
       release.resolve();
       await expect(second).resolves.toBe("synthetic-new-access");
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect((await readMcpOAuthStore(identity.storeKey)).tokens?.refresh_token).toBe(
-        "synthetic-new-refresh",
-      );
+      expect((await read()).tokens?.refresh_token).toBe("synthetic-new-refresh");
     } finally {
       release.resolve();
       await outcome;
@@ -297,7 +291,7 @@ describe("real MCP SDK token HTTP and durable owner", () => {
       await release.promise;
       return tokens();
     });
-    const holder = resolveMcpOAuthAccessToken({ identity, fetchFn });
+    const holder = refresh(fetchFn);
     try {
       await awaitGateBeforeSettlement(entered.promise, holder, "refresh settled before HTTP");
       // The waiter first checks for a reusable token without the lease; cancel once it waits.
@@ -310,7 +304,7 @@ describe("real MCP SDK token HTTP and durable owner", () => {
           return acquire(params);
         });
       const controller = new AbortController();
-      const waiter = resolveMcpOAuthAccessToken({ identity, fetchFn, signal: controller.signal });
+      const waiter = refresh(fetchFn, { signal: controller.signal });
       await waiting.promise;
       acquisition.mockRestore();
       controller.abort();
