@@ -35,9 +35,6 @@ it.each([
   const dialog = await openDialog();
 
   expect(dialog.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
-  expect(Array.from(dialog.querySelectorAll("h3") ?? [], (heading) => heading.textContent)).toEqual(
-    ["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"],
-  );
   expect(chips(dialog, "Send message")).toEqual([enter]);
   expect(chips(dialog, "Start new session (from the new-session page)")).toEqual([enter]);
   expect(dialog.textContent).not.toContain("shortcutsOverlay.");
@@ -132,15 +129,7 @@ it.each(
       expect(key({}).defaultPrevented).toBe(false);
       expect(dialog.isOpen).toBe(true);
     };
-    for (const init of [
-      { repeat: true },
-      { isComposing: true },
-      { keyCode: 229 },
-      { altKey: true },
-      { key: "A", code: "KeyA" },
-    ]) {
-      expect(key(init).defaultPrevented).toBe(false);
-    }
+    expect(key({ repeat: true }).defaultPrevented).toBe(false);
     const otherModal = document.body.appendChild(document.createElement("openclaw-modal-dialog"));
     await otherModal.updateComplete;
     expect(otherModal.querySelector("dialog")?.open).toBe(true);

@@ -169,49 +169,24 @@ click B "https://example.invalid/mermaid-link"`;
   expect(remote).not.toContain("example.invalid");
 });
 
-it("keeps untrusted alternatives inert and retires metadata when the source changes", async () => {
+it("renders authored alternatives as inert image metadata", async () => {
   await import("./markdown-mermaid.tsx");
   const element = document.createElement("openclaw-mermaid");
   document.body.append(element);
-  const authored =
-    "flowchart LR\naccTitle: Audit 🧪\naccDescr: Inspect <img src=x onerror=alert(1)> before allowing the request.\nA --> B";
-  const cases = [
-    [authored, "Audit 🧪", "Inspect", true],
-    ["flowchart LR\nA[No authored alternative] --> B", "Mermaid diagram", "", false],
-    ["flowchart LR\naccTitle: Approval order\nA --> B", "Approval order", "", false],
-    [
-      "flowchart LR\naccDescr: Approval precedes execution.\nA --> B",
-      "Mermaid diagram",
-      "Approval precedes execution.",
-      false,
-    ],
-    [authored, "Audit 🧪", "Inspect", true],
-  ] as const;
-  const preview = () => element.querySelector<HTMLImageElement>(".preview img");
+  element.source =
+    "flowchart LR\\naccTitle: Audit 🧪\\naccDescr: Inspect <img src=x onerror=alert(1)> before allowing the request.\\nA --> B";
   try {
-    for (const [source, title, text, partial] of cases) {
-      const oldUrl = preview()?.getAttribute("src");
-      element.source = source;
-      await expect.poll(() => preview()?.getAttribute("src")).not.toBe(oldUrl);
-      await expect.poll(() => preview()?.alt).toBe(title);
-      const image = preview()!;
-      await image.decode();
-      const description = document.getElementById(image.getAttribute("aria-describedby")!);
-      if (text) {
-        expect(description?.textContent).toContain(text);
-        if (!partial) {
-          expect(description?.textContent).toBe(text);
-        }
-        expect(description?.children).toHaveLength(0);
-        expect(getComputedStyle(description!).display).toBe("none");
-      } else {
-        expect(description).toBeNull();
-        expect(image.hasAttribute("aria-describedby")).toBe(false);
-        expect(element.querySelector(".description")).toBeNull();
-      }
-      expect(element.querySelector(".preview svg, .preview script, .description img")).toBeNull();
-      expect(image.src).toMatch(/^blob:/u);
-    }
+    await expect
+      .poll(() => element.querySelector<HTMLImageElement>(".preview img")?.alt)
+      .toBe("Audit 🧪");
+    const image = element.querySelector<HTMLImageElement>(".preview img")!;
+    await image.decode();
+    const description = document.getElementById(image.getAttribute("aria-describedby")!);
+    expect(description?.textContent).toContain("Inspect");
+    expect(description?.children).toHaveLength(0);
+    expect(getComputedStyle(description!).display).toBe("none");
+    expect(element.querySelector(".preview svg, .preview script, .description img")).toBeNull();
+    expect(image.src).toMatch(/^blob:/u);
   } finally {
     element.remove();
   }

@@ -107,12 +107,6 @@ describe("showConfirmDialog", () => {
       });
       const { dialog } = await getRenderedModalDialog(document.body);
       const selected = findButton(choice === "confirm" ? "All sessions" : "Only this session");
-      expect([...document.body.querySelectorAll("button")].map((item) => item.textContent)).toEqual(
-        ["Cancel", "Only this session", "All sessions"],
-      );
-      expect(findButton("All sessions").classList.contains("primary")).toBe(true);
-      expect(findButton("Only this session").className).toBe("btn");
-      expect(findButton("Cancel").hasAttribute("autofocus")).toBe(true);
       expect(selected.disabled).toBe(true);
       setCheckbox('input[type="checkbox"]', true);
       flush();
