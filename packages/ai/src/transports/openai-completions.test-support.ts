@@ -8,7 +8,7 @@ import {
 } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { Model } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { encodedModelRequestBodyStream } from "./model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
@@ -151,18 +151,7 @@ export function createDeepSeekCompletionsModel(): CompletionsModel {
   });
 }
 
-export function createAssistantOutput(model: CompletionsModel): OpenAICompletionsOutput {
-  return {
-    role: "assistant" as const,
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
+export { createAssistantOutput };
 
 export function expectedRecoveredTool(name: string, args: Record<string, unknown>) {
   return {

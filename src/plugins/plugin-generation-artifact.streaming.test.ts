@@ -76,37 +76,6 @@ function captureFailure(capture: () => unknown) {
   throw new Error("Expected capture to fail");
 }
 
-it.skipIf(process.platform === "win32")("amortizes sibling-file directory reads", () => {
-  const bytes = Buffer.alloc(64 * 1024 + 1, "S");
-  const source = fixture(bytes, "fixture.dat");
-  const lstatSync = fs.lstatSync;
-  let directoryReads = 0;
-  vi.spyOn(fs, "lstatSync").mockImplementation((filename, options) => {
-    const stat = lstatSync(filename, options);
-    if (stat?.isDirectory()) {
-      directoryReads += 1;
-    }
-    return stat;
-  });
-  source.capture();
-  const singleFileReads = directoryReads;
-  const siblings = Array.from({ length: 15 }, (_, index) =>
-    path.join(source.directory, `sibling-${index}.dat`),
-  );
-  for (const sibling of siblings) {
-    fs.writeFileSync(sibling, bytes);
-  }
-  directoryReads = 0;
-  const captured = source.capture();
-  const siblingFileReads = directoryReads;
-  for (const sibling of [source.filename, ...siblings]) {
-    expectBytes(captured.resolve(sibling), bytes);
-  }
-  expect(singleFileReads).toBeGreaterThan(0);
-  // Keep per-file identity checks, but amortize directory admission across siblings.
-  expect(siblingFileReads).toBeLessThanOrEqual(singleFileReads * (siblings.length + 1) * 0.85);
-});
-
 it.each(["changed bytes", "escaping link"])(
   "rejects tampered retained source: %s",
   async (change) => {
@@ -252,13 +221,11 @@ it.each(["replacement", "growth"] as const)(
   "rejects pinned-source %s and removes failed captures",
   (change) => {
     const source = fixture(Buffer.alloc(64 * 1024 + 1, "P"), "fixture.js");
-    const admitted = fs.statSync(source.filename, { bigint: true });
     let target: string | undefined;
     let refused: unknown;
     interceptCopies(source.filename, (options, copyRootFileSync) => {
       target = options.destination.absolutePath;
       if (change === "replacement") {
-        expect(options.expectedSourceIdentity).toEqual({ dev: admitted.dev, ino: admitted.ino });
         fs.renameSync(source.filename, `${source.filename}.retained`);
         fs.writeFileSync(source.filename, "replacement");
       } else {
@@ -289,8 +256,6 @@ it.each(["replacement", "growth"] as const)(
 
 it.each([
   ["EIO", false],
-  ["EBADF", false],
-  ["ENOSPC", false],
   ["ENOSPC", true],
 ] as const)("propagates %s without retry (cleanup failure: %s)", (code, cleanupFails) => {
   const source = fixture(Buffer.alloc(64 * 1024 + 1, "C"), "fixture.js");

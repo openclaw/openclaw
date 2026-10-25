@@ -211,61 +211,53 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     }
   });
 
+  function interceptWorkerCommand(
+    intercept: (command: Parameters<DomainScope["execute"]>[0]) => void | Promise<void>,
+    phase: "before" | "after" = "before",
+  ) {
+    worker.mockImplementation((context, operation, operationOptions) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (command, executeOptions) => {
+              const before = phase === "before" ? intercept(command) : undefined;
+              if (before) {
+                await before;
+              }
+              const result = await scope.execute(command, executeOptions);
+              const after = phase === "after" ? intercept(command) : undefined;
+              if (after) {
+                await after;
+              }
+              return result;
+            },
+          }),
+        operationOptions,
+      ),
+    );
+  }
+
   return {
     settle,
     get stateDir() {
       return stateDir;
     },
     worker,
-    interceptWorkerCommand(
-      intercept: (command: Parameters<DomainScope["execute"]>[0]) => void | Promise<void>,
-      phase: "before" | "after" = "before",
-    ) {
-      worker.mockImplementation((context, operation, operationOptions) =>
-        runSubagentStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: async (command, executeOptions) => {
-                const before = phase === "before" ? intercept(command) : undefined;
-                if (before) {
-                  await before;
-                }
-                const result = await scope.execute(command, executeOptions);
-                const after = phase === "after" ? intercept(command) : undefined;
-                if (after) {
-                  await after;
-                }
-                return result;
-              },
-            }),
-          operationOptions,
-        ),
-      );
-    },
+    interceptWorkerCommand,
     rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
-      worker.mockImplementation((context, operation, operationOptions) =>
-        runSubagentStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (
-                  isSubagentRegistryWriteCommand(command) &&
-                  command.input.values.some((value) => {
-                    const row = rowToSubagentRunRecord(value);
-                    return row !== null && reject(row);
-                  })
-                ) {
-                  throw new Error(message);
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          operationOptions,
-        ),
-      );
+      interceptWorkerCommand((command) => {
+        if (
+          isSubagentRegistryWriteCommand(command) &&
+          command.input.values.some((value) => {
+            const row = rowToSubagentRunRecord(value);
+            return row !== null && reject(row);
+          })
+        ) {
+          throw new Error(message);
+        }
+      });
     },
     gateway,
     announce,

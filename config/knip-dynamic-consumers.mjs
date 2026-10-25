@@ -180,6 +180,19 @@ function emittedFileNamedImportEdges(source) {
   return edges;
 }
 
+function emittedSelfNamedImportNames(source) {
+  return [
+    ...source.matchAll(
+      /\bimport\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};/gu,
+    ),
+  ].flatMap(([, bindings]) =>
+    bindings
+      .split(",")
+      .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
+      .filter(Boolean),
+  );
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -219,16 +232,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
 
   const benchmarkGeneratorPath = "scripts/lib/gateway-bench-worker-messages.ts";
   const benchmarkGenerator = fs.readFileSync(benchmarkGeneratorPath, "utf8");
-  const generatedNames = [
-    ...benchmarkGenerator.matchAll(
-      /\bimport\s*\{([^}]+)\}\s*from\s*\$\{JSON\.stringify\(import\.meta\.url\)\};/gu,
-    ),
-  ].flatMap(([, bindings]) =>
-    bindings
-      .split(",")
-      .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
-      .filter(Boolean),
-  );
+  const generatedNames = emittedSelfNamedImportNames(benchmarkGenerator);
   if (generatedNames.length > 0) {
     imports.push(namedImport(generatedNames, benchmarkGeneratorPath, filePath, imports.length));
   }
@@ -355,6 +359,38 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
         ),
       );
     }
+  }
+
+  const trajectoryFlushPreloadPath = "scripts/perf/trajectory-flush-preload.mts";
+  const trajectoryFlushNames = emittedSelfNamedImportNames(
+    fs.readFileSync(trajectoryFlushPreloadPath, "utf8"),
+  );
+  if (trajectoryFlushNames.length > 0) {
+    imports.push(
+      namedImport(trajectoryFlushNames, trajectoryFlushPreloadPath, filePath, imports.length),
+    );
+  }
+
+  const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
+  const poolFixtureSpecifier = fs
+    .readFileSync(poolLifecyclePath, "utf8")
+    .match(
+      /\bbroker\.open(?:<[^>]+>)?\(\s*\{\s*moduleUrl:\s*new URL\(\s*["']([^"'\r\n]+)["']\s*,\s*self\s*\)/u,
+    )?.[1];
+  const creationFactory = fs
+    .readFileSync("src/infra/sqlite-store.worker.ts", "utf8")
+    .match(
+      /\bconst factoryName\s*=\s*request\.existingIdentity\s*\?\s*["'][^"'\r\n]+["']\s*:\s*["']([^"'\r\n]+)["']/u,
+    )?.[1];
+  if (poolFixtureSpecifier && creationFactory) {
+    imports.push(
+      namedImport(
+        [creationFactory],
+        path.resolve(path.dirname(poolLifecyclePath), poolFixtureSpecifier),
+        filePath,
+        "PgPool",
+      ),
+    );
   }
 
   return `${source}\n${imports.join("\n")}`;

@@ -423,6 +423,7 @@ src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
+src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
@@ -2732,6 +2733,7 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/state-lease-loss.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

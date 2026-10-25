@@ -109,8 +109,17 @@ nodes. It does not retain loose host worker modules. A standalone node uses the
 same executable's generic Bun runner to prewarm and execute a transferred worker
 bundle, preserving its normal bundle and protocol checks. In a run-only AOT build,
 that portable worker graph runs interpreted; embedded host worker threads still
-execute their compiled entries. Qualify this child path on the exact signed
-artifact without adding JIT entitlements or substituting a host runtime.
+execute their compiled entries. Worker repository synchronization and project-setup
+Git commands are generated from configuration data without requiring retained
+function bodies. Qualify this child path on the exact signed artifact without
+adding JIT entitlements or substituting a host runtime.
+
+Portable workers delegate exec process ownership to their admitted host's native
+anchor. The same executable runs that declared entry outside generic Bun mode;
+macOS keeps process-group cleanup and Linux keeps native subreaper cleanup.
+macOS delegates only to bundles advertising the platform-aware native-owner
+capability; older bundles retain their existing startup envelope. Linux also
+accepts the earlier Linux-native-owner capability.
 
 ### Original TypeScript and compiler options
 

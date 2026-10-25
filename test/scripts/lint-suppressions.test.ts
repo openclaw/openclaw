@@ -164,6 +164,12 @@ describe("production lint suppressions", () => {
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The size-record probe forwards Map.set with the original map receiver.
         "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
+        // The footprint observer supplies the native MessagePort receiver through Reflect.apply.
+        "scripts/perf/pg-footprint-preload.mjs|typescript/unbound-method|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "scripts/perf/pg-footprint-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The fault injector supplies the native pg.Client receiver through Reflect.apply.
+        "scripts/perf/pg-pool-hang.worker.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
         // The setup probe executes an expression from the same trusted source input it imports.
@@ -212,6 +218,8 @@ describe("production lint suppressions", () => {
         "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
+        // Node BroadcastChannel.postMessage has no target-origin parameter.
+        "src/infra/postgres-sync/pool.ts|unicorn/require-post-message-target-origin|1",
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
         "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",

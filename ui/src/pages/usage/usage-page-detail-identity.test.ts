@@ -198,8 +198,18 @@ it.each([
     expect.soft(page.read().detail).toMatchObject({
       timeSeries: null,
       sessionLogs: null,
-      timeSeriesStatus: { error: "Replacement details unavailable" },
-      sessionLogsStatus: { error: "Replacement details unavailable" },
+      timeSeriesStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
+      sessionLogsStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
     });
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       const requests = request.mock.calls.slice(beforeRefresh).filter(([name]) => name === method);
