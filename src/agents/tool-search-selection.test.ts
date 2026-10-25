@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
-import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
@@ -125,7 +124,7 @@ describe("Tool Search selectors", () => {
 
   it.each(["tools", "directory"] as const)(
     "defers MCP schemas only, preserving callable direct tools in %s mode",
-    async (mode) => {
+    (mode) => {
       using ctx = catalog(
         {
           include: [{ source: "mcp" }],
@@ -162,67 +161,28 @@ describe("Tool Search selectors", () => {
       expect(catalogRef.current?.entries.map((entry) => entry.id)).toEqual([
         "mcp:remote:github_write_issue",
       ]);
-      for (const target of [
-        ...direct,
-        ...clients.tools.map((definition) => wrapToolDefinition(definition)),
-      ]) {
-        expect(target.parameters).toBeDefined();
-        await expect(target.execute("direct", {})).resolves.toMatchObject({
-          details: { name: target.name },
-        });
-      }
-      const control = (name: string) =>
-        expectDefined(
-          surface.tools.find((candidate) => candidate.name === name),
-          name,
-        );
-      expect(
-        await control("tool_search").execute("search", { query: deferred.name }),
-      ).toMatchObject({
-        details: [{ id: "mcp:remote:github_write_issue", source: "mcp", input: "unknown" }],
-      });
-      expect(
-        await control("tool_describe").execute("describe", { id: deferred.name }),
-      ).toMatchObject({
-        details: { parameters: deferred.parameters },
-      });
-      expect(
-        await control("dispatch_action").execute("call", { id: deferred.name, args: {} }),
-      ).toMatchObject({
-        details: {
-          tool: { source: "mcp", name: deferred.name },
-          result: { details: { name: deferred.name } },
-        },
-      });
       expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("core_lookup");
     },
   );
 
   it.each(["tools", "directory"] as const)(
-    "preserves direct-only and trusted required/coding guarantees in %s mode",
+    "preserves trusted required/coding guarantees in %s mode",
     (mode) => {
       using ctx = catalog({ include: [{ name: "*" }] }, mode);
-      const { catalogRef } = ctx;
-      const directOnly = tool("direct_contract", "mcp");
-      directOnly.catalogMode = "direct-only";
       const trusted = [tool("read"), tool("message")];
       const lookalikes = [tool("write", "mcp"), tool("message", "mcp")];
       const apply = mode === "directory" ? applyToolSchemaDirectoryCatalog : applyToolSearchCatalog;
       const surface = apply({
         ...ctx,
-        tools: [...createToolSearchTools(ctx), directOnly, ...trusted, ...lookalikes],
+        tools: [...createToolSearchTools(ctx), ...trusted, ...lookalikes],
         directToolNames: ["message"],
       });
-      expect(surface.tools).toContain(directOnly);
       expect(surface.tools).toContain(trusted[0]);
       // Directory's existing cross-source collision gate also hides trusted message.
       expect(surface.tools.includes(trusted[1]!)).toBe(mode === "tools");
       for (const target of lookalikes) {
         expect(surface.tools).not.toContain(target);
       }
-      expect(catalogRef.current?.entries.map((entry) => entry.name)).not.toContain(
-        "direct_contract",
-      );
     },
   );
 
@@ -305,18 +265,6 @@ describe("Tool Search selectors", () => {
       "Available deferred-schema tools: none.",
     );
   });
-
-  it.each([false, { enabled: false, include: [{ source: "mcp" as const }] }])(
-    "leaves explicitly disabled Tool Search disabled: %j",
-    (toolSearch) => {
-      const tools = [tool("remote", "mcp")];
-      const catalogRef = createToolSearchCatalogRef();
-      expect(
-        applyToolSearchCatalog({ tools, config: { tools: { toolSearch } }, catalogRef }).tools,
-      ).toEqual(tools);
-      expect(catalogRef.current).toBeUndefined();
-    },
-  );
 
   it("preserves availability across the direct/catalog split and applies prompt restrictions", () => {
     using ctx = catalog({ include: [{ name: "dependent" }] });

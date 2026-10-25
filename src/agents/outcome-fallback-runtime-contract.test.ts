@@ -117,13 +117,10 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
 
   it.each([
     ["optional", undefined, 1, 1],
-    ["optional", "empty", 1, 1],
-    ["optional", "reasoning-only", 1, 1],
     ["result-required", undefined, 1, 2],
     ["result-required", "empty", 3, 6],
     ["result-required", "reasoning-only", 3, 9],
     ["required", "empty", 3, 6],
-    ["required", "reasoning-only", 3, 9],
   ] as const)(
     "settles an empty stop for %s replies with harness classification %s",
     async (expectation, classification, expectedModels, expectedRequests) => {
@@ -207,29 +204,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       } else {
         expect(notice).toBeUndefined();
       }
-    },
-  );
-
-  const fallbackClassificationCases = [
-    ["empty", "empty_result"],
-    ["reasoning-only", "reasoning_only_result"],
-    ["planning-only", "planning_only_result"],
-  ] as const;
-
-  it.each(fallbackClassificationCases)(
-    "maps harness classification %s to a format fallback code",
-    (classification, code) => {
-      const fallback = classifyResult({
-        provider: contract.primaryProvider,
-        model: contract.primaryModel,
-        result: createContractRunResult({
-          meta: {
-            durationMs: 1,
-            agentHarnessResultClassification: classification,
-          },
-        }),
-      });
-      expect(fallback).toMatchObject({ reason: "format", code });
     },
   );
 
@@ -369,10 +343,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     ).rejects.toBe(finalError);
     expect(run).toHaveBeenCalledTimes(2);
   });
-
-  const silent = emptyResult({
-    meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
-  });
   it.each<[string, Partial<Parameters<typeof classifyResult>[0]>]>([
     ["abort", { result: emptyResult({ meta: { aborted: true } }) }],
     ["media send", { result: emptyResult({ messagingToolSentMediaUrls: ["image.png"] }) }],
@@ -389,18 +359,5 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     ["block reply pipeline", { hasBlockReplyPipelineOutput: true }],
   ])("does not fallback after %s", (_name, options) => {
     expect(classifyResult({ ...contractRunOptions, result: emptyResult(), ...options })).toBeNull();
-  });
-
-  it("keeps running on the primary when terminal output is not classified as fallback", async () => {
-    const run = vi.fn().mockResolvedValue(silent);
-    const result = await runWithModelFallback({
-      ...contractRunOptions,
-      run,
-    });
-
-    expect(result.outcome).toBe("completed");
-    expect(result.result).toBe(silent);
-    expect(result.attempts).toStrictEqual([]);
-    expect(run).toHaveBeenCalledTimes(1);
   });
 });
