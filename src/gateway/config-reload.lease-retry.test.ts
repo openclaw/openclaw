@@ -101,7 +101,7 @@ it("bounds lease reads across config observation and application", async () => {
   harness.watcher.emit("change");
   await flushReload(harness.reloader);
 
-  expect(checkpoints).toEqual([0, 2]);
+  expect(checkpoints).toEqual([0, 1]);
   expect(harness.onHotReload).toHaveBeenCalledOnce();
   expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
   reads.restore();
