@@ -105,7 +105,11 @@ async function localFixture() {
       clawManaged: true,
       ...options,
     });
-  return { root, sourceDir, env, install };
+  const deny = (options: InstallOptions = {}) =>
+    expect(install(options)).rejects.toMatchObject({
+      capabilityConsent: { pluginId: "claw-audit" },
+    });
+  return { root, sourceDir, env, install, deny };
 }
 
 async function withLocalFixture(
@@ -195,17 +199,14 @@ it("denies an official ClawHub plugin before artifact and record commit, then in
 });
 
 it("rejects missing consent before publishing an artifact or install record", async () => {
-  await withLocalFixture(async ({ env, install }) => {
-    await expect(install()).rejects.toMatchObject({
-      capabilityConsent: { pluginId: "claw-audit" },
-    });
-
+  await withLocalFixture(async ({ env, deny }) => {
+    await deny();
     await expectUnpublished(env);
   });
 });
 
 it("keeps the installed artifact and record unchanged when update consent is denied", async () => {
-  await withLocalFixture(async ({ root, env, install }) => {
+  await withLocalFixture(async ({ root, env, install, deny }) => {
     const reviewed: string[][] = [];
     await install({
       onCapabilityConsent: async (review) => {
@@ -218,15 +219,13 @@ it("keeps the installed artifact and record unchanged when update consent is den
     expect(original.record?.acceptedSurface?.tools).toEqual(["audit.read"]);
 
     await writePluginSource(root, "audit.write");
-    await expect(
-      install({
-        mode: "update",
-        onCapabilityConsent: async (review) => {
-          reviewed.push(review.declared.tools);
-          return undefined;
-        },
-      }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
+    await deny({
+      mode: "update",
+      onCapabilityConsent: async (review) => {
+        reviewed.push(review.declared.tools);
+        return undefined;
+      },
+    });
 
     expect(reviewed).toEqual([["audit.read"], ["audit.write"]]);
     expect(await readInstalled(env)).toEqual(original);
@@ -234,20 +233,18 @@ it("keeps the installed artifact and record unchanged when update consent is den
 });
 
 it("rejects a staged capability change during the Claw owner's final check", async () => {
-  await withLocalFixture(async ({ env, install }) => {
+  await withLocalFixture(async ({ env, deny }) => {
     let stageChanged = false;
-    await expect(
-      install({
-        onCapabilityConsent: acceptReview,
-        beforePersistentEffect: async () => {
-          if (stageChanged) {
-            return;
-          }
-          stageChanged = true;
-          await replaceStagedTools(env, ["audit.read", "audit.write"]);
-        },
-      }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
+    await deny({
+      onCapabilityConsent: acceptReview,
+      beforePersistentEffect: async () => {
+        if (stageChanged) {
+          return;
+        }
+        stageChanged = true;
+        await replaceStagedTools(env, ["audit.read", "audit.write"]);
+      },
+    });
 
     expect(stageChanged).toBe(true);
     await expectUnpublished(env);
@@ -304,19 +301,17 @@ it("rejects sibling-entry drift even when the merged capability token is unchang
 });
 
 it("rejects final-stage capability drift without replacing the installed plugin", async () => {
-  await withLocalFixture(async ({ root, env, install }) => {
+  await withLocalFixture(async ({ root, env, install, deny }) => {
     const onCapabilityConsent = acceptReview;
     await install({ onCapabilityConsent });
     const original = await readInstalled(env);
 
     await writePluginSource(root, "audit.write");
-    await expect(
-      install({
-        mode: "update",
-        onCapabilityConsent,
-        beforePersistentEffect: () => replaceStagedTools(env, ["audit.write", "audit.admin"]),
-      }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
+    await deny({
+      mode: "update",
+      onCapabilityConsent,
+      beforePersistentEffect: () => replaceStagedTools(env, ["audit.write", "audit.admin"]),
+    });
 
     expect(await readInstalled(env)).toEqual(original);
 

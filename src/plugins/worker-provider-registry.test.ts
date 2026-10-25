@@ -39,16 +39,13 @@ function createOwner(
   });
 }
 
-function expectRejected(
-  provider: WorkerProvider,
-  message: unknown,
-  declaredIds = ["static-ssh"],
-  diagnostic = {},
-) {
+function expectRejected(provider: WorkerProvider, message: unknown, declaredIds = ["static-ssh"]) {
   const { registry, registerWorkerProvider } = createTestRegistry();
   registerWorkerProvider(createOwner("owner", declaredIds), provider);
   expect(registry.workerProviders.size).toBe(0);
-  expect(registry.diagnostics).toContainEqual(expect.objectContaining({ message, ...diagnostic }));
+  expect(registry.diagnostics).toContainEqual(
+    expect.objectContaining({ message, level: "error", pluginId: "owner" }),
+  );
 }
 
 describe("worker provider registry", () => {
@@ -57,33 +54,32 @@ describe("worker provider registry", () => {
       createWorkerProvider("static-ssh"),
       "plugin must declare contracts.workerProviders for provider: static-ssh",
       [],
-      { level: "error", pluginId: "owner" },
     );
   });
 
-  it("rejects a missing resolveAllocation method", () => {
-    const provider = createWorkerProvider("static-ssh");
-    delete (provider as Partial<WorkerProvider>).resolveAllocation;
-    expectRejected(provider, "worker provider registration missing method: resolveAllocation");
-  });
-
   it.each([
-    ["renew", "later", "must be a function"],
-    ["runSetupCommand", "later", "must be a function"],
-    ["resolveSshIdentity", "later", "must be a function"],
-    ["provisionBeforeInstallation", "sometimes", "must be a boolean"],
-  ])("rejects an invalid %s declaration", (field, value, error) => {
+    ["resolveAllocation", undefined, "missing method: resolveAllocation"],
+    ["renew", "later", "renew must be a function"],
+    ["runSetupCommand", "later", "runSetupCommand must be a function"],
+    ["resolveSshIdentity", "later", "resolveSshIdentity must be a function"],
+    ["provisionBeforeInstallation", "sometimes", "provisionBeforeInstallation must be a boolean"],
+    [
+      "supportedExecutionModes",
+      ["unsupported"],
+      expect.stringContaining("worker provider registration supportedExecutionModes"),
+    ],
+    ["id", "__proto__", "missing valid id"],
+  ] as const)("rejects an invalid %s declaration", (field, value, error) => {
     const provider = createWorkerProvider("static-ssh");
-    Reflect.set(provider, field, value);
-    expectRejected(provider, `worker provider registration ${field} ${error}`);
-  });
-
-  it("rejects an unknown mode in a placement declaration", () => {
-    const provider = createWorkerProvider("static-ssh");
-    Reflect.set(provider, "supportedExecutionModes", ["unsupported"]);
+    if (value === undefined) {
+      Reflect.deleteProperty(provider, field);
+    } else {
+      Reflect.set(provider, field, value);
+    }
     expectRejected(
       provider,
-      expect.stringContaining("worker provider registration supportedExecutionModes"),
+      typeof error === "string" ? `worker provider registration ${error}` : error,
+      field === "id" ? ["__proto__"] : undefined,
     );
   });
 
@@ -98,15 +94,6 @@ describe("worker provider registry", () => {
 
     expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
     expect(pluginRegistry.registry.diagnostics).toEqual([]);
-  });
-
-  it("rejects invalid provider ids", () => {
-    expectRejected(
-      createWorkerProvider("__proto__"),
-      "worker provider registration missing valid id",
-      ["__proto__"],
-      { level: "error", pluginId: "owner" },
-    );
   });
 
   it("rejects normalized duplicate provider ids", () => {

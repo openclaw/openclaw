@@ -38,6 +38,15 @@ async function initializeStore(scope: ReturnType<typeof catalogStore>["scope"]) 
   await upsertSessionEntry({ ...scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } });
 }
 
+function incidentResult(incidentId: string, summary: string) {
+  return bindPluginInlineViewInvocation(
+    createPluginInlineViewResult("incidents", "incident", { incidentId }, { version: 3, summary }),
+    "incidents",
+    "show_incident",
+    "call-1",
+  );
+}
+
 it("imports and deduplicates in the supplied config store without polluting runtime or default stores", async () => {
   await withTempHome(
     async (home) => {
@@ -233,17 +242,7 @@ it("preserves inline fallback through native storage, text catalog and untrusted
     setRuntimeConfigSnapshot(config);
     try {
       await initializeStore(scope);
-      const result = bindPluginInlineViewInvocation(
-        createPluginInlineViewResult(
-          "incidents",
-          "incident",
-          { incidentId: "INC-42" },
-          { version: 3, summary: "INC-42 is investigating." },
-        ),
-        "incidents",
-        "show_incident",
-        "call-1",
-      );
+      const result = incidentResult("INC-42", "INC-42 is investigating.");
       await appendTranscriptMessage(scope, {
         message: {
           role: "toolResult",
@@ -254,17 +253,6 @@ it("preserves inline fallback through native storage, text catalog and untrusted
           timestamp: 1000,
         },
       });
-      const nested = bindPluginInlineViewInvocation(
-        createPluginInlineViewResult(
-          "incidents",
-          "incident",
-          { incidentId: "INC-43" },
-          { version: 3, summary: "INC-43 is resolved." },
-        ),
-        "incidents",
-        "show_incident",
-        "call-1",
-      );
       await appendTranscriptMessage(scope, {
         message: createNestedToolActivity({
           runId: "run-2",
@@ -275,7 +263,7 @@ it("preserves inline fallback through native storage, text catalog and untrusted
           toolCallId: "call-1",
           toolName: "show_incident",
           input: {},
-          result: nested,
+          result: incidentResult("INC-43", "INC-43 is resolved."),
           isError: false,
           startedAt: 2000,
           timestamp: 2100,
