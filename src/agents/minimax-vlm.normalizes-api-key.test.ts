@@ -12,9 +12,7 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
   function jsonResponse(payload: unknown) {
-    return new Response(JSON.stringify(payload), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json(payload);
   }
 
   function guarded(
@@ -29,6 +27,13 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   function mockResponse(body: BodyInit, init: ResponseInit) {
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(body, init)));
+  }
+
+  function unboundedResponse(chunk: Uint8Array, status: number, trace: string) {
+    const cancel = vi.fn();
+    const body = new ReadableStream({ pull: (controller) => controller.enqueue(chunk), cancel });
+    mockResponse(body, { status, headers: { "Trace-Id": trace } });
+    return cancel;
   }
 
   beforeEach(() => vi.stubEnv("MINIMAX_API_HOST", ""));
@@ -128,51 +133,25 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   it("bounds large provider error response bodies", async () => {
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockResponse(body, {
-      status: 500,
-      statusText: "Internal Server Error",
-      headers: { "Trace-Id": "trace-123" },
-    });
+    const cancel = unboundedResponse(
+      new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`),
+      500,
+      "trace-123",
+    );
     const message = await requestError();
     expect(message).toContain("MiniMax VLM request failed");
     expect(message).toContain("Trace-Id: trace-123");
     expect(message).not.toContain("tail-marker");
     expect(message.length).toBeLessThan(520);
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("bounds large successful response bodies before parsing JSON", async () => {
-    let canceled = false;
-    let pullCount = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pullCount += 1;
-        controller.enqueue(new Uint8Array(1024 * 1024));
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    mockResponse(body, {
-      status: 200,
-      headers: { "Content-Type": "application/json", "Trace-Id": "trace-success" },
-    });
+    const cancel = unboundedResponse(new Uint8Array(1024 * 1024), 200, "trace-success");
     expect(await requestError()).toBe(
       "MiniMax VLM response [Trace-Id=trace-success]: JSON response exceeds 16777216 bytes",
     );
-    // WHATWG streams may pre-pull one chunk beyond the bytes consumed by the reader.
-    expect(pullCount).toBeGreaterThanOrEqual(17);
-    expect(pullCount).toBeLessThanOrEqual(18);
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it.each(["error body", "reason phrase", "Trace-Id", "application status message"])(

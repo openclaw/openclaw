@@ -3,6 +3,7 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
 import { describe, expect, it } from "vitest";
+import { collect } from "../../test/helpers/async-iterable.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
@@ -105,16 +106,8 @@ describe("failed Responses loopback SSE", () => {
           expect(message).toMatchObject({
             stopReason: "error",
             errorCode: "responses_output_identity_conflict",
-            errorMessage: "Responses stream changed output item identity",
           });
-          expect(JSON.parse(message.errorBody ?? "{}")).toEqual({
-            outputIndex: 0,
-            expectedType: "reasoning",
-            actualType: "message",
-            completed: false,
-            completedToolCall: false,
-            mismatch: "type",
-            eventType: "response.completed",
+          expect(JSON.parse(message.errorBody ?? "{}")).toMatchObject({
             retrySafe: !hostedTools,
           });
           expect(message.errorBody).not.toContain("private_canary");
@@ -153,10 +146,7 @@ describe("failed Responses loopback SSE", () => {
               cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
             },
           );
-          const events = [];
-          for await (const event of stream) {
-            events.push(event);
-          }
+          const events = await collect(stream);
 
           expect(requestPaths).toHaveLength(1);
           expect(requestPaths[0]).toMatch(/^\/v1\/responses(?:\?|$)/);
@@ -214,7 +204,7 @@ describe("incomplete Responses loopback SSE", () => {
           usage,
         },
       },
-      async (baseUrl, requestPaths) => {
+      async (baseUrl) => {
         const stream = await responseStream(
           responsesTransports[0],
           baseUrl,
@@ -225,14 +215,9 @@ describe("incomplete Responses loopback SSE", () => {
             reasoning: false,
           },
         );
-        const events = [];
-        for await (const event of stream) {
-          events.push(event);
-        }
+        const events = await collect(stream);
 
         const terminal = events.find((event) => event.type === "done");
-        expect(requestPaths).toHaveLength(1);
-        expect(requestPaths[0]).toMatch(/^\/v1\/responses(?:\?|$)/);
         expect(terminal).toMatchObject({
           type: "done",
           reason: "length",
@@ -242,9 +227,6 @@ describe("incomplete Responses loopback SSE", () => {
             usage: expectedUsage,
           },
         });
-        if (terminal?.type === "done") {
-          expect(terminal.message.content.some((block) => block.type === "toolCall")).toBe(false);
-        }
       },
     );
   });

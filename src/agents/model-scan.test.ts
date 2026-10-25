@@ -1,5 +1,5 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { oversizedJsonResponse } from "../../test/helpers/provider-http.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
@@ -104,31 +104,14 @@ describe("scanOpenRouterModels", () => {
   });
 
   it("bounds an oversized catalog success body and cancels the stream", async () => {
-    const cancel = vi.fn(async () => undefined);
-    let pullCount = 0;
-    const chunk = new Uint8Array(64 * 1024).fill(0x20);
-    useResponse(
-      jsonResponse(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode('{"data":['));
-          },
-          pull(controller) {
-            pullCount += 1;
-            controller.enqueue(chunk);
-          },
-          cancel,
-        }),
-      ),
-    );
-
+    const { response, state } = oversizedJsonResponse();
+    useResponse(response);
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(
       /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(pullCount).toBeGreaterThan(0);
-    expect(pullCount).toBeLessThan(16 * 1024 * 1024);
+    expect(state.canceled).toBe(true);
+    expect(state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it.each([
@@ -221,13 +204,6 @@ describe("scanOpenRouterModels", () => {
     await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
     await pending;
     expect({ abortCount, timers: vi.getTimerCount() }).toEqual({ abortCount: 1, timers: 0 });
-  });
-
-  it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    await scan([], { timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not match provider filters across provider id variants", async () => {

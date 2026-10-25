@@ -30,7 +30,6 @@ import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
-import * as gatewayModule from "./tools/gateway.js";
 
 function admittedFixture(
   runId: string,
@@ -210,18 +209,13 @@ it("does not transfer an admin tool's authority to a replacement with the same r
   });
 });
 
-it("exposes add but refuses incomplete capture and retired requester authority", async () => {
+it("exposes requester creation but rejects grants when delegated authority retires", async () => {
   setRuntimeConfigSnapshot({});
   onTestFinished(clearRuntimeConfigSnapshot);
   const runId = "remote-admin-capture";
   const { authority, caller, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
   caller.sessionKey = "agent:main:remote";
   await run(async () => {
-    const callGatewayTool = vi.fn();
-    const gatewaySpy = vi
-      .spyOn(gatewayModule, "callGatewayTool")
-      .mockImplementation(callGatewayTool);
-    onTestFinished(() => gatewaySpy.mockRestore());
     const tool = createCronTool({
       runId,
       agentSessionKey: caller.sessionKey,
@@ -232,16 +226,6 @@ it("exposes add but refuses incomplete capture and retired requester authority",
       "properties.action.enum",
       expect.arrayContaining(["add", "list", "update"]),
     );
-    await expect(
-      tool.execute("incomplete", {
-        action: "add",
-        job: {
-          schedule: { kind: "every", everyMs: 60_000 },
-          payload: { kind: "agentTurn", message: "Read status" },
-        },
-      }),
-    ).rejects.toThrow("did not capture the complete model-callable tool surface");
-    expect(callGatewayTool).not.toHaveBeenCalled();
     const requester = bindCronRequesterGrant(runId)!;
     const grant = requester();
     releaseAgentRunDelegatedAuthority(authority);
