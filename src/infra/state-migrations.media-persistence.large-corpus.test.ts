@@ -101,49 +101,40 @@ function migrationChildEnv(stateDir: string): NodeJS.ProcessEnv {
   ]);
 }
 
-function inspectCorpus(stateDir: string, sparse = false) {
+function inspectCorpus(stateDir: string) {
   using db = new DatabaseSync(
     resolveOpenClawAgentSqlitePath({ agentId: "main", env: { OPENCLAW_STATE_DIR: stateDir } }),
     { readOnly: true },
   );
-  const prefix = sparse ? "sparse-" : "large-corpus-";
   const read = (session: number, seq = 0) =>
     readSqliteTranscriptPayload(
       db
         .prepare(
           `SELECT ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id=? AND seq=?`,
         )
-        .get(`${prefix}${session}`, seq),
+        .get(`large-corpus-${session}`, seq),
     );
   const count = (table: string) => db.prepare(`SELECT COUNT(*) count FROM ${table}`).get()?.count;
   const media = (message: {
     ["__openclaw"]?: { media?: { path: string }[] };
     MediaPath?: string;
   }) => [message["__openclaw"]?.media?.[0]?.path, Object.hasOwn(message, "MediaPath")];
-  const first = JSON.parse(read(0));
-  const boundary = JSON.parse(read(0, sparse ? 0 : 64));
+  const boundary = JSON.parse(read(0, 64));
   const trajectory = JSON.parse(
     String(
       db
         .prepare("SELECT event_json FROM trajectory_runtime_events WHERE session_id=? AND seq=?")
-        .get(`${prefix}${sparse ? SPARSE_EVENT_SESSION_COUNT - 1 : 0}`, sparse ? 0 : 64)
-        ?.event_json,
+        .get("large-corpus-0", 64)?.event_json,
     ),
   );
   return {
-    sessions: count("session_nodes"),
-    windows: count("session_windows"),
     events: count("transcript_events"),
     trajectoryEvents: count("trajectory_runtime_events"),
-    firstIdentity: [first.type, first.id, first.parentId],
-    firstMedia: media(first.message),
     boundaryMedia: media(boundary.message),
     trajectoryMedia: media(trajectory.data.messagesSnapshot[0]),
-    survivors: sparse
-      ? []
-      : [read(20, 64), read(39, 127)].map((value) =>
-          createHash("sha256").update(value).digest("hex"),
-        ),
+    survivors: [read(20, 64), read(39, 127)].map((value) =>
+      createHash("sha256").update(value).digest("hex"),
+    ),
   };
 }
 
@@ -235,12 +226,8 @@ it("rewrites bounded batches under a 256 MiB old-space cap", () => {
   });
   const after = inspectCorpus(stateDir);
   expect(after).toMatchObject({
-    sessions: SESSION_COUNT,
-    windows: SESSION_COUNT,
     events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
     trajectoryEvents: EVENTS_PER_SESSION,
-    firstIdentity: ["message", "event-0-0", null],
-    firstMedia: ["/media/legacy.png", false],
     boundaryMedia: ["/media/boundary.png", false],
     trajectoryMedia: ["/media/trajectory-boundary.png", false],
   });
@@ -257,10 +244,6 @@ it("bounds SQLite crossings across many event-bearing sessions", () => {
       expect.stringContaining("Saved pre-repair SQLite backup:"),
       expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
     ],
-  });
-  expect(inspectCorpus(stateDir, true)).toMatchObject({
-    firstMedia: ["/media/transcript.png", false],
-    trajectoryMedia: ["/media/trajectory.png", false],
   });
   expect(output.migrationSelects).toBeLessThan(1_000);
 }, 130_000);

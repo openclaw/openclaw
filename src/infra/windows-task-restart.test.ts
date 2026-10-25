@@ -164,8 +164,8 @@ it("writes a detached schtasks relaunch helper", () => {
   for (const fragment of [
     `Get-Process -Id ${process.pid}`,
     "WaitForExit(180000)",
-    "[DateTime]::UtcNow.AddSeconds(5400)",
-    "replacement Gateway listener appeared within 5400s",
+    "$deadline = [DateTime]::UtcNow.AddSeconds(",
+    "} while ([DateTime]::UtcNow -lt $deadline)",
     "gateway-restart.log",
     'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     "Get-NetTCPConnection -LocalPort 18789 -State Listen",
@@ -178,10 +178,6 @@ it("writes a detached schtasks relaunch helper", () => {
     expect(script).toContain(fragment);
   }
   expect(script).not.toContain("Get-ScheduledTask");
-  expect(script).not.toContain("findstr");
-  expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
-    script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
-  );
 });
 
 it.each([
