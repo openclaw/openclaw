@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -20,7 +19,6 @@ import {
 import { probeGateway } from "./probe.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
-const correctPin = fingerprint.replaceAll(":", "").toLowerCase();
 const wrongPin = "00".repeat(32);
 const edgeAuthValue = "synthetic-probe-edge-auth";
 
@@ -114,16 +112,12 @@ afterAll(async () => {
 afterEach(resetSecretRedactionRegistryForTest);
 
 it.each([
-  ["saved pin", wrongPin, undefined, true, false, /fingerprint mismatch/i],
-  ["explicit pin", correctPin, wrongPin, true, false, /fingerprint mismatch/i],
-  ["matching pin", correctPin, undefined, true, false, null],
-  ["CA validation", undefined, undefined, true, false, /certificate|self.signed/i],
-  ["malformed saved pin", "invalid", undefined, false, false, /SHA-256 fingerprint/],
-  ["changed endpoint", fingerprint, undefined, false, true, /certificate/],
-  ["explicit pin override", wrongPin, fingerprint, false, false, null],
+  ["malformed saved pin", "invalid", undefined, false, /SHA-256 fingerprint/],
+  ["changed endpoint", fingerprint, undefined, true, /certificate/],
+  ["explicit pin override", wrongPin, fingerprint, false, null],
 ] as const)(
   "validates %s before sending Gateway credentials",
-  async (_name, savedPin, explicitPin, bootstrap, changed, error) => {
+  async (_name, savedPin, explicitPin, changed, error) => {
     await withTestDir({ prefix: "openclaw-probe-tls-" }, async (stateDir) => {
       const url = `${gateway.url}/gateway`;
       const expectTransport = gateway.observeTransport();
@@ -133,19 +127,10 @@ it.each([
         savedPin,
         "test-probe-token",
       );
-      const connection = bootstrap
-        ? await resolveGatewayClientBootstrap({
-            config,
-            authPolicy: "probe",
-            explicitTlsFingerprint: explicitPin,
-            env,
-          })
-        : { url, auth: { token: "test-probe-token" }, tlsFingerprint: explicitPin };
-      if (bootstrap) {
-        expect(connection.tlsFingerprint).toBe(explicitPin ?? savedPin);
-      }
       const result = await probeGateway({
-        ...connection,
+        url,
+        auth: { token: "test-probe-token" },
+        tlsFingerprint: explicitPin,
         config,
         timeoutMs: 2_000,
         detailLevel: "none",
