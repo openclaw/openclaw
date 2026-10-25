@@ -77,17 +77,12 @@ function cleanupStorage(params: { registry?: unknown; failureStage?: CleanupFail
     () => failAt("session_remove"),
   );
   const chromeApi = { storage: { local, session } };
+  vi.stubGlobal("chrome", chromeApi);
   return {
     local,
     session,
-    prepare: () => {
-      vi.stubGlobal("chrome", chromeApi);
-      return prepareRetiredCopilotState();
-    },
-    discard: () => {
-      vi.stubGlobal("chrome", chromeApi);
-      return discardRetiredCopilotState();
-    },
+    prepare: prepareRetiredCopilotState,
+    discard: discardRetiredCopilotState,
     retry: () => {
       failureStage = undefined;
     },

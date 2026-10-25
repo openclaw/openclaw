@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chromeEvent } from "./browser.test-support.js";
+import { chromeEvent, storageArea } from "./browser.test-support.js";
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import { createTabAccessPolicy, type TabAccessEpoch, type TabAccessMode } from "./tab-access.js";
@@ -26,13 +26,7 @@ async function createNavigationHarness(
   };
   const chromeApi = {
     extension: { isAllowedFileSchemeAccess: async () => fileAccessAllowed },
-    storage: {
-      session: {
-        get: async () => ({}),
-        set: async () => {},
-        remove: async () => {},
-      },
-    },
+    storage: { session: storageArea() },
     tabs: {
       get: vi.fn(async (_tabId: number) => tab),
       query: vi.fn(async () => [tab]),
@@ -82,9 +76,6 @@ async function createNavigationHarness(
     attachments,
     send,
     detachDebugger,
-    setTab(update: Partial<BrowserTabSnapshot>) {
-      tab = { ...tab, ...update };
-    },
     async controlBlank() {
       const epoch = policy.capture(7, "Page.navigate");
       await policy.requireTab(7, epoch);
@@ -116,6 +107,12 @@ async function createNavigationHarness(
         chromeApi.debugger.onEvent.emit({ tabId: 7 }, method, params);
       }
     },
+    frameNavigated(url: string, loaderId = "return") {
+      tab = { ...tab, url };
+      chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", {
+        frame: { id: "root", loaderId, url },
+      });
+    },
     deferLookup() {
       const { promise: pending, resolve: release } = Promise.withResolvers<BrowserTabSnapshot>();
       chromeApi.tabs.get.mockImplementation(async () => await pending);
@@ -131,12 +128,12 @@ async function createNavigationHarness(
 
 describe("Chrome navigation event access", () => {
   it("projects native child session ids only while the attachment epoch is current", async () => {
-    const harness = await createNavigationHarness("selected");
+    const h = await createNavigationHarness("selected");
     const params = { frame: { id: "child", loaderId: "child-loader", url: "about:blank" } };
     for (const source of [{ tabId: 7 }, { tabId: 7, sessionId: "child-session" }]) {
-      harness.chromeApi.debugger.onEvent.emit(source, "Page.frameNavigated", params);
+      h.chromeApi.debugger.onEvent.emit(source, "Page.frameNavigated", params);
     }
-    expect(harness.send.mock.calls.map(([event]) => event)).toEqual([
+    expect(h.send.mock.calls.map(([event]) => event)).toEqual([
       { type: "cdpEvent", tabId: 7, method: "Page.frameNavigated", params },
       {
         type: "cdpEvent",
@@ -146,215 +143,192 @@ describe("Chrome navigation event access", () => {
         params,
       },
     ]);
-    harness.send.mockClear();
-    harness.policy.invalidateTab(7);
-    harness.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", params);
-    harness.chromeApi.debugger.onEvent.emit(
+    h.send.mockClear();
+    h.policy.invalidateTab(7);
+    h.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", params);
+    h.chromeApi.debugger.onEvent.emit(
       { tabId: 7, sessionId: "child-session" },
       "Page.frameNavigated",
       params,
     );
-    expect(harness.send).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it.each(["pause", "mode change", "remove", "detach", "group rename", "group removal"])(
     "retires controlled blank authority on %s without reauthorizing it",
     async (reason) => {
-      const harness = await createNavigationHarness("all", { groupId: 11 });
-      await harness.controlBlank();
+      const h = await createNavigationHarness("all", { groupId: 11 });
+      await h.controlBlank();
       switch (reason) {
         case "pause":
-          await harness.policy.pause(7);
-          expect(harness.policy.isDenied(7)).toBe(true);
-          await harness.policy.allow(7);
+          await h.policy.pause(7);
+          expect(h.policy.isDenied(7)).toBe(true);
+          await h.policy.allow(7);
           break;
         case "mode change":
-          harness.policy.setMode("selected");
-          harness.policy.setMode("all");
+          h.policy.setMode("selected");
+          h.policy.setMode("all");
           break;
         case "remove":
-          harness.chromeApi.tabs.onRemoved.emit(7);
+          h.chromeApi.tabs.onRemoved.emit(7);
           break;
         case "detach":
-          harness.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
+          h.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
           break;
         case "group rename":
-          harness.chromeApi.tabGroups.onUpdated.emit({ id: 12, title: "Other" });
-          await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
-          harness.chromeApi.tabGroups.onUpdated.emit({ id: 11, title: "Other" });
+          h.chromeApi.tabGroups.onUpdated.emit({ id: 12, title: "Other" });
+          await expect(h.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
+          h.chromeApi.tabGroups.onUpdated.emit({ id: 11, title: "Other" });
           break;
         case "group removal":
-          harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
-          await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
-          harness.chromeApi.tabGroups.onRemoved.emit({ id: 11 });
+          h.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
+          await expect(h.policy.requireTab(7)).resolves.toMatchObject({ url: "about:blank" });
+          h.chromeApi.tabGroups.onRemoved.emit({ id: 11 });
           break;
       }
-      harness.send.mockClear();
-      harness.emitNavigation();
-      await expect(harness.policy.requireTab(7)).rejects.toThrow(
+      h.send.mockClear();
+      h.emitNavigation();
+      await expect(h.policy.requireTab(7)).rejects.toThrow(
         reason === "remove" ? "access was revoked" : "restricted or unavailable",
       );
-      await expect(harness.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
-      expect(harness.send).not.toHaveBeenCalled();
+      await expect(h.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
+      expect(h.send).not.toHaveBeenCalled();
     },
   );
 
   it("discards a stale selected discovery snapshot of blank before return", async () => {
-    const harness = await createNavigationHarness("selected");
-    await harness.controlBlank();
-    const stale = await harness.chromeApi.tabs.query();
+    const h = await createNavigationHarness("selected");
+    await h.controlBlank();
+    const stale = await h.chromeApi.tabs.query();
     const { promise: lookup, resolve: release } = Promise.withResolvers<BrowserTabSnapshot[]>();
     const { promise: started, resolve: queried } = Promise.withResolvers<void>();
-    harness.chromeApi.tabs.query.mockImplementationOnce(() => {
+    h.chromeApi.tabs.query.mockImplementationOnce(() => {
       queried();
       return lookup;
     });
-    const discovering = harness.policy.listAccessibleTabs();
+    const discovering = h.policy.listAccessibleTabs();
     await started;
     try {
-      harness.setTab({ url: "https://return.example/" });
-      harness.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", {
-        frame: { id: "root", loaderId: "return", url: "https://return.example/" },
-      });
+      h.frameNavigated("https://return.example/");
     } finally {
       release(stale);
     }
     const url = "https://return.example/";
     await expect(discovering).resolves.toEqual([expect.objectContaining({ id: 7, url })]);
-    await expect(harness.policy.requireTab(7)).resolves.toMatchObject({ id: 7, url });
+    await expect(h.policy.requireTab(7)).resolves.toMatchObject({ id: 7, url });
   });
 
   it("rereads a selected lookup overtaken by a native root commit before checking provenance", async () => {
-    const harness = await createNavigationHarness("selected");
-    await harness.controlBlank();
-    const get = harness.chromeApi.tabs.get.getMockImplementation()!;
-    harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
+    const h = await createNavigationHarness("selected");
+    await h.controlBlank();
+    const get = h.chromeApi.tabs.get.getMockImplementation()!;
+    h.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
       const stale = await get(tabId);
-      harness.setTab({ url: "https://return.example/" });
-      harness.chromeApi.debugger.onEvent.emit({ tabId: 7 }, "Page.frameNavigated", {
-        frame: { id: "root", loaderId: "return", url: "https://return.example/" },
-      });
+      h.frameNavigated("https://return.example/");
       return stale;
     });
-    await expect(harness.policy.requireTab(7)).resolves.toMatchObject({
+    await expect(h.policy.requireTab(7)).resolves.toMatchObject({
       url: "https://return.example/",
     });
   });
 
-  it.each(["selected"] as const)("preserves ordered navigation events in %s mode", async (mode) => {
+  it("preserves ordered navigation events in selected mode", async () => {
     const url = "https://destination.example/";
-    const harness = await createNavigationHarness(mode);
-    const releaseLookup = harness.deferLookup();
+    const h = await createNavigationHarness("selected");
+    const releaseLookup = h.deferLookup();
     try {
-      harness.update({ url });
-      harness.emitNavigation();
+      h.update({ url });
+      h.emitNavigation();
 
-      expect(harness.send.mock.calls.map(([frame]) => frame)).toEqual(
+      expect(h.send.mock.calls.map(([frame]) => frame)).toEqual(
         navigationEvents.map((event) => ({ type: "cdpEvent", tabId: 7, ...event })),
       );
-      await expect(harness.policy.requireTab(7, harness.attachmentEpoch)).rejects.toThrow(
-        "access was revoked",
-      );
+      await expect(h.policy.requireTab(7, h.attachmentEpoch)).rejects.toThrow("access was revoked");
 
-      harness.send.mockClear();
-      harness.update({ url: `${url}next` });
-      harness.emitNavigation();
-      expect(harness.send.mock.calls.map(([frame]) => frame.method)).toEqual(
+      h.send.mockClear();
+      h.update({ url: `${url}next` });
+      h.emitNavigation();
+      expect(h.send.mock.calls.map(([frame]) => frame.method)).toEqual(
         navigationEvents.map((event) => event.method),
       );
     } finally {
       await releaseLookup();
     }
-    expect(harness.detachDebugger).not.toHaveBeenCalled();
+    expect(h.detachDebugger).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "restricted committed URL",
-    "restricted pending URL",
-    "incognito tab",
-    "different selected group",
-    "wrong tab identity",
-    "paused tab",
-    "changed group authority",
-    "forged epoch copy",
-    "replaced tab",
-  ])("does not renew access for %s from a URL snapshot", async (scenario) => {
-    const harness = await createNavigationHarness(scenario === "paused tab" ? "all" : "selected");
-    const update: Partial<BrowserTabSnapshot> = { url: "https://destination.example/" };
+  it.each<[string, Partial<BrowserTabSnapshot>]>([
+    ["restricted committed URL", { url: "chrome://settings" }],
+    ["restricted pending URL", { pendingUrl: "chrome://settings" }],
+    ["incognito tab", { incognito: true }],
+    ["different selected group", { groupId: 12 }],
+    ["wrong tab identity", { id: 8 }],
+    ["paused tab", {}],
+    ["changed group authority", {}],
+    ["forged epoch copy", {}],
+    ["replaced tab", {}],
+  ])("does not renew access for %s from a URL snapshot", async (scenario, change) => {
+    const h = await createNavigationHarness(scenario === "paused tab" ? "all" : "selected");
+    const update = { url: "https://destination.example/", ...change };
     if (scenario === "paused tab") {
-      await harness.policy.pause(7);
+      await h.policy.pause(7);
     }
-    const releaseLookup = harness.deferLookup();
+    const releaseLookup = h.deferLookup();
     try {
       switch (scenario) {
-        case "restricted committed URL":
-          update.url = "chrome://settings";
-          break;
-        case "restricted pending URL":
-          update.pendingUrl = "chrome://settings";
-          break;
-        case "incognito tab":
-          update.incognito = true;
-          break;
-        case "different selected group":
-          update.groupId = 12;
-          break;
-        case "wrong tab identity":
-          update.id = 8;
-          break;
         case "changed group authority":
-          harness.chromeApi.tabGroups.onUpdated.emit();
+          h.chromeApi.tabGroups.onUpdated.emit();
           break;
         case "forged epoch copy":
-          harness.attachments.set(7, { epoch: { ...harness.attachmentEpoch } });
+          h.attachments.set(7, { epoch: { ...h.attachmentEpoch } });
           break;
         case "replaced tab":
-          harness.chromeApi.tabs.onReplaced.emit(8, 7);
+          h.chromeApi.tabs.onReplaced.emit(8, 7);
           break;
       }
-      harness.send.mockClear();
-      harness.update(update);
-      harness.emitNavigation();
-      expect(harness.send).not.toHaveBeenCalled();
+      h.send.mockClear();
+      h.update(update);
+      h.emitNavigation();
+      expect(h.send).not.toHaveBeenCalled();
     } finally {
       await releaseLookup();
     }
     // Events observed without authority must never replay after an async lookup.
-    expect(harness.send).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it("preserves commands admitted after a newer tab event when an older group lookup completes", async () => {
-    const harness = await createNavigationHarness("selected");
+    const h = await createNavigationHarness("selected");
     const { promise: pending, resolve: release } = Promise.withResolvers<void>();
     const { promise: started, resolve: observed } = Promise.withResolvers<void>();
-    const get = harness.chromeApi.tabs.get.getMockImplementation()!;
-    harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
+    const get = h.chromeApi.tabs.get.getMockImplementation()!;
+    h.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
       observed();
       await pending;
       return await get(tabId);
     });
 
-    harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
+    h.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
     await started;
     try {
-      harness.update({ url: "https://destination.example/" });
+      h.update({ url: "https://destination.example/" });
       await vi.waitFor(() => {
-        harness.send.mockClear();
-        harness.emitNavigation();
-        expect(harness.send).toHaveBeenCalledTimes(navigationEvents.length);
+        h.send.mockClear();
+        h.emitNavigation();
+        expect(h.send).toHaveBeenCalledTimes(navigationEvents.length);
       });
-      const commandEpoch = harness.policy.capture(7, "Page.navigate");
-      await expect(harness.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({ id: 7 });
+      const commandEpoch = h.policy.capture(7, "Page.navigate");
+      await expect(h.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({ id: 7 });
       release();
       // Drain the superseded lookup without introducing a second Chrome event.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      await expect(harness.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({
+      await expect(h.policy.requireTab(7, commandEpoch)).resolves.toMatchObject({
         id: 7,
         url: "https://destination.example/",
       });
-      expect(harness.detachDebugger).not.toHaveBeenCalled();
+      expect(h.detachDebugger).not.toHaveBeenCalled();
     } finally {
       release();
     }
@@ -362,17 +336,17 @@ describe("Chrome navigation event access", () => {
 
   it("does not retain file permission across a recreated extension policy", async () => {
     for (const fileAccessAllowed of [true, false]) {
-      const harness = await createNavigationHarness("all", { fileAccessAllowed });
-      const releaseLookup = harness.deferLookup();
+      const h = await createNavigationHarness("all", { fileAccessAllowed });
+      const releaseLookup = h.deferLookup();
       try {
-        harness.update({ url: "file:///tmp/openclaw-navigation-proof.html" });
-        harness.emitNavigation();
-        expect(harness.send).toHaveBeenCalledTimes(fileAccessAllowed ? navigationEvents.length : 0);
+        h.update({ url: "file:///tmp/openclaw-navigation-proof.html" });
+        h.emitNavigation();
+        expect(h.send).toHaveBeenCalledTimes(fileAccessAllowed ? navigationEvents.length : 0);
       } finally {
         await releaseLookup();
       }
       if (!fileAccessAllowed) {
-        await expect(harness.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
+        await expect(h.policy.requireTab(7)).rejects.toThrow("restricted or unavailable");
       }
     }
   });
