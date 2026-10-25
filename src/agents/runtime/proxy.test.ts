@@ -2,6 +2,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collect } from "../../../test/helpers/async-iterable.js";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -127,7 +128,7 @@ describe("streamProxy", () => {
       .map((event, index) => `data:${index === 1 ? " " : ""}${JSON.stringify(event)}\n`)
       .join("\n");
     const stream = startStream(responseFromText(body));
-    const events = await Array.fromAsync(stream);
+    const events = await collect(stream);
 
     expect(events.map((event) => event.type)).toEqual([
       "text_start",
@@ -198,7 +199,7 @@ describe("streamProxy", () => {
       headers: { Authorization: "Bearer upstream", "x-api-key": "secret" },
     };
     const stream = streamProxy(model, context, options);
-    const events = await Array.fromAsync(stream);
+    const events = await collect(stream);
 
     expect(events.at(-1)?.type).toBe("done");
     await expect(stream.result()).resolves.toMatchObject({
@@ -359,7 +360,7 @@ describe("streamProxy", () => {
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
     const stream = startStream(responseFromText(`data: ${JSON.stringify({ type: "start" })}`));
-    const events = await Array.fromAsync(stream);
+    const events = await collect(stream);
 
     expect(events.at(-1)?.type).toBe("error");
     await expect(stream.result()).resolves.toMatchObject({

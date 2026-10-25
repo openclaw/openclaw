@@ -114,6 +114,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
         if (mode === "reject") {
           return Promise.reject(failure);
         }
+        return undefined;
       });
       const task = keepHttpServerTaskAlive({
         server,

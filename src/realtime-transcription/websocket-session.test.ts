@@ -93,12 +93,12 @@ async function setup(
     connections,
     frames,
     authHeaders,
-    async waitFrames(count: number) {
+    waitFrames: async (count: number) => {
       while (frames.length < count) {
         await once(received, "frame");
       }
     },
-    async connection(count: number) {
+    connection: async (count: number) => {
       await vi.waitFor(() => expect(connections).toHaveLength(count));
       return expectDefined(connections[count - 1], "expected server connection");
     },
