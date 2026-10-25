@@ -56,7 +56,7 @@ describe("qa-lab server ui helpers", () => {
     expect(missingUiHtml()).toContain("pnpm qa:lab:build");
   });
 
-  it("never resolves sibling files outside the UI dist root", async () => {
+  it("resolves the UI index but rejects traversal and malformed asset paths", async () => {
     const rootDir = await makeUiDir();
     const uiDistDir = path.join(rootDir, "dist");
     const siblingDir = path.join(rootDir, "dist-other");
@@ -67,13 +67,7 @@ describe("qa-lab server ui helpers", () => {
 
     expect(tryResolveUiAsset("/", uiDistDir, rootDir)).toBe(path.join(uiDistDir, "index.html"));
     expect(tryResolveUiAsset("/../dist-other/secret.txt", uiDistDir, rootDir)).toBeNull();
-  });
-
-  it("rejects malformed percent-encoded UI asset paths", async () => {
-    const uiDistDir = await makeUiDir();
-    await writeFile(path.join(uiDistDir, "index.html"), "bundle-root", "utf8");
-
-    expect(tryResolveUiAsset("/%E0%A4", uiDistDir, uiDistDir)).toBeNull();
+    expect(tryResolveUiAsset("/%E0%A4", uiDistDir, rootDir)).toBeNull();
   });
 });
 
@@ -88,7 +82,7 @@ const TEST_TLS_OPTIONS = {
   maxVersion: "TLSv1.2",
 } as const;
 
-function trackServer<T extends Server>(server: T): T {
+async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -104,10 +98,6 @@ function trackServer<T extends Server>(server: T): T {
       });
     }
   });
-  return server;
-}
-
-async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
   server.listen(0, host);
   await once(server, "listening");
   const address = server.address();
@@ -118,7 +108,7 @@ async function listenLoopback(server: Server, host = "127.0.0.1"): Promise<numbe
 }
 
 async function openBrowserPair(): Promise<{ browser: Socket; proxySocket: Socket }> {
-  const server = trackServer(net.createServer({ allowHalfOpen: true }));
+  const server = net.createServer({ allowHalfOpen: true });
   const port = await listenLoopback(server);
   const connected = once(server, "connection");
   const browser = net.connect({ host: "127.0.0.1", port });
@@ -166,16 +156,14 @@ async function readSocket(socket: Socket, marker?: string, timeoutMs = 2_000): P
 
 async function expectOpeningFailure(kind: "tls" | "reset") {
   const accepted = Promise.withResolvers<Socket>();
-  const server = trackServer(
-    net.createServer((socket) => {
-      if (kind === "tls") {
-        socket.resume();
-      } else {
-        socket.once("data", () => socket.resetAndDestroy());
-      }
-      accepted.resolve(socket);
-    }),
-  );
+  const server = net.createServer((socket) => {
+    if (kind === "tls") {
+      socket.resume();
+    } else {
+      socket.once("data", () => socket.resetAndDestroy());
+    }
+    accepted.resolve(socket);
+  });
   const port = await listenLoopback(server, "localhost");
   const { browser, proxySocket } = await openBrowserPair();
   const endSpy = vi.spyOn(proxySocket, "end");
@@ -205,14 +193,12 @@ describe("proxyUpgradeRequest loopback transport", () => {
       })) as typeof tls.connect);
 
     const request = Promise.withResolvers<string>();
-    const upstreamServer = trackServer(
-      tls.createServer(TEST_TLS_OPTIONS, (socket) => {
-        void readSocket(socket, "\r\n\r\n").then((data) => {
-          request.resolve(data);
-          socket.write(UPGRADE_RESPONSE);
-        }, request.reject);
-      }),
-    );
+    const upstreamServer = tls.createServer(TEST_TLS_OPTIONS, (socket) => {
+      void readSocket(socket, "\r\n\r\n").then((data) => {
+        request.resolve(data);
+        socket.write(UPGRADE_RESPONSE);
+      }, request.reject);
+    });
     const upstreamPort = await listenLoopback(upstreamServer, "localhost");
     const { browser, proxySocket } = await openBrowserPair();
     const setTimeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
@@ -233,7 +219,7 @@ describe("proxyUpgradeRequest loopback transport", () => {
   }, 16_000);
 
   it("closes a connecting upstream exactly once when the browser sends EOF", async () => {
-    const upstreamServer = trackServer(net.createServer());
+    const upstreamServer = net.createServer();
     const upstreamPort = await listenLoopback(upstreamServer);
     const { browser, proxySocket } = await openBrowserPair();
     const upstream = new net.Socket();

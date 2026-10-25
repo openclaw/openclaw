@@ -73,6 +73,7 @@ if (fixtureVersion) {
   }
 }
 const authDbPath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+const recordCommand = (kind, fields = {}) => record({ kind, args, authDbPath, configPath, stateDir, ...fields });
 if (args[0] === "models" || (args[0] === "update" && !args.includes("--help"))) {
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const portProbe = net.createServer();
@@ -90,17 +91,12 @@ if (args[0] === "models") {
   for await (const chunk of process.stdin) stdin += chunk;
   const provider = args[args.indexOf("--provider") + 1];
   const configStat = fs.lstatSync(configPath);
-  record({
-    kind: "auth",
-    args,
+  recordCommand("auth", {
     stdin,
-    authDbPath,
     dbExists: fs.existsSync(authDbPath),
-    configPath,
     configMode: configStat.mode & 0o777,
     configRegular: configStat.isFile(),
     configSymlink: configStat.isSymbolicLink(),
-    stateDir,
     env: {
       OPENCLAW_CLI: process.env.OPENCLAW_CLI,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -133,11 +129,11 @@ if (process.env.QA_ASSERT_AUTH_HANDOFF === "1" &&
 if (args[0] === "update") {
   const phase = args.includes("--help") ? "help" : "repair";
   if (process.env.QA_FAIL_PLUGIN_SETUP === phase) {
-    record({ kind: "plugins", args, authDbPath, configPath, stateDir });
+    recordCommand("plugins");
     await fail(8, "plugin fixture rejected: Authorization: Bearer " + "fixture-plugin-secret".repeat(200));
   }
   if (args.includes("--help")) {
-    record({ kind: "help", args, authDbPath, configPath, stateDir });
+    recordCommand("help");
     process.stdout.write(process.env.QA_LEGACY_PLUGIN_SETUP === "1" ? "Options: --yes" : "Options: --accept-capabilities --yes");
     process.exit(0);
   }
@@ -146,7 +142,7 @@ if (args[0] === "update") {
     process.exit(2);
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  record({ kind: "plugins", args, authDbPath, configPath, stateDir, configPort: config.gateway.port });
+  recordCommand("plugins", { configPort: config.gateway.port });
   if (fixtureVersion) config.meta = { lastTouchedVersion: fixtureVersion };
   delete config.plugins.entries["qa-lab"];
   config.plugins.allow = config.plugins.allow.filter((id) => id !== "qa-lab");
@@ -155,18 +151,13 @@ if (args[0] === "update") {
   process.exit(0);
 }
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-record({
-  kind: "gateway",
-  args,
-  authDbPath,
+recordCommand("gateway", {
   dbExists: fs.existsSync(authDbPath),
-  configPath,
   authProfileIds: Object.keys(config.auth?.profiles ?? {}),
   fixtureProfiles: config.fixtureProfiles,
   configVersion: config.meta?.lastTouchedVersion,
   sourcePluginConfigured: Boolean(config.plugins?.entries?.["qa-lab"]),
   configPort: config.gateway.port,
-  stateDir,
 });
 const gatewayAttempts = fs.readFileSync(recordPath, "utf8").trim().split("\\n")
   .map((line) => JSON.parse(line)).filter((entry) => entry.kind === "gateway").length;

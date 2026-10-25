@@ -29,6 +29,29 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
   "base64",
 );
+const textContent = (text: string) => [{ type: "text", text }];
+
+function imageToolExchange(action: string, index: number, taskId: string) {
+  const id = `image-${index}`;
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id, name: "image_generate", arguments: { action } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: id,
+      toolName: "image_generate",
+      isError: false,
+      content:
+        action === "generate"
+          ? textContent(
+              `Background task started for image generation (${taskId}). Do not call image_generate again for this request.`,
+            )
+          : [],
+    },
+  ];
+}
 
 async function runImageScenario(
   options: {
@@ -87,46 +110,17 @@ async function runImageScenario(
         }
         if (method === "chat.history") {
           expect(params).toEqual({ sessionKey, limit: 100, maxChars: 131072 });
-          const actions = ["status", "generate", "status"];
           return {
             messages: [
-              ...actions.flatMap((action, index) => {
-                const call = {
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "toolCall",
-                      id: `image-${index}`,
-                      name: "image_generate",
-                      arguments: { action },
-                    },
-                  ],
-                };
-                return [
-                  call,
-                  {
-                    role: "toolResult",
-                    toolCallId: `image-${index}`,
-                    toolName: "image_generate",
-                    isError: false,
-                    content:
-                      action === "generate"
-                        ? [
-                            {
-                              type: "text",
-                              text: `Background task started for image generation (${taskId}). Do not call image_generate again for this request.`,
-                            },
-                          ]
-                        : [],
-                  },
-                ];
-              }),
+              ...["status", "generate", "status"].flatMap((action, index) =>
+                imageToolExchange(action, index, taskId),
+              ),
               ...(options.fault === "initial acknowledgement only"
                 ? []
                 : [
                     {
                       role: "assistant",
-                      content: [{ type: "text", text: caption }],
+                      content: textContent(caption),
                       __openclaw: {
                         runId:
                           options.fault === "wrong completion run"

@@ -74,9 +74,9 @@ describe("qa credential admin runtime", () => {
     expect(fetchCall(fetchImpl).input).toBe(
       "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
     );
-    const { init } = fetchCall(fetchImpl);
-    const headers = init?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer maint-secret");
+    expect(fetchCall(fetchImpl).init.headers).toMatchObject({
+      authorization: "Bearer maint-secret",
+    });
     const body = requestBody(fetchImpl);
     expect(body).toMatchObject({ kind: "telegram", actorId: "maintainer-local" });
     expect(body.payload).toEqual(payload);
@@ -200,9 +200,10 @@ describe("qa credential admin runtime", () => {
         );
 
         expect(error).toBeInstanceOf(QaCredentialAdminError);
-        const adminError = error as QaCredentialAdminError;
-        expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
-        expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
+        expect(error).toMatchObject({
+          code: "BROKER_REQUEST_FAILED",
+          message: expect.stringMatching(/Convex credential admin response exceeds/),
+        });
         await vi.waitFor(() => expect(responseClosed).toBe(true));
         expect(chunksSent).toBeLessThan(totalChunks);
       },

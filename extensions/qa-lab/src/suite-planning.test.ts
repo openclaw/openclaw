@@ -74,7 +74,6 @@ describe("qa suite planning helpers", () => {
     expect(new Set(selected).size).toBe(3);
     expect(selected[0]).toEqual(scenarios[0]);
     expect(selected[0]).not.toBe(scenarios[0]);
-    expect(selected[2]).not.toBe(selected[0]);
   });
 
   it("applies the same lane contract to explicit and implicit selection", () => {
