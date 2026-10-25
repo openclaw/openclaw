@@ -66,10 +66,7 @@ beforeEach(async () => {
   outputDir = path.join(repoRoot, "output");
   vi.clearAllMocks();
   mocks.readQaBootstrapScenarioCatalog.mockReturnValue({
-    scenarios: [
-      makeQaSuiteTestScenario("runtime-channel", { surface: "channel" }),
-      makeQaSuiteTestScenario("runtime-control-ui", { surface: "control-ui" }),
-    ],
+    scenarios: [makeQaSuiteTestScenario("runtime-channel", { surface: "channel" })],
   });
   mocks.runQaFlowSuiteStandard.mockImplementation(
     async (
@@ -113,42 +110,20 @@ describe("runtime parity Control UI ownership", () => {
         }
         const result = await original(params, context);
         const status = calls === 1 ? "fail" : calls === 3 ? retryStatus : "pass";
-        const evidenceStatus = status === "skip" ? "skipped" : status;
-        const content = JSON.stringify({ runtime: params.forcedRuntime, status });
-        await fs.mkdir(context.outputDir, { recursive: true });
-        await fs.writeFile(path.join(context.outputDir, "runtime-observation.json"), content);
-        const receiptId = `${id}:runtime`;
-        recording.invocation.complete(id, {
-          status: evidenceStatus,
-          entries: [
-            {
-              test: { kind: "flow", id: scenario.id, title: scenario.title },
-              coverage: [{ id: "channels.dm", role: "primary" }],
-              result: { status: evidenceStatus },
-              binding: { occurrenceId: id, assertionId: "child-result", receiptId },
-              effective: true,
-            },
-          ],
-          receipts: [
-            {
-              id: receiptId,
-              phase: "runtime",
-              identity: {
-                ...recording.invocation.anchors[0]!.launch,
-                runtime: { id: params.forcedRuntime!, version: "fixture-version" },
+        result.scenarios[0] = await recording.record(
+          0,
+          id,
+          { ...result.scenarios[0]!, status },
+          {
+            importedEntries: [
+              {
+                test: { kind: "flow", id: scenario.id, title: scenario.title },
+                coverage: [{ id: "channels.dm", role: "primary" }],
+                result: { status: status === "skip" ? "skipped" : status },
               },
-              artifact: {
-                kind: "fixture",
-                source: "qa-suite",
-                path: "runtime-observation.json",
-                sha256: sha256(content),
-              },
-            },
-          ],
-        });
-        recording.invocation.select(0, id);
-        recording.publish();
-        result.scenarios[0] = { ...result.scenarios[0]!, status, evidenceOccurrenceId: id };
+            ],
+          },
+        );
         result.evidence = recording.snapshot();
         return result;
       });
