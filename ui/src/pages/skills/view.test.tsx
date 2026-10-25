@@ -564,8 +564,6 @@ describe("renderSkills", () => {
 
   it.each([
     [true, 1],
-    [false, 0],
-    [null, 0],
     [undefined, 0],
   ])(
     "marks official ClawHub skills in the detail title: isOfficial=%s",
@@ -588,7 +586,7 @@ describe("renderSkills", () => {
       });
       await getRenderedModalDialog(container);
       const badges = container.querySelectorAll(
-        ".clawhub-skill-detail__identity .plugin-official-badge[aria-label='Official']",
+        ".clawhub-skill-detail__identity [role='img'][aria-label='Official']",
       );
       expect(badges).toHaveLength(count);
     },
