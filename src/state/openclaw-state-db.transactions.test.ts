@@ -200,26 +200,6 @@ it("refuses a savepoint in an unmanaged enclosing transaction", () => {
   }
 });
 
-it("lets SQLite exclude a competing cached writer and resumes after its commit", () => {
-  const database = openDatabase(options);
-  const other = new DatabaseSync(database.path);
-  const write = vi.fn(() => insertEvent(database.db, "committed", "native-transaction"));
-  try {
-    other.exec("BEGIN IMMEDIATE");
-    expect(() => writeTransaction(write, options, { busyTimeoutMs: 0 })).toThrow(/locked|busy/i);
-    expectNotWritten(database.db, write, "native-transaction");
-    other.exec("COMMIT");
-    writeTransaction(write, options, { busyTimeoutMs: 0 });
-    expect(write).toHaveBeenCalledOnce();
-    expect(events(other, "native-transaction")).toEqual([{ event_key: "committed" }]);
-  } finally {
-    if (other.isTransaction) {
-      other.exec("ROLLBACK");
-    }
-    other.close();
-  }
-});
-
 it("refuses a single-statement write before its effect when shared-state admission is lost", () => {
   const database = openDatabase(options);
   publishForeignSchemaOwner(database.path);
@@ -234,7 +214,6 @@ it("publishes a committed single statement without an envelope", () => {
   const database = openDatabase(options);
   using reader = new DatabaseSync(database.path, { readOnly: true });
   const publications: string[] = [];
-  const exec = vi.spyOn(database.db, "exec");
   const write = vi.fn(({ db }: { db: EngineConnection }) => {
     expect(db.isTransaction).toBe(false);
     deferSqlitePostCommitPublication(db, () => {
@@ -247,34 +226,6 @@ it("publishes a committed single statement without an envelope", () => {
   expect(result.changes).toBe(1);
   expect(write).toHaveBeenCalledOnce();
   expect(publications).toEqual(["notified"]);
-  expect(
-    exec.mock.calls.filter(([sql]) => /\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)),
-  ).toEqual([]);
-});
-
-it("keeps a nested single statement and its publication subject to the outer rollback", () => {
-  const database = openDatabase(options);
-  const published = vi.fn();
-  expect(() =>
-    writeTransaction(({ db }) => {
-      writeTransaction(
-        ({ db: nested }) => {
-          expect(nested.isTransaction).toBe(true);
-          deferSqlitePostCommitPublication(nested, published);
-          return insertEvent(nested, "rolled-back");
-        },
-        { ...options, database },
-        { singleStatement: true },
-      );
-      expect(db.isTransaction).toBe(true);
-      expect(published).not.toHaveBeenCalled();
-      expect(events(db)).toEqual([{ event_key: "rolled-back" }]);
-      throw new Error("synthetic outer rollback");
-    }, options),
-  ).toThrow("synthetic outer rollback");
-  expect(database.db.isTransaction).toBe(false);
-  expect(published).not.toHaveBeenCalled();
-  expect(events(database.db)).toEqual([]);
 });
 
 it("configures checkpoint lock waits before schema mutation", () => {

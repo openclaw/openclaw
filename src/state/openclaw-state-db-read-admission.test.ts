@@ -258,38 +258,31 @@ it.each(["read", "refused-read", "closed-writer"] as const)(
           path.basename(databasePath),
         );
         let moved = false;
-        const interceptOpen = () => {
-          const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-            this: Worker,
-            message,
-            ...args
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with its original receiver.
+        const postMessage = Worker.prototype.postMessage;
+        const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+          this: Worker,
+          message,
+          ...args
+        ) {
+          if (
+            isRecord(message) &&
+            message.type === "open" &&
+            message.databasePath === canonicalTarget
           ) {
             dispatch.mockRestore();
-            if (
-              isRecord(message) &&
-              message.type === "open" &&
-              message.databasePath === canonicalTarget
-            ) {
-              // The target is absent at admission, then gets the real retained inode before native open.
-              fs.renameSync(retainedPath, databasePath);
-              if (kind !== "closed-writer") {
-                fs.writeFileSync(databasePath, "");
-              }
-              expect(databaseIdentity.readDatabasePathIdentitySync(databasePath).key).toBe(
-                retiredIdentity.key,
-              );
-              moved = true;
+            // The target is absent at admission, then gets the retained inode before native open.
+            fs.renameSync(retainedPath, databasePath);
+            if (kind !== "closed-writer") {
+              fs.writeFileSync(databasePath, "");
             }
-            try {
-              return this.postMessage(message, ...args);
-            } finally {
-              if (!moved) {
-                interceptOpen();
-              }
-            }
-          });
-        };
-        interceptOpen();
+            expect(databaseIdentity.readDatabasePathIdentitySync(databasePath).key).toBe(
+              retiredIdentity.key,
+            );
+            moved = true;
+          }
+          return postMessage.call(this, message, ...args);
+        });
         const store = keyedStore("read-admission");
         await store.register("retained", "original");
         expect(moved).toBe(true);

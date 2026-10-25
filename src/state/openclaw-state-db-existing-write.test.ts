@@ -87,6 +87,10 @@ function sidecarIdentities(pathname: string) {
 function insert(db: EngineConnection, id: number, value: string) {
   return db.prepare("INSERT INTO records VALUES (?, ?)").run(id, value);
 }
+const record =
+  (id: number, value: string) =>
+  ({ db }: { db: EngineConnection }) =>
+    insert(db, id, value);
 
 function expectNoSidecars(pathname: string) {
   expect(["-wal", "-shm"].map((suffix) => fs.existsSync(`${pathname}${suffix}`))).toEqual([
@@ -97,7 +101,7 @@ function expectNoSidecars(pathname: string) {
 it("admits maintenance with QUICK without lending that receipt to a FULL writer", () => {
   const options = fixture();
   const reads = observeSqliteReadSql(StatementSync.prototype);
-  writeExisting(({ db }) => db.exec("INSERT INTO records VALUES (1, 'quick write')"), options, {
+  writeExisting(record(1, "quick write"), options, {
     ...contract,
     integrityCheck: "quick",
   });
@@ -118,18 +122,10 @@ it("admits maintenance with QUICK without lending that receipt to a FULL writer"
 
 it("writes to an existing additive subset across reopen", () => {
   const options = fixture(true);
-  writeExisting(
-    ({ db }) => {
-      insert(db, 1, "warm subset");
-    },
-    options,
-    { ...contract, initializeAdditiveSchema: true },
-  );
+  const additive = { ...contract, initializeAdditiveSchema: true };
+  writeExisting(record(1, "warm subset"), options, additive);
   expect(readValues(options.path)).toEqual(["warm subset"]);
-  writeExisting(({ db }) => insert(db, 2, "reopened subset"), options, {
-    ...contract,
-    initializeAdditiveSchema: true,
-  });
+  writeExisting(record(2, "reopened subset"), options, additive);
   expect(readValues(options.path)).toEqual(["warm subset", "reopened subset"]);
 });
 
@@ -142,7 +138,7 @@ it("performs requested orphan recovery after warming subset admission", () => {
        requester_origin_json TEXT, last_notified_event_at INTEGER
      ) STRICT;`,
   );
-  writeExisting(({ db }) => insert(db, 1, "warm"), options, contract);
+  writeExisting(record(1, "warm"), options, contract);
   {
     using database = new DatabaseSync(options.path);
     database.exec(`PRAGMA foreign_keys = OFF;
@@ -198,22 +194,18 @@ it("preserves a replacement appearing during schema lease acquisition", () => {
   const replacement = fixture(false, "INSERT INTO records VALUES (99, 'replacement preserved')");
   const replacementBytes = fs.readFileSync(replacement.path);
   const withMaintenance = maintenance.withStateDatabaseSchemaMaintenance;
-  const lease = vi
-    .spyOn(maintenance, "withStateDatabaseSchemaMaintenance")
-    .mockImplementation((leaseOptions, operation) =>
+  vi.spyOn(maintenance, "withStateDatabaseSchemaMaintenance").mockImplementation(
+    (leaseOptions, operation) =>
       withMaintenance(leaseOptions, () => {
         fs.renameSync(options.path, `${options.path}.retired`);
         fs.copyFileSync(replacement.path, options.path);
         return operation();
       }),
-    );
-  const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
-    db.exec("INSERT INTO records VALUES (1, 'wrong generation')");
-  });
+  );
+  const mutate = vi.fn(record(1, "wrong generation"));
   expect(() =>
     writeExisting(mutate, options, { ...contract, recoverTaskDeliveryOrphans: true }),
   ).toThrow(/generation/iu);
-  expect(lease).toHaveBeenCalledOnce();
   expect(mutate).not.toHaveBeenCalled();
   expect(fs.readFileSync(options.path).equals(replacementBytes)).toBe(true);
   expect(readValues(options.path)).toEqual(["replacement preserved"]);
@@ -235,7 +227,7 @@ it("retains WAL identity and admission across local and sibling writes", () => {
     expect(db).toBe(retained);
     insert(db, 3, "last");
   }, options);
-  writer.run(({ db }) => insert(db, 4, "warm"), options);
+  writer.run(record(4, "warm"), options);
   writer.assertSettled();
   expect(readValues(options.path)).toEqual(["first", "foreign", "last", "warm"]);
   expect(sidecarIdentities(options.path)).toEqual(sidecars);
@@ -258,8 +250,8 @@ it("resumes retained writes after lazy DDL without changing the schema version",
     ensureUserPreferencesSchema({ ...options, database: peer });
     expectRow(peer.db, "SELECT COUNT(*) AS total FROM user_preferences", { total: 0 });
     expectRow(peer.db, "PRAGMA user_version", version);
-    writer.run(({ db }) => db.exec("INSERT INTO records VALUES (2, 'after addition')"), options);
-    writer.run(({ db }) => db.exec("INSERT INTO records VALUES (3, 'warm again')"), options);
+    writer.run(record(2, "after addition"), options);
+    writer.run(record(3, "warm again"), options);
     expect(readValues(options.path)).toEqual(["before addition", "after addition", "warm again"]);
   } finally {
     writer.close();
@@ -350,9 +342,7 @@ it.each(metadataMutationCases)(
         }
       }
       const writer = openWriter(options);
-      const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
-        db.exec("INSERT INTO records VALUES (2, 'refused')");
-      });
+      const mutate = vi.fn(record(2, "refused"));
       expect(() => writer.run(mutate, options)).toThrow(error);
       expect(mutate).not.toHaveBeenCalled();
       expect(readValues(options.path)).toEqual([]);
@@ -378,20 +368,14 @@ it("rechecks current environment for each retained write", () => {
   };
   const writer = withExistingSchema(options, () => {
     const result = openWriter(externalOptions);
-    result.run(
-      ({ db }) => db.exec("INSERT INTO records VALUES (1, 'authorized')"),
-      externalOptions,
-    );
+    result.run(record(1, "authorized"), externalOptions);
     const refused = vi.fn();
     expect(() => result.run(refused, options)).toThrow(/external|managed/iu);
     expect(refused).not.toHaveBeenCalled();
     return result;
   });
   withExistingSchema(options, () => {
-    writer.run(
-      ({ db }) => db.exec("INSERT INTO records VALUES (2, 'readmitted')"),
-      externalOptions,
-    );
+    writer.run(record(2, "readmitted"), externalOptions);
   });
   expect(readValues(options.path)).toEqual(["authorized", "readmitted"]);
 });

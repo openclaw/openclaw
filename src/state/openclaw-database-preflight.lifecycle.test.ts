@@ -61,6 +61,7 @@ it.each([
   ["direct", "success", "caller"],
   ["direct", "failure", "caller"],
   ["direct", "cancel", "caller"],
+  ["snapshot", "open-failure", "caller"],
   ["snapshot", "close-failure", "caller"],
   ["snapshot", "cancel", "startup"],
   ["snapshot", "cancel", "scope"],
@@ -94,6 +95,10 @@ it.each([
     const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
     const locations: string[] = [];
     const firstSnapshotCleaned = createDeferred();
+    const secondPrepared = createDeferred();
+    const cleanupStarted = createDeferred();
+    const releaseCleanup = createDeferred();
+    let cleanupCount = 0;
     const readPaths = marker("read-paths.json");
     const publishReadPaths = (values: string[]) => {
       fs.writeFileSync(`${readPaths}.tmp`, JSON.stringify(values));
@@ -148,9 +153,24 @@ it.each([
         expect(index).toBeGreaterThanOrEqual(0);
         locations[index] = path.toNamespacedPath(fs.realpathSync.native(prepared.location));
         publishReadPaths(locations);
+        if (outcome === "open-failure" && index === 0) {
+          await secondPrepared.promise;
+        }
+        if (index === 1) {
+          secondPrepared.resolve();
+        }
         return {
           ...prepared,
+          ...(outcome === "open-failure" && index === 0
+            ? { location: path.join(path.dirname(prepared.location), "missing.sqlite") }
+            : {}),
           async cleanupAsync() {
+            if (outcome === "cancel" || (outcome === "open-failure" && index === 1)) {
+              if (++cleanupCount === (outcome === "cancel" ? 2 : 1)) {
+                cleanupStarted.resolve();
+              }
+              await releaseCleanup.promise;
+            }
             const removed = await prepared.cleanupAsync();
             if (index === 0) {
               firstSnapshotCleaned.resolve();
@@ -161,6 +181,25 @@ it.each([
       },
     );
     vi.mocked(fork).mockClear();
+    const nativeFork = (
+      await vi.importActual<typeof import("node:child_process")>("node:child_process")
+    ).fork;
+    const childClosures: Promise<void>[] = [];
+    let closedChildren = 0;
+    vi.mocked(fork).mockImplementation((...args) => {
+      const child = nativeFork(...args);
+      if (childClosures.length < 2) {
+        childClosures.push(
+          new Promise<void>((resolve) => {
+            child.once("close", () => {
+              closedChildren += 1;
+              resolve();
+            });
+          }),
+        );
+      }
+      return child;
+    });
     const controller = new AbortController();
     const cancellation = new Error("intentional reader cancellation");
     if (owner === "scope") {
@@ -187,11 +226,17 @@ it.each([
             })
           : inspect();
     const settled = trackSettlement(run);
-    let childClosures: Promise<void>[] = [];
     try {
-      await vi.waitFor(() => expectFiles([marker("close-0"), marker("close-1")], true), {
-        timeout: 10_000,
-      });
+      await vi.waitFor(
+        () =>
+          expectFiles(
+            (outcome === "open-failure" ? ["close-1"] : ["close-0", "close-1"]).map(marker),
+            true,
+          ),
+        {
+          timeout: 10_000,
+        },
+      );
       expect(settled()).toBe(false);
       expectMarker("close-2", false);
       const readLocations = source === "snapshot" ? locations : sources;
@@ -199,27 +244,23 @@ it.each([
       if (firstReadLocation === undefined || secondReadLocation === undefined) {
         throw new Error("Both paused readers must have a prepared database path");
       }
-      expectFiles(readLocations.slice(0, 2), true);
+      expectFiles(readLocations.slice(outcome === "open-failure" ? 1 : 0, 2), true);
 
       const children = vi
         .mocked(fork)
         .mock.results.filter((result) => result.type === "return")
         .map(({ value }) => value);
       expect(children).toHaveLength(2);
-      let closedChildren = 0;
-      childClosures = children.map(
-        (child) =>
-          new Promise<void>((resolve) => {
-            child.once("close", () => {
-              closedChildren += 1;
-              resolve();
-            });
-          }),
-      );
       if (outcome === "cancel") {
         controller.abort(cancellation);
         await setImmediate();
         expect(children.map((child) => child.killed)).toEqual([true, true]);
+        if (source === "snapshot") {
+          await withTestTimeout(cleanupStarted.promise, 10_000, "snapshot cleanup did not start");
+          expect(settled()).toBe(false);
+          expectSnapshotDirectories(locations, true);
+          releaseCleanup.resolve();
+        }
         await expect(run).rejects.toBe(cancellation);
       } else {
         resume("release-0");
@@ -232,8 +273,10 @@ it.each([
           expect(fs.existsSync(firstReadLocation)).toBe(true);
           resume("exit-release");
         }
-        if (outcome === "failure" || outcome === "close-failure") {
-          await childClosures[0];
+        if (outcome === "failure" || outcome === "close-failure" || outcome === "open-failure") {
+          if (outcome !== "open-failure") {
+            await childClosures[0];
+          }
           if (source === "snapshot") {
             await withTestTimeout(
               firstSnapshotCleaned.promise,
@@ -250,10 +293,22 @@ it.each([
           }
         }
         resume("release-1");
+        if (outcome === "open-failure") {
+          await withTestTimeout(
+            cleanupStarted.promise,
+            10_000,
+            "peer snapshot cleanup did not start",
+          );
+          expect(settled()).toBe(false);
+          expectSnapshotDirectories([secondReadLocation], true);
+          releaseCleanup.resolve();
+        }
         if (outcome === "failure") {
           await expect(run).rejects.toMatchObject({ name: "SqliteIntegrityError" });
         } else if (outcome === "close-failure") {
           await expect(run).rejects.toThrow("native snapshot close failure");
+        } else if (outcome === "open-failure") {
+          await expect(run).rejects.toThrow();
         } else {
           await expect(run).resolves.toEqual(compatible);
         }
@@ -275,111 +330,10 @@ it.each([
       resume("release-0");
       resume("release-1");
       resume("exit-release");
+      secondPrepared.resolve();
+      releaseCleanup.resolve();
       controller.abort(cancellation);
       await Promise.allSettled([run, ...childClosures]);
     }
-  },
-);
-
-function createSnapshotCandidates() {
-  const { inspect } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
-  const directory = tempDirs.make("openclaw-preflight-lifecycle-agents-");
-  const paths = [0, 1, 2].map((index) => path.join(directory, `agent-${index}.sqlite`));
-
-  // Closed WAL families retain the private snapshot recovery path.
-  for (const pathname of paths) {
-    execSql(
-      pathname,
-      `PRAGMA journal_mode=WAL; PRAGMA user_version = ${supportedVersions.agent + 1};`,
-    );
-    expectFiles([`${pathname}-wal`, `${pathname}-shm`], false);
-  }
-
-  return { inspect, paths };
-}
-
-it.each(["cancel", "failure"] as const)(
-  "drains started snapshots before propagating %s",
-  async (outcome) => {
-    const fixture = createSnapshotCandidates();
-    const cancel = outcome === "cancel";
-    const secondPrepared = createDeferred();
-    const cleanupStarted = createDeferred();
-    const firstCleaned = createDeferred();
-    const release = createDeferred();
-    let cleanupCount = 0;
-    const sourcePaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
-    const prepare = snapshots.prepareSqliteReadOnlyLocation;
-    const locations: string[] = [];
-    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-      async (pathname, options) => {
-        const prepared = await prepare(pathname, options);
-        if (!sourcePaths.has(pathname)) {
-          return prepared;
-        }
-        const ordinal = locations.length;
-        locations.push(prepared.location);
-        if (!cancel && ordinal === 0) {
-          await secondPrepared.promise;
-        }
-        if (ordinal === 1) {
-          secondPrepared.resolve();
-        }
-        return {
-          ...prepared,
-          ...(!cancel && ordinal === 0
-            ? { location: path.join(path.dirname(prepared.location), "missing.sqlite") }
-            : {}),
-          cleanupAsync: async () => {
-            cleanupCount += 1;
-            if (cancel ? cleanupCount === 2 : ordinal === 1) {
-              cleanupStarted.resolve();
-            }
-            if (cancel || ordinal === 1) {
-              await release.promise;
-            }
-            const removed = await prepared.cleanupAsync();
-            if (ordinal === 0) {
-              firstCleaned.resolve();
-            }
-            return removed;
-          },
-        };
-      },
-    );
-    const controller = new AbortController();
-    const run = fixture.inspect({
-      supportedVersions,
-      requireStartupMigrationReadiness: true,
-      configuredAgentDatabaseCandidatePaths: fixture.paths,
-      signal: cancel ? controller.signal : undefined,
-    });
-    const settled = trackSettlement(run);
-    try {
-      await withTestTimeout(cleanupStarted.promise, 10_000, "snapshot cleanup did not start");
-      if (cancel) {
-        expectSnapshotDirectories(locations, true);
-        controller.abort(new Error("intentional preflight cancellation"));
-      } else {
-        await withTestTimeout(firstCleaned.promise, 10_000, "failing snapshot did not clean up");
-      }
-      await Promise.resolve();
-      expect(settled()).toBe(false);
-      expect(locations).toHaveLength(2);
-    } finally {
-      secondPrepared.resolve();
-      release.resolve();
-      if (cancel) {
-        controller.abort(new Error("intentional preflight cancellation"));
-      }
-      await Promise.allSettled([run]);
-    }
-    if (cancel) {
-      await expect(run).rejects.toThrow("intentional preflight cancellation");
-    } else {
-      await expect(run).rejects.toThrow();
-    }
-    expect(locations).toHaveLength(2);
-    expectSnapshotDirectories(locations, false);
   },
 );
