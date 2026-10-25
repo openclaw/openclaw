@@ -40,13 +40,13 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       ],
     );
     const anchor = new DatabaseSync(":memory:");
-    let closeReader: (() => void) | undefined;
+    const cleanup: { closeReader?: () => void } = {};
     harness.onClose(() => {
-      closeReader?.();
+      cleanup.closeReader?.();
       anchor.close();
     });
     const reader = new PostgresSyncConnection(connection!, schema, anchor, schema);
-    closeReader = () => reader.close();
+    cleanup.closeReader = () => reader.close();
     const queries = vi.spyOn(reader, "query");
     const pathname = `/synthetic/${schema}/anchor.sqlite`;
     const closedTransactions: boolean[] = [];
