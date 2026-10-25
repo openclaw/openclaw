@@ -62,6 +62,10 @@ async function expectJson(response: Response, status: number, body: unknown) {
   expect(response.status).toBe(status);
   await expect(response.json()).resolves.toEqual(body);
 }
+async function expectSuccess(response: Response, body: object) {
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject(body);
+}
 const messageIds = (result: QaBusPollResult) =>
   result.events.flatMap((event) => ("message" in event ? [event.message.id] : []));
 
@@ -149,8 +153,7 @@ describe("qa-bus server", () => {
         text: `hello from ${kind}`,
       });
 
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      await expectSuccess(response, {
         message: { conversation: { id: "alice", kind: "direct" } },
       });
     }
@@ -298,43 +301,33 @@ describe("qa-bus server", () => {
     expect(secondPage.cursor).toBe(101);
   });
 
-  it("rejects malformed poll numeric fields before long-polling", async () => {
+  it.each([
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: "999", timeoutMs: 500 },
+      "poll cursor must be an integer at least 0.",
+      300,
+    ],
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: 1, acknowledgedCursor: 2, timeoutMs: 0 },
+      "acknowledged poll cursor must not exceed the requested poll cursor.",
+      undefined,
+    ],
+    [
+      "/v1/actions/search",
+      { limit: "all", query: "anything" },
+      "search limit must be an integer at least 1.",
+      undefined,
+    ],
+  ] as const)("rejects %s input: %s", async (route, body, error, deadline) => {
     const { post } = await fixture();
-
     const startedAt = Date.now();
-    const response = await post("/v1/poll", {
-      accountId: "acct-a",
-      cursor: "999",
-      timeoutMs: 500,
-    });
-
-    expect(Date.now() - startedAt).toBeLessThan(300);
-    await expectJson(response, 400, { error: "poll cursor must be an integer at least 0." });
-  });
-
-  it("rejects acknowledgements beyond the fetched cursor", async () => {
-    const { post } = await fixture();
-
-    const response = await post("/v1/poll", {
-      accountId: "acct-a",
-      cursor: 1,
-      acknowledgedCursor: 2,
-      timeoutMs: 0,
-    });
-
-    await expectJson(response, 400, {
-      error: "acknowledged poll cursor must not exceed the requested poll cursor.",
-    });
-  });
-
-  it("rejects malformed search limits before querying state", async () => {
-    const { post } = await fixture();
-    const response = await post("/v1/actions/search", {
-      limit: "all",
-      query: "anything",
-    });
-
-    await expectJson(response, 400, { error: "search limit must be an integer at least 1." });
+    const response = await post(route, body);
+    if (deadline) {
+      expect(Date.now() - startedAt).toBeLessThan(deadline);
+    }
+    await expectJson(response, 400, { error });
   });
 
   it.each(["inbound", "outbound"] as const)(
@@ -362,8 +355,7 @@ describe("qa-bus server", () => {
           : { to: "dm:qa-operator" }),
       });
 
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      await expectSuccess(response, {
         message: { direction, attachments: [attachment] },
       });
 
@@ -372,12 +364,6 @@ describe("qa-bus server", () => {
       expect(snapshot.events).toHaveLength(1);
       const storedAttachment = snapshot.messages[0]?.attachments?.[0];
       expect(storedAttachment).toEqual(attachment);
-      const storedImage = Buffer.from(storedAttachment?.contentBase64 ?? "", "base64");
-      expect(storedImage.byteLength).toBe(generatedImage.byteLength);
-      expect(
-        storedImage.equals(generatedImage),
-        "stored attachment bytes match the generated image",
-      ).toBe(true);
     },
   );
 
@@ -398,8 +384,7 @@ describe("qa-bus server", () => {
       limit: 10_000,
       timeoutMs: 60_000,
     });
-    expect(pollResponse.status).toBe(200);
-    await expect(pollResponse.json()).resolves.toMatchObject({
+    await expectSuccess(pollResponse, {
       events: [{ message: { id: message.id } }],
     });
 
@@ -408,8 +393,7 @@ describe("qa-bus server", () => {
       limit: 10_000,
       query: "bounded",
     });
-    expect(searchResponse.status).toBe(200);
-    await expect(searchResponse.json()).resolves.toMatchObject({
+    await expectSuccess(searchResponse, {
       messages: [{ id: message.id }],
     });
 
@@ -417,8 +401,7 @@ describe("qa-bus server", () => {
       "/v1/actions/search",
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
     );
-    expect(extremeSearchResponse.status).toBe(200);
-    await expect(extremeSearchResponse.json()).resolves.toMatchObject({
+    await expectSuccess(extremeSearchResponse, {
       messages: [{ id: message.id }],
     });
   });

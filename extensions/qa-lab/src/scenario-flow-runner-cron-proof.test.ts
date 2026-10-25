@@ -158,8 +158,7 @@ async function runSchedulingFixture(
       const visible = structuredClone(jobs);
       if (restarted && kind === "recurring") {
         visible.splice(0, 1);
-        assert.ok(visible[0]);
-        visible[0].state.nextRunAtMs = now + 100_000;
+        first(visible).state.nextRunAtMs = now + 100_000;
       }
       if (restarted) {
         options.mutateRestartedJobs?.(visible);
@@ -232,16 +231,10 @@ async function runSchedulingFixture(
       },
     },
   );
-  const result = pending.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+  // Observe rejection before advancing timers, then propagate it unchanged.
+  void pending.catch(() => {});
   await vi.runAllTimersAsync();
-  const outcome = await result;
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  return { result: outcome.value, restarted, removed, historyReads };
+  return { result: await pending, restarted, removed, historyReads };
 }
 
 beforeEach(() => {
