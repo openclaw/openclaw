@@ -401,6 +401,7 @@ export function createBrowserResourceScenarios(
       route: deps.route,
       fixture: { browserResources: true },
       resourceOnly: true,
+      observationBrowser: true,
       setup: setupBrowserResources,
       prepare: prepareCards,
       expected:
@@ -481,6 +482,7 @@ export function createBrowserResourceScenarios(
       id: "browser-native-stage-resources",
       route: deps.route,
       resourceOnly: true,
+      observationBrowser: true,
       setup: installSyntheticNativeBrowser,
       prepare: prepareNative,
       expected:
@@ -567,6 +569,7 @@ export function createBrowserResourceScenarios(
         route: deps.route,
         fixture: kind === "cards" ? { browserResources: true } : undefined,
         resourceOnly: true,
+        observationBrowser: true,
         visibility: visibility === "hidden" ? visibility : undefined,
         setup: kind === "cards" ? setupBrowserResources : installSyntheticNativeBrowser,
         prepare: kind === "cards" ? prepareCards : prepareNative,

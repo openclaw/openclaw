@@ -86,6 +86,7 @@ export type InteractionScenario = {
   fixture?: InteractionFixtureOptions;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
+  observationBrowser?: boolean;
   visibility?: "hidden";
   /** Count newly inserted rows across the action, including transient replacements. */
   rowSelector?: string;
