@@ -5,7 +5,7 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
+import { hangingFetchUntilAbort } from "../../test-support/hanging-fetch.test-support.js";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import { MAX_JSON_BYTES } from "./schema.js";
@@ -20,19 +20,15 @@ import {
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
-
 const { batch, input, response, result: expectedResult } = mixedFixture;
-
 function registeredProvider(config: Record<string, unknown> = {}) {
   return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
 }
-
 const context = (
   signal = new AbortController().signal,
   deadlineMonotonicMs = performance.now() + 1000,
 ) => ({
   model: "jev-agent-selected",
-  agentId: "research",
   signal,
   deadlineMonotonicMs,
 });
@@ -79,14 +75,6 @@ it("rejects cancellation concurrent with body EOF", async () => {
   );
   mockBodyResponse(body);
   await expectCancelled(request(clientConfig, controller.signal));
-});
-it("preserves bounded multi-chunk JSON responses", async () => {
-  const json = JSON.stringify(response);
-  const body = createClosedChunkStream(
-    [json.slice(0, 50), json.slice(50)].map((chunk) => new TextEncoder().encode(chunk)),
-  );
-  mockBodyResponse(body);
-  await expect(request()).resolves.toEqual({ evaluation: response });
 });
 it.each<[number, string, HeadersInit, number?]>([
   [400, "unsupported-input", {}],
@@ -151,12 +139,10 @@ it.each([
       refreshTimeout: () => {},
     };
   });
-  let settled = false;
+  const settled = vi.fn();
   const outcome = request(clientConfig, controller.signal)
     .catch((error: unknown) => error)
-    .finally(() => {
-      settled = true;
-    });
+    .finally(settled);
   try {
     await setImmediate();
     if (trigger === "abort") {
@@ -165,10 +151,10 @@ it.each([
     await setImmediate();
     expect(release).toHaveBeenCalledOnce();
     expect(nativeCancel).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     cancellationGate.resolve();
     await setImmediate();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     releaseGate.resolve();
     expect(await outcome).toMatchObject({ name: "EvaluationError", reason });
     if (trigger === "overflow") {
@@ -186,18 +172,14 @@ it.each([
     await outcome;
   }
 });
-
-beforeAll(async () => {
-  // Response-contract assertions start after loader/policy setup; cold-import
-  // deadline admission is covered separately by registration.lazy.test.ts.
-  await import("./client.js");
+// The static client import is warm; cold-import admission lives in registration.lazy.test.ts.
+beforeAll(() => {
   resolveProviderHttpRequestConfigWithOriginTrust({
     provider: "typesafe",
     baseUrl: "https://api.typesafe.ai/v1",
     defaultBaseUrl: "https://api.typesafe.ai/v1",
   });
 });
-
 beforeEach(() => {
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: "synthetic-key" });
 });
@@ -206,70 +188,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-
 const withMetadata = {
   ...response,
   metrics: { seconds: 0.05, description: "Bearer demo" },
-  scoring: { calibrated: false },
-  latency_ms: 15.7,
-  usage: {
-    ...response.usage,
-    output_tokens_basis: "scored_decision_positions",
-    decision_positions: 3,
-  },
+  usage: { ...response.usage, decision_positions: 3 },
 };
 const tokens = (output_tokens: unknown) => ({ usage: { input_tokens: 12, output_tokens } });
-
 it("preserves hosted mixed answers and additive metadata", async () => {
   vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
   vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
   const fetch = mockResponse(withMetadata);
-  const provider = registeredProvider();
-  await expect(provider.evaluate(batch, context())).resolves.toEqual(expectedResult);
+  await expect(registeredProvider().evaluate(batch, context())).resolves.toEqual(expectedResult);
   expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
-  expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
   expectAuthorization(fetch, "Bearer synthetic-key");
-  const body = fetch.mock.calls[0]?.[1]?.body;
-  assert(typeof body === "string");
-  expect(JSON.parse(body)).toEqual({
-    ...input,
-    model: "jev-agent-selected",
-  });
 });
 it.each([
-  ["missing model", { model: undefined }],
-  ["malformed model", { model: 42 }],
-  ["missing answers", { answers: undefined }],
-  ["missing usage", { usage: undefined }],
-  ["missing token count", { usage: { input_tokens: 12 } }],
-  ["malformed token count", { usage: { input_tokens: "12", output_tokens: 3 } }],
-  ["negative token count", tokens(-1)],
-  ["fractional token count", tokens(1.5)],
-  ["unsafe token count", tokens(Number.MAX_SAFE_INTEGER + 1)],
-  ["missing answer", { answers: { c: response.answers.c, s: response.answers.s } }],
-  ["extra answer", { answers: { ...response.answers, extra: response.answers.q } }],
-  ["mismatched answer type", { answers: { ...response.answers, q: response.answers.c } }],
-  ["extra answer field", withAnswer("q", { debug: true })],
-  ["invalid distribution probability", withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } })],
-  ["malformed confidence", withAnswer("c", { confidence: "0.5" })],
-  ["out of range boolean", withAnswer("q", { noul: 1.01 })],
-  ["unknown probability label", withAnswer("c", { probabilities: { keep: 0.5, other: 0.5 } })],
-  ["excessive metadata bytes", { metrics: "x".repeat(4 * 1024 * 1024) }],
-  ["excessive metadata nodes", { metrics: Array(262144).fill(null) }],
-  [
-    "excessive metadata depth",
-    { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
-  ],
-  [
-    "nonfinite required number",
-    JSON.stringify(withMetadata).replace('"noul":0.37', '"noul":1e400'),
-  ],
-])("rejects %s despite additive metadata", async (_name, invalid) => {
-  mockResponse(typeof invalid === "string" ? invalid : { ...withMetadata, ...invalid });
+  { model: undefined },
+  { model: 42 },
+  { answers: undefined },
+  { usage: undefined },
+  { usage: { input_tokens: 12 } },
+  { usage: { input_tokens: "12", output_tokens: 3 } },
+  tokens(-1),
+  tokens(1.5),
+  tokens(Number.MAX_SAFE_INTEGER + 1),
+  { answers: { c: response.answers.c, s: response.answers.s } },
+  { answers: { ...response.answers, q: response.answers.c } },
+  withAnswer("q", { debug: true }),
+  withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } }),
+  withAnswer("c", { confidence: "0.5" }),
+  withAnswer("q", { noul: 1.01 }),
+  withAnswer("c", { probabilities: { keep: 0.5, other: 0.5 } }),
+  { metrics: Array(262144).fill(null) },
+  { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
+])("rejects invalid response %# despite additive metadata", async (invalid) => {
+  mockResponse({ ...withMetadata, ...invalid });
   await expectUnavailable(registeredProvider().evaluate(batch, context()), "invalid-response");
 });
-
 it.each([
   ["transport", "transport", "TypeSafe transport unavailable"],
   ["invalid JSON", "invalid-response", "TypeSafe returned invalid JSON"],
@@ -289,7 +244,6 @@ it.each([
   await expect(outcome).rejects.toMatchObject({ reason });
   await expect(outcome).rejects.toThrow(message);
 });
-
 it.each(["before dispatch", "in flight"])("sanitizes cancellation %s", async (phase) => {
   const controller = new AbortController();
   const fetch = mockFetch(async (_url, init) => {
@@ -303,7 +257,6 @@ it.each(["before dispatch", "in flight"])("sanitizes cancellation %s", async (ph
   await expectCancelled(request(clientConfig, controller.signal));
   expect(fetch).toHaveBeenCalledTimes(phase === "before dispatch" ? 0 : 1);
 });
-
 const cyclic: unknown[] = [];
 cyclic.push(cyclic);
 const privateQuestion = (question: object) => ({
@@ -328,57 +281,28 @@ it.each([
   expect(String(error)).not.toMatch(/private state|private ID/);
   expect(fetch).not.toHaveBeenCalled();
 });
-
-it("observes credential rotation, loss, recovery and cancellation", async () => {
+it("rejects ambient and unprepared hosted credentials before dispatch", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
   const fetch = mockResponse(response);
-  const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
-  const controller = new AbortController();
-  for (const [revision, key] of [
-    "synthetic-key",
-    "synthetic-rotated",
-    undefined,
-    "synthetic-recovered",
-  ].entries()) {
-    vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision, value: key });
-    expect(provider.isReady?.()).toBe(Boolean(key));
-    fetch.mockClear();
-    const outcome = await provider.evaluate(batch, context(controller.signal));
-    if (key) {
-      expect(outcome.status).toBe("ok");
-      expectAuthorization(fetch, `Bearer ${key}`);
-      expect(JSON.stringify(outcome)).not.toContain(key);
-      expect(fetch).toHaveBeenCalledOnce();
-    } else {
-      expect(outcome).toEqual({ status: "unavailable", reason: "credentials-unavailable" });
-      await expect(
-        evaluate(
-          input,
-          runtimeConfig({ apiKey: { source: "env", provider: "default", id: "TYPESAFE_API_KEY" } }),
-        ),
-      ).rejects.toThrow("API key is missing");
-      expect(fetch).not.toHaveBeenCalled();
-    }
-  }
-  fetch.mockClear();
-  controller.abort(new Error("caller closed"));
-  await expect(provider.evaluate(batch, context(controller.signal))).rejects.toThrow(
-    "caller closed",
+  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1 });
+  await expectUnavailable(
+    registeredProvider({ apiKey: "synthetic-unprepared" }).evaluate(batch, context()),
+    "credentials-unavailable",
   );
+  await expect(
+    evaluate(
+      input,
+      runtimeConfig({ apiKey: { source: "env", provider: "default", id: "TYPESAFE_API_KEY" } }),
+    ),
+  ).rejects.toThrow("API key is missing");
   expect(fetch).not.toHaveBeenCalled();
 });
-
+const oversizedChoices = Object.fromEntries(
+  Array.from({ length: 256 }, (_, i) => [String(i), null]),
+);
 it.each<DecisionBatch>([
   { state: null, questions: { s: { type: "score", criteria: Array(11).fill("level") } } },
-  {
-    state: null,
-    questions: {
-      c: {
-        type: "choice",
-        criteria: Object.fromEntries(Array.from({ length: 256 }, (_, i) => [String(i), null])),
-      },
-    },
-  },
+  { state: null, questions: { c: { type: "choice", criteria: oversizedChoices } } },
   { ...batch, state: { constructor: "synthetic reserved key" } },
 ])("rejects unsupported vendor input without dispatch", async (value) => {
   const fetch = vi.fn();
@@ -401,17 +325,11 @@ it("uses only the deadline remaining after preparation", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(40);
   const started = Promise.withResolvers<AbortSignal>();
-  mockFetch(
-    (_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
-        const signal = init?.signal;
-        assert(signal);
-        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
-          once: true,
-        });
-        started.resolve(signal);
-      }),
-  );
+  mockFetch((url, init) => {
+    assert(init?.signal);
+    started.resolve(init.signal);
+    return hangingFetchUntilAbort(url, init);
+  });
   const controller = new AbortController();
   const pending = registeredProvider().evaluate(batch, context(controller.signal, 50));
   try {

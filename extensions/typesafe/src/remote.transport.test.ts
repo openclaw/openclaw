@@ -19,6 +19,7 @@ import type { RuntimeConfig } from "./config.js";
 import {
   collectRequest,
   decisionContext,
+  mixedFixture,
   registeredDecisionProvider,
   stubAmbientProxies,
 } from "./transport.test-support.js";
@@ -72,18 +73,8 @@ async function listen<T extends Server>(listener: T) {
     },
   };
 }
-
 type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
-
-const batch = {
-  state: { evidence: "Synthetic outage" },
-  questions: { q: { type: "boolean" as const } },
-};
-const answer = {
-  model: "nemotron-deciffusion",
-  answers: { q: { type: "noul", noul: 0.75 } },
-  usage: { input_tokens: 8, output_tokens: 1 },
-};
+const { batch, localResponse: answer, result: expectedResult } = mixedFixture;
 const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
 const endpointRef = {
   source: "store",
@@ -101,7 +92,6 @@ let responsePayload: string;
 let fixture: Awaited<ReturnType<typeof listen<ReturnType<typeof createServer>>>>;
 let baseUrl: string;
 let pinnedAddress = "10.123.0.5";
-
 beforeAll(async () => {
   const server = createServer({ key: PROXY_FIXTURE_KEY, cert: tls.ca }, (request, response) => {
     collectRequest(request, () => {
@@ -118,8 +108,7 @@ beforeAll(async () => {
   });
   fixture = await listen(server);
   baseUrl = `https://files.proxy.test:${fixture.port}`;
-  // Network proof starts after host-policy/loader initialization, as on a running
-  // Gateway. Cold import and deadline admission have separate registration.lazy tests.
+  // Cold-import admission lives in registration.lazy.test.ts.
   await import("./client.js");
   resolveProviderHttpRequestConfigWithOriginTrust({
     provider: "typesafe",
@@ -141,9 +130,7 @@ beforeEach(() => {
     ProxyAgent,
     fetch: undiciFetch,
   });
-  vi.mocked(getPreparedPluginSecretInput)
-    .mockReset()
-    .mockReturnValue({ revision: 1, value: "synthetic-hosted-key" });
+  vi.mocked(getPreparedPluginSecretInput).mockReset();
   stubAmbientProxies();
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
 });
@@ -152,7 +139,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
 function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
   return registeredDecisionProvider(() => ({
     models: { providers: { typesafe: typeof source === "function" ? source() : source } },
@@ -191,7 +177,6 @@ const header = (value: string) => ({
   value,
   prefix: "Token ",
 });
-
 const replacement = "replacement";
 const override = "Bearer override";
 const headerAuth = { mode: "header" as const, headerName: "X-API-Key", value: replacement };
@@ -214,29 +199,15 @@ it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | unde
   ],
 ])("uses private HTTPS with %s credentials", async (mode, config, authorization, apiKey) => {
   const registered = provider(
-    settings({
-      ...config,
-      ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
-    }),
+    settings({ ...config, baseUrl: baseUrl + (mode === "bearer" ? "/v1/" : "") }),
   );
-  await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
-    status: "ok",
-    result: {
-      model: "nemotron-deciffusion",
-      answers: { q: { type: "boolean", probabilityTrue: 0.75 } },
-    },
-  });
-  expect(received).toEqual([
-    {
-      url: "/v1/systemone",
-      host: new URL(baseUrl).host,
-      authorization,
-      apiKey,
-    },
+  await expect(registered.evaluate(batch, context())).resolves.toEqual(expectedResult);
+  expect(received.map((request) => [request.authorization, request.apiKey])).toEqual([
+    [authorization, apiKey],
   ]);
+  expect(received[0]).toMatchObject({ url: "/v1/systemone", host: new URL(baseUrl).host });
   expect([...new Set(lookup.mock.calls.map(([host]) => host))]).toEqual(["files.proxy.test"]);
 });
-
 it("honors private-network opt-out and opt-in", async () => {
   await expectUnavailable(evaluate({ request: { allowPrivateNetwork: false, tls } }));
   pinnedAddress = "127.0.0.1";
@@ -246,7 +217,6 @@ it("honors private-network opt-out and opt-in", async () => {
   });
   expect(received).toHaveLength(1);
 });
-
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
   "enforces TLS verification: %s",
   async (failure) => {
@@ -258,7 +228,6 @@ it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
     expect(received).toHaveLength(0);
   },
 );
-
 it.each<Partial<ModelProviderConfig>>([
   { headers: { Authorization: endpointRef } },
   { request: { auth: bearer(endpointRef) } },
@@ -268,7 +237,6 @@ it.each<Partial<ModelProviderConfig>>([
   await expectUnavailable(evaluate(config), "credentials-unavailable");
   expect(lookup).not.toHaveBeenCalled();
 });
-
 it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
   "rejects unsafe DNS answer %s",
   async (address) => {
@@ -276,7 +244,6 @@ it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
     await expectUnavailable(evaluate());
   },
 );
-
 it.each(["https://api.typesafe.ai/v1/systemone", "https://other.proxy.test/sink"])(
   "never follows a redirect to %s",
   async (target) => {
@@ -285,7 +252,6 @@ it.each(["https://api.typesafe.ai/v1/systemone", "https://other.proxy.test/sink"
     expect(received[0]?.host).toBe(new URL(baseUrl).host);
   },
 );
-
 it.each([
   ["origin", { baseUrl: "https://other.proxy.test" }],
   ["policy", { request: { allowPrivateNetwork: false } }],
@@ -303,7 +269,6 @@ it.each([
     await expectUnavailable(registered.evaluate(batch, context()));
   },
 );
-
 it("never bypasses a managed proxy refusal", async () => {
   const connects: string[] = [];
   const proxy = await listen(createHttpServer());
