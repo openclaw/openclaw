@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
@@ -153,13 +154,6 @@ describe("openclaw attach (action)", () => {
     revokeWork = async () => {};
     spawnedChild.emit("close", 0, null);
     await Promise.all(activeActions);
-    const { spawn } = await import("node:child_process");
-    for (const call of vi.mocked(spawn).mock.calls) {
-      const args = call[1];
-      if (Array.isArray(args) && typeof args[2] === "string") {
-        configDirectories.add(dirname(args[2]));
-      }
-    }
     for (const line of logs) {
       if (line.startsWith("{")) {
         const parsed = JSON.parse(line) as { configPath?: string };
@@ -174,35 +168,24 @@ describe("openclaw attach (action)", () => {
     configDirectories.clear();
   });
 
-  it.each([
-    {
-      name: "sanitized wide labels",
-      labels: ["\u001b[31m界界界界界界\u001b[0m", "Alpha"],
-      expectedLines: [
-        "SESSION       ID PREFIX",
-        "界界界界界界  123456780aaa4000",
-        "Alpha         123456780bbb4000",
-      ],
-    },
-  ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {
+  it("renders ambiguous session candidates with sanitized wide labels", async () => {
     const response = {
       ok: false,
       candidates: [
         {
           key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
           agentId: "main",
-          displayName: labels[0],
+          displayName: "\u001b[31m界界界界界界\u001b[0m",
         },
         {
           key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
           agentId: "main",
-          displayName: labels[1],
+          displayName: "Alpha",
         },
       ],
     } satisfies SessionsResolveResult;
     const gateway = vi.mocked(callGateway);
     const originalImplementation = gateway.getMockImplementation();
-    const { spawn } = await import("node:child_process");
     const spawnCount = vi.mocked(spawn).mock.calls.length;
     gateway.mockReset();
     // Any request after resolution must fail before a grant can reach config writing or spawn.
@@ -216,7 +199,9 @@ describe("openclaw attach (action)", () => {
       expect(error.message).toBe(
         [
           "Session reference is ambiguous:",
-          ...expectedLines,
+          "SESSION       ID PREFIX",
+          "界界界界界界  123456780aaa4000",
+          "Alpha         123456780bbb4000",
           "Pass a longer reference. Run `openclaw sessions list` to choose a full session key.",
         ].join("\n"),
       );
@@ -242,14 +227,14 @@ describe("openclaw attach (action)", () => {
       "--print-config",
     );
 
-    expect(gatewayCalls.find((call) => call.method === "agents.list")).toMatchObject({
+    expect(calls("agents.list")[0]).toMatchObject({
       url: "wss://gateway.example/base",
       token: "explicit-token",
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.read"],
       params: {},
     });
-    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+    expect(calls("attach.grant")[0]).toMatchObject({
       url: "wss://gateway.example/base",
       token: "explicit-token",
       useStoredDeviceAuth: true,
@@ -258,7 +243,7 @@ describe("openclaw attach (action)", () => {
     });
     const printed = JSON.parse(logs[0]!) as { configPath: string };
     expect(existsSync(printed.configPath)).toBe(true);
-    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+    expect(calls("attach.revoke")).toEqual([]);
   });
 
   it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
@@ -268,75 +253,71 @@ describe("openclaw attach (action)", () => {
 
       await runAttach(target, "--print-config");
 
-      expect(gatewayCalls.find((call) => call.method === "attach.grant")?.params).toMatchObject({
+      expect(calls("attach.grant")[0]?.params).toMatchObject({
         sessionKey: "global",
         agentId: "ops",
       });
     },
   );
 
-  it.each(["1e3"])("rejects malformed --ttl %s before minting", async (ttl) => {
-    await runAttach("--ttl", ttl, "--print-config");
+  it("rejects malformed --ttl before minting", async () => {
+    await runAttach("--ttl", "1e3", "--print-config");
     expect(exitCode).toBe(1);
     expect(logs.join("\n")).toContain("--ttl must be a positive integer of milliseconds");
-    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
+    expect(calls("attach.grant")).toEqual([]);
   });
 
-  it.each([{ code: null, signal: "SIGTERM", expected: 143 }] as const)(
-    "joins child close and revoke before unwinding with $expected",
-    async ({ code, signal, expected }) => {
-      const allowRevoke = createDeferred();
-      revokeWork = () => allowRevoke.promise;
-      vi.mocked(defaultRuntime.exit).mockImplementation((value) => {
-        throw new ExitError(value);
-      });
-      const beforeInt = process.listeners("SIGINT");
-      const beforeTerm = process.listeners("SIGTERM");
-      const action = runAttach("--session", "agent:main:spawn");
-      const outcome = action.catch((error: unknown) => error);
-      await waitForSpawn(action);
-      const { spawn } = await import("node:child_process");
-      const args = vi.mocked(spawn).mock.calls.at(-1)?.[1];
-      expect(args).toEqual([
-        "--strict-mcp-config",
-        "--mcp-config",
-        expect.stringContaining(".mcp.json"),
-      ]);
-      const configPath = Array.isArray(args) ? args[2] : undefined;
-      if (typeof configPath !== "string") {
-        throw new Error("missing spawned MCP config path");
-      }
-      expect(existsSync(configPath)).toBe(true);
-      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual(mcpConfig);
-      const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
-      const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
-      expect(onSigint).toBeTypeOf("function");
-      onSigint?.("SIGINT");
-      expect(spawnedChild.kill).not.toHaveBeenCalled();
-      onSigterm?.("SIGTERM");
-      expect(spawnedChild.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-      spawnedChild.emit("exit", code, signal);
-      expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+  it("joins child close and revoke before unwinding with 143", async () => {
+    const allowRevoke = createDeferred();
+    revokeWork = () => allowRevoke.promise;
+    vi.mocked(defaultRuntime.exit).mockImplementation((value) => {
+      throw new ExitError(value);
+    });
+    const beforeInt = process.listeners("SIGINT");
+    const beforeTerm = process.listeners("SIGTERM");
+    const action = runAttach("--session", "agent:main:spawn");
+    const outcome = action.catch((error: unknown) => error);
+    await waitForSpawn(action);
+    const args = vi.mocked(spawn).mock.calls.at(-1)?.[1];
+    expect(args).toEqual([
+      "--strict-mcp-config",
+      "--mcp-config",
+      expect.stringContaining(".mcp.json"),
+    ]);
+    const configPath = Array.isArray(args) ? args[2] : undefined;
+    if (typeof configPath !== "string") {
+      throw new Error("missing spawned MCP config path");
+    }
+    expect(existsSync(configPath)).toBe(true);
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual(mcpConfig);
+    const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
+    const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
+    expect(onSigint).toBeTypeOf("function");
+    onSigint?.("SIGINT");
+    expect(spawnedChild.kill).not.toHaveBeenCalled();
+    onSigterm?.("SIGTERM");
+    expect(spawnedChild.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    spawnedChild.emit("exit", null, "SIGTERM");
+    expect(calls("attach.revoke")).toEqual([]);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    spawnedChild.emit("close", null, "SIGTERM");
+    try {
+      await awaitGateBeforeSettlement(
+        revokeStarted.promise,
+        action,
+        "attach skipped grant revocation",
+      );
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      spawnedChild.emit("close", code, signal);
-      try {
-        await awaitGateBeforeSettlement(
-          revokeStarted.promise,
-          action,
-          "attach skipped grant revocation",
-        );
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-        expect(existsSync(configPath)).toBe(true);
-      } finally {
-        allowRevoke.resolve();
-      }
-      expect(await outcome).toEqual(new ExitError(expected));
-      expect(calls("attach.revoke")).toHaveLength(1);
-      expect(existsSync(configPath)).toBe(false);
-      expect(process.listeners("SIGINT")).toEqual(beforeInt);
-      expect(process.listeners("SIGTERM")).toEqual(beforeTerm);
-    },
-  );
+      expect(existsSync(configPath)).toBe(true);
+    } finally {
+      allowRevoke.resolve();
+    }
+    expect(await outcome).toEqual(new ExitError(143));
+    expect(calls("attach.revoke")).toHaveLength(1);
+    expect(existsSync(configPath)).toBe(false);
+    expect(process.listeners("SIGINT")).toEqual(beforeInt);
+    expect(process.listeners("SIGTERM")).toEqual(beforeTerm);
+  });
 
   it("revokes once and surfaces a launch failure when the child errors", async () => {
     const exit = new ExitError(1);
@@ -364,7 +345,6 @@ describe("openclaw attach (action)", () => {
       const release = createDeferred();
       const cancelled = new Error("attach command cancelled");
       responseGate = { method, entered: entered.resolve, release: release.promise };
-      const { spawn } = await import("node:child_process");
       const spawnCount = vi.mocked(spawn).mock.calls.length;
       const configCount = vi.mocked(mkdtempSync).mock.calls.length;
       const action = scope.track(() =>
@@ -408,7 +388,6 @@ describe("openclaw attach (action)", () => {
   );
 
   it("revokes the minted grant if spawning throws synchronously", async () => {
-    const { spawn } = await import("node:child_process");
     const failure = new Error("spawn rejected");
     vi.mocked(spawn).mockImplementationOnce(() => {
       throw failure;
@@ -459,6 +438,6 @@ describe("openclaw attach (action)", () => {
     await runAttach("--print-config");
     expect(exitCode).toBe(1);
     expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
-    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+    expect(calls("attach.revoke")).toEqual([]);
   });
 });

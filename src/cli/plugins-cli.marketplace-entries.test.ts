@@ -66,6 +66,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = mocks.defaultRuntime;
 const loadFeed = mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries;
 const output = () => runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+const expectJson = (value: object) =>
+  expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining(value));
 const privateUrl = "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag";
 const calendar = {
   name: "@acme/calendar",
@@ -146,21 +148,19 @@ describe("plugins marketplace entries", () => {
     );
     await marketplaceCommand(["entries", "--feed-profile", "acme", "--offline", "--json"]);
     expect(loadFeed).toHaveBeenCalledWith({ feedProfile: "acme", offline: true });
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "hosted-snapshot",
-        entryCount: 1,
-        entries: [
-          expect.objectContaining({
-            id: "acme-calendar",
-            label: "Acme Calendar",
-            name: "@acme/calendar",
-            version: "1.2.3",
-            install: expect.objectContaining({ npmSpec: "@acme/calendar@1.2.3" }),
-          }),
-        ],
-      }),
-    );
+    expectJson({
+      source: "hosted-snapshot",
+      entryCount: 1,
+      entries: [
+        expect.objectContaining({
+          id: "acme-calendar",
+          label: "Acme Calendar",
+          name: "@acme/calendar",
+          version: "1.2.3",
+          install: expect.objectContaining({ npmSpec: "@acme/calendar@1.2.3" }),
+        }),
+      ],
+    });
   });
 
   it.each(["metadata", "override"])(
@@ -180,14 +180,10 @@ describe("plugins marketplace entries", () => {
       );
       const feedUrl = source === "override" ? rawUrl : undefined;
       await entries({ feedUrl, json: true });
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...(source === "metadata"
-            ? { metadata: expect.objectContaining({ url: publicUrl }) }
-            : {}),
-          error: `feed fetch failed for ${publicUrl}`,
-        }),
-      );
+      expectJson({
+        ...(source === "metadata" ? { metadata: expect.objectContaining({ url: publicUrl }) } : {}),
+        error: `feed fetch failed for ${publicUrl}`,
+      });
       expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain("token=secret");
       await entries({ feedUrl });
       expect(output()).toContain(publicUrl);
@@ -238,13 +234,11 @@ describe("plugins marketplace refresh", () => {
         requireSnapshotWrite: true,
       });
       expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
-      expect(runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source: "hosted",
-          entries: 1,
-          metadata: expect.objectContaining({ checksum: "sha256:abcdef" }),
-        }),
-      );
+      expectJson({
+        source: "hosted",
+        entries: 1,
+        metadata: expect.objectContaining({ checksum: "sha256:abcdef" }),
+      });
       expect(runtime.log).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
         "Marketplace catalog saved for the next Gateway start.",
@@ -277,44 +271,37 @@ describe("plugins marketplace refresh", () => {
     });
   });
 
-  it("rejects a pinned refresh when the feed falls back", async () => {
-    loadFeed.mockResolvedValue({
-      source: "bundled-fallback",
-      entries: [{ name: "@openclaw/acpx" }],
-      error: "hosted catalog feed checksum mismatch: expected sha256:expected",
-      metadata: {
-        url: "https://clawhub.ai/v1/feeds/plugins",
-        status: 200,
-        checksum: "sha256:actual",
-      },
-    });
-    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-      "exit 1",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "bundled-fallback" }),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
-  });
-
-  it("rejects a pinned snapshot without corrupting JSON", async () => {
-    loadFeed.mockResolvedValue(feed({ source: "hosted-snapshot" }));
-    await expect(refresh({ json: true, expectedSha256: "sha256:expected" })).rejects.toThrow(
-      "exit 1",
-    );
-    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ source: "hosted-snapshot" }),
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
-    );
-  });
+  it.each(["bundled-fallback", "hosted-snapshot"] as const)(
+    "rejects a pinned %s refresh without corrupting JSON",
+    async (source) => {
+      loadFeed.mockResolvedValue(
+        source === "hosted-snapshot"
+          ? feed({ source })
+          : {
+              source,
+              entries: [{ name: "@openclaw/acpx" }],
+              error: "hosted catalog feed checksum mismatch: expected sha256:expected",
+              metadata: {
+                url: "https://clawhub.ai/v1/feeds/plugins",
+                status: 200,
+                checksum: "sha256:actual",
+              },
+            },
+      );
+      await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
+        "exit 1",
+      );
+      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ source }),
+      );
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${source}).`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("keeps offline refresh successful and next-start notices off JSON stdout", async () => {
     loadFeed.mockResolvedValue(feed());
@@ -387,22 +374,15 @@ describe("plugins marketplace list", () => {
         },
       ],
     };
-    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
-      ok: true,
-      sourceLabel: source,
-      manifest: injected,
-    }));
+    const injectedResult = { ok: true, sourceLabel: source, manifest: injected };
+    mocks.listMarketplacePlugins.mockResolvedValueOnce(injectedResult);
 
     await list(source, { json: true });
     expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
     expect(runtime.log).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
-    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
-      ok: true,
-      sourceLabel: source,
-      manifest: injected,
-    }));
+    mocks.listMarketplacePlugins.mockResolvedValueOnce(injectedResult);
     await list(source, { json: false });
     const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
     expect(human).not.toContain("\u001b");
