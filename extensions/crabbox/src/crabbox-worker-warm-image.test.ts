@@ -3,8 +3,9 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
-import { expectText } from "./crabbox-warm-scenarios.test-support.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
+import { scenario } from "./crabbox-warm-provider-scenarios.test-support.js";
+import { expectText, updateWarmImage } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -145,11 +146,11 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   fs.symlinkSync(process.execPath, runtimeNode);
   fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
-  for (const file of retained) {
+  for (const file of [
+    ...retained,
+    ...removed.map((directory) => path.join(directory, "fixture")),
+  ]) {
     write(file);
-  }
-  for (const directory of removed) {
-    write(path.join(directory, "fixture"));
   }
   write(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
   write(scrubScript, scrubInput);
@@ -211,10 +212,9 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   }
   expect(fs.existsSync(runtime)).toBe(true);
   expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
-  for (const file of removed) {
+  for (const file of [...removed, egressEnvFile]) {
     expect(fs.existsSync(file)).toBe(false);
   }
-  expect(fs.existsSync(egressEnvFile)).toBe(false);
   for (const file of retained) {
     expect(fs.readFileSync(file, "utf8")).toBe("synthetic retained bytes");
   }
@@ -286,28 +286,23 @@ it.each([
 );
 
 it("recovers enrolled class after restart", async () => {
-  const initial = createWarmProvider();
-  const lease = await provisionWarmProfile(initial.provider, PROFILE, OPERATION_ID, "fast");
+  const initial = scenario();
+  const lease = await initial.provision(OPERATION_ID, PROFILE, { machineClass: "fast" });
   await initial.provider.dispose();
 
-  const restarted = createWarmProvider(undefined, initial.stateDir);
+  const restarted = scenario(undefined, initial.stateDir);
   await restarted.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
-  await destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE });
+  await restarted.stop(lease);
 
-  expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+  expect(restarted.checkpoints("create")).toHaveLength(1);
 
   for (const [digit, machineClass] of [
     ["1", "standard"],
     ["2", "fast"],
   ] as const) {
     restarted.calls.length = 0;
-    await provisionWarmProfile(
-      restarted.provider,
-      PROFILE,
-      `provision:v2:${digit.repeat(64)}`,
-      machineClass,
-    );
-    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    await restarted.provision(`provision:v2:${digit.repeat(64)}`, PROFILE, { machineClass });
+    const fork = restarted.checkpoints("fork")[0];
     if (machineClass === "standard") {
       expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
       expect(fork).toBeUndefined();
@@ -344,7 +339,7 @@ it("does not change a checkpoint-bound lease to cold when the fork fails", async
 });
 
 it("verifies an unverified pending image before falling back to cold", async () => {
-  const { provider, calls } = createWarmProvider(({ argv }) =>
+  const s = scenario(({ argv }) =>
     argv[2] === "inspect"
       ? jsonResult({
           localState: "metadata_available",
@@ -353,16 +348,14 @@ it("verifies an unverified pending image before falling back to cold", async () 
         })
       : undefined,
   );
-  await captureWarmImage(provider);
+  await s.capture();
   // Older captures can retain a pending projection; verify that stored state on reuse.
-  const store = openWarmImageStore();
-  const { key, value } = store.entries()[0]!;
-  store.update(key, () => ({ ...value, image: { ...value.image!, state: "pending" } }));
-  calls.length = 0;
+  updateWarmImage({ state: "pending" });
+  s.calls.length = 0;
 
-  const lease = await provisionWarmProfile(provider);
+  const lease = await s.provision();
 
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-  await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
-  expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+  expect(s.commands("warmup").length).toBeGreaterThan(0);
+  await s.stop(lease);
+  expect(s.checkpoints("create")).toEqual([]);
 });

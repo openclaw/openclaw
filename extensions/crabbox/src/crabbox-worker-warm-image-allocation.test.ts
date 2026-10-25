@@ -23,13 +23,15 @@ import {
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
 
+type ManagerOptions = Parameters<typeof createCrabboxWarmImageManager>[0];
+const available = (providerState = "available", nextAction = "fork_or_delete") =>
+  jsonResult({ localState: "metadata_available", providerState, nextAction });
+
 function fixture(
   failCreate = false,
   onCommand?: (argv: string[]) => ReturnType<typeof commandResult> | void,
   policy?: CrabboxWarmImagePolicy,
-  prepareCapture: Parameters<
-    typeof createCrabboxWarmImageManager
-  >[0]["prepareCapture"] = async () => {},
+  prepareCapture: ManagerOptions["prepareCapture"] = async () => {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
@@ -53,11 +55,7 @@ function fixture(
       );
     }
     if (argv[2] === "inspect") {
-      return jsonResult({
-        localState: "metadata_available",
-        providerState: "available",
-        nextAction: "fork_or_delete",
-      });
+      return available();
     }
     if (argv[2] === "fork") {
       return jsonResult({
@@ -367,13 +365,7 @@ it.each([
         return commandResult({ code: 2, stderr: `checkpoint ${CHECKPOINT_ID} not found` });
       }
       return argv[2] === "inspect"
-        ? commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState,
-              nextAction: providerState === "missing" ? "forget" : "fork_or_delete",
-            }),
-          })
+        ? available(providerState, providerState === "missing" ? "forget" : "fork_or_delete")
         : undefined;
     });
     await publish(owner, context("cbx_source"));
@@ -400,16 +392,9 @@ it.each([
 );
 
 it("starts incompatible preparation cold and retains its missing pinned predecessor", async () => {
-  const { owner, projectContext, calls } = fixture(false, (argv) => {
-    if (argv[2] === "inspect") {
-      return jsonResult({
-        localState: "metadata_available",
-        providerState: "missing",
-        nextAction: "delete_local",
-      });
-    }
-    return undefined;
-  });
+  const { owner, projectContext, calls } = fixture(false, (argv) =>
+    argv[2] === "inspect" ? available("missing", "delete_local") : undefined,
+  );
   await publish(owner, projectContext("cbx_source"), "a".repeat(40));
   await owner.pin(CHECKPOINT_ID, true);
   const predecessor = structuredClone(record()!.image);

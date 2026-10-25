@@ -34,11 +34,11 @@ const PROFILE_METADATA = {
   projectLabel: "git.example.test/team/project",
   projectRoot: "/projects/example",
 };
-const invalidRequest = (respond: ReturnType<typeof vi.fn>) =>
+const expectError = (respond: ReturnType<typeof vi.fn>, code = "INVALID_REQUEST") =>
   expect(respond).toHaveBeenCalledWith(
     false,
     expect.any(Object),
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
+    expect.objectContaining({ code }),
   );
 
 beforeEach(async () => {
@@ -110,6 +110,29 @@ async function createActions() {
   };
 }
 
+async function list(api = createApi(), params: unknown = {}) {
+  const respond = vi.fn();
+  await listCrabboxImages(api, { params, respond });
+  return respond;
+}
+
+async function mutate(
+  actions: CrabboxSnapshotActions,
+  action: Parameters<typeof mutateCrabboxImage>[2],
+  params: unknown,
+  api = createApi(),
+) {
+  const respond = vi.fn();
+  await mutateCrabboxImage(api, actions, action, { params, respond });
+  return respond;
+}
+
+async function recover(params: unknown) {
+  const respond = vi.fn();
+  await recoverCrabboxImage(crabboxState, { params, respond });
+  return respond;
+}
+
 describe("Crabbox snapshot mutations", () => {
   it.each(["pin", "delete"] as const)(
     "rejects malformed %s requests before calling the owner",
@@ -130,9 +153,7 @@ describe("Crabbox snapshot mutations", () => {
           ? [{ checkpointId: "chk_fixture" }, { checkpointId: "chk_fixture", pinned: "true" }]
           : [{ ...valid, pinned: true }]),
       ]) {
-        const respond = vi.fn();
-        await mutateCrabboxImage(createApi(), actions, action, { params, respond });
-        invalidRequest(respond);
+        expectError(await mutate(actions, action, params));
       }
       expect(actions[action]).not.toHaveBeenCalled();
     },
@@ -148,11 +169,7 @@ describe("Crabbox snapshot mutations", () => {
         other: { provider: "other", settings: {} },
       },
     };
-    const respond = vi.fn();
-    await mutateCrabboxImage(api, actions, "delete", {
-      params: { checkpointId: "chk_fixture" },
-      respond,
-    });
+    const respond = await mutate(actions, "delete", { checkpointId: "chk_fixture" }, api);
     expect(actions.delete).toHaveBeenCalledWith("chk_fixture", [SETTINGS]);
     expect(respond).toHaveBeenCalledWith(true, { status: "retiring" });
   });
@@ -166,11 +183,7 @@ describe("Crabbox snapshot mutations", () => {
       actions.rollback.mockImplementation(() => {
         throw error;
       });
-      const respond = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, "rollback", {
-        params: { checkpointId: "chk_fixture" },
-        respond,
-      });
+      const respond = await mutate(actions, "rollback", { checkpointId: "chk_fixture" });
       expect(respond).toHaveBeenCalledWith(
         false,
         { error: error.message },
@@ -218,9 +231,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       message: "Native checkpoints are unsupported for this coordinator target.",
     };
     store.register("older", { version: 3, allocations: {}, captureUnsupported });
-    const respond = vi.fn();
-
-    await listCrabboxImages(createApi(), { params: {}, respond });
+    const respond = await list();
 
     expect(respond).toHaveBeenCalledWith(true, {
       images: expect.arrayContaining([
@@ -260,10 +271,9 @@ describe("Crabbox snapshots Gateway methods", () => {
       delete: async () => ({ status: "deleted" }),
     };
     for (const action of ["pin", "rollback"] as const) {
-      const mutationResponse = vi.fn();
-      await mutateCrabboxImage(createApi(), actions, action, {
-        params: { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: true } : {}) },
-        respond: mutationResponse,
+      const mutationResponse = await mutate(actions, action, {
+        checkpointId: "chk_fixture",
+        ...(action === "pin" ? { pinned: true } : {}),
       });
       expect(mutationResponse).toHaveBeenCalledWith(true, summary);
     }
@@ -272,8 +282,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it("uses current configured defaults without resolving secrets or including other providers", async () => {
     const api = createApi();
-    const respond = vi.fn();
-    await listCrabboxImages(api, { params: {}, respond });
+    const respond = await list(api);
     expect(respond.mock.calls[0]![1].profiles).toEqual(
       (
         [
@@ -294,9 +303,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       })),
     );
     api.config = {};
-    respond.mockClear();
-    await listCrabboxImages(api, { params: {}, respond });
-    expect(respond.mock.calls[0]![1].profiles).toEqual([]);
+    expect((await list(api)).mock.calls[0]![1].profiles).toEqual([]);
   });
 
   it.each([
@@ -306,20 +313,15 @@ describe("Crabbox snapshots Gateway methods", () => {
   ])("refuses invalid recovery params without changing capture ownership: %j", async (params) => {
     const current = record();
     openWarmImageStore().register("profile", current);
-    const respond = vi.fn();
-    await recoverCrabboxImage(crabboxState, { params, respond });
-    invalidRequest(respond);
+    expectError(await recover(params));
     expect(openWarmImageStore().lookup("profile")).toEqual(current);
   });
 
   it("recovers the exact acknowledged capture and returns the CLI result shape", async () => {
     const current = record();
     openWarmImageStore().register("profile", current);
-    const respond = vi.fn();
-    await recoverCrabboxImage(crabboxState, {
-      params: { selector: SELECTOR, acknowledgeProviderCleanup: true },
-      respond,
-    });
+    const params = { selector: SELECTOR, acknowledgeProviderCleanup: true };
+    const respond = await recover(params);
     expect(respond).toHaveBeenCalledWith(true, {
       images: [expect.objectContaining({ checkpointId: "chk_fixture", capture: undefined })],
       legacyLeases: [],
@@ -330,16 +332,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       ...current,
       operation: undefined,
     });
-    respond.mockClear();
-    await recoverCrabboxImage(crabboxState, {
-      params: { selector: SELECTOR, acknowledgeProviderCleanup: true },
-      respond,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.any(Object),
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expectError(await recover(params), "UNAVAILABLE");
   });
 
   it("reports legacy allocations with doctor guidance and recovers only the acknowledged row", async () => {
@@ -349,8 +342,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     });
     legacy.register("cbx_legacy", { machineClass: "standard" });
     const selector = (await listCrabboxLegacyWarmLeases(crabboxState))[0]!.selector;
-    const respond = vi.fn();
-    await listCrabboxImages(createApi(), { params: {}, respond });
+    const respond = await list();
     expect(respond.mock.calls[0]![1].legacyLeases).toEqual([
       {
         leaseId: "cbx_legacy",
@@ -361,16 +353,11 @@ describe("Crabbox snapshots Gateway methods", () => {
         ),
       },
     ]);
-    await recoverCrabboxImage(crabboxState, {
-      params: { selector, acknowledgeProviderCleanup: true },
-      respond,
-    });
+    await recover({ selector, acknowledgeProviderCleanup: true });
     expect(legacy.lookup("cbx_legacy")).toBeUndefined();
   });
 
   it("rejects list parameters before accessing state", async () => {
-    const respond = vi.fn();
-    await listCrabboxImages(createApi(), { params: { selector: SELECTOR }, respond });
-    invalidRequest(respond);
+    expectError(await list(createApi(), { selector: SELECTOR }));
   });
 });
