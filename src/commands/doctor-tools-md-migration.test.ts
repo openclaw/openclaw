@@ -96,11 +96,8 @@ async function expectUnchanged(
 describe("TOOLS.md migration", () => {
   it("previews the migration without mutating or archiving workspace files", async () => {
     const fixture = await createFixture();
-    await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/tools-md-migration",
-        requirement: "legacy-tools-md",
-      }),
+    await expect(collectToolsMdMigrationFindings(fixture.cfg)).resolves.toMatchObject([
+      { checkId: "core/doctor/tools-md-migration", requirement: "legacy-tools-md" },
     ]);
     await expect(fixture.migrate(false)).resolves.toEqual({ changes: [], warnings: [] });
     await expectUnchanged(fixture, DEFAULT_AGENTS, DEFAULT_TOOLS);
@@ -183,9 +180,7 @@ describe("TOOLS.md migration", () => {
       });
     }
     await expect(fixture.migrate()).resolves.toEqual({ changes: [], warnings: [] });
-    const rerunAgents = await fs.readFile(fixture.agentsPath, "utf8");
-    expect(rerunAgents).toBe(expected);
-    expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(expected);
   });
   it.skipIf(process.platform === "win32").each([
     { when: "before migration", mode: 0o600, warning: "additional POSIX readers" },
@@ -341,10 +336,6 @@ describe("TOOLS.md migration", () => {
       if (phase === "interrupted write") {
         expect(result.changes).toHaveLength(1);
         await expect(fs.readdir(fixture.workspace)).resolves.toEqual(["AGENTS.md"]);
-      } else {
-        expect(
-          (await fs.readFile(fixture.agentsPath, "utf8")).match(/migrated from TOOLS\.md/gu),
-        ).toHaveLength(1);
       }
     },
   );

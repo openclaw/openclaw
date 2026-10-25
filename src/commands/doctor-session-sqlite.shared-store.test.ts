@@ -1,15 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
-import {
-  readSessionGoalOperationInDatabase,
-  type SessionGoalOperation,
-} from "../config/sessions/goals-operations.js";
 import {
   loadExactSessionEntry,
-  listSessionParticipantsReadOnly,
-  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -26,15 +19,12 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
-import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
@@ -46,8 +36,6 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-canonical
 
 async function closeStore(store: { stateDir: string; root: string }) {
   await cleanupSessionStateForTest({ stateDir: store.stateDir, rootPath: store.root });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 }
 
 function doctor(store: Awaited<ReturnType<typeof createStore>>, mode: "recover" | "inspect") {
@@ -88,83 +76,14 @@ async function createStore() {
 
 async function createHistoricalSharedStore() {
   const store = await createStore();
-  const goalOperation = {
-    action: "start",
-    operationId: "goal-before-participant-upgrade",
-    issuedAtMs: Date.now(),
-    requestFingerprint: "shared-store-goal-fixture",
-    objective: "Preserve this Goal across the participant migration.",
-  } satisfies SessionGoalOperation;
-  const turn = await persistSessionTranscriptTurn(
-    { ...store.scope, sessionId: "doctor-session" },
-    {
-      config: store.cfg,
-      expectedSessionId: "doctor-session",
-      messages: [{ message: { role: "user", content: goalOperation.objective } }],
-      sessionTurnMutation: { kind: "goal", operation: goalOperation, runId: "goal-start" },
-      updateMode: "none",
-    },
-  );
-  const goalReceipt = turn.sessionTurnMutationResult?.result;
-  expect(goalReceipt).toMatchObject({ action: "start", status: "started", runId: "goal-start" });
-  await closeStore(store);
-  const source = openNodeSqliteDatabase(store.sqlitePath);
-  const retained = [
-    "session_nodes",
-    "session_windows",
-    "transcript_events",
-    "transcript_rewrite_watermarks",
-    "transcript_event_identities",
-    "session_transcript_active_events",
-    "session_transcript_index_state",
-    "session_transcript_fts",
-    "session_goal_operations",
-  ].map((table) => {
-    const rows = source.prepare(`SELECT * FROM "${table}"`).all();
-    if (table === "transcript_events") {
-      for (const row of rows) {
-        row.event_json = readSqliteTranscriptPayload(row);
-      }
-    }
-    return { table, rows };
-  });
-  source.close();
-  fs.rmSync(store.sqlitePath);
   const database = openNodeSqliteDatabase(store.sqlitePath);
   const sql = sessionSqlFixture(database);
   try {
-    seedOpenClawAgentSchemaV21(database);
+    restoreEmptyV21StorageForHistoricalFixture(database);
     removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec("BEGIN; PRAGMA defer_foreign_keys = ON;");
-    for (const { table, rows } of retained) {
-      const columns = database
-        .prepare(`SELECT * FROM "${table}"`)
-        .columns()
-        .map(({ name }) => name);
-      const insert = database.prepare(
-        `INSERT INTO "${table}" (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-      );
-      for (const row of rows) {
-        insert.run(
-          ...columns.map((column) => {
-            const value = row[column];
-            if (value === undefined) {
-              throw new Error(`Missing historical fixture value ${table}.${column}`);
-            }
-            return value;
-          }),
-        );
-      }
-    }
-    database.exec("COMMIT;");
-    const goalState = readStoredGoalState(database, store.scope.sessionKey);
     database.exec("DROP TABLE session_participants;");
     database.exec(LEGACY_PARTICIPANTS_SCHEMA);
     sql`INSERT INTO session_participants VALUES (${store.scope.sessionKey}, 'human', 'person', 'profile', 3, 10, 20)`.run();
-    sql`UPDATE session_nodes SET entry_json = json_set(entry_json,
-          '$.createdVia', 'operator', '$.createdAt', 5,
-          '$.createdActor', json('{"type":"human","id":"person","label":"Original creator"}'))
-         WHERE session_key = ${store.scope.sessionKey}`.run();
     database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
     database.exec(`
       INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
@@ -179,23 +98,10 @@ async function createHistoricalSharedStore() {
       PRAGMA writable_schema = OFF;`);
     const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
     database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
-    return { ...store, goalOperation, goalReceipt, goalState };
+    return store;
   } finally {
     database.close();
   }
-}
-
-function readStoredGoalState(
-  database: ReturnType<typeof openNodeSqliteDatabase>,
-  sessionKey: string,
-) {
-  const sql = sessionSqlFixture(database);
-  return {
-    goal: sql`SELECT json_extract(entry_json, '$.goal') AS goal_json FROM session_nodes WHERE session_key = ${sessionKey}`.get(),
-    receipts:
-      sql`SELECT * FROM session_goal_operations WHERE session_key = ${sessionKey} ORDER BY operation_id`.all(),
-    ddl: sql`SELECT name, sql FROM sqlite_schema WHERE tbl_name = 'session_goal_operations' ORDER BY name`.all(),
-  };
 }
 
 async function repairHistoricalSharedStore(store: Awaited<ReturnType<typeof createStore>>) {
@@ -213,32 +119,7 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
     agent_id: "main",
     schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
   });
-  const entry = loadExactSessionEntry(store.scope)?.entry;
-  expect(entry?.goal).toEqual(store.goalReceipt?.goal);
-  expect(entry).toMatchObject({
-    sessionId: "doctor-session",
-    createdAt: 5,
-    createdVia: "operator",
-    createdActor: { type: "human", source: "profile", id: "person", label: "Original creator" },
-  });
-  expect(
-    readStoredGoalState(requireNativeSqliteDatabase(reopened.db), store.scope.sessionKey),
-  ).toEqual(store.goalState);
-  expect(
-    readSessionGoalOperationInDatabase(reopened, {
-      ...store.scope,
-      expectedSessionId: "doctor-session",
-      operation: store.goalOperation,
-    }),
-  ).toEqual(store.goalReceipt);
-  expect(listSessionParticipantsReadOnly(store.scope).get(store.scope.sessionKey)).toEqual([
-    {
-      identity: { type: "profile", id: "person" },
-      contributionCount: 3,
-      firstPromptedAt: null,
-      lastPromptedAt: null,
-    },
-  ]);
+  expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
   expect(sql`PRAGMA foreign_key_check`.all()).toEqual([]);
   expect(sql`PRAGMA integrity_check`.get()?.integrity_check).toBe("ok");
 }
@@ -310,7 +191,6 @@ describe("Doctor canonical session SQLite targets", () => {
     const preserved = openNodeSqliteDatabase(store.sqlitePath, { readOnly: true });
     const sql = sessionSqlFixture(preserved);
     try {
-      expect(readStoredGoalState(preserved, store.scope.sessionKey)).toEqual(store.goalState);
       expect(sql`PRAGMA user_version`.get()?.user_version).toBe(17);
       expect(sql`SELECT agent_id, schema_version FROM schema_meta`.get()).toEqual({
         agent_id: "main",

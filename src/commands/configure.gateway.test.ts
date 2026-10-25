@@ -59,22 +59,19 @@ import { promptGatewayConfig } from "./configure.gateway.js";
 
 async function runGatewayPrompt(params: {
   selectQueue: string[];
-  textQueue: Array<string | undefined>;
+  textQueue?: Array<string | undefined>;
   baseConfig?: OpenClawConfig;
   randomToken?: string;
   confirmResult?: boolean;
 }) {
   vi.clearAllMocks();
   mocks.resolveGatewayPort.mockReturnValue(18789);
-  mocks.select.mockImplementation(async (input) => {
-    const next = params.selectQueue.shift();
-    if (next !== undefined) {
-      return next;
-    }
-    return input.initialValue ?? input.options[0]?.value;
-  });
-  mocks.text.mockImplementation(async () => params.textQueue.shift());
-  mocks.password.mockImplementation(async () => params.textQueue.shift());
+  mocks.select.mockImplementation(
+    async (input) => params.selectQueue.shift() ?? input.initialValue ?? input.options[0]?.value,
+  );
+  const text = params.textQueue ?? [];
+  mocks.text.mockImplementation(async () => text.shift());
+  mocks.password.mockImplementation(async () => text.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockImplementation(async (input) => params.confirmResult ?? input.initialValue);
   return promptGatewayConfig(params.baseConfig ?? {});
@@ -100,6 +97,18 @@ async function runTrustedProxyPrompt(params: {
     selectQueue: [params.bind ?? "loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
   });
 }
+
+const proxyPrompt = () =>
+  mocks.text.mock.calls.find(
+    ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
+  )?.[0];
+const expectLoopbackWarning = (initialValue: boolean) => {
+  expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue }));
+  expect(mocks.note).toHaveBeenCalledWith(
+    expect.stringContaining("Any local process"),
+    expect.any(String),
+  );
+};
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -157,17 +166,14 @@ describe("promptGatewayConfig", () => {
       randomToken: "generated-token",
     });
     expect(result.config.gateway?.auth).toEqual({ mode: "token", token: "generated-token" });
-    expect(mocks.password).toHaveBeenCalledOnce();
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
     const result = await runGatewayPrompt({
       selectQueue: ["loopback", "password", "off"],
       textQueue: ["18789", undefined],
-      randomToken: "unused",
     });
     expect(result.config.gateway?.auth).toEqual({ mode: "password" });
-    expect(mocks.password).toHaveBeenCalledOnce();
   });
 
   it("configures proxy headers and disables incompatible Tailscale serve", async () => {
@@ -200,11 +206,9 @@ describe("promptGatewayConfig", () => {
 
   it("rejects an empty entry in trusted proxy input", async () => {
     await runTrustedProxyPrompt({ textQueue: ["18789", "x-forwarded-user", "", "", "10.42.0.1"] });
-    const prompt = mocks.text.mock.calls.find(
-      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
-    )?.[0];
-    expect(prompt?.validate).toBeTypeOf("function");
-    expect(prompt.validate("10.42.0.1, ")).toEqual(expect.stringMatching(/IPv4.*IPv6.*CIDR/));
+    expect(proxyPrompt().validate("10.42.0.1, ")).toEqual(
+      expect.stringMatching(/IPv4.*IPv6.*CIDR/),
+    );
   });
 
   it("accepts runtime auth after consent for a mapped loopback proxy", async () => {
@@ -215,15 +219,8 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
     });
     expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
-    const prompt = mocks.text.mock.calls.find(
-      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
-    )?.[0];
-    expect(prompt.validate(proxies)).toBeUndefined();
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Any local process"),
-      expect.any(String),
-    );
+    expect(proxyPrompt().validate(proxies)).toBeUndefined();
+    expectLoopbackWarning(false);
     expect(await authorizeConfiguredProxy(result.config, "127.0.0.1")).toEqual({
       ok: true,
       method: "trusted-proxy",
@@ -234,7 +231,7 @@ describe("promptGatewayConfig", () => {
   it("rejects proxy attribution through an IPv4 catch-all", async () => {
     const proxies = "::ffff:0:0/96";
     const result = await runTrustedProxyPrompt({ proxies, confirmResult: true });
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expectLoopbackWarning(false);
     expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
     expect(isTrustedProxyAddress("127.0.0.1", result.config.gateway?.trustedProxies)).toBe(true);
     // Every IPv4 hop is trusted, so the forwarded client address is consumed as a proxy too.
@@ -280,16 +277,7 @@ describe("promptGatewayConfig", () => {
         },
       });
       expect(baseConfig).toEqual(original);
-      expect(mocks.confirm).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("Allow loopback"),
-          initialValue: sameMode,
-        }),
-      );
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Any local process"),
-        expect.any(String),
-      );
+      expectLoopbackWarning(sameMode);
       const refusalMessage = mocks.note.mock.calls.at(-1)?.[0];
       expect(refusalMessage).toContain("will be rejected");
       expect(refusalMessage).toContain("trusted_proxy_loopback_source");

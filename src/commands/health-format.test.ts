@@ -17,6 +17,19 @@ import {
   unavailablePlugin,
 } from "./health.test-fixtures.js";
 
+afterEach(() => {
+  resetSecretRedactionRegistryForTest();
+  vi.restoreAllMocks();
+});
+
+function expectHealth(
+  summary: HealthSummary,
+  line: string,
+  options?: Parameters<typeof formatHealthChannelLines>[1],
+) {
+  expect(formatHealthChannelLines(summary, options)).toStrictEqual([line]);
+}
+
 it.each([
   [
     1006,
@@ -38,11 +51,6 @@ it.each([
 );
 
 describe("health failure diagnostic redaction", () => {
-  afterEach(() => {
-    resetSecretRedactionRegistryForTest();
-    vi.restoreAllMocks();
-  });
-
   it.each([false, true])("keeps built-in and custom masking with rich=%s", (rich) => {
     vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
       redactPatterns: ["deploymentMask9X"],
@@ -52,12 +60,9 @@ describe("health failure diagnostic redaction", () => {
         rich,
       }),
     );
-    expect(output).toContain("Health check failed:");
-    expect(output).toContain("remote");
-    expect(output).toContain("visible");
-    expect(output).not.toContain("mockPass7X");
-    expect(output).not.toContain("deploymentMask9X");
-    expect(output).toContain("***");
+    expect(output).toBe(
+      `Health check failed: ${rich ? "" : "Error: "}remote password=*** *** visible`,
+    );
   });
 
   it.each([false, true])("masks complete and normalized registered values with rich=%s", (rich) => {
@@ -90,11 +95,6 @@ const channelSummary = (id: string, label: string, account: ChannelAccountHealth
     channelOrder: [id],
     channelLabels: { [id]: label },
   });
-const telegramAccount = (accountId: string, username: string, elapsedMs: number) => ({
-  accountId,
-  configured: true,
-  probe: { ok: true, elapsedMs, bot: { username } },
-});
 const ingressPressure = (channelId: string, accountId: string, overrides = {}) => ({
   channelId,
   accountId,
@@ -116,23 +116,7 @@ describe("formatHealthChannelLines", () => {
       healthState: "not-running",
       lastError: `\u001b[31m${error}\u001b[0m\n`,
     });
-    expect(formatHealthChannelLines(summary)).toEqual([`Telegram: not-running (${error}\\n)`]);
-  });
-
-  it("formats per-account probe timings", () => {
-    const main = telegramAccount("main", "pinguini_ugi_bot", 196);
-    const summary = channelSummary("telegram", "Telegram", {
-      ...main,
-      accounts: {
-        main,
-        flurry: telegramAccount("flurry", "flurry_ugi_bot", 190),
-        poe: telegramAccount("poe", "poe_ugi_bot", 188),
-      },
-    });
-
-    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
-      "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
-    ]);
+    expectHealth(summary, `Telegram: not-running (${error}\\n)`);
   });
 
   it.each([
@@ -159,7 +143,7 @@ describe("formatHealthChannelLines", () => {
       ...account,
     });
 
-    expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
+    expectHealth(summary, `Test: ${expected}`);
   });
 
   it("surfaces secondary auth stabilization in default and verbose health output", () => {
@@ -168,9 +152,7 @@ describe("formatHealthChannelLines", () => {
       statusState: "unstable",
     });
     for (const accountMode of ["default", "all"] as const) {
-      expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
-        "Matrix: auth stabilizing",
-      ]);
+      expectHealth(summary, "Matrix: auth stabilizing", { accountMode });
     }
   });
 
@@ -194,37 +176,25 @@ describe("formatHealthChannelLines", () => {
         );
         const accountIdsByChannel = { matrix: ["main"] };
 
-        expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
-        expect(
-          formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
-        ).toStrictEqual([`Matrix: ${expectedAll}`]);
-        expect(
-          formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
-        ).toStrictEqual([`Matrix: ${scopedState}`]);
-        expect(
-          formatHealthChannelLines(summary, {
-            accountIdsByChannel: { matrix: ["alerts"] },
-          }),
-        ).toStrictEqual([`Matrix: ${expected}`]);
+        expectHealth(summary, `Matrix: ${expected}`);
+        expectHealth(summary, `Matrix: ${expectedAll}`, {
+          accountMode: "all",
+          accountIdsByChannel,
+        });
+        expectHealth(summary, `Matrix: ${scopedState}`, {
+          accountMode: "default",
+          accountIdsByChannel,
+        });
+        expectHealth(summary, `Matrix: ${expected}`, {
+          accountIdsByChannel: { matrix: ["alerts"] },
+        });
       }
     },
   );
 
-  it("keeps the healthy preferred account ahead of numeric account-key order", () => {
+  it("preserves preferred account order, unique usernames, webhook text and per-account timings", () => {
     const summary = createMultiAccountHealthSummary(
-      { accountId: "1", probe: { ok: true, elapsedMs: 1 } },
-      { accountId: "9", probe: { ok: true, elapsedMs: 9 } },
-    );
-
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["Matrix: ok (9ms)"]);
-    expect(
-      formatHealthChannelLines(summary, { accountIdsByChannel: { matrix: ["1", "9"] } }),
-    ).toStrictEqual(["Matrix: ok (1ms)"]);
-  });
-
-  it("keeps the selected username first, deduplicates it, and preserves webhook text", () => {
-    const summary = createMultiAccountHealthSummary(
-      { accountId: "1", probe: { ok: true, bot: { username: "sibling" } } },
+      { accountId: "1", probe: { ok: true, elapsedMs: 1, bot: { username: "sibling" } } },
       {
         accountId: "9",
         probe: {
@@ -236,9 +206,14 @@ describe("formatHealthChannelLines", () => {
       },
     );
 
-    expect(formatHealthChannelLines(summary)).toStrictEqual([
+    expectHealth(
+      summary,
       "Matrix: ok (@selected, @sibling) (12ms) - webhook https://example.test/hook",
-    ]);
+    );
+    expectHealth(summary, "Matrix: ok (@sibling, @selected) (1ms)", {
+      accountIdsByChannel: { matrix: ["1", "9"] },
+    });
+    expectHealth(summary, "Matrix: ok (@sibling:1:1ms, @selected:9:12ms)", { accountMode: "all" });
   });
 
   it("does not promote stale failures from an intentionally disabled account", () => {
@@ -248,10 +223,8 @@ describe("formatHealthChannelLines", () => {
       enabled: false,
     });
 
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["Matrix: ok (12ms)"]);
-    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
-      "Matrix: ok (main:main:12ms)",
-    ]);
+    expectHealth(summary, "Matrix: ok (12ms)");
+    expectHealth(summary, "Matrix: ok (main:main:12ms)", { accountMode: "all" });
   });
 
   it("surfaces a failed sibling probe over the selected account's passive healthy state", () => {
@@ -260,20 +233,17 @@ describe("formatHealthChannelLines", () => {
       probe: { ok: false, error: "sync rejected" },
     });
 
-    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
-      "Matrix: failed (unknown) - sync rejected",
-    ]);
+    expectHealth(summary, "Matrix: failed (unknown) - sync rejected", { accountMode: "all" });
   });
 
   it("masks raw and terminal-normalized plugin diagnostics with built-in and custom patterns", () => {
-    const configSpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
+    vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
       redactPatterns: ["deploymentMarker7"],
     });
-    try {
-      registerSecretValueForRedaction("plugin9X");
-      registerSecretValueForRedaction("lineA9\nlineB7");
-      const summary = createHealthSummary();
-      summary.plugins = {
+    registerSecretValueForRedaction("plugin9X");
+    registerSecretValueForRedaction("lineA9\nlineB7");
+    const summary = createHealthSummary({
+      plugins: {
         loaded: [],
         errors: [
           pluginHealthError(
@@ -282,15 +252,12 @@ describe("formatHealthChannelLines", () => {
             { origin: "config", activated: true },
           ),
         ],
-      };
-
-      expect(formatHealthChannelLines(summary)).toEqual([
-        "Plugin ***: failed - *** password=*** *** visible context; run openclaw doctor",
-      ]);
-    } finally {
-      resetSecretRedactionRegistryForTest();
-      configSpy.mockRestore();
-    }
+      },
+    });
+    expectHealth(
+      summary,
+      "Plugin ***: failed - *** password=*** *** visible context; run openclaw doctor",
+    );
   });
 
   it("bounds combined plugin warnings without counting hidden errors", () => {
@@ -323,31 +290,26 @@ describe("formatHealthChannelLines", () => {
   });
 });
 
-it.each<{ name: string; queues?: HealthSummary["deliveryQueues"]; expected: string | null }>([
-  {
-    name: "dead-lettered ingress entries per channel account",
-    queues: {
+it.each<[string, HealthSummary["deliveryQueues"], string | null]>([
+  [
+    "dead-lettered ingress entries per channel account",
+    {
       failed: [],
       ingressFailed: [
         { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
         { channelId: "telegram", accountId: "ops", count: 2 },
       ],
     },
-    expected:
-      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
-  },
-  {
-    name: "ingress pressure per channel account",
-    queues: {
-      failed: [],
-      ingressPressure: [ingressPressure("telegram", "ops")],
-    },
-    expected:
-      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
-  },
-  {
-    name: "dead letters and ingress pressure together",
-    queues: {
+    "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+  ],
+  [
+    "ingress pressure per channel account",
+    { failed: [], ingressPressure: [ingressPressure("telegram", "ops")] },
+    "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
+  ],
+  [
+    "dead letters and ingress pressure together",
+    {
       failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
       ingressPressure: [
         ingressPressure("line", "default", {
@@ -359,11 +321,10 @@ it.each<{ name: string; queues?: HealthSummary["deliveryQueues"]; expected: stri
         }),
       ],
     },
-    expected:
-      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
-  },
-  { name: "no entries", expected: null },
-])("formatDeliveryQueueHealthLine: $name", ({ queues, expected }) => {
+    "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
+  ],
+  ["no entries", undefined, null],
+])("formatDeliveryQueueHealthLine: %s", (_name, queues, expected) => {
   expect(
     formatDeliveryQueueHealthLine(createHealthSummary({ deliveryQueues: queues }), 7_290_000),
   ).toBe(expected);

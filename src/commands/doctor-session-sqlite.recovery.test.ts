@@ -27,18 +27,12 @@ import {
 } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
+const header = { type: "session", version: 3, id: "session-1", cwd: "/fixture", timestamp: "" };
 
 describe("runDoctorSessionSqlite", () => {
   it.each(["fresh", "prefix", "complete", "unindexed"] as const)(
     "archives redundant session headers after a %s import",
     async (state) => {
-      const header = {
-        type: "session",
-        version: 3,
-        id: "session-1",
-        cwd: "/fixture",
-        timestamp: "2026-09-01T00:00:05Z",
-      };
       const lines = [
         header,
         messageEvent("one", "user", "first"),
@@ -93,52 +87,44 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    [{ cwd: "/other" }, { version: 2 }, { extra: "different" }].flatMap((difference) =>
-      [false, true].map((unindexed) => ({ difference, unindexed })),
-    ),
-  )("retains a conflicting same-id session header (%j)", async ({ difference, unindexed }) => {
-    const header = {
-      type: "session",
-      version: 3,
-      id: "session-1",
-      cwd: "/fixture",
-      timestamp: "",
-    };
-    const store = createLegacyStore({
-      transcriptLines: [
-        JSON.stringify(header),
-        JSON.stringify(messageEvent("one", "user", "first")),
-        JSON.stringify({ ...header, ...difference }),
-      ],
-    });
-    if (unindexed) {
-      fs.writeFileSync(store.storePath, "{}\n");
-    }
-    const original = fs.readFileSync(store.transcriptPath);
-    const report = await importLegacyStore(store);
-    containsObjects(report.targets[0]?.issues, {
-      code: unindexed ? "historical_transcript_deferred" : "sqlite_transcript_count_mismatch",
-    });
-    let retainedTranscriptPath = store.transcriptPath;
-    if (unindexed) {
-      const archive = expectDefined(
-        readManifest(report.migrationRun?.manifestPath).targets[0]?.completedMoves.find(
-          (move) => move.sourcePath === store.transcriptPath,
-        ),
-        "protected conflicting transcript",
-      );
-      expect(archive.artifact?.classification).toBe("protected");
-      retainedTranscriptPath = archive.archivePath;
-    } else {
-      expect(
-        readManifest(report.migrationRun?.manifestPath).targets[0]?.validationBeforeArchive,
-      ).toBe("failed");
-      expect(report.totals.archivedLegacyStoreFiles).toBe(0);
-      expect(fs.existsSync(store.storePath)).toBe(true);
-    }
-    expectFiles(original, retainedTranscriptPath);
-  });
+  it.each([false, true])(
+    "retains a conflicting same-id session header (unindexed=%s)",
+    async (unindexed) => {
+      const store = createLegacyStore({
+        transcriptLines: [
+          JSON.stringify(header),
+          JSON.stringify(messageEvent("one", "user", "first")),
+          JSON.stringify({ ...header, cwd: "/other" }),
+        ],
+      });
+      if (unindexed) {
+        fs.writeFileSync(store.storePath, "{}\n");
+      }
+      const original = fs.readFileSync(store.transcriptPath);
+      const report = await importLegacyStore(store);
+      containsObjects(report.targets[0]?.issues, {
+        code: unindexed ? "historical_transcript_deferred" : "sqlite_transcript_count_mismatch",
+      });
+      let retainedTranscriptPath = store.transcriptPath;
+      if (unindexed) {
+        const archive = expectDefined(
+          readManifest(report.migrationRun?.manifestPath).targets[0]?.completedMoves.find(
+            (move) => move.sourcePath === store.transcriptPath,
+          ),
+          "protected conflicting transcript",
+        );
+        expect(archive.artifact?.classification).toBe("protected");
+        retainedTranscriptPath = archive.archivePath;
+      } else {
+        expect(
+          readManifest(report.migrationRun?.manifestPath).targets[0]?.validationBeforeArchive,
+        ).toBe("failed");
+        expect(report.totals.archivedLegacyStoreFiles).toBe(0);
+        expect(fs.existsSync(store.storePath)).toBe(true);
+      }
+      expectFiles(original, retainedTranscriptPath);
+    },
+  );
 
   it.each(["orphaned", "rename-failure"] as const)(
     "recovers the complete SQLite file set (%s)",

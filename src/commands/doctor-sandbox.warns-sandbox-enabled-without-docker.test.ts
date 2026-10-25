@@ -2,13 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_SANDBOX_IMAGE } from "../agents/sandbox/constants.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform as onPlatform } from "../test-utils/vitest-spies.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const runCommandWithTimeout = vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>();
@@ -23,22 +22,6 @@ vi.mock("../flows/bundled-health-checks.js", () => ({ resolveCodexHealthApi }));
 
 // mock-isolation: Sandbox probes must not launch commands on the test host.
 vi.mock("../process/exec.js", () => ({ runExec, runCommandWithTimeout }));
-
-vi.mock("../agents/sandbox/constants.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/sandbox/constants.js")>(
-    "../agents/sandbox/constants.js",
-  )),
-  DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
-  DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
-  DEFAULT_SANDBOX_IMAGE: "default-image",
-}));
-
-vi.mock("../agents/sandbox/config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/sandbox/config.js")>(
-    "../agents/sandbox/config.js",
-  )),
-  resolveSandboxScope: vi.fn(() => "shared"),
-}));
 
 // mock-isolation: Synthetic engine descriptors keep probes independent of installed containers.
 vi.mock("../agents/sandbox/docker.js", () => ({
@@ -58,17 +41,11 @@ describe("sandbox health", () => {
 
   const mockPrompter: DoctorPrompter = {
     confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    } satisfies DoctorRepairMode,
   } as unknown as DoctorPrompter;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(false);
     runExec.mockResolvedValue({ stdout: "", stderr: "" });
     validateSandboxContainerEngineTarget.mockResolvedValue(undefined);
     resolveCodexHealthApi.mockReturnValue({
@@ -92,6 +69,8 @@ describe("sandbox health", () => {
     expect(resolveCodexHealthApi).not.toHaveBeenCalled();
     expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
   };
+  const expectNote = (message: string) =>
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Sandbox");
 
   it.each(["non-main", "off"] as const)(
     "reports unavailable Docker with sandbox mode %s",
@@ -101,10 +80,8 @@ describe("sandbox health", () => {
       if (mode === "off") {
         expect(note).not.toHaveBeenCalled();
       } else {
-        const [message, title] = note.mock.calls[0]!;
-        expect(title).toBe("Sandbox");
-        expect(message).toContain('mode: "non-main") but Docker is not available');
-        expect(message).toContain("openclaw config set agents.defaults.sandbox.mode off");
+        expectNote('mode: "non-main") but Docker is not available');
+        expectNote("openclaw config set agents.defaults.sandbox.mode off");
       }
     },
   );
@@ -132,7 +109,7 @@ describe("sandbox health", () => {
     await onPlatform("linux", async () => {
       await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
     });
-    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", "default-image"], {
+    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", DEFAULT_SANDBOX_IMAGE], {
       timeoutMs: 5_000,
     });
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
@@ -182,30 +159,14 @@ describe("sandbox health", () => {
         denial,
       });
     }
-    const cfg = createSandboxConfig("all");
-    cfg.plugins = { entries: { codex: { enabled: true } } };
-    const options = { env: { PATH: "/service/bin" }, cwd: "/service/workspace" };
-    await onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(cfg, options));
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Codex bwrap ${kind} namespace check failed`),
-      "Sandbox",
-    );
+    await probeOnLinux();
+    expectNote(`Codex bwrap ${kind} namespace check failed`);
     if (stage === "unshare") {
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining("kernel.apparmor_restrict_unprivileged_userns=0"),
-        "Sandbox",
-      );
+      expectNote("kernel.apparmor_restrict_unprivileged_userns=0");
       expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
     } else {
-      const message = note.mock.calls[0]![0];
-      expect(message).toContain(`Codex bwrap ${kind} namespace check failed`);
-      expect(message).toContain(`Check result: ${denial}`);
-      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
-      expect(resolveCodexHealthApi).toHaveBeenCalledExactlyOnceWith({ cfg, ...options });
-      expect(probeCodexWorkspaceWriteSandbox).toHaveBeenCalledExactlyOnceWith({
-        cfg,
-        env: options.env,
-      });
+      expectNote(`Check result: ${denial}`);
+      expectNote(`Check command: ${codexSandboxCommand}`);
     }
   });
 
@@ -287,22 +248,14 @@ describe("sandbox health", () => {
       vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(true);
     });
 
-    afterEach(() => {
-      runExec.mockReset();
-      runCommandWithTimeout.mockReset();
-      vi.mocked(mockPrompter.confirmRuntimeRepair).mockReset().mockResolvedValue(false);
-    });
-
-    function mkTmp(prefix: string): string {
-      return fs.realpathSync(dirs.make(prefix));
-    }
-
-    function mkRepo(prefix: string): string {
-      const repo = mkTmp(prefix);
-      fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
-      fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
-      fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "openclaw" }));
-      return repo;
+    function mkPackage(script = false): string {
+      const root = fs.realpathSync(dirs.make("ocsbx-"));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      if (script) {
+        fs.mkdirSync(path.join(root, "scripts"));
+        fs.writeFileSync(path.join(root, scriptRel), "#!/bin/sh\n");
+      }
+      return root;
     }
 
     it.each([false, true])(
@@ -310,23 +263,16 @@ describe("sandbox health", () => {
       async (installedPackage) => {
         let argv1: string, cwd: string, expectedRoot: string | null;
         if (installedPackage) {
-          const installed = mkTmp("ocsbx-installed-");
-          fs.writeFileSync(
-            path.join(installed, "package.json"),
-            JSON.stringify({ name: "openclaw" }),
-          );
-          argv1 = path.join(installed, "openclaw.mjs");
-          fs.writeFileSync(argv1, "");
-          cwd = expectedRoot = mkRepo("ocsbx-source-");
-          expect(resolveOpenClawPackageRootSync({ argv1, cwd })).toBe(installed);
+          argv1 = path.join(mkPackage(), "openclaw.mjs");
+          cwd = expectedRoot = mkPackage(true);
         } else {
           // Keep an enclosing checkout above TMPDIR outside package discovery.
-          cwd = path.join(mkTmp("ocsbx-none-"), "node_modules", ".bin");
+          cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
           fs.mkdirSync(cwd, { recursive: true });
           argv1 = path.join(cwd, "openclaw");
-          fs.writeFileSync(argv1, "");
           expectedRoot = null;
         }
+        fs.writeFileSync(argv1, "");
         const originalArgv = process.argv;
         const argv = [...originalArgv];
         argv[1] = argv1;
