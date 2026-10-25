@@ -10,13 +10,22 @@ import { registerAgentRunContext, clearAgentRunContext } from "../../infra/agent
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
-import { claimForeground, recoveryEntry } from "./main-session-recovery-state.test-support.js";
+import {
+  claimForeground,
+  observeRecovery,
+  recoveryEntry,
+  recoveryState,
+} from "./main-session-recovery-state.test-support.js";
 import { markStartupOrphanedMainSessionsForRecovery as markOrphans } from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // #118873: terminal-only custody must not block foreground admission forever.
 
 const sessionKey = "agent:main:main";
+const fence = (runId: string, lifecycleGeneration = "dead-generation") => ({
+  runId,
+  lifecycleGeneration,
+});
 function expectRetired(entry: SessionEntry | undefined) {
   expect(entry).toBeDefined();
   expect(entry?.mainRestartRecovery).toBeUndefined();
@@ -37,7 +46,7 @@ const unusedGatewayRuntime: GatewayRecoveryRuntime = {
 
 function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return recoveryEntry({
-    restartRecoveryRuns: [{ runId: "settled-run", lifecycleGeneration: "dead-generation" }],
+    restartRecoveryRuns: [fence("settled-run")],
     restartRecoveryTerminalRunIds: ["settled-run"],
     ...overrides,
   });
@@ -46,8 +55,8 @@ function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
 function fencedEntry(live: boolean) {
   return settledEntry({
     restartRecoveryRuns: [
-      { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-      { runId: "second-run", lifecycleGeneration: live ? "generation-1" : "dead-generation-2" },
+      fence("settled-run"),
+      fence("second-run", live ? "generation-1" : "dead-generation-2"),
     ],
     restartRecoveryTerminalRunIds: live ? ["settled-run"] : ["settled-run", "second-run"],
   });
@@ -82,7 +91,7 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
     lastRunId: "rejected-foreground",
     restartRecoveryDeliveryRunId: "rejected-foreground",
     restartRecoveryDeliverySourceRunId: "rejected-foreground",
-    restartRecoveryRuns: [{ runId: "older-recovery", lifecycleGeneration: "dead-generation" }],
+    restartRecoveryRuns: [fence("older-recovery")],
     restartRecoveryTerminalRunIds: ["rejected-foreground"],
     ...overrides,
   });
@@ -96,78 +105,53 @@ describe("main session recovery terminal-only residue", () => {
         updatedAt: 100,
         status: "killed",
         abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: "stopped-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryRuns: [fence("stopped-run")],
         restartRecoveryTerminalRunIds: Array.from({ length: 8 }, (_, index) => `other-${index}`),
       };
-      const cases: Array<{ key: string; patch: Partial<SessionEntry> }> = [
-        { key: "orphan", patch: {} },
-        { key: "live", patch: {} },
-        { key: "aborted", patch: { abortedLastRun: true } },
-        {
-          key: "agent-live",
-          patch: {
-            restartRecoveryRuns: [{ runId: "active-run", lifecycleGeneration: "dead-generation" }],
+      const cases: Record<string, Partial<SessionEntry>> = {
+        orphan: {},
+        live: {},
+        aborted: { abortedLastRun: true },
+        "agent-live": { restartRecoveryRuns: [fence("active-run")] },
+        harness: {
+          restartRecoveryHarnessCompletion: {
+            taskId: "task",
+            taskStatus: "succeeded",
+            taskRunId: "task-run",
+            sourceRunId: "stopped-run",
+            requesterSessionKey: "agent:main:harness",
+            requesterAgentId: "main",
+            sessionId: "harness",
           },
         },
-        {
-          key: "harness",
-          patch: {
-            restartRecoveryHarnessCompletion: {
-              taskId: "task",
-              taskStatus: "succeeded",
-              taskRunId: "task-run",
-              sourceRunId: "stopped-run",
-              requesterSessionKey: "agent:main:harness",
-              requesterAgentId: "main",
-              sessionId: "harness",
+        tombstone: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "stopped",
+            tombstone: { reason: "exhausted" },
+          }),
+        },
+        pending: { pendingFinalDelivery: { kind: "replayable", text: "owed", createdAt: 1 } },
+        delivery: { restartRecoveryDeliveryRunId: "delivery-run" },
+        reserved: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "reserved",
+            chargedAttempts: 1,
+            reservation: {
+              attempt: 1,
+              runId: "reserved-run",
+              lifecycleGeneration: "current-generation",
             },
-          },
+          }),
         },
-        {
-          key: "tombstone",
-          patch: {
-            mainRestartRecovery: {
-              cycleId: "stopped",
-              revision: 1,
-              chargedAttempts: 0,
-              tombstone: { reason: "exhausted" },
-            },
-          },
+        claimed: {
+          mainRestartRecovery: recoveryState({
+            cycleId: "claimed",
+            foregroundClaims: { tokens: ["owner"], lifecycleGeneration: "current-generation" },
+          }),
         },
-        {
-          key: "pending",
-          patch: { pendingFinalDelivery: { kind: "replayable", text: "owed", createdAt: 1 } },
-        },
-        { key: "delivery", patch: { restartRecoveryDeliveryRunId: "delivery-run" } },
-        {
-          key: "reserved",
-          patch: {
-            mainRestartRecovery: {
-              cycleId: "reserved",
-              revision: 1,
-              chargedAttempts: 1,
-              reservation: {
-                attempt: 1,
-                runId: "reserved-run",
-                lifecycleGeneration: "current-generation",
-              },
-            },
-          },
-        },
-        {
-          key: "claimed",
-          patch: {
-            mainRestartRecovery: {
-              cycleId: "claimed",
-              revision: 1,
-              chargedAttempts: 0,
-              foregroundClaims: { tokens: ["owner"], lifecycleGeneration: "current-generation" },
-            },
-          },
-        },
-      ];
+      };
       const before = new Map<string, SessionEntry | undefined>();
-      for (const { key, patch } of cases) {
+      for (const [key, patch] of Object.entries(cases)) {
         await write({ ...killed, sessionId: key, ...patch }, `agent:main:${key}`);
         before.set(key, read(`agent:main:${key}`));
       }
@@ -197,10 +181,10 @@ describe("main session recovery terminal-only residue", () => {
           restartRecoveryRuns: killed.restartRecoveryRuns,
           abortedLastRun: true,
         });
-        for (const { key } of cases.filter(
-          (candidate) => !["orphan", "aborted", "pending"].includes(candidate.key),
-        )) {
-          expect(read(`agent:main:${key}`)).toEqual(before.get(key));
+        for (const key of Object.keys(cases)) {
+          if (!["orphan", "aborted", "pending"].includes(key)) {
+            expect(read(`agent:main:${key}`)).toEqual(before.get(key));
+          }
         }
       } finally {
         clearAgentRunContext("active-run");
@@ -236,12 +220,7 @@ describe("main session recovery terminal-only residue", () => {
       });
       const before = structuredClone(entry);
 
-      transition(entry, {
-        kind: "observe",
-        cycleId: "unused-cycle",
-        lifecycleGeneration: "generation-1",
-        sessionKey,
-      });
+      observeRecovery(entry, "generation-1");
 
       if (terminal) {
         expect(entry.status).toBe("failed");
