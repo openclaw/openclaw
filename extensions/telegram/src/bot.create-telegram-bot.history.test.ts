@@ -26,6 +26,7 @@ const group = { id: -10042, type: "group", title: "Ops" } as const;
 let updateId = 30000;
 let cfg: OpenClawConfig;
 let storePath: string;
+const createHistoryBot = () => createBot(false, true, cfg);
 beforeEach(() => {
   storePath = resolveStorePath(undefined, { agentId: "main" });
   cfg = {
@@ -56,10 +57,6 @@ function message(text: string, overrides: Partial<Message.TextMessage> = {}) {
     date: Math.floor(Date.now() / 1000),
     ...overrides,
   };
-}
-
-function reply(text: string, overrides: Partial<Message.TextMessage> = {}) {
-  return { ...message(text, overrides), reply_to_message: undefined };
 }
 
 function reopenedCache() {
@@ -105,7 +102,7 @@ function expectContextMessages(...messages: Array<Record<string, unknown>>) {
   );
 }
 
-function mention(reply_to_message?: ReturnType<typeof reply>) {
+function mention(reply_to_message?: ReturnType<typeof message>) {
   return message("@openclaw_bot summarize", {
     chat: group,
     entities: [{ type: "mention", offset: 0, length: 13 }],
@@ -115,7 +112,7 @@ function mention(reply_to_message?: ReturnType<typeof reply>) {
 
 it("bounds the automatic window without deleting quiet history after reopen", async () => {
   cfg.channels!.telegram!.historyLimit = 2;
-  const bot = await createBot(false, true, cfg);
+  const bot = await createHistoryBot();
   const quiet = ["Retain the launch code cobalt", "Latest one", "Latest two"].map((text) =>
     message(text),
   );
@@ -132,7 +129,7 @@ it("bounds the automatic window without deleting quiet history after reopen", as
 
 it.each([false, true])("retains a username-free channel (%s)", async (senderChat) => {
   const channel = { id: -100777111222, type: "channel", title: "Private Channel" } as const;
-  const bot = await createBot(false, true, cfg);
+  const bot = await createHistoryBot();
   await receive(bot, {
     channel_post: {
       message_id: 601,
@@ -155,8 +152,8 @@ it.each([false, true])("retains a username-free channel (%s)", async (senderChat
 });
 
 it("keeps current discussion alongside stale ancestry and persists edited self text", async () => {
-  const bot = await createBot(false, true, cfg);
-  const old = reply("Old deployment answer", {
+  const bot = await createHistoryBot();
+  const old = message("Old deployment answer", {
     chat: group,
     date: Math.floor(Date.now() / 1000) - 20,
   });
@@ -186,7 +183,7 @@ it("keeps current discussion alongside stale ancestry and persists edited self t
 it("does not duplicate an observed outbound reply in ambient history", async () => {
   cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
   cfg.messages!.groupChat = { unmentionedInbound: "room_event", mentionPatterns: [] };
-  const bot = await createBot(false, true, cfg);
+  const bot = await createHistoryBot();
   const sent = message("Already delivered", { chat: group, from: bot.botInfo });
   await recordOutbound(sent);
   await receive(bot, { message: message("What now?", { chat: group }) });
@@ -215,7 +212,7 @@ it("keeps transcript context until every physical projection part is recorded, t
     eventId,
     message: { role: "assistant", content: "**Alpha** beta", timestamp: Date.now() - 1000 },
   });
-  const bot = await createBot(false, true, cfg);
+  const bot = await createHistoryBot();
   for (const [partIndex, text] of ["Alpha", "beta"].entries()) {
     const messageId = 700 + partIndex;
     await recordOutbound(message(text, { message_id: messageId, from: bot.botInfo }), {
@@ -225,7 +222,7 @@ it("keeps transcript context until every physical projection part is recorded, t
     });
     await receive(bot, {
       message: message("continue", {
-        reply_to_message: reply("Alpha", { message_id: 700, from: bot.botInfo }),
+        reply_to_message: message("Alpha", { message_id: 700, from: bot.botInfo }),
       }),
     });
     const serialized = JSON.stringify(lastInput().ChannelStructuredContext);
@@ -248,7 +245,7 @@ it("keeps transcript context until every physical projection part is recorded, t
 });
 
 async function replyInput(text: string, overrides: Partial<Message>, bot?: Bot) {
-  await receive(bot ?? (await createBot(false, true, cfg)), {
+  await receive(bot ?? (await createHistoryBot()), {
     message: { ...message(text), ...overrides },
   });
   return lastInput();
@@ -256,9 +253,9 @@ async function replyInput(text: string, overrides: Partial<Message>, bot?: Bot) 
 
 it.each(["business", "spoof"])("preserves %s reply attribution", async (kind) => {
   cfg.channels!.telegram!.name = "Configured Agent";
-  const bot = await createBot(false, true, cfg);
+  const bot = await createHistoryBot();
   const sender = kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)";
-  const target = reply("Earlier reply", {
+  const target = message("Earlier reply", {
     message_id: 9005,
     from: { id: 777, is_bot: false, first_name: "Alex (you)" },
     ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
@@ -276,7 +273,7 @@ it.each(["business", "spoof"])("preserves %s reply attribution", async (kind) =>
 
 it("preserves selected quote bytes and identity", async () => {
   const input = await replyInput("check this", {
-    reply_to_message: reply("Can you summarize this?", { message_id: 9001 }),
+    reply_to_message: message("Can you summarize this?", { message_id: 9001 }),
     quote: {
       text: " summarize this\n",
       position: 8,
@@ -316,7 +313,7 @@ it("redacts forwarded origin with an authorized reply target", async () => {
   };
   const input = await replyInput("Thoughts?", {
     chat: group,
-    reply_to_message: reply("forwarded text", {
+    reply_to_message: message("forwarded text", {
       chat: group,
       message_id: 9004,
       forward_origin: {
