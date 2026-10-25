@@ -1,7 +1,7 @@
 // Ownership decisions must survive registry replacement and unrelated capability admission.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { disposeContextEngineSources } from "../context-engine/registry.resources.js";
@@ -27,29 +27,59 @@ afterEach(async () => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+let workspaceDir: string;
+beforeEach(() => {
+  useNoBundledPlugins();
+  workspaceDir = makePluginLoaderTempDir();
+  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
+});
+
+function load(config: OpenClawConfig, previousRegistry?: ReturnType<typeof loadOpenClawPlugins>) {
+  return loadOpenClawPlugins({
+    config,
+    workspaceDir,
+    cache: false,
+    runtimeSideEffects: true,
+    previousRegistry,
+  });
+}
+
+function configuration(
+  plugins: Array<{ file: string }>,
+  engineId: string,
+  policy: NonNullable<OpenClawConfig["plugins"]> = {},
+): OpenClawConfig {
+  return {
+    plugins: {
+      load: { paths: plugins.map(({ file }) => file) },
+      slots: { memory: "none", contextEngine: engineId },
+      ...policy,
+    },
+  };
+}
+
 // Generated entries exercise the production loader without importing bundled plugin runtimes.
-function writeEnginePlugin(params: {
-  workspaceDir: string;
-  id: string;
-  engineIds: string[];
-  kind?: "memory" | "context-engine";
-  declaredEngineIds?: string[];
-}) {
+function writeEnginePlugin(
+  id: string,
+  engineIds: string[],
+  kind?: "memory" | "context-engine",
+  declaredEngineIds = kind === "context-engine" ? engineIds : undefined,
+) {
   const plugin = writePlugin({
-    id: params.id,
-    dir: path.join(params.workspaceDir, params.id),
+    id,
+    dir: path.join(workspaceDir, id),
     filename: "index.cjs",
     body: `const fs = require("node:fs");
-module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
-  fs.appendFileSync(${JSON.stringify(path.join(params.workspaceDir, "registrations"))}, ${JSON.stringify(params.id + "\n")});
-  api.registerService({ id: ${JSON.stringify(params.id + "-service")}, start() {} });
-  for (const engineId of ${JSON.stringify(params.engineIds)}) {
+module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  fs.appendFileSync(${JSON.stringify(path.join(workspaceDir, "registrations"))}, ${JSON.stringify(id + "\n")});
+  api.registerService({ id: ${JSON.stringify(id + "-service")}, start() {} });
+  for (const engineId of ${JSON.stringify(engineIds)}) {
     api.registerContextEngine(engineId, () => {
-      fs.appendFileSync(${JSON.stringify(path.join(params.workspaceDir, "factories"))}, ${JSON.stringify(params.id + ":")} + engineId + "\\n");
+      fs.appendFileSync(${JSON.stringify(path.join(workspaceDir, "factories"))}, ${JSON.stringify(id + ":")} + engineId + "\\n");
       return {
         info: { id: engineId, name: "Synthetic Engine" },
         ingest: async () => ({ ingested: true }),
-        assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: ${JSON.stringify(params.id)} }),
+        assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: ${JSON.stringify(id)} }),
         compact: async () => ({ ok: true, compacted: false }),
       };
     });
@@ -59,9 +89,9 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   fs.writeFileSync(
     path.join(plugin.dir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: params.id,
-      kind: params.kind,
-      contextEngineIds: params.declaredEngineIds,
+      id,
+      kind,
+      contextEngineIds: declaredEngineIds,
       configSchema: EMPTY_PLUGIN_SCHEMA,
     }),
   );
@@ -72,29 +102,9 @@ it.each([
   { engineId: "canonical-engine", allow: ["mixed-demo"] },
   { engineId: "MiXeD-demo", allow: ["unrelated"] },
 ])("loads mixed-case owner of exact engine $engineId", async ({ engineId, allow }) => {
-  useNoBundledPlugins();
-  const workspaceDir = makePluginLoaderTempDir();
-  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-  const plugin = writeEnginePlugin({
-    workspaceDir,
-    id: "MiXeD-demo",
-    engineIds: [engineId],
-    kind: "context-engine",
-    declaredEngineIds: [engineId],
-  });
-  const config: OpenClawConfig = {
-    plugins: {
-      load: { paths: [plugin.file] },
-      allow,
-      slots: { memory: "none", contextEngine: engineId },
-    },
-  };
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir,
-    cache: false,
-    runtimeSideEffects: true,
-  });
+  const plugin = writeEnginePlugin("MiXeD-demo", [engineId], "context-engine");
+  const config = configuration([plugin], engineId, { allow });
+  const registry = load(config);
   try {
     expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
       engineId,
@@ -121,28 +131,8 @@ it.each([
 });
 
 it("keeps canonical denial ahead of mixed-case equal-ID selection", async () => {
-  useNoBundledPlugins();
-  const workspaceDir = makePluginLoaderTempDir();
-  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-  const plugin = writeEnginePlugin({
-    workspaceDir,
-    id: "MiXeD-demo",
-    engineIds: ["MiXeD-demo"],
-    kind: "context-engine",
-    declaredEngineIds: ["MiXeD-demo"],
-  });
-  const registry = loadOpenClawPlugins({
-    config: {
-      plugins: {
-        load: { paths: [plugin.file] },
-        deny: ["mixed-demo"],
-        slots: { memory: "none", contextEngine: "MiXeD-demo" },
-      },
-    },
-    workspaceDir,
-    cache: false,
-    runtimeSideEffects: true,
-  });
+  const plugin = writeEnginePlugin("MiXeD-demo", ["MiXeD-demo"], "context-engine");
+  const registry = load(configuration([plugin], "MiXeD-demo", { deny: ["mixed-demo"] }));
   try {
     expect(registry.plugins.find((record) => record.id === "MiXeD-demo")?.status).toBe("disabled");
     expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
@@ -158,37 +148,19 @@ it("keeps canonical denial ahead of mixed-case equal-ID selection", async () => 
 it("rebuilds declared factories when switching engines on the same owner", async () => {
   const { resolveContextEngine, resolveLogicalTurnContextEngines } =
     await import("../context-engine/registry.js");
-  useNoBundledPlugins();
-  const workspaceDir = makePluginLoaderTempDir();
-  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
   const plugins = [
-    writeEnginePlugin({ workspaceDir, id: "secondary-capability", engineIds: ["second"] }),
-    writeEnginePlugin({
-      workspaceDir,
-      id: "vendor",
-      engineIds: ["first", "second"],
-      kind: "context-engine",
-      declaredEngineIds: ["first", "second"],
-    }),
-    writeEnginePlugin({ workspaceDir, id: "ordinary", engineIds: [] }),
+    writeEnginePlugin("secondary-capability", ["second"]),
+    writeEnginePlugin("vendor", ["first", "second"], "context-engine"),
+    writeEnginePlugin("ordinary", []),
   ];
-  const config: OpenClawConfig = {
-    plugins: {
-      load: { paths: plugins.map((plugin) => plugin.file) },
-      entries: {
-        "secondary-capability": { enabled: true },
-        vendor: { enabled: true },
-        ordinary: { enabled: true },
-      },
-      slots: { memory: "none", contextEngine: "first" },
+  const config = configuration(plugins, "first", {
+    entries: {
+      "secondary-capability": { enabled: true },
+      vendor: { enabled: true },
+      ordinary: { enabled: true },
     },
-  };
-  const initial = loadOpenClawPlugins({
-    config,
-    workspaceDir,
-    cache: false,
-    runtimeSideEffects: true,
   });
+  const initial = load(config);
   let replacement: ReturnType<typeof loadOpenClawPlugins> | undefined;
   try {
     expect(fs.readFileSync(path.join(workspaceDir, "registrations"), "utf8")).toBe(
@@ -204,13 +176,7 @@ it("rebuilds declared factories when switching engines on the same owner", async
       ...config,
       plugins: { ...config.plugins, slots: { memory: "none", contextEngine: "second" } },
     };
-    replacement = loadOpenClawPlugins({
-      config: nextConfig,
-      workspaceDir,
-      cache: false,
-      runtimeSideEffects: true,
-      previousRegistry: initial,
-    });
+    replacement = load(nextConfig, initial);
     expect(getPluginRuntimeLoadContextState(replacement)?.selectedContextEngine).toEqual({
       engineId: "second",
       owner: "plugin:vendor",
@@ -229,13 +195,7 @@ it("rebuilds declared factories when switching engines on the same owner", async
     ]);
 
     // An unchanged follow-up generation may retain the ordinary plugin and selected factory.
-    const unchanged = loadOpenClawPlugins({
-      config: nextConfig,
-      workspaceDir,
-      cache: false,
-      runtimeSideEffects: true,
-      previousRegistry: replacement,
-    });
+    const unchanged = load(nextConfig, replacement);
     try {
       await ensureContextEnginesInitialized();
       expect(unchanged.plugins.find((plugin) => plugin.id === "ordinary")).toBe(
@@ -287,38 +247,16 @@ it.each(["standalone", "logical-turn"] as const)(
   async (resolver) => {
     const { resolveContextEngine, resolveLogicalTurnContextEngines } =
       await import("../context-engine/registry.js");
-    useNoBundledPlugins();
-    const workspaceDir = makePluginLoaderTempDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
     const plugins = [
-      writeEnginePlugin({
-        workspaceDir,
-        id: "existing-engine",
-        engineIds: ["existing-engine"],
-        kind: "memory",
-      }),
-      writeEnginePlugin({
-        workspaceDir,
-        id: "claimant",
-        engineIds: ["existing-engine"],
-        kind: "context-engine",
-        declaredEngineIds: ["existing-engine"],
-      }),
+      writeEnginePlugin("existing-engine", ["existing-engine"], "memory"),
+      writeEnginePlugin("claimant", ["existing-engine"], "context-engine"),
     ];
     // A restrictive allowlist leaves neither plugin approved; the memory slot still admits its owner.
-    const config: OpenClawConfig = {
-      plugins: {
-        load: { paths: plugins.map((plugin) => plugin.file) },
-        allow: ["unrelated-plugin"],
-        slots: { memory: "existing-engine", contextEngine: "existing-engine" },
-      },
-    };
-    const registry = loadOpenClawPlugins({
-      config,
-      workspaceDir,
-      cache: false,
-      runtimeSideEffects: true,
+    const config = configuration(plugins, "existing-engine", {
+      allow: ["unrelated-plugin"],
+      slots: { memory: "existing-engine", contextEngine: "existing-engine" },
     });
+    const registry = load(config);
     try {
       await ensureContextEnginesInitialized();
       expect(fs.readFileSync(path.join(workspaceDir, "registrations"), "utf8")).toBe(

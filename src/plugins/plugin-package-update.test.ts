@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -12,6 +12,7 @@ function record(
   pluginId: string,
   rootDir: string,
   contributions: { channels?: string[]; channelConfigs?: string[] } = {},
+  owner = "pack",
 ): InstalledPluginIndexRecord {
   return recordInstalledPluginIndexInstallOwner(
     {
@@ -36,7 +37,7 @@ function record(
       },
       compat: [],
     },
-    "pack",
+    owner,
   );
 }
 
@@ -58,11 +59,24 @@ function index(rootDir: string, plugins: InstalledPluginIndexRecord[]): Installe
 
 function captureSnapshot(pluginIndex: InstalledPluginIndex, installOwners = ["pack"]) {
   const result = capturePluginPackageUpdateSnapshot({ index: pluginIndex, installOwners });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
+  assert(result.ok);
   return result.value;
+}
+
+type UpdateParams = Parameters<typeof reconcilePluginPackageUpdateConfig>[0];
+function reconcile(
+  config: OpenClawConfig,
+  beforeIndex: InstalledPluginIndex,
+  afterIndex: InstalledPluginIndex,
+  options: Partial<Pick<UpdateParams, "snapshot" | "installOwnerMigrations">> = {},
+) {
+  return reconcilePluginPackageUpdateConfig({
+    config,
+    beforeIndex,
+    afterIndex,
+    ...options,
+    snapshot: options.snapshot ?? captureSnapshot(beforeIndex),
+  });
 }
 
 describe("plugin package update policy reconciliation", () => {
@@ -84,28 +98,18 @@ describe("plugin package update policy reconciliation", () => {
       if (transferred) {
         after.installRecords.pack!.contextEngineIdsByPlugin = { "pack/retained": ["engine"] };
       }
-      const snapshot = capturePluginPackageUpdateSnapshot({
-        index: before,
-        installOwners: ["pack"],
-      });
-      if (!snapshot.ok) {
-        throw new Error(snapshot.error);
-      }
-      const result = reconcilePluginPackageUpdateConfig({
-        config: {
+      const result = reconcile(
+        {
           plugins: {
             installs: { ...after.installRecords },
             slots: { contextEngine: "engine" },
             entries: { "pack/retired": { enabled: true } },
           },
         },
-        beforeIndex: before,
-        afterIndex: after,
-        snapshot: snapshot.value,
-      });
-      if (!result.ok) {
-        throw new Error(result.error);
-      }
+        before,
+        after,
+      );
+      assert(result.ok);
       expect(result.config.plugins?.entries?.["pack/retired"]).toBeUndefined();
       expect(result.config.plugins?.slots?.contextEngine).toBe(transferred ? "engine" : undefined);
     },
@@ -123,7 +127,6 @@ describe("plugin package update policy reconciliation", () => {
       record("pack/one", afterRoot, { channels: ["shared"] }),
       record("pack/renamed", afterRoot),
     ]);
-    const snapshot = captureSnapshot(before);
     const config: OpenClawConfig = {
       plugins: {
         allow: ["pack/one", "pack/two", "pack/old", "other"],
@@ -147,17 +150,8 @@ describe("plugin package update policy reconciliation", () => {
       },
     };
 
-    const result = reconcilePluginPackageUpdateConfig({
-      config,
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+    const result = reconcile(config, before, after);
+    assert(result.ok);
     expect(result.config.plugins).toEqual({
       allow: ["pack/one", "other"],
       deny: ["other-denied"],
@@ -172,13 +166,11 @@ describe("plugin package update policy reconciliation", () => {
 
   it("fails closed when the replacement package has no authoritative child rows", () => {
     const before = index("/packages/pack-v1", [record("pack/one", "/packages/pack-v1")]);
-    const snapshot = captureSnapshot(before);
-    const result = reconcilePluginPackageUpdateConfig({
-      config: { plugins: { entries: { "pack/one": { enabled: true } } } },
-      beforeIndex: before,
-      afterIndex: index("/packages/pack-v2", []),
-      snapshot,
-    });
+    const result = reconcile(
+      { plugins: { entries: { "pack/one": { enabled: true } } } },
+      before,
+      index("/packages/pack-v2", []),
+    );
     expect(result).toMatchObject({ ok: false });
   });
 
@@ -201,19 +193,13 @@ describe("plugin package update policy reconciliation", () => {
     const snapshot = captureSnapshot(before, ["orphan", "pack"]);
     const config = { plugins: { entries: { "pack/one": { enabled: true } } } };
 
-    const result = reconcilePluginPackageUpdateConfig({
-      config,
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
+    const result = reconcile(config, before, after, { snapshot });
 
     expect(result).toEqual({ ok: true, config });
   });
 
   it("fails closed when a tombstone replacement still has no authoritative child rows", () => {
     const before = index("/packages/pack-v1", []);
-    const snapshot = captureSnapshot(before);
     const after = {
       ...index("/packages/pack-v2", []),
       installRecords: {
@@ -225,12 +211,7 @@ describe("plugin package update policy reconciliation", () => {
       },
     };
 
-    const result = reconcilePluginPackageUpdateConfig({
-      config: {},
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
+    const result = reconcile({}, before, after);
 
     expect(result).toMatchObject({ ok: false });
   });
@@ -238,7 +219,7 @@ describe("plugin package update policy reconciliation", () => {
   it("follows catalog-alias install-owner migrations without pruning QQ config", () => {
     const rootDir = "/packages/qqbot";
     const before: InstalledPluginIndex = {
-      ...index(rootDir, [record("qqbot", rootDir, { channels: ["qqbot"] })]),
+      ...index(rootDir, [record("qqbot", rootDir, { channels: ["qqbot"] }, "qqbot")]),
       installRecords: {
         qqbot: { source: "npm", installPath: rootDir, spec: "@openclaw/qqbot@1.9.0" },
         "openclaw-qqbot": {
@@ -248,15 +229,9 @@ describe("plugin package update policy reconciliation", () => {
         },
       },
     };
-    before.plugins = [
-      recordInstalledPluginIndexInstallOwner(
-        record("qqbot", rootDir, { channels: ["qqbot"] }),
-        "qqbot",
-      ),
-    ];
     const after: InstalledPluginIndex = {
       ...index(`${rootDir}-canonical`, [
-        record("openclaw-qqbot", `${rootDir}-canonical`, { channels: ["qqbot"] }),
+        record("openclaw-qqbot", `${rootDir}-canonical`, { channels: ["qqbot"] }, "openclaw-qqbot"),
       ]),
       installRecords: {
         "openclaw-qqbot": {
@@ -266,12 +241,6 @@ describe("plugin package update policy reconciliation", () => {
         },
       },
     };
-    after.plugins = [
-      recordInstalledPluginIndexInstallOwner(
-        record("openclaw-qqbot", `${rootDir}-canonical`, { channels: ["qqbot"] }),
-        "openclaw-qqbot",
-      ),
-    ];
     const snapshot = captureSnapshot(before, ["qqbot"]);
     const qqbotConfig = {
       enabled: true,
@@ -288,30 +257,16 @@ describe("plugin package update policy reconciliation", () => {
         load: { paths: [rootDir, `${rootDir}/qqbot.js`, "/plugins/unrelated.js"] },
       },
     } satisfies OpenClawConfig;
-    const missingMigration = reconcilePluginPackageUpdateConfig({
-      config,
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
-    expect(missingMigration).toMatchObject({ ok: false });
-    if (missingMigration.ok) {
-      throw new Error("expected missing alias migration to fail");
-    }
+    const missingMigration = reconcile(config, before, after, { snapshot });
+    assert(!missingMigration.ok);
     expect(missingMigration.error).toContain(
       'Plugin "qqbot" is not associated with a tracked package install',
     );
-    const migrated = reconcilePluginPackageUpdateConfig({
-      config,
-      beforeIndex: before,
-      afterIndex: after,
+    const migrated = reconcile(config, before, after, {
       snapshot,
       installOwnerMigrations: { qqbot: "openclaw-qqbot" },
     });
-    expect(migrated).toMatchObject({ ok: true });
-    if (!migrated.ok) {
-      throw new Error(migrated.error);
-    }
+    assert(migrated.ok);
     expect(migrated.config.channels?.qqbot).toEqual(qqbotConfig);
     expect(migrated.config.plugins?.load?.paths).toEqual(["/plugins/unrelated.js"]);
   });
@@ -320,22 +275,16 @@ describe("plugin package update policy reconciliation", () => {
     const rootDir = "/packages/shared-pack";
     const before = index(rootDir, [record("pack/one", rootDir), record("pack/old", rootDir)]);
     const after = index(rootDir, [record("pack/one", rootDir)]);
-    const snapshot = captureSnapshot(before);
-    const result = reconcilePluginPackageUpdateConfig({
-      config: {
+    const result = reconcile(
+      {
         plugins: {
           load: { paths: [rootDir, `${rootDir}/old.js`, "/plugins/unrelated.js"] },
         },
       },
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
-
-    expect(result).toMatchObject({ ok: true });
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+      before,
+      after,
+    );
+    assert(result.ok);
     expect(result.config.plugins?.load?.paths).toEqual([rootDir, "/plugins/unrelated.js"]);
   });
 

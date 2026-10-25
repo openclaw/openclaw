@@ -1,7 +1,7 @@
 /** Tests bundle manifest parsing for Agent, Codex, Claude, Cursor, and OpenClaw formats. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -27,10 +27,7 @@ function expectLoadedManifest(
   bundleFormat: "agent" | "codex" | "claude" | "cursor",
 ) {
   const result = loadBundleManifest({ rootDir, bundleFormat });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("expected bundle manifest to load");
-  }
+  assert(result.ok);
   return result.manifest;
 }
 
