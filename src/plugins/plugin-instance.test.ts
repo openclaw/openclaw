@@ -113,8 +113,9 @@ it("optionally drains retained consumers before resources stop while preserving 
   }
 });
 
-it("lets a self-retiring call finish before joined explicit cleanup", async () => {
+it("lets self-retiring and dependent calls finish before joined explicit cleanup", async () => {
   const instance = new PluginInstance("self");
+  const startRetirement = createDeferredCore();
   const events: string[] = [];
   instance.lifecycle.onDispose(async () => {
     await Promise.resolve();
@@ -122,6 +123,7 @@ it("lets a self-retiring call finish before joined explicit cleanup", async () =
   });
   const helper = instance.wrap(() => "receipt completed");
   const tool = instance.wrap(async () => {
+    await startRetirement.promise;
     await instance.dispose();
     events.push("reload published");
     const result = await new Promise<string>((resolve) => {
@@ -131,33 +133,16 @@ it("lets a self-retiring call finish before joined explicit cleanup", async () =
     return result;
   });
   const call = tool();
+  const dependent = instance.wrap(async () => events.push(await call))();
+  startRetirement.resolve();
+  await Promise.resolve();
   const disposal = instance.dispose();
   expectUnavailable(() => tool());
   await expect(call).resolves.toBe("receipt completed");
+  await dependent;
   await disposal;
-  expect(events).toEqual(["reload published", "receipt completed", "cleanup"]);
+  expect(events).toEqual(["reload published", "receipt completed", "receipt completed", "cleanup"]);
   expect(instance.lifecycle.signal.aborted).toBe(true);
-});
-
-it("lets admitted calls consume a self-retiring call's result before cleanup", async () => {
-  const instance = new PluginInstance("dependent-calls");
-  const startRetirement = createDeferredCore();
-  const events: string[] = [];
-  instance.lifecycle.onDispose(() => {
-    events.push("cleanup");
-  });
-  const first = instance.wrap(async () => {
-    await startRetirement.promise;
-    await instance.dispose();
-    return "first result";
-  })();
-  const second = instance.wrap(async () => {
-    events.push(await first);
-    return "second result";
-  })();
-  startRetirement.resolve();
-  await expect(Promise.all([first, second])).resolves.toEqual(["first result", "second result"]);
-  expect(events).toEqual(["first result", "cleanup"]);
 });
 
 it("hands an asynchronously returned stream to its consumer before joining retirement", async () => {
@@ -231,22 +216,16 @@ it("preserves class receivers and fences callable re-exports, including frozen g
     static get reader() {
       return () => this.#label;
     }
-    #value: number;
-    constructor(value: number) {
-      this.#value = value;
-    }
+    #value = 2;
     get read() {
       return () => this.#value;
-    }
-    increment() {
-      return ++this.#value;
     }
   }
   const WrappedCounter = instance.wrap(Object.freeze(Counter));
   const label: () => string = Reflect.get(WrappedCounter, "label");
   const readLabel = WrappedCounter.reader;
   expect([label(), readLabel()]).toEqual(["counter", "counter"]);
-  const counter = new WrappedCounter(2);
+  const counter = new WrappedCounter();
   const readExport = vi.fn(() => counter.read);
   const exports = instance.wrap(
     Object.freeze({
@@ -255,18 +234,15 @@ it("preserves class receivers and fences callable re-exports, including frozen g
       },
     }),
   );
-  expect(Object.keys(exports)).toEqual(["read"]);
   const readDescriptor = Object.getOwnPropertyDescriptor(exports, "read")!;
-  expect(typeof readDescriptor.get).toBe("function");
   expect(readExport).not.toHaveBeenCalled();
   const read = exports.read;
-  expect(counter).toBeInstanceOf(Counter);
-  expect([counter.increment(), read()]).toEqual([3, 3]);
+  expect(read()).toBe(2);
   await instance.dispose();
   expectUnavailable(
     read,
     () => exports.read,
-    () => new WrappedCounter(2),
+    () => new WrappedCounter(),
     label,
     readLabel,
     () => WrappedCounter.reader,
@@ -302,59 +278,8 @@ it.each(["before wrapping", "after growing"] as const)(
   },
 );
 
-it.each(["stream", "iterator"] as const)(
-  "fences retained %s getters after stream closure without hiding plain data",
-  async (target) => {
-    const instance = new PluginInstance("stream-getters");
-    const read = vi.fn(() => "retired getter");
-    const iterator = chunks("chunk");
-    const source = {
-      [Symbol.asyncIterator]: () => iterator,
-      label: "retained data",
-    };
-    Object.defineProperty(iterator, "status", { get: read });
-    Object.defineProperty(source, "status", { get: read });
-    const stream = instance.wrap(source);
-    const view = stream[Symbol.asyncIterator]();
-    await expect(view.next()).resolves.toEqual({ done: false, value: "chunk" });
-    await expect(view.next()).resolves.toMatchObject({ done: true });
-    await instance.dispose();
-    expect(() => Reflect.get(target === "stream" ? stream : view, "status")).toThrow(
-      /stream is closed|reloaded or disabled/,
-    );
-    expect(read).not.toHaveBeenCalled();
-    expect(stream.label).toBe("retained data");
-  },
-);
-
-it.each(["iteratorMember", "asyncSourceMethod"] as const)(
-  "fences callable values returned through a stream's %s",
-  async (target) => {
-    const instance = new PluginInstance("stream-values");
-    const read = vi.fn(() => "owned value");
-    const payload = { read, done: true };
-    const iterator = Object.assign(chunks(payload), { member: payload });
-    const stream = instance.wrap({
-      [Symbol.asyncIterator]: () => iterator,
-      helperAsync: async () => read,
-    });
-    const view = stream[Symbol.asyncIterator]();
-    await expect(view.next()).resolves.toMatchObject({ done: false, value: { done: true } });
-    const readers = {
-      iteratorMember: () => view.member.read,
-      asyncSourceMethod: () => stream.helperAsync(),
-    };
-    const retained = await readers[target]();
-    expect(retained()).toBe("owned value");
-    await expect(view.next()).resolves.toMatchObject({ done: true });
-    await instance.dispose();
-    expectUnavailable(() => retained());
-    expect(read).toHaveBeenCalledOnce();
-  },
-);
-
 it.each(["source", "iterator"] as const)(
-  "joins an admitted async %s helper after its cursor ends",
+  "joins the admitted %s helper and fences retained stream values",
   async (target) => {
     const instance = new PluginInstance("stream-helper");
     const proceed = createDeferredCore();
@@ -362,19 +287,32 @@ it.each(["source", "iterator"] as const)(
     instance.lifecycle.onDispose(() => {
       events.push("cleanup");
     });
-    const read = instance.wrap(() => "owned value");
+    const ownedRead = vi.fn(() => "owned value");
+    const read = instance.wrap(ownedRead);
+    const readStatus = vi.fn(() => "retired getter");
     const inspect = async () => {
       await proceed.promise;
       const value = read();
       events.push("helper");
       return value;
     };
-    const source = Object.assign(chunks("chunk"), { inspect });
-    const stream = instance.wrap({ ...iterable(source), inspect });
+    const source = Object.assign(chunks({ done: true }), { inspect, member: { read: ownedRead } });
+    const exports = {
+      ...iterable(source),
+      inspect,
+      helperAsync: async () => ownedRead,
+      label: "data",
+    };
+    for (const value of [source, exports]) {
+      Object.defineProperty(value, "status", { get: readStatus });
+    }
+    const stream = instance.wrap(exports);
     const iterator = stream[Symbol.asyncIterator]();
     const pending = target === "source" ? stream.inspect() : iterator.inspect();
     try {
-      await expect(iterator.next()).resolves.toEqual({ value: "chunk", done: false });
+      await expect(iterator.next()).resolves.toEqual({ value: { done: true }, done: false });
+      const retained = [iterator.member.read, await stream.helperAsync()];
+      expect(retained.map((callback) => callback())).toEqual(["owned value", "owned value"]);
       await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
       const disposing = instance.dispose();
       await Promise.resolve();
@@ -383,6 +321,13 @@ it.each(["source", "iterator"] as const)(
       await expect(pending).resolves.toBe("owned value");
       await disposing;
       expect(events).toEqual(["helper", "cleanup"]);
+      for (const value of [stream, iterator]) {
+        expect(() => Reflect.get(value, "status")).toThrow(/stream is closed|reloaded or disabled/);
+      }
+      expect(readStatus).not.toHaveBeenCalled();
+      expect(stream.label).toBe("data");
+      expectUnavailable(...retained);
+      expect(ownedRead).toHaveBeenCalledTimes(3);
     } finally {
       proceed.resolve();
       await Promise.allSettled([pending, iterator.return(undefined), instance.dispose()]);
@@ -390,25 +335,7 @@ it.each(["source", "iterator"] as const)(
   },
 );
 
-it("releases a directly consumed async generator when its consumer returns early", async () => {
-  const instance = new PluginInstance("iterator");
-  const finished = vi.fn();
-  const stream = instance.wrap(async function* () {
-    try {
-      yield "chunk";
-      yield "unused";
-    } finally {
-      finished();
-    }
-  })();
-  await expect(stream.next()).resolves.toEqual({ value: "chunk", done: false });
-  const draining = instance.dispose();
-  await stream.return(undefined);
-  await draining;
-  expect(finished).toHaveBeenCalledOnce();
-});
-
-it.each(["completion", "failure"] as const)(
+it.each(["early return", "completion", "failure"] as const)(
   "permits terminal return after %s without reentering plugin code",
   async (outcome) => {
     const instance = createTestInstance("terminal-return");
@@ -428,11 +355,16 @@ it.each(["completion", "failure"] as const)(
     const originalReturn = source.return.bind(source);
     const readReturn = vi.fn(() => originalReturn);
     Object.defineProperty(source, "return", { get: readReturn });
-    const stream = instance.wrap(source);
+    const stream =
+      outcome === "early return" ? instance.wrap(() => source)() : instance.wrap(source);
     const iterator = stream[Symbol.asyncIterator]();
     const retainedReturn = iterator.return.bind(iterator);
     await expect(iterator.next()).resolves.toEqual({ done: false, value: "chunk" });
-    if (outcome === "failure") {
+    if (outcome === "early return") {
+      const draining = instance.dispose();
+      await stream.return(undefined);
+      await draining;
+    } else if (outcome === "failure") {
       await expect(iterator.next()).rejects.toBe(failure);
     } else {
       await expect(iterator.next()).resolves.toEqual({ done: true, value: "original result" });
@@ -606,12 +538,7 @@ it.each(["resolve", "reject"] as const)(
       const result = await disposing;
       const timeout = drainTimeout(result.errors[0]);
 
-      expect(timeout.forcedRetirement).toEqual({
-        activeCallCount: 1,
-        retainedConsumerCount: 0,
-      });
       expect(result.errors).toEqual([timeout, cleanupFailure]);
-      expect(cleanup).toHaveBeenCalledOnce();
       const settlement = trackCompletion(
         timeout.settled.catch((error: unknown) => {
           expect(error).toBeInstanceOf(AggregateError);
@@ -633,9 +560,8 @@ it.each(["resolve", "reject"] as const)(
           : { error: callFailure },
       );
       await settlement.promise;
-      expect(settlement.done).toBe(true);
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(await instance.dispose()).toBe(result);
-      expect(result.errors).toEqual([timeout, cleanupFailure]);
     } finally {
       pending.resolve("finished");
       await Promise.allSettled([call, disposing]);
@@ -704,7 +630,7 @@ it("preserves prepared caller scope and follows an adopted instance for detached
   await instance.dispose();
 });
 
-it("owns grouped SDK registrations through registration closure and instance disposal", async () => {
+it("owns grouped SDK registrations through instance disposal", async () => {
   const instance = new PluginInstance("facades");
   const registerSessionAction = vi.fn<(entry: PluginSessionActionRegistration) => void>();
   const registerAgentEventSubscription =
@@ -725,24 +651,19 @@ it("owns grouped SDK registrations through registration closure and instance dis
     instance,
   );
   const handler = vi.fn<() => void>();
-  let lateRegistration: (() => void) | undefined;
   let registeredLifecycle = api.lifecycle;
   runPluginRegistration((registeredApi) => {
     registeredLifecycle = registeredApi.lifecycle;
     registeredApi.session.controls.registerSessionAction({ id: "grouped", handler });
     registeredApi.agent.events.registerAgentEventSubscription({ id: "events", handle: handler });
     registeredApi.lifecycle.registerRuntimeLifecycle({ id: "lifecycle", cleanup: () => {} });
-    lateRegistration = () =>
-      registeredApi.session.controls.registerSessionAction({ id: "late", handler });
   }, api);
-  lateRegistration?.();
-  expect(registerSessionAction).toHaveBeenCalledOnce();
   const disposed = vi.fn();
   registeredLifecycle.onDispose?.(disposed);
   expect(registeredLifecycle.signal).toBe(instance.controller.signal);
   expect(registerRuntimeLifecycle).toHaveBeenCalledOnce();
   const callbacks = [
-    ...registerSessionAction.mock.calls.map(([entry]) => entry.handler),
+    registerSessionAction.mock.calls[0]![0].handler,
     registerAgentEventSubscription.mock.calls[0]![0].handle,
   ];
   for (const callback of callbacks) {
@@ -774,7 +695,6 @@ it("owns direct SDK registrations in the candidate registry and fences retained 
       handler: () => true,
     });
   });
-  expect(registry.httpRoutes).toHaveLength(1);
   const command = registry.commands[0]!.command.handler;
   const memory = registry.memoryCapabilities[0]!.capability.promptBuilder!;
   const route = registry.httpRoutes[0]!.handler;

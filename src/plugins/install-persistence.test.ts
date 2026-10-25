@@ -425,44 +425,41 @@ describe("persistPluginInstall enablement", () => {
     expect(enablePlugin).toHaveBeenCalledTimes(1);
   });
 
-  it("installs a plugin disabled when its required configuration is missing", async () => {
-    const warn = vi.fn();
-    const baseConfig: OpenClawConfig = {
-      plugins: {
-        allow: ["memory-core"],
-        deny: ["needs-config"],
-        entries: {
-          "needs-config": { hooks: { timeoutMs: 5_000 } },
+  it.each(["needs-config", "MyPlug"])(
+    "stages %s disabled under its canonical ID when settings are missing",
+    async (pluginId) => {
+      const warn = vi.fn();
+      const policyId = pluginId.toLowerCase();
+      const hooks = { timeoutMs: 5_000 };
+      const allow = pluginId === "needs-config" ? ["memory-core"] : undefined;
+      const baseConfig: OpenClawConfig = {
+        plugins: {
+          ...(allow ? { allow } : {}),
+          deny: [policyId],
+          entries: { [policyId]: { hooks } },
         },
-      },
-    };
-    setManifests(createManifestRecord("needs-config", { configSchema: requiredTokenSchema }));
-
-    const next = await persistNpm("needs-config", baseConfig, {
-      persistenceLogger: { warn },
-    });
-
-    expect(next).toEqual({
-      plugins: {
-        allow: ["memory-core", "needs-config"],
-        entries: {
-          "needs-config": { enabled: false, hooks: { timeoutMs: 5_000 } },
+      };
+      setManifests(createManifestRecord(pluginId, { configSchema: requiredTokenSchema }));
+      const next = await persistNpm(pluginId, baseConfig, { persistenceLogger: { warn } });
+      expect(next).toEqual({
+        plugins: {
+          ...(allow ? { allow: [...allow, policyId] } : {}),
+          entries: { [policyId]: { enabled: false, hooks } },
         },
-      },
-    });
-    expect(enablePlugin).not.toHaveBeenCalled();
-    expect(selectSlot).not.toHaveBeenCalled();
-    expectRuntimeLogIncludes(
-      'Installed plugin "needs-config" without enabling it because it requires configuration first.',
-    );
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      'Installed plugin "needs-config" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable needs-config`.',
-    );
-    expect(pluginsCliRuntimeLogs).toContain("Installed plugin: needs-config");
-    expect(writeIndex.mock.calls[0]?.[0]).toMatchObject({
-      "needs-config": npmInstall("needs-config@1.0.0"),
-    });
-  });
+      });
+      expect(enablePlugin).not.toHaveBeenCalled();
+      expect(selectSlot).not.toHaveBeenCalled();
+      const warning = `Installed plugin "${pluginId}" without enabling it because it requires configuration first.`;
+      expectRuntimeLogIncludes(warning);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `${warning} Configure it, then run \`openclaw plugins enable ${pluginId}\`.`,
+      );
+      expect(pluginsCliRuntimeLogs).toContain(`Installed plugin: ${pluginId}`);
+      expect(writeIndex.mock.calls[0]?.[0]).toMatchObject({
+        [pluginId]: npmInstall(`${pluginId}@1.0.0`),
+      });
+    },
+  );
 
   it("reads mixed-case manifest policy from canonical lowercase entries on reinstall", async () => {
     const baseConfig: OpenClawConfig = {
@@ -487,20 +484,6 @@ describe("persistPluginInstall enablement", () => {
     expect(next.plugins?.entries).toEqual(baseConfig.plugins?.entries);
     expect(enablePlugin).toHaveBeenCalledExactlyOnceWith(baseConfig, "MyPlug", expect.anything());
     expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("requires configuration first");
-  });
-
-  it("stages a mixed-case install missing settings under its canonical lowercase entry", async () => {
-    const baseConfig: OpenClawConfig = {
-      plugins: { deny: ["myplug"], entries: { myplug: { hooks: { timeoutMs: 5_000 } } } },
-    };
-    setManifests(createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }));
-
-    const next = await persistNpm("MyPlug", baseConfig);
-
-    expect(next.plugins).toEqual({
-      entries: { myplug: { enabled: false, hooks: { timeoutMs: 5_000 } } },
-    });
-    expect(enablePlugin).not.toHaveBeenCalled();
   });
 
   it.each(["schema", "disabled config"] as const)("rejects invalid %s", async (kind) => {

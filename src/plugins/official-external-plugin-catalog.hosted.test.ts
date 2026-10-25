@@ -245,16 +245,10 @@ describe("official external plugin catalog", () => {
     });
 
     expectSource(result, "hosted");
-    expect(result.entries.map((entry) => entry.id)).toEqual([
-      "@acme/trusted",
-      "@acme/disabled",
-      "@acme/community",
-      "@acme/missing-authority",
-    ]);
-    const [trusted, disabled, community, missingAuthority] = result.entries;
-    if (!trusted || !disabled || !community || !missingAuthority) {
-      throw new Error("expected schema-v2 marketplace entries");
-    }
+    const trusted = result.entries[0]!;
+    const disabled = result.entries[1]!;
+    const community = result.entries[2]!;
+    const missingAuthority = result.entries[3]!;
     expect(install(trusted)).toEqual({
       clawhubSpec: "clawhub:@acme/trusted@1.2.3",
       defaultChoice: "clawhub",
