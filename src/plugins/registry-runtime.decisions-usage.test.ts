@@ -27,7 +27,12 @@ import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import type { PreparedDecisionBillingFacts } from "./runtime/runtime-model-usage.js";
 import type { PluginRuntime } from "./runtime/types.js";
+
+const preparation = vi.hoisted(() => ({
+  billing: undefined as PreparedDecisionBillingFacts["billing"],
+}));
 
 // The registered provider host, lifecycle, SDK wrapper and accounting stay real.
 // mock-isolation: Supply prepared adapter outcomes; real provider validation has integration proof.
@@ -38,11 +43,7 @@ vi.mock("../agents/decision-inference.js", () => ({
     params.onPreparedBilling?.({
       provider: "fixture",
       model: params.modelId.split("@")[0]!,
-      billing: {
-        unit: "tokens",
-        source: "provider-catalog",
-        usdPerMillion: { input: 2, output: 0 },
-      },
+      billing: preparation.billing,
     });
     return params.provider.evaluate(params.batch, {
       model: { id: params.modelId.split("@")[0]!, name: "Native", provider: "fixture" },
@@ -88,18 +89,12 @@ function accepted(costUsd?: number): Extract<ProviderDecisionOutcomeV2, { status
   };
 }
 
-function listenForUsage(listener: () => void) {
-  const stop = onTrustedInternalDiagnosticEvent(
-    markTrustedOtelDiagnosticListener((event) => {
-      if (event.type === "model.usage") {
-        listener();
-      }
-    }),
-  );
-  onTestFinished(stop);
-}
-
 function registered(evaluate: DecisionProviderV2["evaluate"], selectedConfig = config) {
+  preparation.billing = {
+    unit: "tokens",
+    source: "provider-catalog",
+    usdPerMillion: { input: 2, output: 0 },
+  };
   const builder = createTestPluginRegistry({
     modelAuth: { isProviderApiKeyConfigured: () => true },
   } as unknown as PluginRuntime);
@@ -185,12 +180,37 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
 });
 
+it.each([
+  { name: "prepared route estimate", costUsd: undefined, expected: 0.0002 },
+  { name: "provider billed zero", costUsd: 0, expected: 0 },
+])("records one accepted observation with $name", async ({ costUsd, expected }) => {
+  const outcome = accepted(costUsd);
+  const host = registered(async () => outcome);
+  expect(await host.run()).toMatchObject(outcome);
+  expect(host.events).toEqual([
+    {
+      trusted: true,
+      hostPluginId: host.consumer.id,
+      event: usageEvent(expected),
+    },
+  ]);
+});
+
+it("keeps unknown route pricing absent after accepting provider usage", async () => {
+  const host = registered(async () => accepted());
+  preparation.billing = undefined;
+  expect(await host.run()).toMatchObject(accepted());
+  expect(host.events).toHaveLength(1);
+  expect(host.events[0]?.event.usage).toEqual({ input: 100 });
+  expect(host.events[0]?.event).not.toHaveProperty("costUsd");
+});
+
 it("does not record usage for a rejected prepared outcome", async () => {
   const host = registered(async () => ({
     status: "unavailable",
     reason: "invalid-response",
   }));
-  expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
+  await expect(host.run()).resolves.toEqual({ status: "unavailable", reason: "invalid-response" });
   expect(host.events).toEqual([]);
 });
 
@@ -212,7 +232,7 @@ it.each(["provider retirement", "consumer retirement", "cancellation"] as const)
     expect(host.events).toEqual([]);
     release.resolve();
     if (interruption === "provider retirement") {
-      expect(await pending).toEqual({ status: "unavailable", reason: "retiring" });
+      await expect(pending).resolves.toEqual({ status: "unavailable", reason: "retiring" });
     } else {
       await expect(pending).rejects.toThrow(
         interruption === "cancellation"
@@ -319,7 +339,13 @@ it.each(entries)("records exactly one accepted observation at %s", async (entry)
   expect(host.events[0]).toMatchObject({
     trusted: true,
     hostPluginId: entry.startsWith("plugin") ? host.consumer.id : undefined,
-    event: usageEvent(0.0002, "operation-owner"),
+    event: {
+      provider: "fixture",
+      model: "native",
+      agentId: "operation-owner",
+      usage: { input: 100 },
+      costUsd: 0.0002,
+    },
   });
   expect(host.events[0]!.event).not.toHaveProperty("sessionKey");
   expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
@@ -327,74 +353,113 @@ it.each(entries)("records exactly one accepted observation at %s", async (entry)
 
 const directEntries = ["core-v1", "core-v2", "registry-v1", "registry-v2"] as const;
 
-it.each(
-  directEntries.flatMap((entry) => [
-    { entry, mode: "replacement" },
-    { entry, mode: "admitted" },
-    { entry, mode: "accessor" },
-  ]),
-)("$entry captures its admitted signal ($mode)", async ({ entry, mode }) => {
-  const host = pendingDecision();
-  const { started, release, evaluate } = host;
-  const admitted = new AbortController();
-  const replacement = new AbortController();
-  const options = {
-    ...operationOptions,
-    purpose: "signal-replacement",
-    signal: admitted.signal,
-    agentId: "operation-owner",
-  };
-  let reads = 0;
-  if (mode === "accessor") {
-    Object.defineProperty(options, "signal", {
-      get: () => (++reads === 1 ? admitted.signal : replacement.signal),
-    });
-  }
-  const pending = invoke(entry, host, options);
-  const rejected =
-    mode === "admitted" ? expect(pending).rejects.toThrow("admitted cancelled") : undefined;
-  try {
-    await started.promise;
-    if (mode !== "accessor") {
+it.each(directEntries)(
+  "keeps admitted cancellation and exactly-once accounting after %s replaces its signal",
+  async (entry) => {
+    const host = pendingDecision();
+    const { started, release, evaluate } = host;
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    const options = {
+      ...operationOptions,
+      purpose: "signal-replacement",
+      signal: admitted.signal,
+      agentId: "operation-owner",
+    };
+    const pending = invoke(entry, host, options);
+    try {
+      await started.promise;
       options.signal = replacement.signal;
-    }
-    (mode === "admitted" ? admitted : replacement).abort(
-      new Error(mode === "admitted" ? "admitted cancelled" : "replacement cancelled"),
-    );
-    expect(host.events).toEqual([]);
-    release.resolve();
-    if (mode === "admitted") {
-      await rejected;
+      replacement.abort(new Error("replacement cancelled"));
       expect(host.events).toEqual([]);
-    } else {
-      expect(await pending).toMatchObject({ status: "ok", result: accepted().result });
+      release.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "ok", result: accepted().result });
       expect(host.events).toEqual([
-        { trusted: true, hostPluginId: undefined, event: usageEvent(0.0002, "operation-owner") },
+        {
+          trusted: true,
+          hostPluginId: undefined,
+          event: usageEvent(0.0002, "operation-owner"),
+        },
       ]);
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
     }
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
-    if (mode === "accessor") {
-      expect(reads).toBe(1);
-    }
-  } finally {
-    release.resolve();
-    await Promise.allSettled([pending]);
-  }
-});
+  },
+);
 
-it.each([undefined, null, operationOptions])(
-  "rejects absent options or signal before dispatch (%j)",
-  async (options) => {
-    const host = ready("registry-v2");
+it.each(directEntries)(
+  "still cancels %s under its admitted signal after replacement with a live signal",
+  async (entry) => {
+    const host = pendingDecision();
+    const { started, release, evaluate } = host;
+    const admitted = new AbortController();
+    const options = {
+      ...operationOptions,
+      purpose: "signal-replacement",
+      signal: admitted.signal,
+    };
+    const pending = invoke(entry, host, options);
+    const rejected = expect(pending).rejects.toThrow("admitted cancelled");
+    try {
+      await started.promise;
+      options.signal = new AbortController().signal;
+      admitted.abort(new Error("admitted cancelled"));
+      release.resolve();
+      await rejected;
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.events).toEqual([]);
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.each(directEntries)(
+  "reads %s caller signal accessor once for dispatch and completion",
+  async (entry) => {
+    const host = ready(entry);
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    replacement.abort(new Error("unadmitted accessor signal"));
+    let reads = 0;
     await expect(
-      Reflect.apply(decisionRuntime.evaluateDecisionV2InRegistry, undefined, [
-        batch,
-        options,
-        host.registry,
-        config,
-      ]),
-    ).rejects.toThrow("Invalid decision contract");
+      invoke(entry, host, {
+        ...operationOptions,
+        purpose: "signal-accessor",
+        get signal() {
+          return ++reads === 1 ? admitted.signal : replacement.signal;
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(reads).toBe(1);
+    expect(host.evaluate).toHaveBeenCalledOnce();
+    expect(host.events).toHaveLength(1);
+  },
+);
+
+it.each(["registry-v1", "registry-v2"] as const)(
+  "preserves %s contract errors for absent options or signal",
+  async (entry) => {
+    const host = ready(entry);
+    const evaluate =
+      entry === "registry-v1"
+        ? decisionRuntime.evaluateDecisionInRegistry
+        : decisionRuntime.evaluateDecisionV2InRegistry;
+    const input = entry === "registry-v1" ? v1Batch : batch;
+    for (const options of [
+      undefined,
+      null,
+      { purpose: "missing-signal", rubricVersion: "v2", timeoutMs: 5000 },
+    ]) {
+      await expect(
+        Reflect.apply(evaluate, undefined, [input, options, host.registry, config]),
+      ).rejects.toThrow("Invalid decision contract");
+    }
     expect(host.evaluate).not.toHaveBeenCalled();
     expect(host.events).toEqual([]);
   },
@@ -440,7 +505,9 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
   "records no usage when %s consumer retires at the outer-await handoff",
   async (entry) => {
     const host = ready(entry);
-    let disposal: Promise<unknown> | undefined;
+    let disposal:
+      | ReturnType<NonNullable<ReturnType<typeof getPluginInstance>>["dispose"]>
+      | undefined;
     onOperationSettled(() => {
       disposal = getPluginInstance(host.consumer)!.dispose();
     });
@@ -478,10 +545,20 @@ it.each(["plugin-v1", "plugin-v2", "tool", "prefilter"] as const)(
   async (entry) => {
     const host = ready(entry);
     const controller = new AbortController();
-    listenForUsage(() => queueMicrotask(() => controller.abort(new Error("after acceptance"))));
-    await invoke(entry, host, controller.signal);
-    expect(controller.signal.aborted).toBe(true);
-    expect(host.events).toHaveLength(1);
+    const stop = onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event) => {
+        if (event.type === "model.usage") {
+          queueMicrotask(() => controller.abort(new Error("after acceptance")));
+        }
+      }),
+    );
+    try {
+      await invoke(entry, host, controller.signal);
+      expect(controller.signal.aborted).toBe(true);
+      expect(host.events).toHaveLength(1);
+    } finally {
+      stop();
+    }
   },
 );
 
@@ -489,10 +566,16 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
   "does not reject accepted %s usage when the listener queues consumer disposal",
   async (entry) => {
     const host = ready(entry);
-    let disposal: Promise<unknown> | undefined;
-    listenForUsage(() =>
-      queueMicrotask(() => {
-        disposal = getPluginInstance(host.consumer)!.dispose();
+    let disposal:
+      | ReturnType<NonNullable<ReturnType<typeof getPluginInstance>>["dispose"]>
+      | undefined;
+    const stop = onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event) => {
+        if (event.type === "model.usage") {
+          queueMicrotask(() => {
+            disposal = getPluginInstance(host.consumer)!.dispose();
+          });
+        }
       }),
     );
     try {
@@ -500,16 +583,41 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
       expect(disposal).toBeDefined();
       expect(host.events).toHaveLength(1);
     } finally {
+      stop();
       await disposal;
     }
   },
 );
 
-it("leaves units-only usage eventless", async () => {
-  const outcome = accepted();
-  outcome.result.usage = { units: { unit: "decision-units", amount: 2 } };
+it.each(["core-v1", "registry-v1", "plugin-v1"] as const)(
+  "does not account for lossy V1 output at %s",
+  async (entry) => {
+    const host = registered(async () => accepted(0));
+    await expect(invoke(entry, host, new AbortController().signal)).resolves.toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(host.events).toEqual([]);
+  },
+);
+
+it.each([undefined, { units: { unit: "decision-units" as const, amount: 2 } }])(
+  "leaves missing or units-only usage eventless (%j)",
+  async (usage) => {
+    const host = registered(async () => ({
+      ...accepted(),
+      result: { ...accepted().result, usage },
+    }));
+    await host.run();
+    expect(host.events).toEqual([]);
+  },
+);
+
+it("respects disabled diagnostics without changing an accepted result", async () => {
+  const outcome = accepted(0);
   const host = registered(async () => outcome);
-  await host.run();
+  setRuntimeConfigSnapshot({ ...config, diagnostics: { enabled: false } });
+  expect(await host.run()).toMatchObject(outcome);
   expect(host.events).toEqual([]);
 });
 
@@ -575,16 +683,22 @@ it("keeps interleaved agent, model and consumer attribution invocation-local", a
   }
 });
 
-it("keeps an absent registry network-free", async () => {
-  const host = ready("core-v2");
-  expect(
-    await decisionRuntime.evaluateDecisionV2InRegistry(
-      batch,
-      { ...operationOptions, signal: new AbortController().signal },
-      undefined,
-      config,
-    ),
-  ).toEqual({ status: "unavailable", reason: "not-configured" });
-  expect(host.evaluate).not.toHaveBeenCalled();
-  expect(host.events).toEqual([]);
-});
+it.each([null, undefined])(
+  "keeps explicit absent registry %j network-free for both contracts",
+  async (registry) => {
+    const host = ready("core-v2");
+    const options = {
+      ...operationOptions,
+      purpose: "missing-registry",
+      signal: new AbortController().signal,
+    };
+    await expect(
+      decisionRuntime.evaluateDecisionInRegistry(v1Batch, options, registry, config),
+    ).resolves.toEqual({ status: "unavailable", reason: "not-configured" });
+    await expect(
+      decisionRuntime.evaluateDecisionV2InRegistry(batch, options, registry, config),
+    ).resolves.toEqual({ status: "unavailable", reason: "not-configured" });
+    expect(host.evaluate).not.toHaveBeenCalled();
+    expect(host.events).toEqual([]);
+  },
+);

@@ -457,7 +457,7 @@ describe("broadcast send outcomes through native actions", () => {
     sessionKey: "agent:main:telegram:direct:123456789",
     sourceReplyDeliveryMode: "message_tool_only",
   } as const;
-  const explicitRoute = (allowAcrossProviders: boolean, options: Partial<MessageActionInput>) =>
+  const explicitRoute = (allowAcrossProviders = true, options: Partial<MessageActionInput> = {}) =>
     runMessageAction({
       ...sourceInput,
       cfg: {
@@ -540,30 +540,53 @@ describe("broadcast send outcomes through native actions", () => {
       ]);
     });
 
-    it("rejects a private source without an address", async () => {
-      const failure = runMessageAction({
-        ...sourceInput,
-        toolContext: { currentChannelProvider: "telegram" },
-      });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_target_missing",
-        policyRef: "message-target:required",
-      });
-      await expect(failure).rejects.toThrow(/requires a target/i);
-    });
-
-    it("rejects disabled broadcasts", async () => {
-      const failure = runMessageAction({
-        cfg: { tools: { message: { broadcast: { enabled: false } } } },
-        action: "broadcast",
-        params: { targets: ["first"], message: "hello" },
-      });
-      await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
-      await expect(failure).rejects.toMatchObject({
-        reasonCode: "message_broadcast_disabled",
-        policyRef: "message-broadcast:enabled",
-      });
+    it.each([
+      {
+        name: "private source without an address",
+        input: { ...sourceInput, toolContext: { currentChannelProvider: "telegram" } },
+        denial: { reasonCode: "message_target_missing", policyRef: "message-target:required" },
+        message: /requires a target/i,
+      },
+      {
+        name: "disabled broadcast",
+        input: {
+          cfg: { tools: { message: { broadcast: { enabled: false } } } },
+          action: "broadcast",
+          params: { targets: ["qa-channel:direct:one"], message: "hello" },
+        },
+        denial: {
+          reasonCode: "message_broadcast_disabled",
+          policyRef: "message-broadcast:enabled",
+        },
+      },
+      {
+        name: "broadcast targets used as a send target",
+        input: {
+          cfg: {},
+          action: "send",
+          params: {
+            action: "send",
+            idempotencyKey: "run:message:1",
+            targets: ["user:123456789"],
+            message: "hello from codex",
+          },
+        },
+        message: /requires a target/i,
+      },
+    ] satisfies Array<{
+      name: string;
+      input: MessageActionInput;
+      denial?: { reasonCode: string; policyRef: string };
+      message?: RegExp;
+    }>)("rejects $name", async ({ input, denial, message }) => {
+      const failure = runMessageAction(input);
+      if (denial) {
+        await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+        await expect(failure).rejects.toMatchObject(denial);
+      }
+      if (message) {
+        await expect(failure).rejects.toThrow(message);
+      }
     });
 
     it.each([
