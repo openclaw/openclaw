@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { channelFixtureSource } from "./loader-fixture-builders.test-support.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
 
@@ -23,9 +25,8 @@ function writeChannelToolPlugin(params: {
   const channelId = "qqbot";
   const pluginDir = path.join(params.rootDir, params.id);
   mkdirSafeDir(pluginDir);
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeArtifacts(pluginDir, {
+    "openclaw.plugin.json": {
       id: params.id,
       channels: [channelId],
       ...(params.canonicalAliasesRequireOwnField
@@ -46,32 +47,11 @@ function writeChannelToolPlugin(params: {
         },
       },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "index.cjs"),
-    `module.exports = {
+    },
+    "index.cjs": `module.exports = {
       id: ${JSON.stringify(params.id)},
       register(api) {
-        api.registerChannel({
-          plugin: {
-            id: "qqbot",
-            meta: {
-              id: "qqbot",
-              label: "qqbot",
-              selectionLabel: "qqbot",
-              docsPath: "/channels/qqbot",
-              blurb: "fixture channel",
-            },
-            capabilities: { chatTypes: ["direct"] },
-            config: {
-              listAccountIds: () => [],
-              resolveAccount: () => ({ accountId: "default" }),
-            },
-            outbound: { deliveryMode: "direct" },
-          },
-        });
+        api.registerChannel({ plugin: ${channelFixtureSource(channelId, { label: channelId, docsPath: "/channels/qqbot" })} });
         api.registerTool({
           name: "qqbot_remind",
           description: "fixture",
@@ -80,8 +60,7 @@ function writeChannelToolPlugin(params: {
         }, { name: "qqbot_remind" });
       },
     };`,
-    "utf-8",
-  );
+  });
   return pluginDir;
 }
 

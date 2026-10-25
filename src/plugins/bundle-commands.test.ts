@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   plugins: [] as PluginManifestRecord[],
@@ -38,21 +38,9 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
-async function writeCommands(homeDir: string, commands: Record<string, string | Buffer>) {
+function writeCommands(homeDir: string, commands: Record<string, string>) {
   const pluginRoot = path.join(homeDir, ".openclaw", "extensions", "fixture");
-  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-    JSON.stringify({ name: "fixture" }),
-    "utf-8",
-  );
-  await Promise.all(
-    Object.entries(commands).map(async ([relativePath, contents]) => {
-      const filePath = path.join(pluginRoot, relativePath);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, typeof contents === "string" ? `${contents}\n` : contents);
-    }),
-  );
+  writeArtifacts(pluginRoot, { ".claude-plugin/plugin.json": { name: "fixture" }, ...commands });
   mocks.plugins = [
     {
       id: "fixture",
@@ -89,7 +77,7 @@ describe("Claude bundle command discovery", () => {
         OPENCLAW_STATE_DIR: undefined,
       },
       async () => {
-        const pluginRoot = await writeCommands(homeDir, {
+        const pluginRoot = writeCommands(homeDir, {
           "commands/office-hours.MD": markdown(
             "Give direct engineering advice.",
             "description: Help with scoping and architecture",
@@ -151,12 +139,12 @@ describe("Claude bundle command discovery", () => {
 
   it("warns and skips oversized bundle commands without dropping siblings", async () => {
     const homeDir = tempDirs.make("openclaw-bundle-commands-oversized-");
-    const pluginRoot = await writeCommands(homeDir, {
+    const pluginRoot = writeCommands(homeDir, {
       "commands/normal.md": markdown(
         "This is a normal command.",
         "description: Normal command that should be loaded",
       ),
-      "commands/oversized.md": Buffer.alloc(1024 * 1024 + 1, "x"),
+      "commands/oversized.md": "x".repeat(1024 * 1024 + 1),
     });
 
     const oversizedFilePath = path.join(pluginRoot, "commands", "oversized.md");
