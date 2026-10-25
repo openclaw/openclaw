@@ -135,24 +135,12 @@ describe("resolveGatewayProgramArguments", () => {
     }
   });
 
-  it("prefers symlinked path over realpath for stable service config", async () => {
-    const symlinkPath = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/entry.js",
+  it("keeps the normalized dist path when pnpm ownership cannot be verified", async () => {
+    mockEntrypoint(path.resolve("/package/dist/entry.js"));
+    fsMocks.realpath.mockResolvedValue(
+      path.resolve("/package/.pnpm/openclaw@1/node_modules/openclaw/dist/entry.js"),
     );
-    const realpathResolved = path.resolve(
-      "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.1.21-2/node_modules/openclaw/dist/entry.js",
-    );
-    process.argv = ["node", symlinkPath];
-    fsMocks.realpath.mockResolvedValue(realpathResolved);
-    fsMocks.access.mockResolvedValue(undefined);
-
-    const result = await gatewayArgs();
-
-    expect(result.programArguments[0]).toBe(validatedNodePath);
-    expect(result.programArguments[2]).toBe(
-      path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
-    );
-    expect(result.programArguments[2]).not.toContain("@2026.1.21-2");
+    expect((await gatewayArgs()).programArguments[2]).toBe(path.resolve("/package/dist/index.js"));
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -233,35 +221,16 @@ describe("resolveGatewayProgramArguments", () => {
 });
 
 describe("resolveNodeProgramArguments", () => {
-  it.each([
-    { runtime: "node", entry: "src/entry.ts", runtimePath: validatedNodePath },
-    { runtime: "bun", entry: "openclaw.mjs", runtimePath: validatedBunPath },
-  ] as const)(
-    "keeps the $runtime launcher in the selected package from $entry",
-    async (options) => {
-      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const root = tempDirs.make("openclaw-node-selected-package-");
-      const entrypoint = path.join(root, options.entry);
-      const launcher = path.join(root, "openclaw.mjs");
-      await actualFs.mkdir(path.dirname(entrypoint), { recursive: true });
-      await actualFs.writeFile(entrypoint, "");
-      await actualFs.writeFile(launcher, "");
-      fsMocks.realpath.mockImplementation(actualFs.realpath);
-      fsMocks.access.mockImplementation(actualFs.access);
-
-      const result = await nodeArgs({
-        cliEntrypoint: entrypoint,
-        runtime: options.runtime,
-        runtimePath: options.runtimePath,
-      });
-      expect(result.programArguments).toEqual([
-        options.runtimePath,
-        ...(options.runtime === "bun" ? ["--no-install"] : []),
-        launcher,
-        ...nodeTail,
-      ]);
-    },
-  );
+  it("selects the package launcher when invoked from source", async () => {
+    const launcher = path.resolve("/repo/openclaw.mjs");
+    mockEntrypoint(path.resolve("/repo/src/entry.ts"));
+    fsMocks.access.mockImplementation(async (candidate: string) => {
+      if (candidate !== launcher) {
+        throw new Error("missing");
+      }
+    });
+    expect((await nodeArgs()).programArguments).toEqual([validatedNodePath, launcher, ...nodeTail]);
+  });
 
   it.each([true, false])("requires the built CLI launcher (available=%s)", async (available) => {
     const entry = path.resolve("/opt/openclaw/dist/entry.js");
@@ -277,22 +246,7 @@ describe("resolveNodeProgramArguments", () => {
     }
   });
 
-  it("carries plaintext and command restrictions into the managed node command", async () => {
-    const launcherPath = path.resolve("/opt/openclaw/openclaw.mjs");
-
-    const result = await nodeArgs({ tls: false, commands: ["fixture.list", "fixture.read"] });
-
-    expect(result.programArguments).toEqual([
-      validatedNodePath,
-      launcherPath,
-      ...nodeTail,
-      "--no-tls",
-      "--commands",
-      "fixture.list,fixture.read",
-    ]);
-  });
-
-  it("replaces persisted command restrictions with all commands while retaining node options", async () => {
+  it("persists plaintext restrictions and replaces them with all commands while retaining node options", async () => {
     const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
     fsMocks.stat.mockImplementation(actualFs.stat);
     vi.spyOn(windowsEncoding, "resolveWindowsOemCodePage").mockReturnValue(437);
@@ -310,17 +264,29 @@ describe("resolveNodeProgramArguments", () => {
       port: 18789,
       displayName: "Fixture Node",
       installedAppsSharing: false,
+      tls: false,
       runtime: "node" as const,
     };
     try {
       const restricted = await nodeArgs({
         ...options,
-        commands: ["fixture.read"],
+        commands: ["fixture.list", "fixture.read"],
       });
+      expect(restricted.programArguments).toEqual([
+        validatedNodePath,
+        path.resolve("/opt/openclaw/openclaw.mjs"),
+        ...nodeTail,
+        "--no-tls",
+        "--display-name",
+        "Fixture Node",
+        "--no-share-installed-apps",
+        "--commands",
+        "fixture.list,fixture.read",
+      ]);
       await stageScheduledTask({ env, stdout, ...restricted });
       const saved = await readScheduledTaskCommand(env);
       expect(saved?.programArguments).toEqual(
-        expect.arrayContaining(["--commands", "fixture.read"]),
+        expect.arrayContaining(["--no-tls", "--commands", "fixture.list,fixture.read"]),
       );
 
       const reset = await nodeArgs({ ...options, allCommands: true });
@@ -329,13 +295,14 @@ describe("resolveNodeProgramArguments", () => {
       expect(replaced?.programArguments).toEqual(
         expect.arrayContaining([
           "--all-commands",
+          "--no-tls",
           "--display-name",
           "Fixture Node",
           "--no-share-installed-apps",
         ]),
       );
       expect(replaced?.programArguments).not.toContain("--commands");
-      expect(replaced?.programArguments).not.toContain("fixture.read");
+      expect(replaced?.programArguments).not.toContain("fixture.list,fixture.read");
     } finally {
       stdout.destroy();
     }

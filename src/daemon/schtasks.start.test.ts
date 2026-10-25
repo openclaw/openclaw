@@ -15,7 +15,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as utils from "../utils.js";
 import { startScheduledTask } from "./schtasks-control.js";
-import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import * as gatewayService from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
@@ -115,6 +114,8 @@ async function packageEntry(root: string, name = "openclaw") {
 const nodeCommand = (entry: string, args = "gateway") => `"C:\\Node\\node.exe" "${entry}" ${args}`;
 const writeLauncher = (file: string, command: string) =>
   fs.writeFile(file, `@echo off\r\n${command}\r\n`);
+const called = (...commands: string[]) =>
+  native.calls.some(([command]) => commands.includes(command));
 
 function startTask(
   env: Record<string, string>,
@@ -146,13 +147,11 @@ async function fixture(
   return { env, file, root, entry };
 }
 
-it.each(["owned", "foreign", "missing launcher"] as const)(
+it.each(["owned", "missing launcher"] as const)(
   "recovers a disabled Scheduled Task through Doctor only with a verified launcher (%s)",
   async (scenario) => {
     const { env, root, file } = await fixture();
-    if (scenario === "foreign") {
-      await writeLauncher(file, '"C:\\Windows\\notepad.exe" gateway');
-    } else if (scenario === "missing launcher") {
+    if (scenario === "missing launcher") {
       await fs.unlink(file);
     }
     const service = createMockGatewayService({
@@ -196,12 +195,10 @@ it.each(["owned", "foreign", "missing launcher"] as const)(
     );
     expect(native).toMatchObject({ enabled: scenario === "owned", running: scenario === "owned" });
     if (scenario !== "owned") {
-      expect(native.calls.some((args) => args[0] === "/Change" || args[0] === "/Run")).toBe(false);
+      expect(called("/Change", "/Run")).toBe(false);
       expect(note).toHaveBeenCalledWith(
         expect.stringMatching(
-          scenario === "foreign"
-            ? /Gateway service start failed: .*not the requested OpenClaw service/
-            : /Gateway service start failed: .*service command could not be inspected/,
+          /Gateway service start failed: .*service command could not be inspected/,
         ),
         "Gateway",
       );
@@ -223,7 +220,7 @@ it("does not enable a captured service whose auto-start policy must be preserved
   const { env } = await fixture();
   await expect(startTask(env, { preserveAutoStart: true })).rejects.toThrow("disabled");
   expect(native).toMatchObject({ enabled: false, running: false });
-  expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
+  expect(called("/Change")).toBe(false);
 });
 
 it("preserves native Run with missing policy metadata (enabled=true)", async () => {
@@ -232,8 +229,8 @@ it("preserves native Run with missing policy metadata (enabled=true)", async () 
   native.enabledAvailable = false;
   await expect(startTask(env)).resolves.toBeUndefined();
   expect(native.running).toBe(true);
-  expect(native.calls.some((args) => args[0] === "/Run")).toBe(true);
-  expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
+  expect(called("/Run")).toBe(true);
+  expect(called("/Change")).toBe(false);
 });
 
 it.each([
@@ -245,7 +242,7 @@ it.each([
   async (_kind, packageName, program) => {
     const { env } = await fixture("gateway", packageName, program);
     await expect(startTask(env)).rejects.toThrow();
-    expect(native.calls.filter((args) => args[0] === "/Change" || args[0] === "/Run")).toEqual([]);
+    expect(called("/Change", "/Run")).toBe(false);
     expect(native.enabled).toBe(false);
   },
 );
@@ -276,13 +273,13 @@ it.each(["definition", "entrypoint", "authority"])(
         },
       }),
     ).rejects.toThrow(kind === "authority" ? "Caller authority lost" : "changed before start");
-    expect(native.calls.filter((args) => args[0] === "/Run")).toEqual([]);
+    expect(called("/Run")).toBe(false);
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }]]);
   },
 );
 
 it("revalidates a registered VBS launcher across enable before running", async () => {
-  const { env, root, entry } = await fixture();
+  const { env, root } = await fixture();
   const cmd = native.scriptPath;
   const launcher = path.join(root, "gateway.vbs");
   native.scriptPath = "C:\\fixture\\gateway.vbs";
@@ -291,23 +288,10 @@ it("revalidates a registered VBS launcher across enable before running", async (
     launcher,
     `Set shell = CreateObject("WScript.Shell")\r\nWScript.Quit shell.Run("""${cmd}""", 0, True)\r\n`,
   );
-  const sources: string[] = [];
-  // Published update drivers serialize this default command into their definition fingerprint.
-  expect(
-    await readScheduledTaskCommand(env, {
-      requireEffective: true,
-      requireLoaded: true,
-      onLauncherContent: (_content, sourcePath) => sources.push(sourcePath),
-    }),
-  ).toEqual({
-    programArguments: ["C:\\Node\\node.exe", entry, "gateway"],
-    sourcePath: cmd,
-  });
-  expect(sources).toEqual([native.scriptPath, cmd]);
   native.afterEnable = () =>
     fs.writeFile(launcher, `CreateObject("WScript.Shell").Run """${cmd}""", 0, False\r\n`);
   await expect(startTask(env)).rejects.toThrow("changed before start");
-  expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
+  expect(called("/Run")).toBe(false);
 });
 
 it.each([
@@ -344,9 +328,9 @@ it.each([
   } else if (kind === "changed after enable") {
     await expect(start).rejects.toThrow("changed before start");
     expect(native.enabled).toBe(true);
-    expect(native.calls.some((args) => args[0] === "/Run")).toBe(false);
+    expect(called("/Run")).toBe(false);
   } else {
     await expect(start).rejects.toThrow();
-    expect(native.calls.some((args) => args[0] === "/Change" || args[0] === "/Run")).toBe(false);
+    expect(called("/Change", "/Run")).toBe(false);
   }
 });

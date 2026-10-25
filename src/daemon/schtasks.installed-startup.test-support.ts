@@ -264,26 +264,23 @@ export async function inspectInstalledSelectedStartupFallback(
           });
           assert.ok(report.findings[0]?.message.includes(`startup: ${aliasPath}`));
           const value = await deepStatus(selected);
-          const status = z
-            .object({
-              service: z.object({
-                loaded: z.literal(true),
+          const status = installedStatusSchema
+            .extend({
+              service: installedStatusSchema.shape.service.extend({
                 runtime: z.object({
                   status: z.literal("stopped"),
                   pid: z.undefined().optional(),
                   detail: z.string(),
                 }),
-                command: z.object({ programArguments: z.array(z.string()) }),
               }),
               rpc: z.object({ ok: z.literal(false) }),
-              gateway: z.object({ port: z.number().int().positive() }),
+              gateway: installedStatusSchema.shape.gateway.pick({ port: true }),
             })
             .parse(value);
           assert.match(status.service.runtime.detail, /^Startup-folder login item installed;/u);
           assert.deepEqual(status.service.command.programArguments, expectedCommand);
           assert.equal(status.gateway.port, selected.gatewayPort);
-          const { extraServices } = startupStatusExtrasSchema.parse(value);
-          assert.deepEqual(extraServices, [
+          assert.deepEqual(startupStatusExtrasSchema.parse(value).extraServices, [
             {
               platform: "win32",
               label: selected.taskName,
