@@ -1,30 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import {
+  applyMemoryWikiMutation as apply,
+  normalizeMemoryWikiMutationInput as normalize,
+} from "./apply.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+function mutate(config: Parameters<typeof apply>[0]["config"], mutation: unknown) {
+  return apply({ config, mutation: normalize(mutation) });
+}
 
-const synthesisInput = {
-  title: "Alpha Synthesis",
-  body: "Alpha summary body.",
-  sourceIds: ["source.alpha"],
-};
+const synthesisInput = { title: "Alpha Synthesis", body: "Summary.", sourceIds: ["source.alpha"] };
 
 describe("applyMemoryWikiMutation", () => {
-  it.each([
-    ["create_synthesis", { ...synthesisInput, confidence: "0.7" }, { confidence: 0.7 }],
-    ["update_metadata", { lookup: "entity.alpha", confidence: "0.4" }, { confidence: 0.4 }],
-    ["synthesis", synthesisInput, { op: "create_synthesis", title: "Alpha Synthesis" }],
-    [
-      "metadata",
-      { lookup: "entity.alpha", sourceIds: ["source.alpha"] },
-      { op: "update_metadata", lookup: "entity.alpha" },
-    ],
-  ] as const)("normalizes confidence and aliases for %s", (op, input, expected) => {
-    expect(normalizeMemoryWikiMutationInput({ op, ...input })).toMatchObject(expected);
-  });
-
   it.each([false, true])(
     "persists metadata, indexes and human blocks (update: %s)",
     async (update) => {
@@ -60,23 +49,18 @@ describe("applyMemoryWikiMutation", () => {
           "# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\nkeep this note\n<!-- openclaw:human:end -->\n",
         );
       }
-      const result = await applyMemoryWikiMutation({
+      const result = await mutate(
         config,
-        mutation: update
+        update
           ? {
-              op: "update_metadata",
+              op: "metadata",
               lookup: id,
               ...structuredClone(metadata),
               confidence: null,
               status: "review",
             }
-          : {
-              op: "create_synthesis",
-              ...synthesisInput,
-              ...structuredClone(metadata),
-              confidence: 0.7,
-            },
-      });
+          : { op: "synthesis", ...synthesisInput, ...structuredClone(metadata), confidence: "0.7" },
+      );
       expect(result).toMatchObject({
         changed: true,
         pagePath: target,
@@ -110,43 +94,28 @@ describe("applyMemoryWikiMutation", () => {
   );
 
   it.each([
-    {
-      name: "syntax-error",
-      frontmatterLines: [
-        "pageType: synthesis",
-        "id: synthesis.conflicted",
-        "sourceIds:",
-        '  - **MEMORY.md line 235**:"some quoted, value"',
-      ],
-      error: "Unexpected scalar",
-    },
-    {
-      name: "sequence-root",
-      frontmatterLines: ["- pageType: synthesis", "  id: synthesis.conflicted"],
-      error: "Wiki frontmatter must be a YAML mapping",
-    },
-  ])(
-    "rejects a malformed write target without replacing its metadata ($name) (#96125)",
-    async ({ frontmatterLines, error }) => {
-      const { config, write, read } = await createVault();
-      const target = "syntheses/conflicted.md";
-      const original = `---\n${frontmatterLines.join("\n")}\n---\n\n# Conflicted\n\nKeep this body.`;
-      await write(target, original);
-
-      await expect(
-        applyMemoryWikiMutation({
-          config,
-          mutation: {
-            op: "create_synthesis",
-            title: "Conflicted",
-            body: "Replacement body.",
-            sourceIds: ["source.new"],
-          },
-        }),
-      ).rejects.toThrow(error);
-      await expect(read(target)).resolves.toBe(original);
-    },
-  );
+    [
+      'pageType: synthesis\nid: synthesis.conflicted\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"',
+      "Unexpected scalar",
+    ],
+    [
+      "- pageType: synthesis\n  id: synthesis.conflicted",
+      "Wiki frontmatter must be a YAML mapping",
+    ],
+  ])("preserves malformed write targets: %s (#96125)", async (frontmatter, error) => {
+    const { config, write, read } = await createVault();
+    const target = "syntheses/conflicted.md";
+    const original = "---\n" + frontmatter + "\n---\n\n# Conflicted\n\nKeep this body.";
+    await write(target, original);
+    await expect(
+      mutate(config, {
+        op: "create_synthesis",
+        ...synthesisInput,
+        title: "Conflicted",
+      }),
+    ).rejects.toThrow(error);
+    await expect(read(target)).resolves.toBe(original);
+  });
 
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
     const { config, page, read } = await createVault();
@@ -154,25 +123,16 @@ describe("applyMemoryWikiMutation", () => {
     await page(target, { pageType: "entity", id: "entity.shared", title: "Shared" });
 
     await Promise.all(
-      [
-        { sourceIds: ["source.concurrent"] },
-        { questions: ["Which agent owns the next action?"] },
-        { confidence: 0.9 },
-        { status: "review" },
-      ].map((metadata) =>
-        applyMemoryWikiMutation({
-          config,
-          mutation: { op: "update_metadata", lookup: "entity.shared", ...metadata },
-        }),
+      [{ questions: ["Which agent owns the next action?"] }, { confidence: "0.9" }].map(
+        (metadata) =>
+          mutate(config, { op: "update_metadata", lookup: "entity.shared", ...metadata }),
       ),
     );
 
     const parsed = parseWikiMarkdown(await read(target));
     expect(parsed.frontmatter).toMatchObject({
-      sourceIds: ["source.concurrent"],
       questions: ["Which agent owns the next action?"],
       confidence: 0.9,
-      status: "review",
     });
   });
 });

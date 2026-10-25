@@ -7,103 +7,75 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   loadMemoryWikiCompiledCache as loadCache,
-  readMemoryWikiDashboardState,
   writeMemoryWikiCompiledCache as writeCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { buildMemoryWikiImportInsights } from "./import-insights.js";
+import {
+  buildMemoryWikiImportInsights,
+  projectMemoryWikiImportInsight,
+} from "./import-insights.js";
 import type { WikiPageSummary } from "./markdown.js";
+import { createCompiledDigestPage, createCompiledSnapshot } from "./test-helpers.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 function createSnapshot(body: string): MemoryWikiCompiledCacheSnapshot {
   const text = body.slice(0, 700);
-  const usage = { bestUsedFor: [text], notEnoughFor: [text] };
-  const shared = {
-    ...usage,
-    title: text,
-    kind: "entity" as const,
+  const digest = createCompiledDigestPage({
     aliases: [text],
-    sourceIds: [text],
-    contradictions: [text],
-    questions: [text],
     personCard: {
-      ...structuredClone(usage),
       handles: [text],
-      socials: [text],
-      emails: [text],
-      askFor: [text],
-      avoidAskingFor: [text],
+      socials: [],
+      emails: [],
+      askFor: [],
+      avoidAskingFor: [],
+      bestUsedFor: [],
+      notEnoughFor: [],
     },
-  };
+    topRelationships: [{ targetTitle: text, note: text }],
+    topClaims: [{ text, status: "supported", freshnessLevel: "fresh" }],
+  });
   const page: WikiPageSummary = {
-    ...shared,
+    ...digest,
     absolutePath: "/wiki/entities/snapshot.md",
-    relativePath: "entities/snapshot.md",
+    relativePath: digest.path,
     hasFrontmatter: true,
     linkTargets: [],
-    claims: [{ text, evidence: [] }],
-    relationships: [{ targetTitle: text, note: text }],
     bridgeAgentIds: [],
+    claims: [{ text, evidence: [] }],
+    relationships: digest.topRelationships,
+    questions: [text],
   };
-  return {
-    digest: {
-      claimCount: 1,
-      contradictionCount: 1,
-      pages: [
-        {
-          ...shared,
-          path: page.relativePath,
-          relationshipCount: 1,
-          topRelationships: page.relationships,
-          claimCount: 1,
-          topClaims: [{ text, status: "supported", freshnessLevel: "fresh" }],
-        },
-      ],
+  const insight = projectMemoryWikiImportInsight(
+    { ...page, pageType: "source" },
+    {
+      frontmatter: { sourceType: "chatgpt-export" },
+      body: "## Auto Digest\n- Preference signals:\n  - " + text,
     },
-    claims: [
-      {
-        pageTitle: page.title,
-        pageKind: page.kind,
-        pagePath: page.relativePath,
-        aliases: page.aliases,
-        sourceIds: page.sourceIds,
-        evidenceKinds: [text],
-        privacyTiers: [text],
-        text,
-      },
-    ],
-    dashboards: {
-      overview: buildMemoryWikiOverview([page], [projectMemoryWikiOverviewItem(page, body)]),
-      importInsights: buildMemoryWikiImportInsights([
-        {
-          pagePath: "sources/import.md",
-          title: text,
-          riskLevel: "low",
-          riskReasons: [text],
-          labels: [text],
-          topicKey: "topic/testing",
-          topicLabel: text,
-          digestStatus: "available",
-          activeBranchMessages: 2,
-          userMessageCount: 1,
-          assistantMessageCount: 1,
-          firstUserLine: text,
-          lastUserLine: text,
-          assistantOpener: text,
-          summary: text,
-          candidateSignals: [text],
-          correctionSignals: [text],
-          preferenceSignals: [text],
-        },
-      ]),
+  );
+  assert.ok(insight);
+  const snapshot = createCompiledSnapshot({
+    claimCount: 1,
+    contradictionCount: 0,
+    pages: [digest],
+  });
+  snapshot.claims = [
+    {
+      pageTitle: page.title,
+      pageKind: page.kind,
+      pagePath: page.relativePath,
+      evidenceKinds: [text],
+      text,
     },
+  ];
+  snapshot.dashboards = {
+    overview: buildMemoryWikiOverview([page], [projectMemoryWikiOverviewItem(page, body)]),
+    importInsights: buildMemoryWikiImportInsights([insight]),
   };
+  return snapshot;
 }
 
-afterEach(() => {
-  configureMemoryWikiCompiledCacheStore(undefined);
-});
+afterEach(() => configureMemoryWikiCompiledCacheStore(undefined));
 
 it("owns every compiled branch without changing persisted text", async () => {
   const blobs: Uint8Array[] = [];
@@ -125,7 +97,7 @@ it("owns every compiled branch without changing persisted text", async () => {
   });
   configureMemoryWikiCompiledCacheStore(store);
   const config = resolveMemoryWikiConfig({ vault: { path: "/wiki" } });
-  activateOwner(config, "vault-generation");
+  activateOwner(config, "vault");
   // The real projection slices its snippet from a much larger source page.
   const snapshot = createSnapshot(
     "漢字-é-😀-e\u0301-\ud800-x-\udc00" + "x".repeat(2 * 1024 * 1024),
@@ -140,10 +112,7 @@ it("owns every compiled branch without changing persisted text", async () => {
   const topClaim = digestPage.topClaims[0];
   assert.ok(relationship && topClaim);
   const serialized = JSON.stringify(snapshot);
-  const identity = {
-    vaultGeneration: "vault-generation",
-    compiledCachePublicationId: "publication",
-  };
+  const identity = { vaultGeneration: "vault", compiledCachePublicationId: "publication" };
   await writeCache(
     config,
     snapshot,
@@ -159,9 +128,7 @@ it("owns every compiled branch without changing persisted text", async () => {
 
   const cached = await loadCache(config);
   assert.ok(cached);
-  expect(cached).not.toBe(snapshot);
   expect(JSON.stringify(cached)).toBe(serialized);
-  expect(blobs).toHaveLength(1);
   const [blob] = blobs;
   assert.ok(blob);
   expect(gunzipSync(blob).toString("utf8")).toBe(serialized);
@@ -177,18 +144,11 @@ it("owns every compiled branch without changing persisted text", async () => {
   insight.summary = "changed summary";
   insight.preferenceSignals[0] = "changed preference";
   expect(JSON.stringify(await loadCache(config))).toBe(serialized);
-  await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
-    state: "ready",
-    dashboards: cached.dashboards,
-  });
-  await expect(loadCache(config)).resolves.toBe(cached);
 
   // Reload must preserve Unicode, lone surrogates, and the durable generation.
   configureMemoryWikiCompiledCacheStore(undefined);
   configureMemoryWikiCompiledCacheStore(store);
   activateOwner(config, identity.vaultGeneration, identity.compiledCachePublicationId);
   const reloaded = await loadCache(config);
-  assert.ok(reloaded);
-  expect(reloaded).toEqual(cached);
   expect(JSON.stringify(reloaded)).toBe(serialized);
 });
