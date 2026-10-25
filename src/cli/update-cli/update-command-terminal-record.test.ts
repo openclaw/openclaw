@@ -73,12 +73,8 @@ function fixture(
     },
     databasePath: resolveOpenClawStateSqlitePath(env),
     write(sql: string, ...values: (string | number)[]) {
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
-      try {
-        db.prepare(sql).run(...values);
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      db.prepare(sql).run(...values);
     },
     capture: (candidate = result) =>
       captureUpdateCommandTerminalRecord(params, candidate, assertCurrent),
