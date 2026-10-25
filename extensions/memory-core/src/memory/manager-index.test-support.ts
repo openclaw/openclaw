@@ -564,20 +564,6 @@ export function countMemoryIndexFtsMatches(databasePath: string, marker: string)
   }
 }
 
-export function holdMemoryTestOperation<T>(value: () => T) {
-  const entered = createDeferred<void>();
-  const gate = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: () => gate.resolve(),
-    run: async () => {
-      entered.resolve();
-      await gate.promise;
-      return value();
-    },
-  };
-}
-
 export function readPublishedSessionIndex(
   database: DatabaseSync,
   sessionPath: string,
