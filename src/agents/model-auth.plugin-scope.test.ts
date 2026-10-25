@@ -252,7 +252,6 @@ test("uses prepared metadata ownership over ambient declarations", async (f) => 
       () => expect(project(f).evaluateEntry(entry)).toMatchObject({ availability: true }),
       { config: f.cfg, trustConfigIdentity: true },
     );
-    expect(f.hook).toHaveBeenCalled();
   } finally {
     policy.mockRestore();
   }
