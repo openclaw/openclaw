@@ -32,8 +32,9 @@ it.each([true, false])(
     const now = 1_800_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     let failCapture = true;
+    const unsupportedMessage = "x".repeat(1024);
     const receipt = unsupported
-      ? unsupportedCaptureReceipt(LEASE_ID)
+      ? { ...unsupportedCaptureReceipt(LEASE_ID), message: unsupportedMessage }
       : {
           schema: "crabbox.checkpoint.create.failure.v1",
           outcome: "not_submitted",
@@ -62,7 +63,7 @@ it.each([true, false])(
         unsupported: {
           atMs: now,
           provider: "aws",
-          message: unsupportedCaptureReceipt(LEASE_ID).message,
+          message: unsupportedMessage,
         },
       });
       expectText(warn.mock.calls[0]?.[0], ["warm image capture unsupported:"], ["failed"]);
@@ -332,18 +333,14 @@ it("does not change a checkpoint-bound lease to cold when the fork fails", async
     argv[2] === "fork" ? commandResult({ code: 7, stderr: "snapshot unavailable" }) : undefined,
   );
   await captureWarmImage(provider);
-  calls.length = 0;
-
-  await expect(provisionWarmProfile(provider)).rejects.toThrow();
-
-  const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-  const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
-  expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-  expect(warmup).toBeUndefined();
-  calls.length = 0;
-  await expect(provisionWarmProfile(provider)).rejects.toThrow();
-  expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    calls.length = 0;
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
+    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
+    expect(fork?.[3]).toBe(CHECKPOINT_ID);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  }
 });
 
 it("verifies an unverified pending image before falling back to cold", async () => {

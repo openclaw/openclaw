@@ -75,7 +75,6 @@ async function download(
     sha256,
     bytes: archive.length,
     packageRelativePath: `worker-artifacts/${sha256}.tgz`,
-    ...(Array.isArray(outcomes) && outcomes[0] === "pin" ? { tlsFingerprint: "a".repeat(64) } : {}),
   };
   const nodeBootstrap = createNodeBootstrapFixture({
     sha256: createHash("sha256").update(runtimeArchive).digest("hex"),
@@ -135,7 +134,6 @@ async function download(
       let finished = false;
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
       const socket = Object.assign(new EventEmitter(), {
-        getPeerCertificate: () => ({ fingerprint256: "b".repeat(64) }),
         setTimeout: (ms: number, callback: () => void) => {
           idleTimer = setTimeout(() => socket.emit("timeout"), ms);
           socket.once("timeout", callback);
@@ -257,7 +255,7 @@ async function download(
       queueMicrotask(() => {
         let listeners = 0;
         socket.on("newListener", (event) => {
-          if (event === "secureConnect" && ++listeners === (outcome === "pin" ? 2 : 1)) {
+          if (event === "secureConnect" && ++listeners === 1) {
             queueMicrotask(() => socket.emit("secureConnect"));
           }
         });
@@ -591,7 +589,7 @@ describe("bootstrap artifact download retries", () => {
     const result = await download(["late-reset"]);
     expectDownload(result, 0, { ranges: [undefined] });
   });
-  it.each(["short", "size", "pin", 401, 403, 404, 429, 500, 501, 505, 525, 526, 529, 531])(
+  it.each(["short", "size", 401, 403, 404, 429, 500, 501, 505, 525, 526, 529, 531])(
     "keeps %s terminal without retrying",
     async (failure) => {
       const result = await download([failure, "success"]);

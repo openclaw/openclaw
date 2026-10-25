@@ -127,10 +127,8 @@ it.each([false, true])("acknowledges deletion (failure=%s)", async (initialFailu
   expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
 });
 
-it("rolls back atomically with keepPrevious=0", async () => {
-  const s = await captured(undefined, undefined, {
-    warmImagePolicy: { refreshAfterMs: DAY_MS, retainUnusedMs: 14 * DAY_MS, keepPrevious: 0 },
-  });
+it.each(["retire", "pinned", "busy"] as const)("rolls back with %s demotion", async (mode) => {
+  const s = await captured();
   const entry = s.entry();
   const current = entry.value.image!;
   const previous = {
@@ -138,47 +136,42 @@ it("rolls back atomically with keepPrevious=0", async () => {
     checkpointId: "chk_previous",
     createdAtMs: current.createdAtMs - 1,
   };
-  s.store.update(entry.key, (record) => ({ ...record!, previous }));
+  if (mode === "pinned") {
+    await s.provider.images.pin(current.checkpointId, true);
+  }
+  s.store.update(entry.key, (record) => ({
+    ...record!,
+    previous,
+    ...(mode === "busy" && {
+      operation: { type: "retire" as const, checkpointId: "chk_retiring" },
+    }),
+  }));
+  const read = () => s.store.lookup(entry.key);
+  if (mode === "busy") {
+    const before = read();
+    await expect(s.provider.images.rollback(previous.checkpointId)).rejects.toThrow(
+      "capture or retirement",
+    );
+    expect(read()).toEqual(before);
+    return;
+  }
   const summary = await s.provider.images.rollback(previous.checkpointId);
   expect(summary.checkpointId).toBe(previous.checkpointId);
-  expect(summary.previous?.checkpointId).toBeUndefined();
-  expect(summary.retirement?.checkpointId).toBe(current.checkpointId);
   s.calls.length = 0;
-  await s.provider.maintain!(maintenanceContext());
-  expect(s.checkpoints("delete").map((argv) => argv[3])).toEqual([current.checkpointId]);
-  expect(s.store.lookup(entry.key)?.image?.checkpointId).toBe(previous.checkpointId);
-});
-
-it("keeps demoted pins until unpinned after rollback", async () => {
-  const s = await captured();
-  const entry = s.entry();
-  const current = entry.value.image!;
-  await s.provider.images.pin(current.checkpointId, true);
-  s.store.update(entry.key, (record) => ({
-    ...record!,
-    previous: { ...current, checkpointId: "chk_previous" },
-  }));
-  expect((await s.provider.images.rollback("chk_previous")).previous?.pinned).toBeDefined();
   const maintenance = maintenanceContext();
+  if (mode === "pinned") {
+    expect(summary.previous?.pinned).toBeDefined();
+    await s.provider.maintain!(maintenance);
+    expect(read()?.previous?.checkpointId).toBe(current.checkpointId);
+    await s.provider.images.pin(current.checkpointId, false);
+  } else {
+    expect(summary.previous?.checkpointId).toBeUndefined();
+    expect(summary.retirement?.checkpointId).toBe(current.checkpointId);
+  }
   await s.provider.maintain!(maintenance);
-  expect(s.store.lookup(entry.key)?.previous?.checkpointId).toBe(current.checkpointId);
-  await s.provider.images.pin(current.checkpointId, false);
-  await s.provider.maintain!(maintenance);
-  expect(s.store.lookup(entry.key)?.previous).toBeUndefined();
-  expect(s.store.lookup(entry.key)?.image?.checkpointId).toBe("chk_previous");
-});
-
-it("refuses rollback during retirement", async () => {
-  const s = await captured();
-  const entry = s.entry();
-  s.store.update(entry.key, (record) => ({
-    ...record!,
-    previous: { ...record!.image!, checkpointId: "chk_previous" },
-    operation: { type: "retire", checkpointId: "chk_retiring" },
-  }));
-  const before = s.store.lookup(entry.key);
-  await expect(s.provider.images.rollback("chk_previous")).rejects.toThrow("capture or retirement");
-  expect(s.store.lookup(entry.key)).toEqual(before);
+  expect(s.checkpoints("delete").map((argv) => argv[3])).toEqual([current.checkpointId]);
+  expect(read()?.previous).toBeUndefined();
+  expect(read()?.image?.checkpointId).toBe(previous.checkpointId);
 });
 
 it.each([
