@@ -4,10 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
+import { setInternalToolTurnCompletion } from "../../runtime/internal-hooks.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./message-tool-terminal.js";
 import {
   createTerminalTestModel,
@@ -229,9 +226,12 @@ describe("tool-authored source reply turn completion", () => {
     expectContinuation(run, ["order_confirm"]);
   });
 
-  it("lets the model continue for a tool without the capability", async () => {
-    expect((await runBatch({ capableToolNames: ["other_tool"] })).requests).toBe(2);
-  });
+  it.each([{ capableToolNames: [] }, { capableToolNames: ["other_tool"] }])(
+    "continues when the tool is not capable ($capableToolNames)",
+    async ({ capableToolNames }) => {
+      expect((await runBatch({ capableToolNames })).requests).toBe(2);
+    },
+  );
 
   it("commits every final reply only after all capable siblings settle", async () => {
     const run = await runBatch({
@@ -276,16 +276,5 @@ describe("tool-authored source reply turn completion", () => {
     });
 
     expect(run.requests).toBe(1);
-  });
-
-  it("installs nothing when no tool is capable", () => {
-    const agent = new Agent({ initialState: { model } });
-    installToolAuthoredSourceReplyTerminalHook({
-      agent,
-      sourceReplyCapableToolNames: new Set(),
-      idempotencyScope: "run-test",
-      onSourceReplies: () => {},
-    });
-    expect(getInternalToolTurnCompletion(agent)).toBeUndefined();
   });
 });

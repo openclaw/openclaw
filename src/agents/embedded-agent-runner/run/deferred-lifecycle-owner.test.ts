@@ -219,28 +219,6 @@ describe("deferred logical-turn lifecycle", () => {
     }
   });
 
-  it("records only the accepted candidate terminal trajectory", async () => {
-    const recordEvent = vi.fn();
-    const makeOwner = () =>
-      ownerFor("logical-run", {
-        trajectoryRecorder: {
-          recordEvent,
-          flush: async () => {},
-          describeFlushState: () => undefined,
-        },
-      });
-    const discarded = makeOwner();
-    discarded.recordSessionEnd({ status: "error" });
-    await discarded.discard();
-    expect(recordEvent).not.toHaveBeenCalled();
-
-    const accepted = makeOwner();
-    accepted.recordSessionEnd({ status: "success" });
-    await accepted.complete();
-
-    expect(recordEvent.mock.calls).toEqual([["session.ended", { status: "success" }]]);
-  });
-
   it("releases a discarded candidate immediately and joins its diagnostic flush at completion", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -278,7 +256,7 @@ describe("deferred logical-turn lifecycle", () => {
     expect(settled).toBe(true);
   });
 
-  it("flushes buffered diagnostics when a successful candidate enters retry backoff", async () => {
+  it("flushes retry diagnostics without publishing the terminal trajectory until completion", async () => {
     const flushed = createDeferredCore();
     const recordEvent = vi.fn();
     const { manager, operation, owner } = retryManager("retry-candidate", {
@@ -295,14 +273,14 @@ describe("deferred logical-turn lifecycle", () => {
       expect(recordEvent).not.toHaveBeenCalled();
     } finally {
       release?.();
-      await owner.discard();
       await manager.complete();
       operation.complete();
     }
+    expect(recordEvent.mock.calls).toEqual([["session.ended", { status: "success" }]]);
   });
 
-  it.each(["abort", "timeout", "complete", "replace", "close", "authority"] as const)(
-    "releases a retry wait when its owner loses authority through %s",
+  it.each(["abort", "timeout", "complete", "replace", "close", "authority", "next-wait"] as const)(
+    "keeps retry waits bound to their owner through %s",
     async (reason) => {
       let current = true;
       const onRetryWaitCompleted = vi.fn();
@@ -327,8 +305,15 @@ describe("deferred logical-turn lifecycle", () => {
           manager.adopt(idleOwner());
         } else if (reason === "close") {
           closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
-        } else {
+        } else if (reason === "authority") {
           current = false;
+        } else {
+          const releaseNext = manager.beginRetryWait(deadlineAtMs + 240_000);
+          release?.();
+          expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBe(
+            deadlineAtMs,
+          );
+          releaseNext?.();
         }
         expect(
           getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs,
@@ -341,23 +326,4 @@ describe("deferred logical-turn lifecycle", () => {
       }
     },
   );
-
-  it("does not let a completed wait release its owner's next wait or renew its horizon", async () => {
-    const { ref, operation, manager } = retryManager("reused-wait-owner");
-    try {
-      const firstDeadline = Date.now() + 660_000;
-      const releaseFirst = manager.beginRetryWait(firstDeadline);
-      const nextDeadline = Date.now() + 900_000;
-      const releaseNext = manager.beginRetryWait(nextDeadline);
-      releaseFirst?.();
-      expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBe(
-        firstDeadline,
-      );
-      releaseNext?.();
-      expect(getDiagnosticSessionActivitySnapshot(ref).activeRetryWaitDeadlineAtMs).toBeUndefined();
-    } finally {
-      await manager.complete();
-      operation.complete();
-    }
-  });
 });

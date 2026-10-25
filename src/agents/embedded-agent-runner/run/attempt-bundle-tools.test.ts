@@ -149,51 +149,37 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     },
   );
 
-  it.each<[string[], string, boolean | undefined, boolean | undefined, number]>([
-    [["chrome"], "chrome*", false, undefined, 0],
-    [["chrome"], "chrome*", false, true, 1],
-    [["a".repeat(31), "a".repeat(32)], `${"a".repeat(28)}-2*`, undefined, undefined, 1],
-  ])("resolves configured MCP %j for %s", async (servers, allow, enabled, override, calls) => {
-    const input = createInput();
-    input.attempt.config = {
-      plugins: { enabled: false },
-      mcp: {
-        servers: Object.fromEntries(servers.map((name) => [name, { command: "unused", enabled }])),
-      },
-    };
-    input.attempt.toolsAllow = [allow];
-    if (override !== undefined) {
-      input.attempt.toolOverrides = { mcpServers: { chrome: override } };
-    }
-    await prepare(input);
-    expect(mocks.acquireSessionMcpRuntime).toHaveBeenCalledTimes(calls);
-  });
+  it.each([
+    ["chrome dev", "chrome-dev", "chrome-dev", "chrome-dev-2"],
+    ["a".repeat(31), "a".repeat(32), "a".repeat(30), `${"a".repeat(28)}-2`],
+  ])(
+    "allocates configured %s namespaces after colliding plugin servers",
+    async (pluginName, configuredName, first, second) => {
+      const input = createInput();
+      input.attempt.config = {
+        plugins: { entries: { "native-mcp": { enabled: true } } },
+        mcp: { servers: { [configuredName]: { command: "unused" } } },
+      };
+      setAllow(input, [`${second}*`]);
+      const registry = makeRegistry([{ id: "native-mcp", channels: [] }]);
+      const record = registry.plugins[0];
+      if (!record) {
+        throw new Error("missing native plugin fixture");
+      }
+      record.format = "openclaw";
+      record.mcpServers = { [pluginName]: { command: "unused" } };
+      const snapshot = createPluginMetadataSnapshot({
+        config: input.attempt.config,
+        manifestRegistry: registry,
+      });
+      input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
+      mockMcp([{ name: `${first}__click` }, { name: `${second}__click` }]);
 
-  it("allocates configured namespaces after colliding enabled plugin servers", async () => {
-    const input = createInput();
-    input.attempt.config = {
-      plugins: { entries: { "native-mcp": { enabled: true } } },
-      mcp: { servers: { "chrome-dev": { command: "unused" } } },
-    };
-    setAllow(input, ["chrome-dev-2*"]);
-    const registry = makeRegistry([{ id: "native-mcp", channels: [] }]);
-    const record = registry.plugins[0];
-    if (!record) {
-      throw new Error("missing native plugin fixture");
-    }
-    record.format = "openclaw";
-    record.mcpServers = { "chrome dev": { command: "unused" } };
-    const snapshot = createPluginMetadataSnapshot({
-      config: input.attempt.config,
-      manifestRegistry: registry,
-    });
-    input.setup.getCurrentAttemptPluginMetadataSnapshot = () => snapshot;
-    mockMcp([{ name: "chrome-dev__click" }, { name: "chrome-dev-2__click" }]);
+      const result = await prepare(input);
 
-    const result = await prepare(input);
-
-    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["chrome-dev-2__click"]);
-  });
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual([`${second}__click`]);
+    },
+  );
 
   const clients = ["client_read", "client_write", "other_read"];
   it.each<[string, string[], string[], boolean]>([

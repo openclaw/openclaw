@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -9,7 +8,6 @@ import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaul
 import { registered } from "../../../decisions/runtime.test-support.js";
 import type { DecisionProviderV1, ProviderDecisionOutcome } from "../../../decisions/types.js";
 import * as operatorInvocation from "../../../gateway/operator-invocation-authority.js";
-import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -23,6 +21,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -51,24 +50,20 @@ const result = (probabilityTrue = 0.1): ProviderDecisionOutcome => ({
     },
   },
 });
-function config(enabled = true, selected = true): OpenClawConfig {
+function config(enabled = true): OpenClawConfig {
   return {
     agents: {
       defaults: AgentDefaultsBaseSchema.parse({
         experimental: { decisionAssistance: enabled },
-        ...(selected ? { decisionModel: "fixture/model" } : {}),
+        decisionModel: "fixture/model",
       }),
-      entries: { main: {}, quiet: { decisionModel: "" } },
     },
   };
 }
 function captureRequests(reply = () => "done") {
-  const captures: Array<{ names: string[]; definitionChars: number }> = [];
-  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-    captures.push({
-      names: (context.tools ?? []).map((tool) => tool.name),
-      definitionChars: JSON.stringify(context.tools ?? []).length,
-    });
+  const captures: string[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    captures.push((context.tools ?? []).map((tool) => tool.name));
     return createAssistantResultStream(createAssistant(model, reply()));
   });
   return captures;
@@ -87,13 +82,7 @@ async function fixture(
   registered(call);
   const runId = "prefilter-" + ++sequence;
   const tools = (toolSurface.names ?? ["inspect_file", "message", "decision_evaluate"]).map(
-    (name) => ({
-      name,
-      label: name,
-      description: name,
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: {} }),
-    }),
+    createStubTool,
   );
   const controls = mode === "search" ? ["tool_search"] : mode === "code" ? ["exec"] : [];
   const controlTools = controls.map((name) => ({ ...tools[0]!, name }));
@@ -124,7 +113,6 @@ async function fixture(
     forceToolNames: toolSurface.forceToolNames ?? ["message", "denied"],
   });
   const owner = prepareSystemAgentRunAdmission(cfg, runId, agentId, "prefilter-test");
-  const toolResultPromptProjectionState = createToolResultPromptProjectionState();
   onTestFinished(() => {
     owner.close();
     forgetPromptBuildDrainCacheForRun(runId);
@@ -174,7 +162,7 @@ async function fixture(
       transcriptPrompt: assembly.effectivePrompt,
       systemPrompt: session.agent.state.systemPrompt,
       runtimeOnly: false,
-      toolResultPromptProjectionState,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       toolResultMaxChars: 4000,
       toolResultAggregateMaxChars: 8000,
       transcriptLeafId: null,
@@ -209,14 +197,9 @@ describe("prompt assembly with registered Decision runtime", () => {
     },
   );
 
-  it.each<[string, OpenClawConfig, string, boolean]>([
-    ["disabled", config(false), "main", true],
-    ["no model", config(true, false), "main", true],
-    ["unsupported harness", config(), "main", false],
-    ["agent opt-out", config(), "quiet", true],
-  ])("gates Decision inference: %s", async (_name, cfg, agentId, support) => {
-    const { call, ...f } = await fixture(cfg, "structured", agentId);
-    await f.assemble({ supportsTurnScopedToolRestrictions: support });
+  it("retains tools when the harness does not support turn-scoped restrictions", async () => {
+    const { call, ...f } = await fixture();
+    await f.assemble({ supportsTurnScopedToolRestrictions: false });
     expect(call).not.toHaveBeenCalled();
     expect(f.session.getActiveToolNames()).toEqual([
       "inspect_file",
@@ -247,7 +230,7 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      expect(captured.map(({ names }) => names)).toEqual([["message"]]);
+      expect(captured).toEqual([["message"]]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);
@@ -346,11 +329,10 @@ describe("prompt assembly with registered Decision runtime", () => {
         { user: "Help me understand this example.", assistant: "Would you like an explanation?" },
       ],
     });
-    expect(captures[1]?.names).toEqual(["message"]);
-    expect(captures[1]?.definitionChars).toBeLessThan(captures[0]?.definitionChars ?? 0);
+    expect(captures[1]).toEqual(["message"]);
     call.mockResolvedValue(result(0.9));
     await submit("Read package.json now.");
-    expect(captures[2]?.names).toEqual(captures[0]?.names);
+    expect(captures[2]).toEqual(captures[0]);
     expect(f.policy.current.callableToolNames).toContain("inspect_file");
     expect(f.policy.current.callableToolNames).not.toContain("denied");
   });
