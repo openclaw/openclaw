@@ -23,11 +23,7 @@ import { runNodeHostWorker } from "./worker.js";
 
 const COMMAND_PATH = ["node", "worker"] as const;
 
-export function resolveMacNodeWorkerArgv(argv: string[]): {
-  argv: string[];
-  profile: string | null;
-  desktopSharingEnabled?: boolean;
-} {
+export function resolveMacNodeWorkerArgv(argv: string[]) {
   const parsed = parseCliProfileArgs(argv);
   if (!parsed.ok) {
     throw new Error(parsed.error);

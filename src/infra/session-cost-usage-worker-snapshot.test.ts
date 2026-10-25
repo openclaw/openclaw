@@ -25,8 +25,8 @@ import {
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
 import {
+  createUsageCostReportSource,
   prepareUsageCostReportEntry,
-  readUsageCostReportEntry,
 } from "./session-cost-usage-worker-report.js";
 import { executeUsageCostWorker } from "./session-cost-usage-worker.js";
 import type { UsageCostWorkerInput } from "./session-cost-usage-worker.types.js";
@@ -233,14 +233,15 @@ it("spends the shared decoded budget on complete reports after preparing the sna
       return total + metadata.bytes;
     }, 0);
     expect(envelope.body.bytes).toBeGreaterThan(partitionBytes);
+    const row = { key: file.filePath, updatedAt: timestamp, valueJson: encoded.valueJson };
     const prepared = prepareUsageCostReportEntry({
-      row: { key: file.filePath, updatedAt: timestamp, valueJson: encoded.valueJson },
+      row,
       body: () => encoded.blob,
       partitions: () => encoded.partitions,
       pricingFingerprint,
       throwIfCancelled() {},
     });
-    return { prepared, file, decodedBytes: envelope.body.bytes + partitionBytes };
+    return { row, prepared, file, decodedBytes: envelope.body.bytes + partitionBytes };
   });
   const [first, second] = entries;
   if (!first || !second) {
@@ -251,21 +252,24 @@ it("spends the shared decoded budget on complete reports after preparing the sna
   const unexpectedReplay = async () => {
     throw new Error("Committed partition fixture must not replay transcripts");
   };
-  const read = (entry: (typeof entries)[number]) =>
-    readUsageCostReportEntry({
-      prepared: entry.prepared,
-      file: entry.file,
-      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-      scan: {
-        pricingFingerprint,
-        resolveCosts: unexpectedReplay,
-        readGeneration: unexpectedReplay,
-        readRows: unexpectedReplay,
-      },
-      throwIfCancelled() {},
-      replayBudget: { remainingBytes: 0, deadline: Number.POSITIVE_INFINITY },
-      cacheBudget,
-    });
+  const { source } = createUsageCostReportSource({
+    rows: new Map(entries.map((entry) => [entry.row.key, entry.row])),
+    entries: new Map(entries.map((entry) => [entry.row.key, entry.prepared])),
+    files: new Map(entries.map((entry) => [entry.row.key, entry.file])),
+    deferredPaths: new Set(),
+    deferredMetadata: new Map(),
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    scan: {
+      pricingFingerprint,
+      resolveCosts: unexpectedReplay,
+      readGeneration: unexpectedReplay,
+      readRows: unexpectedReplay,
+    },
+    throwIfCancelled() {},
+    replayBudget: { remainingBytes: 0, deadline: Number.POSITIVE_INFINITY },
+    cacheBudget,
+  });
+  const read = (entry: (typeof entries)[number]) => source.readEntry(entry.row);
   expect(await read(first)).toMatchObject({
     rollup: { buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } } },
   });

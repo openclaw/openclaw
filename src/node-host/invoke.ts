@@ -45,6 +45,7 @@ import {
 } from "../infra/node-commands.js";
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
@@ -57,7 +58,6 @@ import {
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
 import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
-import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
 import {
   buildSystemRunApprovalPlan,
@@ -507,9 +507,65 @@ export async function handleInvoke(
     }
     try {
       const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
-      const pluginResult = await withNodeHostPluginInvocation(
-        { context, sessionKey: frame.sessionKey, signal: runtime.signal },
-        async (invokeContext) =>
+      const sessionKey = frame.sessionKey;
+      const signal = runtime.signal;
+      let pluginResult: string | null;
+      const acquireManagedWorkspace = context?.acquireManagedWorkspace;
+      const acquireManagedWorkspaceAsync = context?.acquireManagedWorkspaceAsync;
+      let pluginInvocationActive = true;
+      const assertCurrent = (requestedSessionKey: string) => {
+        if (
+          !pluginInvocationActive ||
+          signal?.aborted ||
+          !sessionKey ||
+          requestedSessionKey !== sessionKey
+        ) {
+          throw new Error("node placement workspace invocation authority is closed");
+        }
+      };
+      const invokeContext =
+        context && (sessionKey || signal || acquireManagedWorkspace || acquireManagedWorkspaceAsync)
+          ? {
+              ...context,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(signal ? { signal } : {}),
+              ...(acquireManagedWorkspaceAsync
+                ? {
+                    acquireManagedWorkspaceAsync: async (
+                      request: Parameters<typeof acquireManagedWorkspaceAsync>[0],
+                    ) => {
+                      const captured = { ...request };
+                      assertCurrent(captured.sessionKey);
+                      const workspace = await acquireManagedWorkspaceAsync(captured);
+                      try {
+                        assertCurrent(captured.sessionKey);
+                        return workspace;
+                      } catch (error) {
+                        workspace.release();
+                        throw error;
+                      }
+                    },
+                  }
+                : {}),
+              ...(acquireManagedWorkspace
+                ? {
+                    acquireManagedWorkspace: (
+                      request: Parameters<typeof acquireManagedWorkspace>[0],
+                    ) => {
+                      warnPluginSdkDeprecation({
+                        family: "node-host-sync-workspace",
+                        method: "OpenClawPluginNodeHostCommandContext.acquireManagedWorkspace",
+                        replacement: "await context.acquireManagedWorkspaceAsync()",
+                      });
+                      assertCurrent(request.sessionKey);
+                      return acquireManagedWorkspace(request);
+                    },
+                  }
+                : {}),
+            }
+          : context;
+      try {
+        pluginResult =
           command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND
             ? await invokeNodeWorkerComputerCommand({
                 paramsJSON: frame.paramsJSON,
@@ -517,8 +573,10 @@ export async function handleInvoke(
                 invoke: (innerCommand, paramsJSON) =>
                   invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
               })
-            : await invokePlugin(command, frame.paramsJSON, io, invokeContext),
-      );
+            : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+      } finally {
+        pluginInvocationActive = false;
+      }
       if (pluginResult !== null) {
         await runtime.flushPluginCommandIo?.();
         await response.send({ ok: true, payloadJSON: pluginResult });
