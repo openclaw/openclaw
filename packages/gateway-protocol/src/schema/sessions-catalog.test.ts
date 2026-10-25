@@ -64,22 +64,16 @@ describe("session catalog schemas", () => {
 
   it("distinguishes pending empty discovery from a completed empty catalog", () => {
     const emptyCatalog = {
-      id: "fixture",
-      label: "Fixture",
+      ...catalog,
       capabilities: { continueSession: false, archive: false },
       hosts: [],
     };
-    expect(Value.Check(SessionsCatalogListResultSchema, { catalogs: [emptyCatalog] })).toBe(true);
-    expect(
-      Value.Check(SessionsCatalogListResultSchema, {
-        catalogs: [{ ...emptyCatalog, pending: true }],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionsCatalogListResultSchema, {
-        catalogs: [{ ...emptyCatalog, pending: "true" }],
-      }),
-    ).toBe(false);
+    checkCatalog(SessionsCatalogListResultSchema, { catalogs: [emptyCatalog] }, [
+      { catalogs: [{ ...emptyCatalog, pending: "true" }] },
+    ]);
+    checkCatalog(SessionsCatalogListResultSchema, {
+      catalogs: [{ ...emptyCatalog, pending: true }],
+    });
   });
 
   it("accepts a closed catalog result with hosts", () => {
@@ -194,9 +188,7 @@ describe("session catalog schemas", () => {
   });
 });
 
-function checkRow(schema: TSchema, expected: boolean, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(expected);
-}
+const rows = schemaValidation(SessionRowSchema);
 const baseRow = { key: "agent:main:main", kind: "global" };
 const participants = (length: number) =>
   Array.from({ length }, (_, index) => ({ identity: { type: "profile", id: `profile-${index}` } }));
@@ -208,6 +200,8 @@ describe("SessionRowSchema", () => {
       lastRunId: "run-settled",
       snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
+      activeModel: "fixture-model",
+      activeModelProvider: "fixture-provider",
       parentSessionKey: "agent:main:dashboard:parent",
       parentSessionId: "sess-parent",
       createdActor: { ...human, avatarUrl: "/api/users/profile-ada/avatar?v=7" },
@@ -234,23 +228,21 @@ describe("SessionRowSchema", () => {
       effectiveCommunication: { send: "always", receive: "ask" },
       sessionRoot: "/workspace/project",
     };
-    expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
-    expect(SessionRowSchema.properties.activeModel).toBeDefined();
-    expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
-    expect(SessionRowSchema.properties.lastRunId).toBeDefined();
-    expect(SessionRowSchema.properties.parentSessionId).toBeDefined();
-    checkRow(SessionRowSchema, true, row);
-    checkRow(SessionRowSchema, true, baseRow);
-    checkRow(SessionRowSchema, false, { ...row, parentSessionId: 42 });
-    checkRow(SessionRowSchema, false, { ...row, sandboxMode: "required" });
-    checkRow(SessionRowSchema, true, { ...row, activeLeafEntryId: null });
-    checkRow(SessionRowSchema, false, { ...row, participants: participants(5) });
-    checkRow(SessionRowSchema, true, { ...row, expandedParticipants: participants(32) });
-    checkRow(SessionRowSchema, false, { ...row, expandedParticipants: participants(33) });
-    checkRow(SessionRowSchema, false, { ...row, permissionMode: "unrestricted" });
-    checkRow(SessionRowSchema, false, { ...row, lastRunId: "" });
-    checkRow(SessionRowSchema, true, { ...row, archiveReason: "age-retention" });
-    checkRow(SessionRowSchema, false, { ...row, archiveReason: "unknown" });
+    checkCatalog(SessionRowSchema, row, [
+      { parentSessionId: 42 },
+      { sandboxMode: "required" },
+      { participants: participants(5) },
+      { expandedParticipants: participants(33) },
+      { permissionMode: "unrestricted" },
+      { lastRunId: "" },
+      { archiveReason: "unknown" },
+    ]);
+    rows.accepts(
+      baseRow,
+      { ...row, activeLeafEntryId: null },
+      { ...row, expandedParticipants: participants(32) },
+      { ...row, archiveReason: "age-retention" },
+    );
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {
@@ -271,12 +263,12 @@ describe("SessionRowSchema", () => {
   it.each(["user", "auto", "inherited", null] as const)(
     "accepts model override source %s",
     (source) => {
-      checkRow(SessionRowSchema, true, { ...baseRow, modelOverrideSource: source });
+      rows.accepts({ ...baseRow, modelOverrideSource: source });
     },
   );
 
   it("rejects an invalid model override source", () => {
-    checkRow(SessionRowSchema, false, { ...baseRow, modelOverrideSource: "session" });
+    rows.rejects({ ...baseRow, modelOverrideSource: "session" });
   });
 });
 
