@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
+import type { SessionListModelFactsLookup } from "./session-list-target.js";
 import { create, identity, selectionRow } from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { selectSessionEntries } from "./session-utils-list.js";
@@ -80,6 +81,14 @@ it("filters only the changed key and ignores unchanged selection publications", 
 });
 
 it("matches fresh selection across churn, archive toggles, filters, and page windows", () => {
+  const modelFacts: ReturnType<SessionListModelFactsLookup> = {
+    selectedModel: { provider: "openai", model: "synthetic", storedOverrideSource: null },
+    rowModelIdentity: { provider: "openai", model: "synthetic" },
+    thinkingProjection: {
+      acpMeta: undefined,
+      agentRuntime: { id: "openclaw", source: "implicit" },
+    },
+  };
   const selection = createSessionRowSelection(cfg, scope, false, () => context);
   const targets = new Map(Array.from({ length: 96 }, (_, index) => [index, row(index)]));
   for (const target of targets.values()) {
@@ -108,11 +117,7 @@ it("matches fresh selection across churn, archive toggles, filters, and page win
       getTarget: prepared.get,
       getRowContext: () => context,
       now: 10_000,
-      getModelFacts: () => ({
-        selectedModel: { provider: "openai", model: "synthetic", storedOverrideSource: null },
-        rowModelIdentity: { provider: "openai", model: "synthetic" },
-        thinkingProjection: { acpMeta: undefined, agentRuntime: undefined },
-      }),
+      getModelFacts: () => modelFacts,
     });
   };
   let seed = 203;
