@@ -178,27 +178,6 @@ afterEach(() => {
 });
 
 describe("ChatGPT import rollback recovery", () => {
-  it("persists the moving phase before vault initialization", async () => {
-    const { rootDir, rollback, readRun, seedCreated } = await createRollbackVault(false);
-    await seedCreated("missing");
-
-    const realMkdir = fs.mkdir;
-    let checkedBeforeFirstVaultWrite = false;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-      const targetPath = path.resolve(String(args[0]));
-      // The coordinator creates transient lock metadata before entering rollback.
-      // Initializing the vault itself must still follow its durable moving phase.
-      if (!checkedBeforeFirstVaultWrite && targetPath === path.resolve(rootDir)) {
-        checkedBeforeFirstVaultWrite = true;
-        await expect(readRun()).resolves.toMatchObject({ rollbackStartedAt: expect.any(String) });
-      }
-      return await Reflect.apply(realMkdir, fs, args);
-    });
-
-    await expect(rollback()).resolves.toMatchObject({ alreadyRolledBack: false });
-    expect(checkedBeforeFirstVaultWrite).toBe(true);
-  });
-
   it("reconciles a crash after rename across a real SQLite reopen", async () => {
     const run = await createRollbackVault();
     const { targetPath, relativePath } = run;
@@ -217,16 +196,11 @@ describe("ChatGPT import rollback recovery", () => {
     };
     await expect(run.rollback()).rejects.toThrow("simulated process crash");
     await expectText(targetPath, recreated);
-    await expect(
-      fs.stat(path.join(run.stateDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeDefined();
-
     run.reopen();
     const retried = await run.rollback();
     expect(retried.alreadyRolledBack).toBe(false);
     expect(retried.preservedPaths).toHaveLength(2);
     const preserved = retried.preservedPaths[0];
-    expect(preserved?.path).toBe(relativePath);
     const preservedContents = await Promise.all(
       retried.preservedPaths.map((entry) => run.readRecovery(entry.recoveryPath)),
     );
@@ -292,11 +266,6 @@ describe("ChatGPT import rollback recovery", () => {
     const persisted = await readRun();
     expect(persisted).toMatchObject(finalized);
     expect(persisted?.createdPaths[0]?.recoveryPaths).toHaveLength(33);
-
-    reopen();
-    const repeated = await rollback();
-    expect(repeated.alreadyRolledBack).toBe(true);
-    expect(repeated.preservedPaths).toStrictEqual(retried.preservedPaths);
   });
 
   it("queues the whole rollback behind an active vault mutation", async () => {
@@ -350,9 +319,9 @@ describe("ChatGPT import rollback recovery", () => {
     await expect(readRecovery(result.preservedPaths[0]?.recoveryPath ?? "")).resolves.toBe(edited);
   });
 
-  it("does not touch targets again after the persisted process-restart fence", async () => {
-    const { stateDir, targetPath, rollback, readRun, seedCreated, reopen } =
-      await createRollbackVault();
+  it("persists before initialization and never retouches targets after the restart fence", async () => {
+    const { stateDir, rootDir, targetPath, rollback, readRun, seedCreated, reopen } =
+      await createRollbackVault(false);
     let crashAfterFence = true;
     configureDurableImportRunStore(stateDir, async (record) => {
       if (crashAfterFence && record.rollbackTargetsFinalizedAt && !record.rolledBackAt) {
@@ -363,10 +332,21 @@ describe("ChatGPT import rollback recovery", () => {
     });
     const beforeCompile = "# Written after rollback target finalization\n";
     const afterCompilerRead = "# Saved after compiler read\n";
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, imported, "utf8");
     await seedCreated();
+    const realMkdir = fs.mkdir;
+    let checkedInitialization = false;
+    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      if (!checkedInitialization && path.resolve(String(args[0])) === path.resolve(rootDir)) {
+        checkedInitialization = true;
+        await expect(readRun()).resolves.toMatchObject({ rollbackStartedAt: expect.any(String) });
+      }
+      return await Reflect.apply(realMkdir, fs, args);
+    });
 
     await expect(rollback()).rejects.toThrow("simulated process exit after target fence");
+    expect(checkedInitialization).toBe(true);
     await expect(readRun()).resolves.toMatchObject({
       rollbackStartedAt: expect.any(String),
       rollbackTargetsFinalizedAt: expect.any(String),

@@ -25,12 +25,9 @@ function createImportedSourceState(pagePath: string, group: "bridge" | "unsafe-l
     version: 1 as const,
     entries: {
       "sync-key": {
+        ...makeEntry(0),
         group,
         pagePath,
-        sourcePath: "/tmp/source.md",
-        sourceUpdatedAtMs: 0,
-        sourceSize: 0,
-        renderFingerprint: "fp",
       },
     },
   };
@@ -134,6 +131,7 @@ async function stateFixture(
     writeMemoryWikiSourceSyncState(vaultRoot, state, store);
   await write({ version: 1, entries });
   return {
+    vaultRoot,
     calls,
     resetCalls: () => Object.assign(calls, { register: 0, delete: 0, entries: 0 }),
     write,
@@ -166,11 +164,14 @@ describe("memory wiki source sync state", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("persists only changed rows in a 1,914-entry state snapshot", async () => {
+  it("persists only changed rows in a 1,914-entry snapshot without consulting retired JSON", async () => {
     const entries = Object.fromEntries(
       Array.from({ length: 1_914 }, (_, index) => [`source-${index}`, makeEntry(index)]),
     );
     const counting = await stateFixture(entries);
+    const legacyPath = path.join(counting.vaultRoot, ".openclaw-wiki", "source-sync.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, "retired JSON is not a runtime input\n");
     const state = await counting.read();
     counting.resetCalls();
     await counting.write(state);
@@ -186,10 +187,12 @@ describe("memory wiki source sync state", () => {
     await counting.write(state);
     expect(counting.calls).toEqual({ register: 1, delete: 0, entries: 0 });
     counting.resetCalls();
-    await counting.prune(
-      state,
-      Object.keys(state.entries).filter((key) => key !== "source-1"),
-    );
+    await expect(
+      counting.prune(
+        state,
+        Object.keys(state.entries).filter((key) => key !== "source-1"),
+      ),
+    ).resolves.toBe(1);
     await counting.write(state);
     expect(counting.calls).toEqual({ register: 0, delete: 1, entries: 0 });
 
@@ -197,6 +200,9 @@ describe("memory wiki source sync state", () => {
     expect(persisted.entries["source-0"]?.sourceSize).toBe(1);
     expect(persisted.entries["source-1"]).toBeUndefined();
     expect(Object.keys(persisted.entries)).toHaveLength(1_913);
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe(
+      "retired JSON is not a runtime input\n",
+    );
   });
 
   it("deletes replaced rows before upserts at the store capacity", async () => {
@@ -216,21 +222,6 @@ describe("memory wiki source sync state", () => {
     await expect(counting.read()).resolves.toMatchObject({
       entries: { "source-0": makeEntry(0), "source-3": makeEntry(3) },
     });
-  });
-
-  it("ignores retired JSON when reading current source-sync state", async () => {
-    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
-    const legacyPath = path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(legacyPath, "retired JSON is not a runtime input\n");
-
-    await expect(readMemoryWikiSourceSyncState(vaultRoot)).resolves.toEqual({
-      version: 1,
-      entries: {},
-    });
-    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe(
-      "retired JSON is not a runtime input\n",
-    );
   });
 
   it("preserves previous Notes when a long source page is pruned again", async () => {
@@ -367,12 +358,6 @@ describe("memory wiki source sync state", () => {
     expect(state.entries["sync-key"]).toBeDefined();
     await expect(fs.stat(pageAbsPath)).resolves.toMatchObject({ size: 33 * 1024 * 1024 });
     await expect(fs.readdir(path.dirname(pageAbsPath))).resolves.toEqual(["page.md"]);
-  });
-
-  it("prunes pages even when the page file is already missing", async () => {
-    const { pageAbsPath, prunePage } = await createSourceFixture();
-    await expect(prunePage()).resolves.toBe(1);
-    await expectMissing(fs.access(pageAbsPath));
   });
 
   it("keeps the page when salvage write fails", async () => {

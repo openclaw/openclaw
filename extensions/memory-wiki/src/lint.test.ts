@@ -393,43 +393,25 @@ describe("lintMemoryWikiVault", () => {
   });
 
   it.each([
-    {
-      name: "syntax-error",
-      frontmatter:
-        'pageType: report\nid: report.lint\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"',
-      error: "Unexpected scalar",
-    },
-    {
-      name: "sequence-root",
-      frontmatter: "- pageType: report\n  id: report.lint",
-      error: "Wiki frontmatter must be a YAML mapping",
-    },
-  ])(
-    "rejects a malformed lint report without changing its bytes ($name)",
-    async ({ frontmatter, error }) => {
+    [
+      "syntax-error",
+      '---\npageType: report\nid: report.lint\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"\n---\n# Existing report',
+      { message: expect.stringContaining("Unexpected scalar") },
+    ],
+    [
+      "sequence-root",
+      "---\n- pageType: report\n  id: report.lint\n---\n# Existing report",
+      { message: expect.stringContaining("Wiki frontmatter must be a YAML mapping") },
+    ],
+    ["invalid UTF-8", Buffer.from([0xff]), { name: "WikiPageNotUtf8Error" }],
+  ] as const)(
+    "rejects a malformed lint report without changing its bytes (%s)",
+    async (_name, content, error) => {
       const { config, write } = await createLintVault();
-      const malformedReport = `---\n${frontmatter}\n---\n\n# Lint Report\n\nExisting report body.\n`;
+      const malformedReport = Buffer.from(content);
       const reportPath = await write("reports/lint.md", malformedReport);
-
-      await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
-      await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+      await expect(lintMemoryWikiVault(config)).rejects.toMatchObject(error);
+      await expect(fs.readFile(reportPath)).resolves.toEqual(malformedReport);
     },
   );
-  it("refuses to rewrite a lint report that is not valid UTF-8", async () => {
-    const { config, write } = await createLintVault();
-    const malformed = Buffer.concat([
-      Buffer.from(
-        "---\npageType: report\nid: report.lint\ntitle: Lint Report\nstatus: active\n---\n# Lint Report\n\nnotes: caf",
-        "utf8",
-      ),
-      Buffer.from([0xff]),
-      Buffer.from("\n", "utf8"),
-    ]);
-    const reportPath = await write("reports/lint.md", malformed);
-
-    await expect(lintMemoryWikiVault(config)).rejects.toMatchObject({
-      name: "WikiPageNotUtf8Error",
-    });
-    expect(await fs.readFile(reportPath)).toEqual(malformed);
-  });
 });

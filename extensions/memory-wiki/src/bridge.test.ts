@@ -73,6 +73,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     return entry as MemoryPluginPublicArtifact;
   }
 
+  const ownedArtifact = (workspace: string, owners: string[]) =>
+    artifact(workspace, "MEMORY.md", "memory-root", owners);
+
   async function createBridge(name: string, options: MemoryWikiPluginConfig = {}) {
     const workspaceDir = await createBridgeWorkspace(`${name}-workspace`);
     const { rootDir: vaultDir, config } = await createBridgeVault(`${name}-vault`, options);
@@ -105,39 +108,44 @@ describe("syncMemoryWikiBridgeSources", () => {
     return { workspaceDir, config, memoryPath, appConfig, pageAbsPath };
   }
 
-  it("imports public memory artifacts and stays idempotent across reruns", async () => {
+  it("imports public artifact kinds and legacy ownership, staying idempotent across reruns", async () => {
     const { workspaceDir, sync, readPage } = await createBridge("import", {
-      bridge: { indexDailyNotes: true, indexDreamReports: true },
+      bridge: { indexDailyNotes: true, indexDreamReports: true, followMemoryEvents: true },
     });
-
+    const legacyWorkspace = await createBridgeWorkspace("legacy");
     await writeArtifacts([
-      [artifact(workspaceDir), "# Durable Memory\n"],
+      [legacyArtifact(legacyWorkspace), "# Durable Memory\n"],
       [artifact(workspaceDir, "memory/2026-04-05.md", "daily-note"), "# Daily Note\n"],
       [artifact(workspaceDir, "memory/dreaming/2026-04-05.md", "dream-report"), "# Dream Report\n"],
+      [
+        artifact(workspaceDir, "memory/events/events.jsonl", "event-log"),
+        '{"type":"memory.recall.recorded"}\n',
+      ],
     ]);
-
     const first = await sync();
-
     expect(first).toMatchObject({
-      workspaces: 1,
-      artifactCount: 3,
-      importedCount: 3,
+      workspaces: 2,
+      artifactCount: 4,
+      importedCount: 4,
       updatedCount: 0,
       skippedCount: 0,
       removedCount: 0,
     });
-    expect(first.pagePaths).toHaveLength(3);
-
-    const memoryPage = await readPage(first.pagePaths[0] ?? "");
+    expect(first.pagePaths).toHaveLength(4);
+    const importedPages = await Promise.all(first.pagePaths.map(readPage));
+    const memoryPage = importedPages.find((page) => page.includes("# Memory Bridge: MEMORY"));
     expect(memoryPage).toContain("sourceType: memory-bridge");
     expect(memoryPage).toContain("## Bridge Source");
-
+    expect(memoryPage).toContain("# Memory Bridge: MEMORY");
+    expect(memoryPage).toContain("- Agents: unknown");
+    const pages = importedPages.join("\n");
+    expect(pages).toContain("sourceType: memory-bridge-events");
+    expect(pages).toContain('"type":"memory.recall.recorded"');
     const second = await sync();
-
     expect(second).toMatchObject({
       importedCount: 0,
       updatedCount: 0,
-      skippedCount: 3,
+      skippedCount: 4,
       removedCount: 0,
     });
   });
@@ -165,45 +173,17 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(2);
   });
 
-  it("imports bridge artifacts from legacy providers without agent ids", async () => {
-    const { workspaceDir, sync, readPage } = await createBridge("legacy-agentids");
-    await writeArtifacts([[legacyArtifact(workspaceDir), "# Durable Memory\n"]]);
-    const result = await sync();
-
-    expect(result).toMatchObject({ importedCount: 1, artifactCount: 1 });
-    const page = await readPage(result.pagePaths[0] ?? "");
-    expect(page).toContain("# Memory Bridge: MEMORY");
-    expect(page).toContain("- Agents: unknown");
-  });
-
   it("isolates agent-scoped bridge artifacts while preserving shared ownership", async () => {
     const supportWorkspace = await createBridgeWorkspace("support");
     const marketingWorkspace = await createBridgeWorkspace("marketing");
     const sharedWorkspace = await createBridgeWorkspace("shared");
     const unknownWorkspace = await createBridgeWorkspace("unknown");
     await writeArtifacts([
-      [
-        artifact(supportWorkspace, "MEMORY.md", "memory-root", [" SUPPORT "]),
-        "# Support Sentinel\n",
-      ],
-      [
-        artifact(marketingWorkspace, "MEMORY.md", "memory-root", ["marketing"]),
-        "# Marketing Sentinel\n",
-      ],
-      [
-        artifact(sharedWorkspace, "MEMORY.md", "memory-root", ["support", "MARKETING"]),
-        "# Shared Sentinel\n",
-      ],
+      [ownedArtifact(supportWorkspace, [" SUPPORT "]), "# Support Sentinel\n"],
+      [ownedArtifact(marketingWorkspace, ["marketing"]), "# Marketing Sentinel\n"],
+      [ownedArtifact(sharedWorkspace, ["support", "MARKETING"]), "# Shared Sentinel\n"],
       [legacyArtifact(unknownWorkspace), "# Unknown Sentinel\n"],
     ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: {
-          support: { workspace: supportWorkspace },
-          marketing: { workspace: marketingWorkspace },
-        },
-      },
-    };
 
     for (const [agentId, included, excluded] of [
       ["support", "Support Sentinel", "Marketing Sentinel"],
@@ -214,7 +194,7 @@ describe("syncMemoryWikiBridgeSources", () => {
       });
       const result = await syncMemoryWikiBridgeSources({
         config: { ...config, agentId },
-        appConfig,
+        appConfig: {},
       });
       expect(result).toMatchObject({ artifactCount: 2, importedCount: 2, workspaces: 2 });
       const pages = (
@@ -237,24 +217,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(syncMemoryWikiBridgeSources({ config })).rejects.toThrow(
       "Memory Wiki agent-scoped vault requires a resolved agent id",
     );
-  });
-
-  it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
-    const { workspaceDir, sync, readPage } = await createBridge("events", {
-      bridge: { followMemoryEvents: true },
-    });
-
-    const eventContent = '{"type":"memory.recall.recorded"}\n';
-    await writeArtifacts([
-      [artifact(workspaceDir, "memory/events/memory-host-events.jsonl", "event-log"), eventContent],
-    ]);
-
-    const result = await sync();
-
-    expect(result).toMatchObject({ artifactCount: 1, importedCount: 1, removedCount: 0 });
-    const page = await readPage(result.pagePaths[0] ?? "");
-    expect(page).toContain("sourceType: memory-bridge-events");
-    expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
   it("keeps stale pages when the memory capability closes during a source read", async () => {

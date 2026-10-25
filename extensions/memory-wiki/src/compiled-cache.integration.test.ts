@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -58,7 +59,7 @@ function createCacheStore() {
 
 async function createPersistentVault(
   options: Parameters<typeof createVault>[0] = { initialize: true },
-): Promise<Awaited<ReturnType<typeof createVault>>> {
+) {
   const vault = await createVault(options);
   // The shared unit harness installs its in-memory cache store. These lifecycle
   // tests deliberately switch back to the SQLite-backed plugin Blob test store.
@@ -175,11 +176,24 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     blobStoreEnv = {};
   });
 
-  it("reuses an existing publication when local source sync starts with an inactive owner", async () => {
+  it("reuses a publication across active initialization, exact reads and inactive source sync", async () => {
     const { rootDir, config } = await createSourceVault({
       config: { vaultMode: "isolated", ingest: { autoCompile: true } },
     });
     const before = await loadMemoryWikiVaultIdentity(rootDir);
+    const readdir = vi.spyOn(fs, "readdir");
+    try {
+      await initializeMemoryWikiVault(config);
+      await expect(
+        getMemoryWikiPage({ config, lookup: "sources/alpha.md" }),
+      ).resolves.toMatchObject({
+        path: "sources/alpha.md",
+        content: expect.stringContaining("Requested source."),
+      });
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
     deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
 
     const result = await syncMemoryWikiImportedSources({ config });
@@ -207,13 +221,8 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         },
       });
       const compiled = await loadMemoryWikiCompiledCache(config);
-      if (!compiled) {
-        throw new Error("Expected the initial compiled snapshot");
-      }
       const parent = await loadMemoryWikiVaultIdentity(rootDir);
-      if (!parent.compiledCachePublicationId) {
-        throw new Error("Expected the initial publication");
-      }
+      assert(compiled && parent.compiledCachePublicationId);
       restartCache();
       await activateExistingMemoryWikiVault(config);
 
@@ -246,32 +255,10 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       expect(result.indexRefreshReason).toBe(
         sourceChanged ? "missing-compiled-cache" : "no-import-changes",
       );
-      const after = await fs.readFile(logPath, "utf8");
-      if (sourceChanged) {
-        expect(after).not.toBe(before);
-      } else {
-        expect(after).toBe(before);
-      }
+      expect((await fs.readFile(logPath, "utf8")) === before).toBe(!sourceChanged);
       await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({ state: "ready" });
     },
   );
-
-  it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
-    const { config } = await createSourceVault();
-    const readdir = vi.spyOn(fs, "readdir");
-    try {
-      await initializeMemoryWikiVault(config);
-      await expect(
-        getMemoryWikiPage({ config, lookup: "sources/alpha.md" }),
-      ).resolves.toMatchObject({
-        path: "sources/alpha.md",
-        content: expect.stringContaining("Requested source."),
-      });
-      expect(readdir).not.toHaveBeenCalled();
-    } finally {
-      readdir.mockRestore();
-    }
-  });
 
   it("round-trips compile through async preparation and claim query after restart", async () => {
     const { rootDir, config, page } = await createPersistentVault({
@@ -290,24 +277,20 @@ describe("Memory Wiki compiled cache lifecycle", () => {
         claims: [
           {
             id: "claim.alpha.db",
-            text: "Alpha uses PostgreSQL for production writes.",
+            text: "Alpha claim.",
             status: "supported",
-            confidence: 0.91,
-            evidence: [{ sourceId: "source.alpha", lines: "1-2" }],
           },
         ],
       },
       "# Alpha\n\nDatabase notes.\n",
     );
 
-    await expect(preparePrompt(config)).resolves.not.toContain("Alpha uses PostgreSQL");
+    await expect(preparePrompt(config)).resolves.not.toContain("Alpha claim.");
     await compileMemoryWikiVault(config);
     await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("claimCount");
 
     const expectCompiledClaim = async () => {
-      await expect(preparePrompt(config)).resolves.toContain(
-        "Alpha uses PostgreSQL for production writes.",
-      );
+      await expect(preparePrompt(config)).resolves.toContain("Alpha claim.");
       await expect(getMemoryWikiPage({ config, lookup: "claim.alpha.db" })).resolves.toMatchObject({
         path: "entities/alpha.md",
         title: "Alpha",

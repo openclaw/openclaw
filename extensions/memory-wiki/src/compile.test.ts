@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
-import { renderWikiMarkdown, toWikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault: createTestVault } = createMemoryWikiTestHarness();
@@ -16,7 +16,7 @@ describe("compileMemoryWikiVault", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("keeps changed imports compile-required when auto-compile is disabled", async () => {
-    const { rootDir, config } = await createVault({
+    const { rootDir, config, read } = await createVault({
       ingest: { autoCompile: false },
       render: { createBacklinks: false, createDashboards: false },
     });
@@ -29,7 +29,7 @@ describe("compileMemoryWikiVault", () => {
     await fs.writeFile(sourcePath, renderSource("before"), "utf8");
     await compileMemoryWikiVault(config);
     const snapshotBefore = await loadMemoryWikiCompiledCache(config);
-    const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
+    const indexBefore = await read("index.md");
 
     await fs.writeFile(sourcePath, renderSource("after"), "utf8");
     const refresh = await refreshMemoryWikiIndexesAfterImport({
@@ -45,11 +45,11 @@ describe("compileMemoryWikiVault", () => {
     await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
       state: "compile-required",
     });
-    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
+    await expect(read("index.md")).resolves.toBe(indexBefore);
   });
 
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
-    const { rootDir, config } = await createVault({ render: { createDashboards: false } });
+    const { rootDir, config, read } = await createVault({ render: { createDashboards: false } });
     const sourcePath = path.join(rootDir, "sources", "preserved.md");
     const notesLine = "- 中文 🦀 \uFFFD tail";
     const source = renderWikiMarkdown({
@@ -61,9 +61,7 @@ describe("compileMemoryWikiVault", () => {
     const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
 
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
-    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
-      "[Preserved](sources/preserved.md)",
-    );
+    await expect(read("index.md")).resolves.toContain("[Preserved](sources/preserved.md)");
     expect(preserved.updatedFiles).not.toContain(sourcePath);
     expect(
       expectDefined(await loadMemoryWikiCompiledCache(config), "compiled cache").digest.pages.map(
@@ -187,7 +185,7 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
-    const { rootDir, config, page: writePage, read } = await createVault();
+    const { config, page: writePage, read } = await createVault();
     await writePage("entities/brad.md", {
       pageType: "entity",
       id: "entity.brad",
@@ -238,17 +236,6 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    expect(
-      toWikiPageSummary({
-        absolutePath: path.join(rootDir, "entities/brad.md"),
-        relativePath: "entities/brad.md",
-        raw: await read("entities/brad.md"),
-      })?.personCard,
-    ).toMatchObject({
-      emails: ["brad@example.com"],
-      privacyTier: "confirm-before-use",
-    });
-
     for (const [name, content] of [
       ["person-agent-directory", "[Brad Groux](../entities/brad.md)"],
       ["relationship-graph", "[Brad Groux](../entities/brad.md) -> Alice"],
@@ -269,7 +256,11 @@ describe("compileMemoryWikiVault", () => {
     expect(bradPage).toMatchObject({
       canonicalId: "maintainer.brad-groux",
       aliases: ["brad", "bgroux"],
-      personCard: { lane: "Microsoft Teams" },
+      personCard: {
+        lane: "Microsoft Teams",
+        emails: ["brad@example.com"],
+        privacyTier: "confirm-before-use",
+      },
       relationshipCount: 1,
     });
     expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");

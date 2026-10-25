@@ -6,7 +6,7 @@ import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
 } from "./compiled-cache.js";
-import { resolveMemoryWikiAgentConfig } from "./config.js";
+import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -62,7 +62,7 @@ vi.mock("./status.js", () => ({
 // mock-isolation: Observe initialization without mutating the vault.
 vi.mock("./vault.js", () => ({ initializeMemoryWikiVault: vi.fn() }));
 
-const { createPluginApi, createVault } = createMemoryWikiTestHarness();
+const { createPluginApi } = createMemoryWikiTestHarness();
 
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
   const call = respond.mock.calls[0];
@@ -100,18 +100,14 @@ const VAULT_BACKED_GATEWAY_CASES = [
 
 const scopedAppConfig = { agents: { entries: { support: {}, marketing: {} } } };
 type GatewayOptions = Partial<Omit<Parameters<typeof registerMemoryWikiGatewayMethods>[0], "api">>;
-async function createGateway(
-  method: string,
-  options:
-    | GatewayOptions
-    | ((vault: Awaited<ReturnType<typeof createVault>>) => GatewayOptions) = {},
-  agentScoped = false,
-) {
-  const vault = await createVault({
-    prefix: "memory-wiki-gateway-",
-    config: agentScoped ? { vault: { scope: "agent" } } : undefined,
+async function createGateway(method: string, options: GatewayOptions = {}, agentScoped = false) {
+  const rootDir = path.resolve("/tmp/memory-wiki-gateway");
+  const config = resolveMemoryWikiConfig({
+    vault: {
+      path: rootDir,
+      ...(agentScoped ? { scope: "agent" } : {}),
+    },
   });
-  const { config, rootDir } = vault;
   const { api, registerGatewayMethod } = createPluginApi();
   const resolveConfig = vi.fn<NonNullable<GatewayOptions["resolveConfig"]>>((agentId, appConfig) =>
     resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
@@ -120,7 +116,7 @@ async function createGateway(
     api,
     getAppConfig: () => (agentScoped ? scopedAppConfig : {}),
     resolveConfig,
-    ...(typeof options === "function" ? options(vault) : options),
+    ...options,
   });
   const handler:
     | ((ctx: {
