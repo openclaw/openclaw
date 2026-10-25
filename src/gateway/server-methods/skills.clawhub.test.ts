@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-  listAgentIds: vi.fn<(_cfg: unknown) => string[]>(() => ["main"]),
-  resolveDefaultAgentId: vi.fn(() => "main"),
-  resolveAgentWorkspaceDir: vi.fn<(_cfg: unknown, _agentId: string) => string>(
-    () => "/tmp/workspace",
-  ),
   report: vi.fn(),
   files: vi.fn(),
   fetchExactClawHubSkillSecurityVerdicts: vi.fn(),
@@ -16,19 +11,6 @@ const mocks = vi.hoisted(() => ({
   installSkillFromClawHub: vi.fn(),
   installSkill: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
-}));
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  writeConfigFile: vi.fn(),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: mocks.listAgentIds,
-  resolveAgentConfig: vi.fn(() => undefined),
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
 vi.mock("../../skills/lifecycle/clawhub.js", () => ({
@@ -62,8 +44,9 @@ vi.mock("../../infra/clawhub-skill-security.js", () => ({
 
 const { skillsHandlers } = await import("./skills.js");
 
-const callSkillsHandler = (method: string, params: Record<string, unknown>) =>
-  callGatewayHandler(skillsHandlers, method, params);
+const config: OpenClawConfig = { agents: { entries: { main: { workspace: "/tmp/workspace" } } } };
+const callSkillsHandler = (method: string, params: Record<string, unknown>, cfg = config) =>
+  callGatewayHandler(skillsHandlers, method, params, { context: { getRuntimeConfig: () => cfg } });
 
 function linkedSkill(registry: string, ownerHandle?: string, slug = "weather") {
   return {
@@ -147,10 +130,11 @@ describe("skills gateway handlers (clawhub)", () => {
   });
 
   it("installs a ClawHub skill through skills.install", async () => {
-    mocks.listAgentIds.mockReturnValue(["main", "research"]);
-    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
-      agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
-    );
+    const researchConfig: OpenClawConfig = {
+      agents: {
+        entries: { ...config.agents?.entries, research: { workspace: "/tmp/research-workspace" } },
+      },
+    };
     const installed = {
       ok: true,
       slug: "calendar",
@@ -160,12 +144,11 @@ describe("skills gateway handlers (clawhub)", () => {
     };
     mocks.installSkillFromClawHub.mockResolvedValue(installed);
 
-    const result = await callSkillsHandler("skills.install", {
-      agentId: "research",
-      source: "clawhub",
-      slug: "@selected/calendar",
-      version: "1.2.3",
-    });
+    const result = await callSkillsHandler(
+      "skills.install",
+      { agentId: "research", source: "clawhub", slug: "@selected/calendar", version: "1.2.3" },
+      researchConfig,
+    );
 
     expect(mocks.installSkillFromClawHub).toHaveBeenCalledWith({
       workspaceDir: "/tmp/research-workspace",
@@ -173,7 +156,7 @@ describe("skills gateway handlers (clawhub)", () => {
       version: "1.2.3",
       force: false,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
-      config: {},
+      config: researchConfig,
     });
     expect(result).toMatchObject({
       ok: true,
@@ -221,7 +204,7 @@ describe("skills gateway handlers (clawhub)", () => {
       skillName: "calendar",
       installId: "deps",
       timeoutMs: 120_000,
-      config: {},
+      config,
     });
     expect(result).toMatchObject({
       ok: true,
@@ -244,7 +227,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       force: true,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
-      config: {},
+      config,
     });
     expect(result).toMatchObject({ ok: true, error: undefined });
   });

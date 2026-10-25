@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -147,14 +147,32 @@ it.each([
         return { identity: "identity-a", generation: "generation-a" };
       },
     });
-    const frames: string[] = [];
-    registerNodeSession(
-      registry,
-      makeClient("conn-node", "node-1", frames, {
-        commands: [command, uploadCommand],
-      }),
-      { pairingGeneration: "generation-a" },
-    );
+    const uploads: Record<string, unknown>[] = [];
+    const nodeClient = makeClient("conn-node", "node-1", [], {
+      commands: [command, uploadCommand],
+    });
+    vi.spyOn(nodeClient.socket, "send").mockImplementation((frame) => {
+      const parsed: unknown = JSON.parse(frame.toString());
+      if (
+        isRecord(parsed) &&
+        parsed.event === "node.invoke.request" &&
+        isRecord(parsed.payload) &&
+        parsed.payload.command === uploadCommand
+      ) {
+        uploads.push(parsed.payload);
+        if (typeof parsed.payload.id !== "string") {
+          throw new Error("Expected node upload request id");
+        }
+        registry.handleInvokeResult({
+          id: parsed.payload.id,
+          nodeId: "node-1",
+          connId: "conn-node",
+          ok: true,
+          payloadJSON: JSON.stringify({ path: "/node/proof.txt", size: 5 }),
+        });
+      }
+    });
+    registerNodeSession(registry, nodeClient, { pairingGeneration: "generation-a" });
     let config: OpenClawConfig = {
       agents: { entries: { main: {} } },
       gateway: {
@@ -186,25 +204,6 @@ it.each([
     };
     const openRespond = vi.fn();
     let uploading: Promise<void> | undefined;
-    const uploadFrames = () =>
-      frames.flatMap((frame) => {
-        const parsed: unknown = JSON.parse(frame);
-        return isRecord(parsed) &&
-          parsed.event === "node.invoke.request" &&
-          isRecord(parsed.payload) &&
-          parsed.payload.command === uploadCommand
-          ? [parsed.payload]
-          : [];
-      });
-    const dispatched = createDeferred();
-    const pushFrames = frames.push.bind(frames);
-    const frameWrites = vi.spyOn(frames, "push").mockImplementation((...values) => {
-      const count = pushFrames(...values);
-      if (uploadFrames().length > 0) {
-        dispatched.resolve();
-      }
-      return count;
-    });
     try {
       await openTerminalSession(
         {
@@ -248,43 +247,27 @@ it.each([
           isWebchatConnect: () => false,
         }),
       );
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        uploading.then(() => {
-          throw new Error("Upload did not reach pairing preparation");
-        }),
-      ]);
+        uploading,
+        "Upload did not reach pairing preparation",
+      );
       config = { ...config, gateway: { ...config.gateway, uploads: { enabled: !disabled } } };
       pairing.resolve({ identity: "identity-a", generation: "generation-a" });
-      await Promise.race([dispatched.promise, uploading]);
-      const frame = uploadFrames()[0];
-      if (frame) {
-        if (typeof frame.id !== "string") {
-          throw new Error("Expected node upload request id");
-        }
-        registry.handleInvokeResult({
-          id: frame.id,
-          nodeId: "node-1",
-          connId: "conn-node",
-          ok: true,
-          payloadJSON: JSON.stringify({ path: "/node/proof.txt", size: 5 }),
-        });
-      }
       await uploading;
       if (disabled && !trusted) {
-        expect.soft(uploadFrames()).toEqual([]);
+        expect.soft(uploads).toEqual([]);
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
         );
       } else {
-        expect(uploadFrames()).toHaveLength(1);
-        expect(JSON.stringify(frame)).not.toContain("assertCommitAllowed");
+        expect(uploads).toHaveLength(1);
+        expect(JSON.stringify(uploads[0])).not.toContain("assertCommitAllowed");
         expect(respond).toHaveBeenCalledWith(true, { path: "/node/proof.txt", size: 5 });
       }
     } finally {
-      frameWrites.mockRestore();
       pairing.resolve({ identity: "identity-a", generation: "generation-a" });
       manager.disposeAll();
       registry.unregister("conn-node");
