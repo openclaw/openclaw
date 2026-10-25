@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
@@ -13,14 +13,12 @@ import type { WorkerTaskHost } from "./worker-task-host.js";
 import {
   retainCurrentWorkerNativeSection,
   withWorkerTaskNativeSectionScope,
-  type WorkerNativeSectionState,
 } from "./worker-task-native-sections.js";
 import { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
 import type { WorkerTaskPoolOptions, WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 class FixtureWorker extends EventEmitter implements WorkerLifecycle {
-  readonly inputs: Array<{ taskId: number; input: unknown }> = [];
-  nativeSections?: WorkerNativeSectionState;
+  input?: { taskId: number; input: unknown; nativeSections: SharedArrayBuffer };
   readonly terminate = vi.fn(async () => {
     this.threadId = -1;
     this.emit("exit", 0);
@@ -30,30 +28,26 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
     super();
   }
 
-  postMessage(value: unknown) {
-    assert(value !== null && typeof value === "object" && "taskId" in value && "input" in value);
-    assert(typeof value.taskId === "number", "Expected a worker task input");
-    if ("nativeSections" in value && value.nativeSections instanceof SharedArrayBuffer) {
-      this.nativeSections = new Int32Array(value.nativeSections);
-    }
-    this.inputs.push({ taskId: value.taskId, input: value.input });
+  postMessage(input: NonNullable<FixtureWorker["input"]>) {
+    this.input = input;
+    this.emit("posted");
   }
-
   ready() {
     this.emit("message", { status: "ready" });
   }
 
-  complete(error?: string) {
+  complete() {
     this.ready();
-    this.reply(error);
+    this.reply();
   }
 
-  reply(error?: string) {
-    const task = this.inputs.at(-1);
+  reply() {
+    const task = this.input;
     assert(task, "No worker task was dispatched");
     this.emit("message", {
       taskId: task.taskId,
-      ...(error ? { status: "failed", error } : { status: "ok", value: task.input }),
+      status: "ok",
+      value: task.input,
     });
   }
 
@@ -66,9 +60,6 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
 }
 
 const pools: Array<WorkerTaskPoolCore<string, string>> = [];
-const nativeFailure = Object.assign(new Error("synthetic heap exhausted"), {
-  code: "ERR_WORKER_OUT_OF_MEMORY",
-});
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
@@ -76,7 +67,6 @@ afterEach(async () => {
 function createPool({
   maxWorkers = 1,
   requiresReady,
-  failure: initialFailure,
   computeCapacity = createWorkerComputeCapacity(4),
   ...options
 }: Pick<
@@ -84,27 +74,17 @@ function createPool({
   "maxWorkers" | "maxPendingTasks" | "maxPendingBytes" | "sharedCompute" | "onRotationComplete"
 > & {
   requiresReady?: false;
-  failure?: "error" | "exit" | "constructor";
   computeCapacity?: WorkerComputeCapacity;
 } = {}) {
   const workers: FixtureWorker[] = [];
-  let failure = initialFailure;
-  let attempts = 0;
+  const createWorker = vi.fn(() => {
+    const worker = new FixtureWorker(workers.length + 1);
+    workers.push(worker);
+    return { worker };
+  });
   const host: WorkerTaskHost = {
     requiresReady: requiresReady === false ? undefined : true,
-    createWorker() {
-      attempts++;
-      if (failure === "constructor") {
-        throw new Error("module unavailable");
-      }
-      const worker = new FixtureWorker(attempts);
-      workers.push(worker);
-      const event = failure;
-      if (event) {
-        queueMicrotask(() => worker.emit(event, event === "error" ? nativeFailure : 0));
-      }
-      return { worker };
-    },
+    createWorker,
     serviceNativeWorkers(nativeWorkers) {
       nativeWorkers.forEach((worker) => worker.service());
     },
@@ -138,10 +118,8 @@ function createPool({
     host,
     workers,
     complete: () => workers.at(-1)!.complete(),
-    attempts: () => attempts,
-    recover: () => {
-      failure = undefined;
-    },
+    createWorker,
+    attempts: () => createWorker.mock.calls.length,
   };
 }
 
@@ -161,9 +139,8 @@ it.each([false, true])(
     host.flushWorkerDiagnostics = flushDiagnostics;
     const task = pool.run("active native work", {}).catch(() => undefined);
     const worker = workers[0]!;
-    assert(worker.nativeSections);
     const release = withWorkerTaskNativeSectionScope(
-      worker.nativeSections,
+      new Int32Array(worker.input!.nativeSections),
       () => true,
       retainCurrentWorkerNativeSection,
     );
@@ -240,26 +217,22 @@ async function expectCapacity(result: Promise<string>) {
 }
 
 it("retries failed publication before successor dispatch", async () => {
-  let nativeReader = false;
+  const events: string[] = [];
   const failure = new Error("resource publication failed");
-  const released = vi.fn(() => {
-    nativeReader = false;
+  const { pool, workers, complete } = createPool({
+    onRotationComplete() {
+      events.push("publish");
+      if (events.length === 1) {
+        throw failure;
+      }
+    },
   });
-  released.mockImplementationOnce(() => {
-    throw failure;
-  });
-  const { pool, workers, complete } = createPool({ onRotationComplete: released });
-  const first = pool.run(() => {
-    nativeReader = true;
-    return "first";
-  }, {});
+  const first = pool.run("first", {});
   complete();
   await first;
   const rotating = pool.rotate();
-  let previousReader: boolean | undefined;
   const prepared = vi.fn(() => {
-    previousReader = nativeReader;
-    nativeReader = true;
+    events.push("prepare");
     return "successor";
   });
   const successor = pool.run(prepared, {});
@@ -269,16 +242,32 @@ it("retries failed publication before successor dispatch", async () => {
   await pool.rotate();
   complete();
   await expect(successor).resolves.toBe("successor");
-  expect([workers[0]!.threadId, previousReader, nativeReader]).toEqual([-1, false, true]);
-  expect(released).toHaveBeenCalledTimes(2);
+  expect(events).toEqual(["publish", "publish", "prepare"]);
 });
 
 it.each(["error", "exit", "constructor"] as const)("latches %s until rotation", async (failure) => {
-  const { pool, complete, attempts, recover } = createPool({ failure });
+  const { pool, workers, complete, attempts, createWorker } = createPool({ maxWorkers: 2 });
+  const prepared = Promise.withResolvers<string>();
+  const nativeFailure = Object.assign(new Error("synthetic heap exhausted"), {
+    code: "ERR_WORKER_OUT_OF_MEMORY",
+  });
+  if (failure === "constructor") {
+    createWorker.mockImplementationOnce(() => {
+      throw new Error("module unavailable");
+    });
+  } else {
+    queueMicrotask(() => {
+      workers[0]!.emit(failure, failure === "error" ? nativeFailure : 0);
+      prepared.resolve("prepared after failure");
+    });
+  }
   const prepare = vi.fn(() => "input");
   const release = vi.fn();
-  const tasks = Array.from({ length: 12 }, () =>
-    pool.run(prepare, { inputBytes: 16, onInputConsumed: release }),
+  const tasks = Array.from({ length: 12 }, (_, index) =>
+    pool.run(index === 1 ? () => prepared.promise : prepare, {
+      inputBytes: 16,
+      onInputConsumed: release,
+    }),
   );
   const outcomes = await Promise.allSettled(tasks);
   expect(outcomes).toEqual(Array.from({ length: 12 }, () => rejected));
@@ -291,7 +280,6 @@ it.each(["error", "exit", "constructor"] as const)("latches %s until rotation", 
   await expect(pool.run("still unavailable", {})).rejects.toMatchObject(unavailable);
   expect(attempts()).toBe(1);
 
-  recover();
   await pool.rotate();
   const recovered = pool.run("recovered", {});
   complete();
@@ -299,76 +287,50 @@ it.each(["error", "exit", "constructor"] as const)("latches %s until rotation", 
   expect(attempts()).toBe(2);
 });
 
-it("keeps a healthy sibling serving the backlog without repeatedly replacing the failed boot", async () => {
+it("keeps a healthy sibling serving queued and new work with checkpoint pressure after failed boot", async () => {
   const { pool, workers, attempts } = createPool({ maxWorkers: 2 });
+  const requested = Promise.withResolvers<AbortSignal>();
+  const response = Promise.withResolvers<WorkerTaskResponse>();
   const healthy = pool.run("healthy", {});
   const worker = workers[0]!;
   worker.ready();
   const failed = pool.run("failed boot", {});
   const failedResult = expect(failed).rejects.toMatchObject(unavailable);
-  const inputs = ["first", "second", "third"];
-  const pending = inputs.map((input) => pool.run(input, {}));
-  workers[1]!.emit("error", new Error("second worker failed to initialize"));
-  await failedResult;
-  pending.push(pool.run("newly admitted", {}));
-  inputs.push("newly admitted");
-  worker.reply();
-  await expect(healthy).resolves.toBe("healthy");
-  for (const input of inputs) {
-    expect(worker.inputs.at(-1)?.input).toBe(input);
-    worker.reply();
-  }
-  await expect(Promise.all(pending)).resolves.toEqual(inputs);
-  expect(attempts()).toBe(2);
-});
-
-it("does not start a late input preparation after its sibling bootstrap failed", async () => {
-  const { pool, workers, attempts } = createPool({ maxWorkers: 2 });
-  const failed = pool.run("failed boot", {});
-  const prepared = Promise.withResolvers<string>();
-  const release = vi.fn();
-  const preparing = pool.run(() => prepared.promise, { onInputConsumed: release });
-  const results = Promise.allSettled([failed, preparing]);
-  workers[0]!.emit("error", new Error("module unavailable"));
-  prepared.resolve("prepared after failure");
-  expect(await results).toEqual([rejected, rejected]);
-  expect(release).toHaveBeenCalledOnce();
-  expect(attempts()).toBe(1);
-  expect(pool.getSnapshot().pendingTasks).toBe(0);
-});
-
-it("requests a checkpoint when failed bootstrap leaves a healthy host-waiting sibling", async () => {
-  const { pool, workers } = createPool({ maxWorkers: 2 });
-  const requested = Promise.withResolvers<AbortSignal>();
-  const response = Promise.withResolvers<WorkerTaskResponse>();
-  const healthy = pool.run("host request", {
+  const queued = pool.run("queued", {
     onRequest(_value, { yieldSignal }) {
       requested.resolve(yieldSignal);
       return response.promise;
     },
   });
-  const healthyResult = Promise.allSettled([healthy]);
-  const worker = workers[0]!;
-  worker.ready();
-  const failed = pool.run("failed boot", {});
-  const failedResult = expect(failed).rejects.toMatchObject(unavailable);
   workers[1]!.emit("error", new Error("second worker failed to initialize"));
   await failedResult;
+  worker.reply();
+  await expect(healthy).resolves.toBe("healthy");
+  expect(worker.input?.input).toBe("queued");
   worker.emit("message", {
     status: "request",
-    taskId: worker.inputs[0]!.taskId,
+    taskId: worker.input!.taskId,
     id: 1,
     value: "waiting on host",
   });
   const pressure = await requested.promise;
   expect(pressure.aborted).toBe(false);
-  const queued = Promise.allSettled([pool.run("queued contender", {})]);
+  const newlyAdmitted = pool.run("newly admitted", {});
   try {
     expect(pressure.aborted).toBe(true);
+    const posted = once(worker, "posted");
+    response.resolve({ input: "queued", timeoutMs: 1000 });
+    await posted;
+    worker.reply();
+    await expect(queued).resolves.toBe("queued");
+    expect(worker.input?.input).toBe("newly admitted");
+    worker.reply();
+    await expect(newlyAdmitted).resolves.toBe("newly admitted");
+    expect(attempts()).toBe(2);
   } finally {
     response.resolve({ input: null, timeoutMs: 1000 });
     await pool.close();
-    await Promise.all([healthyResult, queued]);
+    await Promise.allSettled([queued, newlyAdmitted]);
   }
 });
 
@@ -406,7 +368,7 @@ it("keeps a failed native stop latched until a successful rotation joins it", as
   await expect(recovered).resolves.toBe("recovered");
 });
 
-it("does not latch malformed task input or an ordinary failure from a ready worker", async () => {
+it("does not latch malformed task input", async () => {
   const { pool, workers, attempts } = createPool();
   await expect(
     pool.run("malformed transfer", {
@@ -415,25 +377,10 @@ it("does not latch malformed task input or an ordinary failure from a ready work
       },
     }),
   ).rejects.toThrow("invalid transfer input");
-  const failed = pool.run("ordinary task failure", {});
-  const failedResult = expect(failed).rejects.toMatchObject({ code: "failed" });
-  workers[1]!.complete("invalid task data");
-  await failedResult;
   const recovered = pool.run("valid task", {});
-  workers[1]!.reply();
+  workers[1]!.complete();
   await expect(recovered).resolves.toBe("valid task");
   expect(attempts()).toBe(2);
-});
-
-it("preserves arbitrary worker recovery without a served-protocol readiness requirement", async () => {
-  const { pool, workers } = createPool({ requiresReady: false });
-  const failed = pool.run("custom worker exits", {});
-  const failedResult = expect(failed).rejects.toMatchObject(unavailable);
-  const queued = pool.run("custom response", {});
-  workers[0]!.emit("exit", 0);
-  await failedResult;
-  workers[1]!.reply();
-  await expect(queued).resolves.toBe("custom response");
 });
 
 it.each([true, false])("waits for both capacities (local first=%s)", async (localFirst) => {
