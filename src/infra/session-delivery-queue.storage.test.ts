@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { getDeliveryQueueEntryStatus } from "./delivery-queue-sqlite.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   advanceSessionDeliveryAgentRun as advanceRun,
@@ -58,15 +58,7 @@ describe("session-delivery queue storage", () => {
     await complete(id, ctx);
   }
 
-  function readStatus(dir: string, id: string): string | undefined {
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
-    });
-    const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'session' AND id = ?")
-      .get(id) as { status?: string } | undefined;
-    return row?.status;
-  }
+  const readStatus = (dir: string, id: string) => getDeliveryQueueEntryStatus("session", id, dir);
 
   it("grants one initial-attempt lease and releases it for recovery", async () => {
     await withSessionDeliveryQueue(async (_stateDir, ctx) => {
@@ -170,20 +162,13 @@ describe("session-delivery queue storage", () => {
         ).resolves.toEqual(imageBlocks("artifact-one"));
         await mergePrepared(id, "/tmp/two.png", imageBlocks("artifact-two"), ctx);
 
-        await advanceRun(
-          id,
-          {
-            message: "only missing media",
-            expectedMediaUrls: ["/tmp/two.png"],
-          },
-          ctx,
-        );
+        const retry = { message: "only missing media", expectedMediaUrls: ["/tmp/two.png"] };
+        await advanceRun(id, retry, ctx);
         [entry] = await listPending(ctx);
         expect(entry).toMatchObject({
           agentRunAttempt: 1,
           retryCount: 1,
-          message: "only missing media",
-          expectedMediaUrls: ["/tmp/two.png"],
+          ...retry,
           expectedMediaAttachments: mediaAttachments,
           preparedMediaBlocks: {
             "/tmp/one.png": imageBlocks("artifact-one"),

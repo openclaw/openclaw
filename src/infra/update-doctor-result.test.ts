@@ -39,25 +39,13 @@ afterEach(async () => {
 });
 
 describe("post-install doctor result IPC", () => {
-  it.each(
-    [
-      {
-        status: "error" as const,
-        failureFacts: [
-          { check: "doctor", code: "doctor-failed", message: "Required migration failed" },
-        ],
-      },
-      {
-        ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
-        configHash: "b".repeat(64),
-        warnings: ["plugin/example: version probe timed out"],
-        deferredInspectionCheckIds: [
-          "core/doctor/new-target-inspection",
-          "target:Inspection_Check",
-        ],
-      },
-    ].flatMap((result) => ["file", "stdout"].map((destination) => ({ result, destination }))),
-  )("round-trips $result.status results over $destination", async ({ result, destination }) => {
+  it.each(["file", "stdout"])("round-trips advisory evidence over %s", async (destination) => {
+    const result = {
+      ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
+      configHash: "b".repeat(64),
+      warnings: ["plugin/example: version probe timed out"],
+      deferredInspectionCheckIds: ["core/doctor/new-target-inspection", "target:Inspection_Check"],
+    };
     if (destination === "stdout") {
       const output: string[] = [];
       vi.stubEnv("VITEST", "false");

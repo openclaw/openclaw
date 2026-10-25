@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-database-receipts.js";
 import * as state from "../state/openclaw-state-db.js";
-import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import * as ledger from "./update-run-ledger.js";
 import { toPublicUpdateRun } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
@@ -25,40 +23,22 @@ function timedStep(step: string, status: "completed" | "failed" = "completed") {
 describe("update run ledger compaction", () => {
   it.each([
     { name: "step count", count: 130, detail: undefined },
-    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512), missingWrites: true },
-  ])("retains evidence across the $name bound and reopen", ({ count, detail, missingWrites }) => {
+    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
+  ])("retains evidence across the $name bound and reopen", ({ count, detail }) => {
     const options = isolatedOptions();
     const run = ledger.createUpdateRun({ trigger: "chat" }, options);
     const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
       ledger.recordUpdateRunStep(run.runId, step, options);
-    const backup: UpdateDatabaseBackup = {
-      directory: `${options.env.OPENCLAW_STATE_DIR}/backup`,
-      databases: [],
-      missingPaths: [],
-      sourcePaths: ["database.sqlite"],
-      sourceGenerations: { "database.sqlite": "before" },
-      warnings: [],
-      ...(missingWrites
-        ? { restoreRefusal: "databases changed after snapshot capture; the writer is unknown" }
-        : {}),
-    };
-    const receipt = recordUpdateDatabaseWrites(
-      backup,
-      missingWrites
-        ? undefined
-        : {
-            unchanged: false,
-            fromGenerations: { "database.sqlite": "foreign-write" },
-            generations: { "database.sqlite": "after" },
-          },
-      { name: "openclaw doctor" },
-    );
-    for (const entry of updateRunStepsFromResultStep(receipt)) {
+    // CLI tests own warning generation; this boundary owns its durable, redacted report.
+    for (const entry of updateRunStepsFromResultStep({
+      name: "database migration writes",
+      exitCode: 0,
+      warnings: [
+        `Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at ${options.env.OPENCLAW_STATE_DIR}/backup.`,
+      ],
+    })) {
       write(entry);
     }
-    expect(backup.restoreRefusal).toBe(
-      "databases changed after snapshot capture; the writer is unknown",
-    );
     const evidence = [
       "candidate-admission",
       "warning:update-admission-fallback",

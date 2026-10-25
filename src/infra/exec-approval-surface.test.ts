@@ -10,9 +10,6 @@ import {
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
-const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
-
 function plugin(label: string, approvalCapability: Record<string, unknown>) {
   getChannelPluginMock.mockReturnValue({ meta: { label }, approvalCapability });
 }
@@ -26,48 +23,26 @@ function surface(
   return { kind, channel, channelLabel, accountId };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: (...args: unknown[]) => loadConfigMock(...args),
-  };
-});
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  getRuntimeConfig: (...args: unknown[]) => loadConfigMock(...args),
+}));
 
-vi.mock("../channels/plugins/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
-    "../channels/plugins/index.js",
-  );
-  return {
-    ...actual,
-    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  };
-});
-
-vi.mock("../utils/message-channel.js", () => ({
-  INTERNAL_MESSAGE_CHANNEL: "web",
-  isDeliverableMessageChannel: (...args: unknown[]) => isDeliverableMessageChannelMock(...args),
-  normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
+vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/index.js")>()),
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
 }));
 
 describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
   beforeEach(() => {
     loadConfigMock.mockReset().mockReturnValue({});
     getChannelPluginMock.mockReset();
-    isDeliverableMessageChannelMock.mockReset();
-    normalizeMessageChannelMock.mockReset();
-    normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
-      typeof value === "string" ? value.trim().toLowerCase() : undefined,
-    );
-    isDeliverableMessageChannelMock.mockImplementation(
-      (value?: string) => value === "slack" || value === "discord" || value === "telegram",
-    );
   });
 
   it.each([
     [null, "this platform"],
     ["tui", "terminal UI"],
-    ["web", "Web UI"],
+    ["webchat", "Web UI"],
   ] as const)("treats built-in initiating surface %j", async (channel, label) => {
     expect(await resolveExec({ channel })).toEqual(surface("enabled", channel ?? undefined, label));
   });
@@ -115,13 +90,12 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
 
   it("awaits native availability instead of selecting a synchronous fallback", async () => {
     const availability = Promise.withResolvers<{ kind: "disabled" }>();
-    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
-    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
+    const syncFallback = vi.fn(() => ({ kind: "enabled" as const }));
     plugin("Matrix", {
       nativeAsync: {},
       getExecInitiatingSurfaceStateAsync: () => availability.promise,
-      getExecInitiatingSurfaceState,
-      getActionAvailabilityState,
+      getExecInitiatingSurfaceState: syncFallback,
+      getActionAvailabilityState: syncFallback,
     });
 
     const result = resolveExec({
@@ -131,8 +105,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     expect(supportsNativeExecApprovalClient("matrix")).toBe(true);
     availability.resolve({ kind: "disabled" });
     await expect(result).resolves.toEqual(surface("disabled", "matrix", "Matrix", "default"));
-    expect(getExecInitiatingSurfaceState).not.toHaveBeenCalled();
-    expect(getActionAvailabilityState).not.toHaveBeenCalled();
+    expect(syncFallback).not.toHaveBeenCalled();
   });
 
   it("reports no plugin approval route when the channel cannot enforce scoped reviewers", async () => {
@@ -170,8 +143,8 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
       }),
     ).toEqual(surface("disabled", "telegram", "Telegram", "main"));
     expect(loadConfigMock).toHaveBeenCalledOnce();
-    expect(await resolveExec({ channel: "signal" })).toEqual(
-      surface("unsupported", "signal", "Signal"),
+    expect(await resolveExec({ channel: "unsupported-channel" })).toEqual(
+      surface("unsupported", "unsupported-channel", "Unsupported-channel"),
     );
   });
 
@@ -179,50 +152,36 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     expect(await resolveExec({ channel: "slack" })).toEqual(surface("enabled", "slack", "Slack"));
   });
 
-  it("routes normalized setup parameters to the selected approval hook", () => {
-    const describeExecApprovalSetup = vi.fn(() => "exec setup");
-    const describePluginApprovalSetup = vi.fn(() => "plugin setup");
-    plugin("Telegram", { describeExecApprovalSetup, describePluginApprovalSetup });
-
-    expect(
-      execSetup({
-        channel: " Telegram ",
-        channelLabel: " Telegram Custom ",
-        accountId: " primary ",
-      }),
-    ).toBe("exec setup");
-    expect(describeExecApprovalSetup).toHaveBeenCalledWith({
-      channel: "telegram",
-      channelLabel: "Telegram Custom",
-      accountId: "primary",
-    });
-
-    expect(pluginSetup({ channel: " TELEGRAM " })).toBe("plugin setup");
-    expect(describePluginApprovalSetup).toHaveBeenCalledWith({
-      channel: "telegram",
-      channelLabel: "Telegram",
-      accountId: undefined,
-    });
-  });
-
-  it.each(["tui"])("suppresses setup guidance for %s", (channel) => {
-    expect(execSetup({ channel })).toBeNull();
-    expect(pluginSetup({ channel })).toBeNull();
-    expect(getChannelPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to the sibling approval hook", () => {
-    const describeExecApprovalSetup = vi.fn(() => "exec setup");
-    const describePluginApprovalSetup = vi.fn(() => "plugin setup");
-    getChannelPluginMock.mockImplementation((channel: string) => ({
-      meta: { label: channel },
-      approvalCapability:
-        channel === "telegram" ? { describePluginApprovalSetup } : { describeExecApprovalSetup },
-    }));
-
-    expect(execSetup({ channel: "telegram" })).toBeNull();
-    expect(describePluginApprovalSetup).not.toHaveBeenCalled();
-    expect(pluginSetup({ channel: "matrix" })).toBeNull();
-    expect(describeExecApprovalSetup).not.toHaveBeenCalled();
-  });
+  it.each([
+    [execSetup, "describeExecApprovalSetup", "describePluginApprovalSetup"],
+    [pluginSetup, "describePluginApprovalSetup", "describeExecApprovalSetup"],
+  ] as const)(
+    "normalizes setup through %s without using its sibling or internal UI",
+    (setup, key, sibling) => {
+      const selected = vi.fn(() => "selected setup");
+      const unused = vi.fn(() => "sibling setup");
+      plugin("Telegram", { [key]: selected, [sibling]: unused });
+      expect(
+        setup({ channel: " Telegram ", channelLabel: " Telegram Custom ", accountId: " primary " }),
+      ).toBe("selected setup");
+      expect(selected).toHaveBeenCalledWith({
+        channel: "telegram",
+        channelLabel: "Telegram Custom",
+        accountId: "primary",
+      });
+      expect(setup({ channel: " TELEGRAM " })).toBe("selected setup");
+      expect(selected).toHaveBeenCalledWith({
+        channel: "telegram",
+        channelLabel: "Telegram",
+        accountId: undefined,
+      });
+      expect(unused).not.toHaveBeenCalled();
+      plugin("Telegram", { [sibling]: unused });
+      expect(setup({ channel: "telegram" })).toBeNull();
+      expect(unused).not.toHaveBeenCalled();
+      getChannelPluginMock.mockClear();
+      expect(setup({ channel: "tui" })).toBeNull();
+      expect(getChannelPluginMock).not.toHaveBeenCalled();
+    },
+  );
 });
