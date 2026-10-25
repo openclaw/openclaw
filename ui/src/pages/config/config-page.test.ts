@@ -612,10 +612,14 @@ it("leaves Appearance while a camera selection is unresolved", async () => {
     .filter((page) => page.id !== "settings" && page.id !== "config")
     .filter((page) => page.id === "appearance" || page.id === "notifications");
   const routes = await Promise.all(
-    configPages.map(async (page) => {
-      const module = await page.component();
+    configPages.map(async ({ id, path, aliases, loader, loaderDeps, component }) => {
+      const module = await component();
       return {
-        ...page,
+        id,
+        path,
+        aliases,
+        loader,
+        loaderDeps,
         component: () => ({
           ...module,
           renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) =>
