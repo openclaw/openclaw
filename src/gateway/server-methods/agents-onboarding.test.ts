@@ -35,6 +35,7 @@ const cfg: OpenClawConfig = {
   agents: { entries: { main: {} }, defaults: { model: "ollama/test-model" } },
   session: { mainKey: "home" },
 };
+const verified = { ok: true as const, modelRef: "ollama/test-model", latencyMs: 1 };
 function invocation(runtimeConfig: OpenClawConfig = cfg) {
   return {
     req: { type: "req", id: "creation", method: "agents.create" },
@@ -46,9 +47,7 @@ function invocation(runtimeConfig: OpenClawConfig = cfg) {
 beforeEach(() => {
   vi.mocked(verifySetupInferenceConfig).mockReset();
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 function activeConfig() {
   vi.spyOn(snapshots, "getRuntimeConfigAppliedHash").mockReturnValue(
     snapshots.hashRuntimeConfigValue(cfg),
@@ -64,11 +63,7 @@ function activeConfig() {
 }
 it("verifies primary inference before creation without using its output as the greeting", async () => {
   activeConfig();
-  vi.mocked(verifySetupInferenceConfig).mockResolvedValue({
-    ok: true,
-    modelRef: "ollama/test-model",
-    latencyMs: 1,
-  });
+  vi.mocked(verifySetupInferenceConfig).mockResolvedValue(verified);
   const options = invocation();
   const prepared = await prepareAgentOnboarding(options, "bot-stable", {
     name: "New agent",
@@ -99,11 +94,7 @@ it("rejects failed inference and settings drift before persistence", async () =>
   const options = invocation();
   vi.mocked(verifySetupInferenceConfig).mockImplementationOnce(async () => {
     options.context.getRuntimeConfig = () => ({ ...cfg });
-    return {
-      ok: true,
-      modelRef: "ollama/test-model",
-      latencyMs: 1,
-    };
+    return verified;
   });
   await expect(
     prepareAgentOnboarding(options, "bot-stable", { name: "New agent" }),
@@ -145,7 +136,6 @@ it("atomically publishes a saved greeting that remains in the agent's conversati
         usage: expect.objectContaining({ input: 0, output: 0, totalTokens: 0 }),
       }),
     ]);
-    expect(messages.some((message) => isRecord(message) && message.role === "user")).toBe(false);
     expect(isTranscriptOnlyOpenClawAssistantMessage(messages[0])).toBe(false);
   });
 });

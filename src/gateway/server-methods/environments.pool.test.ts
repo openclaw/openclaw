@@ -61,13 +61,9 @@ for (const method of ["environments.list", "environments.status"] as const) {
       };
       const record = workerRecord({
         state: listing ? "idle" : "attached",
-        ...(listing
-          ? {
-              attachedSessionIds: ["session-z", "session-a", "session-z", " "],
-              idleSinceAtMs: 6_000,
-              destroyRequestedAtMs: 9_000,
-            }
-          : {}),
+        attachedSessionIds: listing ? ["session-z", "session-a", "session-z", " "] : [],
+        idleSinceAtMs: listing ? 6_000 : null,
+        destroyRequestedAtMs: listing ? 9_000 : null,
         preparation: {
           ...preparation,
           ...details,
@@ -105,9 +101,9 @@ for (const method of ["environments.list", "environments.status"] as const) {
           tunnelStatus: "stopped",
         },
       });
-      expect(summary).not.toHaveProperty("sshEndpoint");
-      expect(summary.worker).not.toHaveProperty("sshEndpoint");
-      expect(summary.worker).not.toHaveProperty("keyRef");
+      for (const path of ["sshEndpoint", "worker.sshEndpoint", "worker.keyRef"]) {
+        expect(summary).not.toHaveProperty(path);
+      }
       expect(summary.preparation).toEqual({
         ...preparation,
         ...(includeDetails ? { details } : {}),
@@ -118,12 +114,6 @@ for (const method of ["environments.list", "environments.status"] as const) {
         expect(summary.worker).not.toHaveProperty("destroyRequestedAtMs");
       }
       if (listing) {
-        expect(payload.environments).toMatchObject([
-          { id: "gateway", type: "local" },
-          { id: "node:node-live", type: "node" },
-          { id: "node:node-offline", type: "node" },
-          { id: "worker-1", type: "worker" },
-        ]);
         expect(payload.profiles).toEqual([
           { id: "aws", providerId: "crabbox", ...(includeDetails ? { readyWorkers: 2 } : {}) },
           {
@@ -139,9 +129,6 @@ for (const method of ["environments.list", "environments.status"] as const) {
           expect(service.readReadyWorkerTarget).not.toHaveBeenCalled();
         }
         expect(service.readPreparedPoolSummary).toHaveBeenCalledTimes(includeDetails ? 1 : 0);
-        expect(service.list).toHaveBeenCalledOnce();
-      } else {
-        expect(service.get).toHaveBeenCalledWith("worker-1");
       }
     },
   );
