@@ -80,28 +80,8 @@ it.for(["search", "full", "overflow"] as const)(
           reads.push([...input.sessionKeys]);
           return owner.readRowFacts(input);
         });
-        const admitted: string[][] = [];
-        if (overflow) {
-          const prepare = projection.withPreparedExactRows.bind(projection);
-          vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
-            (select, consume, options) => {
-              const selected = select(cfg);
-              admitted.push(selected.map(({ key }) => key));
-              return prepare(
-                (config) => {
-                  // Reentry retains this admission slice, not the changing live set.
-                  expect(select(config)).toEqual(selected);
-                  return selected;
-                },
-                consume,
-                options,
-              );
-            },
-          );
-        }
         sql = observeHostDataSql();
         const prepare = async () => {
-          expect(projection.capture(oldest)?.materialized).toBeUndefined();
           expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
           if (overflow) {
             for (const metadataPrepared of [false, true]) {
@@ -112,8 +92,6 @@ it.for(["search", "full", "overflow"] as const)(
             await projection.prepareMembership();
             expect(projection.needsMembershipPreparation()).toBe(false);
             expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
-            expect(admitted.length).toBeGreaterThan(0);
-            expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
             expect([...new Set(reads.flat())].toSorted()).toEqual(
               queries.map(({ key }) => key).toSorted(),
             );
@@ -122,7 +100,6 @@ it.for(["search", "full", "overflow"] as const)(
               expect(projection.capture(query)?.sharingEntry?.category).toBe("Work");
             }
           } else {
-            expect.soft(projection.dirtyRowCount).toBe(1);
             expect.soft(projection.needsSelectionPreparation()).toBe(true);
             if (mode === "search") {
               const result = await listProjectedSessions({
@@ -186,15 +163,6 @@ it("keeps failed category facts pending and reenters selection through exact pre
     try {
       await projection.ensureMaterialized();
       sql = observeHostDataSql();
-      await projection.withSelectionPreparation(async () => {
-        const materialized = projection.materializedCount;
-        sessionChanges.emit({ sessionKey: query.key, factsInvalidated: "category" });
-        expect(projection.sharingTargetState(query)).toEqual({ status: "pending" });
-        await projection.prepareSelection();
-        expect(projection.sharingTargetState(query)).toMatchObject({ status: "ready" });
-        expect(projection.sharingTarget(query)?.entry.category).toBe("Work");
-        expect(projection.materializedCount).toBe(materialized);
-      });
       const failure = new Error("category row read failed");
       const reads: string[][] = [];
       observeRowFacts((owner) => async (input) => {

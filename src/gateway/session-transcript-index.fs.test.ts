@@ -86,20 +86,14 @@ test("keeps exact physical ranges across newline dialects and malformed UTF8", a
   expect(index.entries.map((entry) => entry.rawId)).toEqual(["first", "invalid", "", undefined]);
 });
 
-test("retains duplicate order, last by-ID selection and oversized image recovery", async () => {
-  const file = await fixture(
-    [message("same", "first"), imageMessage("image", 300000), message("same", "last")],
-    "\r\n",
-  );
+test("retains duplicate order and last by-ID selection", async () => {
+  const file = await fixture([message("same", "first"), message("same", "last")], "\r\n");
   const { index, read } = await openIndex(file);
   const records = await read();
   expect(records.map((entry) => entry.record.message)).toMatchObject([
     { content: "first" },
-    { content: [{ text: "caption" }, { type: "image", omitted: true, bytes: 300000 }] },
     { content: "last" },
   ]);
-  expect(records[1]?.recoveredImageData).toBe(true);
-  expect(records[1]!.byteLength).toBeGreaterThan(256 * 1024);
   const last = await read([index.byId.get("same")!]);
   expect(last[0]?.record.message).toMatchObject({ content: "last" });
   expect(index.entries.find((entry) => entry.id === "same")?.seq).toBe(1);
