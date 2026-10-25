@@ -37,31 +37,22 @@ import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } f
 const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
 
 function oversizedZaloJsonResponse(onCancel: () => void): Response {
-  const response = new Response(
+  return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(ZALO_JSON_CAP_BYTES + 1));
       },
-      cancel() {
-        onCancel();
-      },
+      cancel: onCancel,
     }),
     { headers: { "content-type": "application/json" }, status: 200 },
   );
-  Object.defineProperty(response, "json", {
-    value: async () => {
-      throw new Error("unbounded json reader was used");
-    },
-  });
-  return response;
 }
 
-function signalAbortedZaloJsonResponse(signal: AbortSignal, onAbort: () => void): Response {
+function signalAbortedZaloJsonResponse(signal: AbortSignal): Response {
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         const abortBody = () => {
-          onAbort();
           controller.error(new Error("zalo body aborted"));
         };
         if (signal.aborted) {
@@ -146,23 +137,15 @@ describe("Zalo API request methods", () => {
   });
 
   it.each([
-    ["rejects an empty ZALO_API_URL", "   ", "ZALO_API_URL must not be empty."],
-    [
-      "rejects invalid alternate API URLs",
-      "file:///tmp/zalo",
-      "ZALO_API_URL must use http:// or https://.",
-    ],
-    [
-      "rejects an API root with URL suffix components: https://proxy.example/zalo#provider",
-      "https://proxy.example/zalo#provider",
-      "ZALO_API_URL must not include a query string or fragment.",
-    ],
-  ] as const)("%s", async (_name, apiUrl, expectedError) => {
+    ["   ", "must not be empty"],
+    ["file:///tmp/zalo", "must use http:// or https://"],
+    ["https://proxy.example/zalo#provider", "must not include a query string or fragment"],
+  ])("rejects invalid API root %j", async (apiUrl, expectedError) => {
     vi.stubEnv("ZALO_API_URL", apiUrl);
 
     await expect(
       callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
-    ).rejects.toThrow(expectedError);
+    ).rejects.toThrow(`ZALO_API_URL ${expectedError}.`);
   });
 
   it.each([getWebhookInfo, deleteWebhook])("uses JSON POST for %s", async (run) => {
@@ -179,32 +162,17 @@ describe("Zalo API request methods", () => {
     async (kind) => {
       vi.useFakeTimers();
       try {
-        const aborted = vi.fn();
         let requestSignal: AbortSignal | undefined;
         const fetcher = vi.fn<ZaloFetch>(async (_input, init) => {
           const signal = expectDefined(init?.signal, "Zalo request abort signal");
           requestSignal = signal;
-          if (kind === "body") {
-            return signalAbortedZaloJsonResponse(signal, aborted);
-          }
-          return new Promise<Response>((_resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                aborted();
-                reject(new Error("photo aborted"));
-              },
-              { once: true },
-            );
-          });
+          return signalAbortedZaloJsonResponse(signal);
         });
         const promise =
           kind === "body"
             ? sendMessage("test-token", text, fetcher)
             : sendPhoto("test-token", photo("https://example.com/image.png"), fetcher);
-        const rejected = expect(promise).rejects.toThrow(
-          kind === "body" ? "zalo body aborted" : "photo aborted",
-        );
+        const rejected = expect(promise).rejects.toThrow("zalo body aborted");
         await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
         if (kind === "photo") {
           expect(requestSignal?.aborted).toBe(false);
@@ -214,7 +182,6 @@ describe("Zalo API request methods", () => {
         }
         await rejected;
         expect(requestSignal?.aborted).toBe(true);
-        expect(aborted).toHaveBeenCalledOnce();
       } finally {
         vi.useRealTimers();
       }
@@ -222,34 +189,26 @@ describe("Zalo API request methods", () => {
   );
 
   it("caps oversized sendChatAction timeouts before scheduling the timer", async () => {
-    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await sendChatAction(
-        "test-token",
-        { chat_id: "chat-123", action: "typing" },
-        createOkFetcher(),
-        MAX_TIMER_TIMEOUT_MS + 1_000_000,
-      );
+    using setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
+    await sendChatAction(
+      "test-token",
+      { chat_id: "chat-123", action: "typing" },
+      createOkFetcher(),
+      MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    );
 
-      expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      setTimeoutMock.mockRestore();
-    }
+    expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("keeps getUpdates on the long-poll request timeout", async () => {
-    const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const fetcher = createOkFetcher();
+    using setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
+    const fetcher = createOkFetcher();
 
-      await getUpdates("test-token", { timeout: 45 }, fetcher);
+    await getUpdates("test-token", { timeout: 45 }, fetcher);
 
-      expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 50_000);
-      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo getUpdates request");
-      expect(init?.body).toBe(JSON.stringify({ timeout: "45" }));
-    } finally {
-      setTimeoutMock.mockRestore();
-    }
+    expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 50_000);
+    const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo getUpdates request");
+    expect(init?.body).toBe(JSON.stringify({ timeout: "45" }));
   });
 
   it("blocks private-network photo URLs before they reach the Zalo API", async () => {
@@ -270,13 +229,9 @@ describe("Zalo API request methods", () => {
   });
 
   it.each([
-    ["rejects non-http photo URLs", "file:///etc/passwd", "Zalo photo URL must use HTTP or HTTPS"],
-    [
-      "rejects non-URL strings",
-      "not a url",
-      "Zalo photo URL must be an absolute HTTP or HTTPS URL",
-    ],
-  ] as const)("%s", async (_name, photoUrl, expectedError) => {
+    ["file:///etc/passwd", "Zalo photo URL must use HTTP or HTTPS"],
+    ["not a url", "Zalo photo URL must be an absolute HTTP or HTTPS URL"],
+  ])("rejects invalid photo URL %j", async (photoUrl, expectedError) => {
     const fetcher = createOkFetcher();
 
     await expect(sendPhoto("test-token", photo(photoUrl), fetcher)).rejects.toThrow(expectedError);

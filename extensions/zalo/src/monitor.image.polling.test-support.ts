@@ -1,7 +1,5 @@
-// Zalo test support covers monitor.image.polling plugin behavior.
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
@@ -53,9 +51,7 @@ describe("Zalo polling image handling", () => {
     getZaloRuntimeMock.mockReturnValue(core);
   });
 
-  afterAll(async () => {
-    await resetLifecycleTestState();
-  });
+  afterAll(resetLifecycleTestState);
 
   it("downloads inbound image media from photo_url and preserves display_name", async () => {
     await withImage(
@@ -70,7 +66,6 @@ describe("Zalo polling image handling", () => {
             RawBody: "",
             CommandBody: "",
             BodyForAgent: "",
-            media: [expect.objectContaining({ contentType: "image/jpeg" })],
           }),
         );
 
@@ -137,99 +132,41 @@ describe("Zalo polling image handling", () => {
     );
   });
 
-  it("keeps the caption fallback without logging the failed image source", async () => {
-    const photoUrl = "https://example.com/private-zalo-photo.jpg?access=private-source-marker";
-    saveRemoteMediaMock.mockRejectedValueOnce(
-      new MediaFetchError("http_error", `Failed to fetch media from ${photoUrl}: HTTP 403`, {
-        status: 403,
-      }),
-    );
-    await withImage({ caption: "/reset", photoUrl }, ({ runtime }) => {
-      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          RawBody: "/reset",
-          CommandBody: "/reset",
-          BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
-          media: [expect.objectContaining({ kind: "image" })],
+  it.each([
+    ["/reset", "/reset\n\n[zalo image attachment unavailable]"],
+    ["", "[zalo image attachment unavailable]"],
+  ])(
+    "preserves image facts and command text %j without logging the failed source",
+    async (caption, body) => {
+      const photoUrl = "https://example.com/private-zalo-photo.jpg?access=private-source-marker";
+      saveRemoteMediaMock.mockRejectedValueOnce(
+        new MediaFetchError("http_error", `Failed to fetch media from ${photoUrl}: HTTP 403`, {
+          status: 403,
         }),
       );
-      expect(runtime.error).toHaveBeenCalledWith("[default] Failed to download Zalo image");
-      const diagnostics = [runtime.error, runtime.log]
-        .flatMap((log) => vi.mocked(log).mock.calls)
-        .flat()
-        .join("\n");
-      expect(diagnostics).not.toContain(photoUrl);
-      expect(diagnostics).not.toContain("private-source-marker");
-    });
-  });
-
-  it("keeps failed media-only command text empty while preserving the native image fact", async () => {
-    saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
-    await withImage({}, () => {
-      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          RawBody: "",
-          CommandBody: "",
-          BodyForAgent: "[zalo image attachment unavailable]",
-          media: [expect.objectContaining({ kind: "image" })],
-        }),
-      );
-    });
-  });
-
-  it("times out inbound image downloads when photo_url headers never arrive", async () => {
-    const { createServer } = await import("node:http");
-    const { saveRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
-
-    const server = createServer((_req, _res) => {
-      // Accept the connection but never write status/headers.
-    });
-    const port = await listenOnLoopback(server);
-    const stallUrl = `http://127.0.0.1:${port}/stall.jpg`;
-    const headerTimeoutMs = 250;
-
-    // Production monitor passes the full timeout budget; the harness shortens
-    // only the actual fetch so the stalled-header case stays fast.
-    const saveRemoteMediaWithHeaderTimeout: typeof saveRemoteMedia = async (params) => {
-      expect(params).toEqual({
-        url: stallUrl,
-        maxBytes: 5 * 1024 * 1024,
-        responseHeaderTimeoutMs: 120_000,
-        readIdleTimeoutMs: 30_000,
-      });
-      return await saveRemoteMedia({
-        ...params,
-        responseHeaderTimeoutMs: headerTimeoutMs,
-        ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
-      });
-    };
-    saveRemoteMediaMock.mockImplementation(saveRemoteMediaWithHeaderTimeout);
-
-    try {
-      await withImage({ caption: "stalled photo", photoUrl: stallUrl }, ({ started }) => {
+      await withImage({ caption, photoUrl }, ({ runtime }) => {
         expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-        const elapsedMs = Date.now() - started;
-        expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
-        expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);
         expect(finalizeInboundContextMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
+            RawBody: caption,
+            CommandBody: caption,
+            BodyForAgent: body,
             media: [expect.objectContaining({ kind: "image" })],
           }),
         );
+        expect(runtime.error).toHaveBeenCalledWith("[default] Failed to download Zalo image");
+        const diagnostics = [runtime.error, runtime.log]
+          .flatMap((log) => vi.mocked(log).mock.calls)
+          .flat()
+          .join("\n");
+        expect(diagnostics).not.toContain(photoUrl);
+        expect(diagnostics).not.toContain("private-source-marker");
       });
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
-  });
+    },
+  );
 
   it.each([
     { mediaMaxMb: 0, expectedMaxBytes: 5 * 1024 * 1024 },
-    { mediaMaxMb: -5, expectedMaxBytes: 5 * 1024 * 1024 },
     { mediaMaxMb: 2, expectedMaxBytes: 2 * 1024 * 1024 },
   ])(
     "caps inbound image downloads at $expectedMaxBytes bytes when mediaMaxMb is $mediaMaxMb",

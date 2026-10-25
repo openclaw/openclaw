@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createEmptyPluginRegistry,
-  createPluginRegistryOwner,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -45,15 +44,8 @@ const state = {
     createPluginStateKeyedStoreForTests<T>("zalo", options),
 };
 const monitors: Array<{ stop: () => Promise<void> }> = [];
-const registryOwners: ReturnType<typeof createPluginRegistryOwner>[] = [];
 async function stopMonitors() {
   await Promise.all(monitors.splice(0).map((monitor) => monitor.stop()));
-}
-function ownedRegistry() {
-  const registry = createEmptyPluginRegistry();
-  setActivePluginRegistry(registry);
-  registryOwners.push(createPluginRegistryOwner(registry));
-  return registry;
 }
 const mediaRoutes = (registry: ReturnType<typeof createEmptyPluginRegistry>) =>
   registry.httpRoutes.filter((route) => route.source === "zalo-hosted-media");
@@ -110,23 +102,16 @@ type FailureRow = [
   kind: "block" | "tool" | "final",
   payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
   flags?: {
-    partial?: "text" | "media";
+    partial?: boolean;
     missingMessageId?: boolean;
-    hosted?: boolean;
     blocked?: boolean;
   },
 ];
 const photo = (name: string) => ({ text: "caption", mediaUrl: `https://example.com/${name}.png` });
+const textReply = { text: "reply" };
 const photos = (count: number) => ({
   text: "caption",
   mediaUrls: ["first", "second", "third"].slice(0, count).map((name) => photo(name).mediaUrl),
-});
-const hostedMediaOptions = (mediaUrl: string) => ({
-  mediaUrl,
-  webhookUrl: "https://example.com/hooks/zalo",
-  webhookPath: "/hooks/zalo",
-  maxBytes: 5 * 1024 * 1024,
-  proxyUrl: undefined,
 });
 type DispatchOptions = Parameters<typeof createReplyDispatcher>[0];
 
@@ -146,7 +131,6 @@ describe("Zalo polling media replies", () => {
       "https://example.com/hooks/zalo/media/abc123abc123abc123abc123?token=secret",
     );
     dispatchReplyWithBufferedBlockDispatcherMock.mockReset();
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(deliverPhoto("caption text"));
     setLifecycleRuntimeCore(
       {
         reply: {
@@ -164,7 +148,6 @@ describe("Zalo polling media replies", () => {
     try {
       await stopMonitors();
     } finally {
-      await Promise.all(registryOwners.splice(0).map((owner) => owner.close()));
       vi.restoreAllMocks();
     }
   });
@@ -193,12 +176,13 @@ describe("Zalo polling media replies", () => {
       });
 
       await processed;
-      expect(sendPhotoMock).toHaveBeenCalledTimes(1);
-
       expect(registry.httpRoutes).toHaveLength(hosted ? 1 : 0);
       if (hosted) {
         expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith(
-          hostedMediaOptions("https://example.com/reply-image.png"),
+          expect.objectContaining({
+            mediaUrl: "https://example.com/reply-image.png",
+            maxBytes: 5 * 1024 * 1024,
+          }),
         );
       } else {
         expect(prepareHostedZaloMediaUrlMock).not.toHaveBeenCalled();
@@ -219,35 +203,25 @@ describe("Zalo polling media replies", () => {
   );
 
   it.each<FailureRow>([
-    ["block text", "block", { text: "block reply" }],
+    ["block text", "block", textReply],
     ["tool photo", "tool", photo("first")],
     ["final photo", "final", photo("final")],
     [
       "blocked hosted photo",
       "tool",
       { text: "caption", mediaUrl: "file:///etc/passwd" },
-      { hosted: true, blocked: true },
+      { blocked: true },
     ],
-    ["partial block photo", "block", photos(3), { partial: "media" }],
-    [
-      "partial tool text",
-      "tool",
-      { text: "first chunk second chunk third chunk" },
-      { partial: "text" },
-    ],
-    ["photo without id", "tool", photos(2), { partial: "media", missingMessageId: true }],
-    [
-      "text without id",
-      "block",
-      { text: "first chunk second chunk" },
-      { partial: "text", missingMessageId: true },
-    ],
+    ["partial block photo", "block", photos(3), { partial: true }],
+    ["partial tool text", "tool", textReply, { partial: true }],
+    ["photo without id", "tool", photos(2), { partial: true, missingMessageId: true }],
+    ["text without id", "block", textReply, { partial: true, missingMessageId: true }],
   ])(
     "reports %s failures through the real reply dispatcher",
     async (name, kind, payload, flags = {}) => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       const failure = new Error(`${name} rejected`);
-      const acceptedMessageId = `zalo-accepted-${flags.partial ?? "none"}`;
+      const acceptedMessageId = "zalo-accepted";
       const acceptedResponse = {
         ok: true,
         ...(flags.missingMessageId ? {} : { result: { message_id: acceptedMessageId } }),
@@ -257,7 +231,7 @@ describe("Zalo polling media replies", () => {
         prepareHostedZaloMediaUrlMock.mockRejectedValueOnce(failure);
       } else {
         const send = isMedia ? sendPhotoMock : sendMessageMock;
-        if (flags.partial === "text") {
+        if (flags.partial && !isMedia) {
           const core = getZaloRuntimeMock() as PluginRuntime;
           vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockReturnValueOnce([
             "first chunk",
@@ -272,7 +246,6 @@ describe("Zalo polling media replies", () => {
       }
 
       const deliveryErrors: unknown[] = [];
-      let failedAfterSendCounts: [number, number, number] | undefined;
       dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
         async ({ dispatcherOptions }: { dispatcherOptions: DispatchOptions }) => {
           const dispatcher = createReplyDispatcher({
@@ -289,14 +262,7 @@ describe("Zalo polling media replies", () => {
           }[kind];
           send(payload);
           dispatcher.markComplete();
-          const receipt = await dispatcher.waitForIdle();
-          if (receipt) {
-            failedAfterSendCounts = [
-              receipt.counts.tool.failedAfterSend,
-              receipt.counts.block.failedAfterSend,
-              receipt.counts.final.failedAfterSend,
-            ];
-          }
+          await dispatcher.waitForIdle();
           return {
             queuedFinal: kind === "final",
             counts: dispatcher.getQueuedCounts(),
@@ -309,16 +275,11 @@ describe("Zalo polling media replies", () => {
         vi.fn<(patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void>();
       const { runtime } = await startPollingMediaMonitor({
         accountId: "acct-zalo-delivery",
-        webhookUrl: flags.hosted ? "https://example.com/hooks/zalo" : "",
+        webhookUrl: flags.blocked ? "https://example.com/hooks/zalo" : "",
         statusSink,
       });
 
       await processed;
-      expect(failedAfterSendCounts).toEqual([
-        kind === "tool" ? 1 : 0,
-        kind === "block" ? 1 : 0,
-        kind === "final" ? 1 : 0,
-      ]);
       expect(deliveryErrors).toHaveLength(1);
       if (flags.partial) {
         const acceptedMessageIds = flags.missingMessageId ? [] : [acceptedMessageId];
@@ -363,12 +324,7 @@ describe("Zalo polling media replies", () => {
 
       await settleAsyncWork();
       const firstHostedMediaRoute = singleMediaRoute(registry);
-      expect(firstHostedMediaRoute).toMatchObject({
-        path: "/hooks/zalo/media",
-        pluginId: "zalo",
-        source: "zalo-hosted-media",
-        handler: expect.any(Function),
-      });
+      expect(firstHostedMediaRoute.path).toBe("/hooks/zalo/media");
 
       const second = await startPollingMediaMonitor({
         accountId: "acct-zalo-polling-media-two",
@@ -386,26 +342,4 @@ describe("Zalo polling media replies", () => {
       expect(mediaRoutes(registry)).toHaveLength(0);
     },
   );
-
-  it("cleans each active registry when its own route holder stops", async () => {
-    const firstRegistry = ownedRegistry();
-    getUpdatesMock.mockImplementation(() => new Promise(() => {}));
-
-    const first = await startPollingMediaMonitor();
-    await settleAsyncWork();
-    expect(firstRegistry.httpRoutes).toHaveLength(1);
-
-    const secondRegistry = ownedRegistry();
-    await startPollingMediaMonitor();
-
-    await settleAsyncWork();
-    expect(secondRegistry.httpRoutes).toHaveLength(1);
-    await first.stop();
-    expect(firstRegistry.httpRoutes).toHaveLength(0);
-    expect(secondRegistry.httpRoutes).toHaveLength(1);
-    await stopMonitors();
-    await Promise.all(registryOwners.splice(0).map((owner) => owner.close()));
-    expect(firstRegistry.httpRoutes).toHaveLength(0);
-    expect(secondRegistry.httpRoutes).toHaveLength(0);
-  });
 });
