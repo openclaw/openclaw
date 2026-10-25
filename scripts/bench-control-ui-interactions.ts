@@ -317,7 +317,13 @@ try {
           ? {
               instrumented: values["projection-counts"],
               shippingBundleProof: false,
-              mountedPerFamily: { A: 400, B: 80 },
+              mountedPerFamily: {
+                "agent-rows": { A: 400, B: 80 },
+                outbox: { A: 400, B: 80 },
+                "board-pins": { A: 400, B: 80 },
+                "sdk-avatars": { A: 120, B: 40 },
+                "sdk-avatar-identities": { A: 120, B: 40 },
+              },
               publications: 20,
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
@@ -652,9 +658,16 @@ try {
               result.requests[request.method] = (result.requests[request.method] ?? 0) + 1;
             }
             if (scenario.projectionFamily) {
+              const sdk =
+                scenario.projectionFamily === "sdk-avatars" ||
+                scenario.projectionFamily === "sdk-avatar-identities";
               const method =
-                scenario.projectionFamily === "board-pins" ? "board.get" : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : 20;
+                scenario.projectionFamily === "board-pins"
+                  ? "board.get"
+                  : scenario.projectionFamily === "sdk-avatar-identities"
+                    ? "agent.identity.get"
+                    : "agents.list";
+              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,

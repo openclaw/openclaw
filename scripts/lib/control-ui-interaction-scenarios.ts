@@ -530,6 +530,17 @@ async function searchModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(["sdk-avatars", "sdk-avatar-identities"] as const).map((family): InteractionScenario => ({
+    id: `projection-${family}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "120 SDK avatars in A and 40 in B, two real factories per application; twenty native publications update A only, then independent factory/application retirement.",
+    projectionFamily: family,
+    prepare: prepareChat,
+    run: async (page) => {
+      await runProjectionFixture(page);
+    },
+  })),
   ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
     id: `projection-outbox-idle-${visibility}`,
     route: controlUiSessionPath(sessionKeys[0]),
