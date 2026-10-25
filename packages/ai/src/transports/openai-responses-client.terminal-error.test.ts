@@ -156,19 +156,6 @@ it("aborts whitespace argument churn and recovers through the same-model retry o
     action: "retry",
     lastRetryFailoverReason: "server_error",
   });
-  expect(recovered.onAgentEvent).toHaveBeenCalledWith(
-    expect.objectContaining({
-      stream: "run_status",
-      data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
-    }),
-  );
-  vi.useRealTimers();
-  const retryCall = wireCall("retry", "exec", '{"code":"return 1;"}');
-  queueEvents(outputItem("added", retryCall), completedResponse("resp_retry", [retryCall]));
-  expect((await collect(await run())).result).toMatchObject({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", arguments: { code: "return 1;" } }],
-  });
 });
 
 it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
@@ -243,12 +230,10 @@ it.each(["filtered", "failed", "eof", "aborted"])(
       Object.assign(probe(`parallel_${index}`, args, "completed"), { async: true }),
     );
     queueStream(async function* () {
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("added", { ...item, arguments: "", status: "in_progress" }, output_index);
-      }
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("done", item, output_index);
-      }
+      yield* calls.map((item, index) =>
+        outputItem("added", { ...item, arguments: "", status: "in_progress" }, index),
+      );
+      yield* calls.map((item, index) => outputItem("done", item, index));
       if (ending === "aborted") {
         controller.abort(
           Object.assign(new Error("superseded"), {

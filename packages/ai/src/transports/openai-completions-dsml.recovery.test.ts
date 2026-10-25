@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectStream,
   replyContext,
   startSse,
   streamFixture,
@@ -9,6 +10,7 @@ import {
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
   createDeepSeekCompletionsModel,
+  expectedRecoveredTool,
   makeCompletionsChunk,
   makeCompletionsModel,
   openRouterAnthropicModel,
@@ -58,14 +60,7 @@ describe("openai completions DSML", () => {
     await text(content);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "read",
-        arguments: { path: "/tmp/valid.md" },
-      },
-    ]);
+    expect(output.content).toEqual([expectedRecoveredTool("read", { path: "/tmp/valid.md" })]);
   });
 
   it("does not recover a nested call hidden inside a nameless invoke", async () => {
@@ -112,41 +107,24 @@ describe("openai completions DSML", () => {
         res.end("data: [DONE]\n\n");
       },
       async (baseUrl) => {
-        const model = makeCompletionsModel({
-          ...createDeepSeekCompletionsModel(),
-          baseUrl,
-        });
-        const stream = await createOpenAICompletionsTransportStreamFn()(
-          model,
-          replyContext("Read the file"),
-          { apiKey: "test-key" },
+        const { events, terminal } = await collectStream(
+          createOpenAICompletionsTransportStreamFn()(
+            { ...createDeepSeekCompletionsModel(), baseUrl },
+            replyContext("Read the file"),
+            { apiKey: "test-key" },
+          ),
         );
-
-        const events = [];
-        for await (const event of stream) {
-          events.push(event);
-        }
-        const terminal = events.at(-1);
-        if (finishReason === "content_filter") {
-          expect(terminal).toMatchObject({
-            type: "error",
-            reason: "error",
-            error: {
-              stopReason: "error",
-              errorMessage: "Provider finish_reason: content_filter",
-              content: [],
-            },
-          });
-        } else {
-          expect(terminal).toMatchObject({
-            type: "done",
-            reason: allowed ? "toolUse" : "length",
-            message: {
-              stopReason: allowed ? "toolUse" : "length",
-              content: allowed ? [{ type: "toolCall", name: "exec", arguments: { code } }] : [],
-            },
-          });
-        }
+        const failed = finishReason === "content_filter";
+        const reason = failed ? "error" : allowed ? "toolUse" : "length";
+        expect(terminal).toMatchObject({
+          type: failed ? "error" : "done",
+          reason,
+          [failed ? "error" : "message"]: {
+            stopReason: reason,
+            content: allowed ? [{ type: "toolCall", name: "exec", arguments: { code } }] : [],
+            ...(failed ? { errorMessage: "Provider finish_reason: content_filter" } : {}),
+          },
+        });
         expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(
           allowed ? 1 : 0,
         );
@@ -172,12 +150,7 @@ describe("openai completions DSML", () => {
     const second = await runOnce();
     for (const resultContent of [first, second]) {
       expect(resultContent).toEqual([
-        {
-          type: "toolCall",
-          id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-          name: "session_status",
-          arguments: { sessionKey: "current" },
-        },
+        expectedRecoveredTool("session_status", { sessionKey: "current" }),
       ]);
     }
     expect((second[0] as { id?: string }).id).not.toBe((first[0] as { id?: string }).id);
@@ -218,14 +191,7 @@ describe("openai completions DSML", () => {
       '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/routed.md"}</|DSML|invoke></|DSML|tool_calls>';
     await text(content);
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      {
-        type: "toolCall",
-        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-        name: "read",
-        arguments: { path: "/tmp/routed.md" },
-      },
-    ]);
+    expect(output.content).toEqual([expectedRecoveredTool("read", { path: "/tmp/routed.md" })]);
     expect(events.filter((event) => event.type === "text_delta")).toEqual([]);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
   });
