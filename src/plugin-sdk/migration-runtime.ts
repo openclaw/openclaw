@@ -3,6 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
@@ -20,6 +21,7 @@ import {
   assertMemoryMigrationSourceRevision,
   MAX_MEMORY_MIGRATION_FILE_BYTES,
 } from "./memory-migration-source.js";
+import type { MigrationCronJob } from "./migration-cron-runtime.js";
 import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
   MIGRATION_REASON_TARGET_EXISTS,
@@ -34,6 +36,111 @@ import type {
 } from "./plugin-entry.js";
 
 export type { MigrationApplyResult, MigrationItem } from "./plugin-entry.js";
+export type { MigrationCronJob } from "./migration-cron-runtime.js";
+
+/** Validates an imported routine through the scheduler's native job contract. */
+export async function validateMigrationCronJob(
+  input: MigrationCronJob,
+): Promise<string | undefined> {
+  return (await import("./migration-cron-runtime.js")).validateMigrationCronJobCore(input);
+}
+
+/** Adds a migrated routine through the offline scheduler owner without starting it. */
+export async function applyMigrationCronJob(
+  ctx: MigrationProviderContext,
+  input: MigrationCronJob,
+): Promise<"created" | "existing" | "conflict"> {
+  return await (await import("./migration-cron-runtime.js")).applyMigrationCronJobCore(ctx, input);
+}
+
+type MigrationAgentEntry = NonNullable<
+  NonNullable<MigrationProviderContext["config"]["agents"]>["entries"]
+>[string];
+
+/** An additional agent whose imported files are managed by the migration provider. */
+export type MigrationAgentDefinition = {
+  id: string;
+  name: string;
+  workspace: string;
+  agentDir: string;
+  model?: MigrationAgentEntry["model"];
+  identity?: MigrationAgentEntry["identity"];
+};
+
+type MigrationAgentCreationSuccess = {
+  agentId: string;
+  workspace: string;
+  agentDir: string;
+  config: MigrationProviderContext["config"];
+};
+
+export type MigrationAgentCreationResult =
+  | ({ status: "created" } & MigrationAgentCreationSuccess)
+  | ({ status: "existing" } & MigrationAgentCreationSuccess)
+  | { status: "conflict"; reason: string }
+  | { status: "error"; reason: string };
+
+/** Creates an agent through the offline lifecycle owner, after onboarding promotion. */
+export async function createMigrationAgent(
+  ctx: MigrationProviderContext,
+  definition: MigrationAgentDefinition,
+): Promise<MigrationAgentCreationResult> {
+  try {
+    const { captureMigrationOwner } = await import("./migration-owner.js");
+    const owner = captureMigrationOwner(ctx);
+    const [{ createAgent, validateAgentIdInput }, { sanitizeAgentIdentityLine }] =
+      await Promise.all([
+        import("../agents/agent-create.js"),
+        import("../agents/identity-file.js"),
+      ]);
+    owner.assertCurrent();
+    const validation = validateAgentIdInput(definition.id, { displayName: definition.name });
+    if (!validation.ok) {
+      return { status: "error", reason: validation.message };
+    }
+    if (!path.isAbsolute(definition.workspace) || !path.isAbsolute(definition.agentDir)) {
+      return { status: "error", reason: "Migration agent paths must be absolute." };
+    }
+    const name = sanitizeAgentIdentityLine(definition.name.trim() || validation.agentId);
+    const entry = {
+      ...definition,
+      id: validation.agentId,
+      name,
+      workspace: path.resolve(definition.workspace),
+      agentDir: path.resolve(definition.agentDir),
+      identity: definition.identity ?? { name },
+    };
+    const result = await createAgent({
+      entry,
+      // Import retries do not authorize recovery of preserved agent databases.
+      restorePaths: [],
+      // Imported files own this agent's instructions; do not seed stock onboarding.
+      skipBootstrap: true,
+      beforePersistentApply: () => owner.assertCurrent(),
+      reuseExisting: (existing) =>
+        existing.name === entry.name &&
+        existing.workspace === entry.workspace &&
+        existing.agentDir === entry.agentDir &&
+        isDeepStrictEqual(existing.identity, entry.identity) &&
+        isDeepStrictEqual(existing.model, entry.model),
+    });
+    if (result.status === "error") {
+      return {
+        status: result.reason === "already-exists" ? "conflict" : "error",
+        reason: result.message,
+      };
+    }
+    return {
+      status: result.status,
+      agentId: result.agentId,
+      workspace: result.workspace,
+      agentDir: result.agentDir,
+      config: result.config,
+    };
+  } catch (error) {
+    return { status: "error", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 /** Directories a migration provider writes imported agent data into. */
 export type PlannedMigrationTargets = {
