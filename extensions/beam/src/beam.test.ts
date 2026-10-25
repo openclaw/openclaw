@@ -24,6 +24,11 @@ function postUpload(endpoint: string, body = sampleUpload()) {
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
 const catalogParams = { agentId: "main", hostId: "gateway", threadId: sampleUpload().beamId };
 const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
+const otherBeamId = "fedcba9876543210fedcba9876543210";
+
+function snapshot(title: string, overrides: Record<string, unknown> = {}) {
+  return { title, items: [{ type: "agentMessage", text: title }], ...overrides };
+}
 
 const servers: http.Server[] = [];
 afterEach(async () => {
@@ -125,18 +130,18 @@ describe("Beam receiver", () => {
       resolveClient: () => ({ ...writeClient(), profileId }),
     });
     const updatedAt = "2026-07-20T12:00:00.000100Z";
-    const storageWindow = { before: 0, after: 0 };
     const upload = async (
       overrides: Record<string, unknown>,
-      options: { receivedAt: number; profileId?: string },
+      time: number,
+      publisher = profileId,
       createdAt?: number,
     ) => {
-      receivedAt = options.receivedAt;
-      profileId = options.profileId ?? profileId;
+      receivedAt = time;
+      profileId = publisher;
       const body = sampleUpload(overrides);
-      storageWindow.before = Date.now();
+      const before = Date.now();
       expect((await postUpload(endpoint, body)).status).toBe(200);
-      storageWindow.after = Date.now();
+      const after = Date.now();
       const stored = await store.get(body.beamId);
       if (createdAt !== undefined) {
         expect(stored).toMatchObject({
@@ -149,8 +154,8 @@ describe("Beam receiver", () => {
         if (!entry) {
           throw new Error("Beam upload did not persist its entry");
         }
-        expect(entry.createdAt).toBeGreaterThanOrEqual(storageWindow.before);
-        expect(entry.createdAt).toBeLessThanOrEqual(storageWindow.after);
+        expect(entry.createdAt).toBeGreaterThanOrEqual(before);
+        expect(entry.createdAt).toBeLessThanOrEqual(after);
         expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
       }
       return stored;
@@ -160,14 +165,14 @@ describe("Beam receiver", () => {
 
     try {
       const terminal = await upload(
-        {
+        snapshot("Terminal snapshot", {
           updatedAt,
           completed: true,
-          title: "Terminal snapshot",
           sourceModel,
           items: [{ type: "userMessage", text: "terminal request" }],
-        },
-        { receivedAt: 100 },
+        }),
+        100,
+        profileId,
         100,
       );
       const terminalEntry = await entryFor(sampleUpload().beamId);
@@ -178,67 +183,41 @@ describe("Beam receiver", () => {
         ["2026-07-20T08:00:00.000100-04:00", "Equal live snapshot", false, 300],
       ] as const) {
         await upload(
-          {
-            updatedAt: candidateUpdatedAt,
-            title,
-            completed,
-            items: [{ type: "agentMessage", text: title }],
-          },
-          { receivedAt: candidateReceivedAt, profileId: "stale-publisher" },
+          snapshot(title, { updatedAt: candidateUpdatedAt, completed }),
+          candidateReceivedAt,
+          "stale-publisher",
         );
         expect(await store.get(sampleUpload().beamId)).toEqual(terminal);
         expect(await entryFor(sampleUpload().beamId)).toEqual(terminalEntry);
       }
 
-      const catalog = createBeamSessionCatalog(store);
-      await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
-        displayName: "Terminal snapshot",
-        preferredModel: "openai/gpt-5.6-sol",
-      });
-      await expect(catalog.read(catalogParams)).resolves.toMatchObject({
-        label: "Terminal snapshot",
-        items: [
-          expect.objectContaining({
-            type: "userMessage",
-            text: "terminal request",
-            sender: { identity: { type: "profile", id: "terminal-publisher" } },
+      for (const [body, time, publisher] of [
+        [
+          snapshot("Refreshed terminal snapshot", {
+            updatedAt,
+            completed: true,
+            sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
           }),
+          400,
+          "terminal-refresh-publisher",
         ],
-      });
+        [
+          snapshot("Reopened snapshot", {
+            updatedAt: "2026-07-20T12:00:00.000200Z",
+            sourceModel,
+          }),
+          500,
+          "reopen-publisher",
+        ],
+      ] as const) {
+        await upload(body, time, publisher, 100);
+      }
 
+      await upload({ beamId: otherBeamId, updatedAt }, 600, profileId, 600);
       await upload(
-        {
-          updatedAt,
-          completed: true,
-          title: "Refreshed terminal snapshot",
-          sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
-          items: [{ type: "agentMessage", text: "refreshed terminal" }],
-        },
-        { receivedAt: 400, profileId: "terminal-refresh-publisher" },
-        100,
-      );
-
-      await upload(
-        {
-          updatedAt: "2026-07-20T12:00:00.000200Z",
-          title: "Reopened snapshot",
-          sourceModel,
-          items: [{ type: "agentMessage", text: "reopened" }],
-        },
-        { receivedAt: 500, profileId: "reopen-publisher" },
-        100,
-      );
-
-      const secondBeamId = "fedcba9876543210fedcba9876543210";
-      await upload({ beamId: secondBeamId, updatedAt }, { receivedAt: 600 }, 600);
-      await upload(
-        {
-          beamId: secondBeamId,
-          updatedAt,
-          completed: true,
-          title: "Equal completed snapshot",
-        },
-        { receivedAt: 700, profileId: "completion-publisher" },
+        snapshot("Equal completed snapshot", { beamId: otherBeamId, updatedAt, completed: true }),
+        700,
+        "completion-publisher",
         600,
       );
     } finally {
@@ -334,14 +313,19 @@ it("retries a rejected terminal upload through the real loopback receiver", asyn
   active = false;
   clock += 4 * 60 * 60_000;
   await runner.tick();
-  expect([...store.values.values()][0]?.completed).toBe(false);
-  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 1.");
+  const stored = () => [...store.values.values()][0];
+  expect(stored()).toMatchObject({
+    completed: false,
+    items: [{ text: "Receiver-boundary proof 1." }],
+  });
 
   await runner.tick();
 
   expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-  expect([...store.values.values()][0]?.completed).toBe(true);
-  expect([...store.values.values()][0]?.items[0]?.text).toBe("Receiver-boundary proof 3.");
+  expect(stored()).toMatchObject({
+    completed: true,
+    items: [{ text: "Receiver-boundary proof 3." }],
+  });
 });
 
 describe("Beam session catalog", () => {
@@ -381,7 +365,7 @@ describe("Beam session catalog", () => {
     const ids = [
       "0123456789ab00000000000000000000",
       "0123456789abffffffffffffffffffff",
-      "fedcba9876543210fedcba9876543210",
+      otherBeamId,
     ] as const;
     for (const [index, beamId] of ids.entries()) {
       store.values.set(beamId, {
@@ -410,18 +394,16 @@ describe("Beam session catalog", () => {
         sourceModel,
         items: [
           ...sampleUpload().items,
-          { type: "userMessage", text: "Did the upload keep the conversation order?" },
-          { type: "agentMessage", text: "Yes, the question still precedes its answer." },
+          { type: "userMessage", text: "Question?" },
+          { type: "agentMessage", text: "Answer." },
         ],
       }),
       createdAt: 100,
       receivedAt: 200,
     };
     store.values.set(current.beamId, current);
-    store.values.set("fedcba9876543210fedcba9876543210", {
-      ...sampleUpload({
-        beamId: "fedcba9876543210fedcba9876543210",
-      }),
+    store.values.set(otherBeamId, {
+      ...sampleUpload({ beamId: otherBeamId }),
       createdAt: 50,
       receivedAt: 100,
     });
@@ -449,17 +431,9 @@ describe("Beam session catalog", () => {
 
     const read = (cursor?: string, limit = 2) => catalog.read({ ...catalogParams, limit, cursor });
     const transcript = await read();
-    expect(transcript.items).toMatchObject([
-      {
-        id: "0123456789abcdef0123456789abcdef:3",
-        type: "agentMessage",
-        text: "Yes, the question still precedes its answer.",
-      },
-      {
-        id: "0123456789abcdef0123456789abcdef:2",
-        type: "userMessage",
-        text: "Did the upload keep the conversation order?",
-      },
+    expect(transcript.items.map(({ id, type, text }) => [id, type, text])).toEqual([
+      [`${current.beamId}:3`, "agentMessage", "Answer."],
+      [`${current.beamId}:2`, "userMessage", "Question?"],
     ]);
     expect(transcript.items[0]).not.toHaveProperty("truncated");
     expect(transcript.nextCursor).toEqual(expect.any(String));

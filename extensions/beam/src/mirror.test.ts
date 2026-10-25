@@ -24,7 +24,6 @@ import {
   beamMirrorId,
   buildBeamMirrorItems,
   createBeamMirrorService,
-  fitBeamMirrorUpload,
   parseBeamMirrorConfig,
 } from "./mirror.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
@@ -52,6 +51,21 @@ async function withMirrorServer(
       (error: unknown) => res.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   }, run);
+}
+
+async function withMirrorRunner(
+  respond: Parameters<typeof withMirrorServer>[0],
+  run: (runner: ReturnType<typeof createBeamTestRunner>) => Promise<void>,
+) {
+  await withMirrorServer(respond, (origin) =>
+    run(createBeamTestRunner({ endpoint: `${origin}/beam`, logger: fixture.logger })),
+  );
+}
+
+async function runTicks(runner: { tick: () => Promise<unknown> }, count = 2) {
+  for (let i = 0; i < count; i++) {
+    await runner.tick();
+  }
 }
 
 describe("parseBeamMirrorConfig", () => {
@@ -98,39 +112,13 @@ describe("buildBeamMirrorItems", () => {
       { type: "agentMessage", text: "Done." },
     ];
     expect(reduced.items).toEqual(expected);
-    expect(
-      parseBeamUpload({
-        version: 1,
-        beamId: "a".repeat(32),
-        source: "openclaw",
-        title: "Incident",
-        updatedAt: "2026-10-19T12:00:00.000Z",
-        completed: true,
-        items: reduced.items,
-      }),
-    ).toMatchObject({ ok: true, value: { items: expected } });
+    expect(parseBeamUpload(sampleUpload({ items: reduced.items }))).toMatchObject({
+      ok: true,
+      value: { items: expected },
+    });
     expect(JSON.stringify(reduced.items)).not.toContain("pluginInlineView");
     expect(JSON.stringify(reduced.items)).not.toContain("secret");
     expect(JSON.stringify(reduced.items)).not.toContain("private thoughts");
-  });
-});
-
-describe("fitBeamMirrorUpload", () => {
-  it("fits the newest suffix with multibyte and JSON-escaped text", () => {
-    const upload = sampleUpload({
-      title: "big",
-      items: Array.from({ length: 300 }, (_, index) => ({
-        type: "agentMessage" as const,
-        text: `entry ${index} ${"🙂\n\u0000".repeat(200)}`,
-      })),
-    });
-    const fitted = fitBeamMirrorUpload(upload);
-    expect(fitted.truncated).toBe(true);
-    expect(fitted.items.length).toBeLessThanOrEqual(BEAM_MAX_ITEMS);
-    expect(fitted.items).toEqual(upload.items.slice(-fitted.items.length));
-    expect(Buffer.byteLength(JSON.stringify(fitted), "utf8")).toBeLessThanOrEqual(56 * 1024);
-    // The fitted payload must remain acceptable to the receiver.
-    expect(parseBeamUpload(structuredClone(fitted)).ok).toBe(true);
   });
 });
 
@@ -165,10 +153,10 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("blocks a redirect without retrying the configured endpoint or logging its location", async () => {
-    const warnings: string[] = [];
+    const { warnings } = fixture;
     const receiverBodies: string[] = [];
     const redirectedBodies: string[] = [];
-    await withMirrorServer(
+    await withMirrorRunner(
       (req, res, body) => {
         if (req.url?.startsWith("/redirected")) {
           redirectedBodies.push(body);
@@ -179,13 +167,8 @@ describe("createBeamMirrorRunner", () => {
         res.writeHead(301, { Location: "/redirected?private=do-not-log" });
         res.end();
       },
-      async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-        });
-        await runner.tick();
-        await runner.tick();
+      async (runner) => {
+        await runTicks(runner);
         expect(receiverBodies).toHaveLength(1);
         expect(redirectedBodies).toEqual([]);
         expect(warnings).toEqual([
@@ -197,22 +180,16 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("logs a terminal redirect block after a recent transient warning", async () => {
-    const warnings: string[] = [];
+    const { warnings } = fixture;
     let requestCount = 0;
-    await withMirrorServer(
+    await withMirrorRunner(
       (_req, res) => {
         requestCount += 1;
         res.statusCode = requestCount === 1 ? 503 : 307;
         res.end();
       },
-      async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-        });
-        await runner.tick();
-        await runner.tick();
-        await runner.tick();
+      async (runner) => {
+        await runTicks(runner, 3);
         expect(requestCount).toBe(2);
         expect(warnings).toEqual([
           "beam mirror upload failed (503) for claude",
@@ -248,20 +225,17 @@ describe("createBeamMirrorRunner", () => {
             ],
           });
         const runner = createRunner();
-        await runner.tick();
-        await runner.tick();
+        await runTicks(runner);
         const restartedRunner = createRunner();
         await restartedRunner.tick();
         endpoint = `${origin}/direct`;
-        await restartedRunner.tick();
-        await restartedRunner.tick();
+        await runTicks(restartedRunner);
         endpoint = `${origin}/another-receiver`;
         active = false;
         await restartedRunner.tick();
         expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
         active = true;
-        await restartedRunner.tick();
-        await restartedRunner.tick();
+        await runTicks(restartedRunner);
         endpoint = `${origin}/direct`;
         await restartedRunner.tick();
         expect(requests).toEqual([
@@ -275,55 +249,57 @@ describe("createBeamMirrorRunner", () => {
     );
   });
 
-  it("uploads the newest chronological suffix of a large transcript once", async () => {
-    const count = 50;
-    const { sent } = fixture;
-    const reads: string[] = [];
-    const cancel = vi.fn();
-    const chronological = Array.from({ length: count }, (_, index) => ({
-      type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
-      text: `Message ${index}: ${"text ".repeat(300)}end`,
-    }));
-    const runner = fixture.runner(
-      {
-        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
-        items: chronological.toReversed(),
-        onRead: (threadId) => reads.push(threadId),
-      },
-      { runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })) },
-      { cancel },
-    );
-    await runner.tick();
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(reads).toEqual(["t1", "t1"]);
-    expect(sent[0]?.auth).toBe("Bearer scratch-token");
-    expect(sent[0]?.payload).toMatchObject({
-      version: 1,
-      beamId: beamMirrorId("claude", "gateway:local", "t1"),
-      source: "claude",
-      title: "Fix flow",
-      completed: false,
-    });
-    expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-    const payload = sent[0]!.payload;
-    expect(payload.items).toEqual(chronological.slice(-payload.items.length));
-    expect(payload.truncated).toBe(true);
-    expect(payload.items.length).toBeLessThan(count);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "uploads the newest suffix once when cancellation rejects: %s",
+    async (rejectCancel) => {
+      const count = 300;
+      const { sent, warnings } = fixture;
+      const reads: string[] = [];
+      const cancel = vi.fn(async () => {
+        if (rejectCancel) {
+          throw new Error("cancel failed");
+        }
+      });
+      const chronological = Array.from({ length: count }, (_, index) => ({
+        type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
+        text: `Message ${index}: ${"🙂\n\u0000".repeat(200)}end`,
+      }));
+      const runner = fixture.runner(
+        {
+          sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
+          items: chronological.toReversed(),
+          onRead: (threadId) => reads.push(threadId),
+        },
+        { runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })) },
+        { cancel },
+      );
+      await runTicks(runner);
+      expect(sent).toHaveLength(1);
+      expect(reads).toEqual(["t1", "t1"]);
+      expect(sent[0]?.auth).toBe("Bearer scratch-token");
+      expect(sent[0]?.payload).toMatchObject({
+        version: 1,
+        beamId: beamMirrorId("claude", "gateway:local", "t1"),
+        source: "claude",
+        title: "Fix flow",
+        completed: false,
+      });
+      expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
+      const payload = sent[0]!.payload;
+      expect(payload.items).toEqual(chronological.slice(-payload.items.length));
+      expect(payload.truncated).toBe(true);
+      expect(payload.items.length).toBeLessThan(count);
+      expect(payload.items.length).toBeLessThanOrEqual(BEAM_MAX_ITEMS);
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThanOrEqual(56 * 1024);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(warnings).toEqual([]);
+    },
+  );
 
   it("includes the latest source model without changing the sanitized message payload", async () => {
     const { sent } = fixture;
     const runner = fixture.runner({
-      sessions: [
-        {
-          threadId: "t-model",
-          name: "Model source",
-          modelProvider: "openai",
-          recencyAt: beamTestNow,
-        },
-      ],
+      sessions: [{ threadId: "t-model", recencyAt: beamTestNow, modelProvider: "openai" }],
       items: [
         { type: "agentMessage", text: "Latest", model: "gpt-5.6-sol" },
         { type: "agentMessage", text: "Earlier", model: "gpt-5.6-terra" },
@@ -356,25 +332,6 @@ describe("createBeamMirrorRunner", () => {
       items: [{ type: "userMessage", text: "Partial message" }],
     });
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-  });
-
-  it("keeps successful uploads successful when response cancellation rejects", async () => {
-    const { sent, warnings } = fixture;
-    const cancel = vi.fn(async () => {
-      throw new Error("cancel failed");
-    });
-    const runner = fixture.runner(
-      { sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }] },
-      {},
-      { cancel },
-    );
-
-    await runner.tick();
-    await runner.tick();
-
-    expect(sent).toHaveLength(1);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(warnings).toEqual([]);
   });
 
   it("keeps one catalog and upload path active across missed scheduler periods", async () => {
@@ -427,9 +384,7 @@ describe("createBeamMirrorRunner", () => {
           release: cleanup.run,
         };
       });
-    const runner = createScheduledBeamTestRunner({
-      logger,
-    });
+    const runner = createScheduledBeamTestRunner({ logger });
 
     try {
       const tick = runner.tick();
@@ -515,16 +470,9 @@ describe("createBeamMirrorRunner", () => {
 
   it("warns once when profile isolation disables process-HOME fallback", async () => {
     const { warnings } = fixture;
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["claude"] })),
-      logger: fixture.logger,
-      listCatalogs: () => [
-        createBeamTestCatalog({ sessions: [], processHomeFallbackAllowed: false }),
-      ],
-    });
+    const runner = fixture.runner({ sessions: [], processHomeFallbackAllowed: false });
 
-    await runner.tick();
-    await runner.tick();
+    await runTicks(runner);
 
     expect(warnings).toEqual([
       "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
@@ -533,12 +481,11 @@ describe("createBeamMirrorRunner", () => {
 
   it("sends one completed upload for an observed idle session on a partial host page", async () => {
     const { sent } = fixture;
-    const recency = beamTestNow - 60_000;
     let clock = beamTestNow;
     const runner = fixture.runner(
       {
         hostCursor: "older-sessions",
-        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
+        sessions: beamTestSessions(["t1"], beamTestNow - 60_000),
       },
       { now: () => clock },
     );
@@ -547,8 +494,7 @@ describe("createBeamMirrorRunner", () => {
     expect(sent[0]?.payload.completed).toBe(false);
     // Session goes idle past the window; the next tick finalizes it once.
     clock = beamTestNow + 4 * 60 * 60_000;
-    await runner.tick();
-    await runner.tick();
+    await runTicks(runner);
     expect(sent).toHaveLength(2);
     expect(sent[1]?.payload.completed).toBe(true);
     expect(sent[1]?.payload.beamId).toBe(sent[0]?.payload.beamId);
