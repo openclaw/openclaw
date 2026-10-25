@@ -9,33 +9,29 @@ import openrouterPlugin from "./index.js";
 
 const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
-async function fetchOpenRouterUsage(
-  params: Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "signal" | "fetchFn"> & {
+async function fetchUsage(
+  fetchFn: typeof fetch,
+  params: Partial<Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "signal">> & {
     baseUrl?: string;
     request?: ModelProviderConfig["request"];
-  },
+  } = {},
 ) {
   if (!provider.fetchUsageSnapshot) {
     throw new Error("OpenRouter usage provider is not registered");
   }
+  const openrouter = {
+    baseUrl: params.baseUrl ?? "https://openrouter.ai/api/v1",
+    request: params.request,
+    models: [],
+  };
   const snapshot = await provider.fetchUsageSnapshot({
-    config: {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: params.baseUrl ?? "https://openrouter.ai/api/v1",
-            request: params.request,
-            models: [],
-          },
-        },
-      },
-    },
+    config: { models: { providers: { openrouter } } },
     env: {},
     provider: "openrouter",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-    fetchFn: params.fetchFn,
+    token: "router-key",
+    timeoutMs: 5000,
+    ...params,
+    fetchFn,
   });
   if (!snapshot) {
     throw new Error("OpenRouter usage provider returned no snapshot");
@@ -61,6 +57,7 @@ function fetchResponses(credits: Response, key: Response) {
     requestUrl(input).endsWith("/credits") ? credits : key,
   );
 }
+const json = (data: Record<string, unknown>) => Response.json({ data });
 
 function mockGuardedFetch(fallback?: typeof fetch) {
   const release = vi.fn(async () => undefined);
@@ -76,15 +73,8 @@ function mockGuardedFetch(fallback?: typeof fetch) {
   return { release, guardedFetch };
 }
 
-function fetchUsage(
-  fetchFn: typeof fetch,
-  options: Partial<Omit<Parameters<typeof fetchOpenRouterUsage>[0], "fetchFn">> = {},
-) {
-  return fetchOpenRouterUsage({ token: "router-key", timeoutMs: 5000, ...options, fetchFn });
-}
-
 function expectBudget(
-  snapshot: Awaited<ReturnType<typeof fetchOpenRouterUsage>>,
+  snapshot: Awaited<ReturnType<typeof fetchUsage>>,
   period: string,
   used: number,
   limit: number,
@@ -105,18 +95,16 @@ describe("OpenRouter usage", () => {
 
   it("combines account credits with key quota and period spend", async () => {
     const fetchFn = fetchResponses(
-      Response.json({ data: { total_credits: 100, total_usage: 35.5 } }),
-      Response.json({
-        data: {
-          label: "Production",
-          limit: 20,
-          limit_remaining: 15,
-          limit_reset: "monthly",
-          usage: 35,
-          usage_daily: 1.25,
-          usage_weekly: 3.5,
-          usage_monthly: 5,
-        },
+      json({ total_credits: 100, total_usage: 35.5 }),
+      json({
+        label: "Production",
+        limit: 20,
+        limit_remaining: 15,
+        limit_reset: "monthly",
+        usage: 35,
+        usage_daily: 1.25,
+        usage_weekly: 3.5,
+        usage_monthly: 5,
       }),
     );
 
@@ -327,13 +315,12 @@ describe("OpenRouter usage", () => {
           });
         // HTTP and body reads stay native; advance only the request deadline clock.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const operation = fetchOpenRouterUsage({
+        const operation = fetchUsage(fetch, {
           token: "synthetic-private-key",
           baseUrl,
           request: { allowPrivateNetwork: true },
           timeoutMs: 1,
           signal: parent.signal,
-          fetchFn: fetch,
         });
         try {
           await headersReady.promise;
@@ -351,37 +338,27 @@ describe("OpenRouter usage", () => {
     );
   });
 
-  it("derives recurring budget usage from remaining credits when the period counter is absent", async () => {
-    const snapshot = await fetchKeyBudget({
-      limit: 50,
-      limit_remaining: 42,
-      limit_reset: "weekly",
-      usage: 200,
-    });
-    expectBudget(snapshot, "Weekly", 8, 50, 16);
-  });
-
-  it("preserves an exhausted zero-dollar key limit", async () => {
-    const snapshot = await fetchKeyBudget({
-      limit: 0,
-      limit_remaining: 0,
-      limit_reset: "monthly",
-      usage_monthly: 0,
-    });
-    expectBudget(snapshot, "Monthly", 0, 0, 100);
-  });
-
-  it("uses remaining credits when BYOK spend counts toward a recurring limit", async () => {
-    const snapshot = await fetchKeyBudget({
-      limit: 20,
-      limit_remaining: 14,
-      limit_reset: "monthly",
-      usage_monthly: 5,
-      byok_usage_monthly: 1,
-      include_byok_in_limit: true,
-    });
-
-    expectBudget(snapshot, "Monthly", 6, 20, 30);
+  it.each([
+    ["Weekly", { limit: 50, limit_remaining: 42, limit_reset: "weekly", usage: 200 }, [8, 50, 16]],
+    [
+      "Monthly",
+      { limit: 0, limit_remaining: 0, limit_reset: "monthly", usage_monthly: 0 },
+      [0, 0, 100],
+    ],
+    [
+      "Monthly",
+      {
+        limit: 20,
+        limit_remaining: 14,
+        limit_reset: "monthly",
+        usage_monthly: 5,
+        byok_usage_monthly: 1,
+        include_byok_in_limit: true,
+      },
+      [6, 20, 30],
+    ],
+  ] as const)("calculates the %s budget for %j", async (period, data, [used, limit, percent]) => {
+    expectBudget(await fetchKeyBudget(data), period, used, limit, percent);
   });
 
   it("includes lifetime BYOK spend in key budgets when remaining credits are unavailable", async () => {
@@ -399,7 +376,7 @@ describe("OpenRouter usage", () => {
   it("preserves an overdrawn account balance", async () => {
     const snapshot = await fetchUsage(
       fetchResponses(
-        Response.json({ data: { total_credits: 10, total_usage: 12.5 } }),
+        json({ total_credits: 10, total_usage: 12.5 }),
         new Response(null, { status: 403 }),
       ),
     );

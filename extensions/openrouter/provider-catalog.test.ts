@@ -71,6 +71,54 @@ async function thinkingProfile(catalog: Catalog, id: string) {
   };
 }
 
+const userContext = {
+  messages: [{ role: "user" as const, content: "Synthetic request", timestamp: 1 }],
+};
+async function reasoningPayload(
+  provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>,
+  catalog: Catalog,
+  id: string,
+  selected?: "off" | "low",
+  standalone?: boolean,
+  withBudget = false,
+) {
+  const model = requestModel(catalog, id, standalone);
+  let payload: unknown;
+  const streamFn: StreamFn = async (runtimeModel, context, options) => {
+    const request = buildOpenAICompletionsParams(
+      { ...runtimeModel, api: "openai-completions" },
+      context,
+      options,
+    );
+    if (withBudget) {
+      request.reasoning = { max_tokens: 1024, exclude: true };
+    }
+    payload = (await options?.onPayload?.(request, runtimeModel)) ?? request;
+    return createAssistantMessageEventStream();
+  };
+  const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
+  await wrap?.({
+    provider: "openrouter",
+    modelId: id,
+    model: standalone === undefined ? undefined : model,
+    sourceApi: standalone ? "openai-completions" : undefined,
+    thinkingLevel: selected,
+    streamFn,
+  })?.(model, userContext, { reasoning: selected });
+  return payload;
+}
+
+const privateBaseUrl = "https://private.example.invalid/v1";
+function privateCatalog(overrides: Parameters<typeof buildOpenrouterLiveProvider>[0] = {}) {
+  return buildOpenrouterLiveProvider({
+    apiKey: "synthetic-private-key",
+    baseUrl: privateBaseUrl,
+    ...overrides,
+  });
+}
+const requestHeaders = (fetchGuard: ReturnType<typeof catalogFetch>, index = 0) =>
+  new Headers(fetchGuard.mock.calls[index]?.[0].init?.headers);
+
 describe("OpenRouter provider catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
@@ -146,16 +194,6 @@ describe("OpenRouter provider catalog", () => {
         ],
       },
     });
-    expect(
-      provider.models.find((model) => model.id === "google/gemini-3.5-flash-lite")?.compat,
-    ).toEqual({ supportsTools: false });
-    expect(provider.models.find((model) => model.id === "acme/no-tools")?.compat).toEqual({
-      supportsTools: false,
-    });
-    expect(
-      provider.models.find((model) => model.id === "custom/legacy-model")?.compat,
-    ).toBeUndefined();
-    expect(provider.models.find((model) => model.id === "openrouter/auto")?.compat).toBeUndefined();
     for (const [id, supportsTools] of [
       ["acme/partial-pricing", true],
       ["google/gemini-3.5-flash-lite", false],
@@ -166,7 +204,7 @@ describe("OpenRouter provider catalog", () => {
       const request = buildOpenAICompletionsParams(
         requestModel(provider, id),
         {
-          messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
+          ...userContext,
           tools: [{ name: "lookup", description: "Synthetic lookup", parameters: Type.Object({}) }],
         },
         { toolChoice: "required" },
@@ -197,42 +235,19 @@ describe("OpenRouter provider catalog", () => {
     expect(profile?.levels.map((level) => level.id).toSorted((a, b) => a.localeCompare(b))).toEqual(
       ["high", "low", "medium", "xhigh"],
     );
-    let payload: unknown;
-    const streamFn: StreamFn = async (nextModel, context, options) => {
-      const request = buildOpenAICompletionsParams(nextModel, context, options);
-      payload = (await options?.onPayload?.(request, nextModel)) ?? request;
-      return createAssistantMessageEventStream();
-    };
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "openrouter",
-      modelId: id,
-      thinkingLevel: "low",
-      streamFn,
+    expect(await reasoningPayload(provider, catalog, id, "low")).toMatchObject({
+      reasoning: { effort: "low" },
     });
-    await wrapped?.(
-      requestModel(catalog, id),
-      { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
-      { reasoning: "low" },
-    );
-    expect(payload).toMatchObject({ reasoning: { effort: "low" } });
   });
 
   it.each([
-    {
-      name: "mandatory empty selector",
-      id: "acme/fixed-empty-efforts",
-      mandatory: true,
-      efforts: [],
-    },
-    {
-      name: "optional empty selector",
-      id: "acme/optional-empty-efforts",
-      mandatory: false,
-      efforts: [],
-    },
+    { name: "mandatory", mandatory: true },
+    { name: "optional", mandatory: false },
   ] as const)(
     "preserves $name through catalog, profile, and request boundaries",
-    async ({ id, mandatory, efforts }) => {
+    async ({ name, mandatory }) => {
+      const id = `acme/${name}-empty-efforts`;
+      const efforts: string[] = [];
       const catalog = await reasoningCatalog(id, {
         mandatory,
         supported_efforts: efforts,
@@ -256,33 +271,13 @@ describe("OpenRouter provider catalog", () => {
           ["low", false],
           [undefined, true],
         ] as const) {
-          const model = requestModel(catalog, id, standalone);
-          let payload: unknown;
-          const streamFn: StreamFn = async (runtimeModel, context, options) => {
-            const request = buildOpenAICompletionsParams(
-              { ...runtimeModel, api: "openai-completions" },
-              context,
-              options,
-            );
-            if (withBudget) {
-              request.reasoning = { max_tokens: 1024, exclude: true };
-            }
-            payload = (await options?.onPayload?.(request, runtimeModel)) ?? request;
-            return createAssistantMessageEventStream();
-          };
-          const wrap = standalone ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
-          const wrapped = wrap?.({
-            provider: "openrouter",
-            modelId: id,
-            model,
-            sourceApi: standalone ? "openai-completions" : undefined,
-            thinkingLevel: selected,
-            streamFn,
-          });
-          await wrapped?.(
-            model,
-            { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
-            { reasoning: selected },
+          const payload = await reasoningPayload(
+            provider,
+            catalog,
+            id,
+            selected,
+            standalone,
+            withBudget,
           );
           expect(payload).not.toHaveProperty("reasoning_effort");
           expect(payload).not.toHaveProperty("reasoning.effort");
@@ -346,9 +341,7 @@ describe("OpenRouter provider catalog", () => {
       baseUrl: "https://private.example.invalid/v1",
     });
 
-    expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).has("authorization")).toBe(
-      false,
-    );
+    expect(requestHeaders(fetchGuard).has("authorization")).toBe(false);
   });
 
   it("isolates successful discovery caches by credential destination and request policy", async () => {
@@ -357,26 +350,18 @@ describe("OpenRouter provider catalog", () => {
     const tenantA = { headers: { "X-Private-Proxy-Tenant": "tenant-a" } };
     const tenantB = { headers: { "X-Private-Proxy-Tenant": "tenant-b" } };
 
-    await buildOpenrouterLiveProvider({
-      ...base,
-      baseUrl: "https://first.invalid/v1",
-      request: tenantA,
-    });
-    await buildOpenrouterLiveProvider({
-      ...base,
-      baseUrl: "https://first.invalid/v1",
-      request: tenantB,
-    });
-    await buildOpenrouterLiveProvider({
-      ...base,
-      baseUrl: "https://second.invalid/v1",
-      request: tenantA,
-    });
-    await buildOpenrouterLiveProvider({
-      ...base,
-      baseUrl: "https://first.invalid/v1",
-      request: tenantA,
-    });
+    for (const [origin, request] of [
+      ["first", tenantA],
+      ["first", tenantB],
+      ["second", tenantA],
+      ["first", tenantA],
+    ] as const) {
+      await buildOpenrouterLiveProvider({
+        ...base,
+        baseUrl: `https://${origin}.invalid/v1`,
+        request,
+      });
+    }
 
     expect(fetchGuard).toHaveBeenCalledTimes(3);
     expect(fetchGuard.mock.calls.map(([request]) => request.url)).toEqual([
@@ -422,19 +407,12 @@ describe("OpenRouter provider catalog", () => {
       release,
     }));
 
-    await expect(
-      buildOpenrouterLiveProvider({
-        apiKey: "synthetic-private-key",
-        baseUrl: "https://private.example.invalid/v1",
-      }),
-    ).rejects.toThrow("did not include a supported next page");
+    await expect(privateCatalog()).rejects.toThrow("did not include a supported next page");
 
     expect(fetchGuard).toHaveBeenCalledOnce();
     const request = fetchGuard.mock.calls[0]?.[0];
     expect(request?.url).toBe("https://private.example.invalid/v1/models");
-    expect(new Headers(request?.init?.headers).get("authorization")).toBe(
-      "Bearer synthetic-private-key",
-    );
+    expect(requestHeaders(fetchGuard).get("authorization")).toBe("Bearer synthetic-private-key");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -454,9 +432,7 @@ describe("OpenRouter provider catalog", () => {
       };
     });
 
-    await buildOpenrouterLiveProvider({
-      apiKey: "synthetic-private-key",
-      baseUrl: "https://private.example.invalid/v1",
+    await privateCatalog({
       request: { headers: { "X-Private-Proxy-Tenant": "synthetic-secret-tenant" } },
     });
 
@@ -472,9 +448,7 @@ describe("OpenRouter provider catalog", () => {
       .mockRejectedValue(new Error("Unexpected catalog fetch"));
 
     await expect(
-      buildOpenrouterLiveProvider({
-        apiKey: "synthetic-private-key",
-        baseUrl: "https://private.example.invalid/v1",
+      privateCatalog({
         request: {
           headers: {
             "X-Private-Proxy-Tenant": {
