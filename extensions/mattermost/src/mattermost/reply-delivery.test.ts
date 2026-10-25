@@ -86,26 +86,28 @@ const present = (...blocks: Presentation["blocks"]): Pick<ReplyPayload, "present
   presentation: { blocks },
 });
 const openControls = present({ type: "buttons", buttons: [{ label: "Open", value: "open" }] });
+const textBlock = (text: string) => present({ type: "text", text });
+const buttons = (
+  ...items: Extract<Presentation["blocks"][number], { type: "buttons" }>["buttons"]
+) => present({ type: "buttons", buttons: items });
+const nativeButton = { buttons: [[{ id: "open", callback_data: "open" }]] };
+const suppressed = (outcome: "empty" | "reasoning_skipped") => ({
+  outcome,
+  visibleReplySent: false,
+  suppression: { reason: "no_visible_result" },
+});
 
 it.each<[string, ReplyPayload, string, string?]>([
+  ["title", { presentation: { title: "Build complete", blocks: [] } }, "Build complete"],
+  ["text", textBlock("Release finished"), "Release finished"],
+  ["native value button", openControls, "- Open", "open"],
   [
-    "presentation-only title",
-    { presentation: { title: "Build complete", blocks: [] } },
-    "Build complete",
-  ],
-  [
-    "presentation-only text",
-    present({ type: "text", text: "Release finished" }),
-    "Release finished",
-  ],
-  ["presentation-only native value button", openControls, "- Open", "open"],
-  [
-    "presentation-only URL button",
-    present({ type: "buttons", buttons: [{ label: "Docs", url: "https://example.com/docs" }] }),
+    "URL button",
+    buttons({ label: "Docs", url: "https://example.com/docs" }),
     "- Docs: https://example.com/docs",
   ],
   [
-    "presentation-only select",
+    "select",
     present({
       type: "select",
       placeholder: "Environment",
@@ -120,31 +122,23 @@ it.each<[string, ReplyPayload, string, string?]>([
     "open",
   ],
   [
-    "authored fallback without duplicate presentation text",
+    "authored fallback",
     {
       text: "Already formatted",
       presentationTextMode: "fallback",
-      ...present({ type: "text", text: "Generated summary" }),
+      ...textBlock("Generated summary"),
     },
     "Already formatted",
   ],
   [
     "typed callback action stays text-only",
-    present({
-      type: "buttons",
-      buttons: [
-        { label: "Inspect", action: { type: "callback", value: "private-callback-token" } },
-      ],
-    }),
+    buttons({ label: "Inspect", action: { type: "callback", value: "private-callback-token" } }),
     "- Inspect",
   ],
 ])(
   "delivers %s through the normal reply owner",
   async (_name, payload, expectedText, expectedButtonValue) => {
-    const result = await deliver({
-      payload,
-      replyToId: "root-post",
-    });
+    const result = await deliver({ payload, replyToId: "root-post" });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
@@ -168,18 +162,10 @@ it.each<[string, ReplyPayload, string, string?]>([
 it("attaches presentation controls only to the first visible text chunk", async () => {
   core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
 
-  const result = await deliver({
-    payload: {
-      text: "alpha beta",
-      ...openControls,
-    },
-    textLimit: 6,
-  });
+  const result = await deliver({ payload: { text: "alpha beta", ...openControls }, textLimit: 6 });
 
   expect(sendMessage).toHaveBeenCalledTimes(2);
-  expect(sendMessage.mock.calls[0]![2]).toMatchObject({
-    buttons: [[{ id: "open", callback_data: "open" }]],
-  });
+  expect(sendMessage.mock.calls[0]![2]).toMatchObject(nativeButton);
   expect("buttons" in sendMessage.mock.calls[1]![2]).toBe(false);
   expect(result).toMatchObject({
     outcome: "text",
@@ -212,11 +198,7 @@ it.each<ReplyPayload>([
 ])("suppresses reasoning payload %j", async (payload) => {
   const outcome = await deliver({ payload, agentId: "agent-1", replyToId: "root-post" });
   expect(sendMessage).not.toHaveBeenCalled();
-  expect(outcome).toEqual({
-    outcome: "reasoning_skipped",
-    visibleReplySent: false,
-    suppression: { reason: "no_visible_result" },
-  });
+  expect(outcome).toEqual(suppressed("reasoning_skipped"));
 });
 
 it("returns 'empty' for substantive text that produced no send (regression: #80501)", async () => {
@@ -230,11 +212,7 @@ it("returns 'empty' for substantive text that produced no send (regression: #805
   });
 
   expect(sendMessage).not.toHaveBeenCalled();
-  expect(outcome).toEqual({
-    outcome: "empty",
-    visibleReplySent: false,
-    suppression: { reason: "no_visible_result" },
-  });
+  expect(outcome).toEqual(suppressed("empty"));
 });
 
 it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {

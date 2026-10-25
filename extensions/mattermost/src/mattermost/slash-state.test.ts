@@ -205,16 +205,18 @@ describe("slash-state", () => {
     }
   });
 
-  it("isolates distinct credentials across accounts", async () => {
-    activate("a1", ["tok-a"]);
-    activate("a2", ["tok-b"]);
-    await expectIsolatedCapacity("tok-a", "tok-b");
-  });
-
-  it("collapses duplicate credentials without merging distinct duplicate groups", async () => {
-    activate("a1", ["tok-a", "tok-shared", "tok-shared-other"]);
-    activate("a2", ["tok-shared", "tok-shared-other"]);
-    await expectIsolatedCapacity("tok-shared", "tok-shared-other");
+  it.each([
+    [["tok-a"], ["tok-b"], "tok-a", "tok-b"],
+    [
+      ["tok-a", "tok-shared", "tok-shared-other"],
+      ["tok-shared", "tok-shared-other"],
+      "tok-shared",
+      "tok-shared-other",
+    ],
+  ] as const)("isolates credential capacity for %j and %j", async (a, b, full, other) => {
+    activate("a1", [...a]);
+    activate("a2", [...b]);
+    await expectIsolatedCapacity(full, other);
   });
 
   it.each([
@@ -260,31 +262,23 @@ describe("slash-state", () => {
     );
   });
 
-  it("rejects a token shared by multiple accounts", async () => {
-    activate("a1", ["tok-shared"]);
-    activate("a2", ["tok-shared"]);
-
-    const result = await routeSlashRequest({ body: "token=tok-shared" });
-
+  it.each([
+    ["token", "token=tok-shared", "command token is not unique"],
+    [
+      "command",
+      "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+      "slash command is not unique",
+    ],
+  ])("rejects ambiguous account routing via %s", async (via, body, message) => {
+    for (const accountId of ["a1", "a2"]) {
+      const token = via === "token" ? "tok-shared" : accountId;
+      activate(accountId, [token], [createRegisteredCommand({ id: accountId, token })]);
+    }
+    const result = await routeSlashRequest({ body });
     expect(result.statusCode).toBe(409);
-    expect(result.body).toContain("command token is not unique");
+    expect(result.body).toContain(message);
     expect(result.warn).toHaveBeenCalledWith(
-      "mattermost: slash callback matched multiple accounts via token (a1, a2)",
-    );
-  });
-
-  it("rejects a registered team and command shared by multiple accounts", async () => {
-    activate("a1", ["tok-a"], [createRegisteredCommand({ id: "cmd-a" })]);
-    activate("a2", ["tok-b"], [createRegisteredCommand({ id: "cmd-b" })]);
-
-    const result = await routeSlashRequest({
-      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
-    });
-
-    expect(result.statusCode).toBe(409);
-    expect(result.body).toContain("slash command is not unique");
-    expect(result.warn).toHaveBeenCalledWith(
-      "mattermost: slash callback matched multiple accounts via command (a1, a2)",
+      `mattermost: slash callback matched multiple accounts via ${via} (a1, a2)`,
     );
   });
 });
