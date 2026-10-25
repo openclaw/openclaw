@@ -328,61 +328,32 @@ describe("Codex runtime plugin install repair", () => {
       },
     },
   };
-  it.each<{
-    name: string;
-    model?: string;
-    cfg: OpenClawConfig;
-    install: boolean;
-  }>([
-    {
-      name: "built-in Copilot without explicit runtime opt-in",
-      model: "github-copilot/gpt-4o",
-      cfg: builtInConfig,
-      install: false,
+  const explicitPiConfig: OpenClawConfig = {
+    agents: {
+      entries: { main: {} },
+      defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "pi" } } } },
     },
-    {
-      name: "model override opting out of provider runtime",
-      model: "github-copilot/gpt-4o",
-      cfg: copilotModelOverrideConfig,
-      install: false,
-    },
-    {
-      name: "another model inheriting provider runtime",
-      model: "github-copilot/claude-sonnet-4",
-      cfg: copilotModelOverrideConfig,
-      install: true,
-    },
-    {
-      name: "another provider explicitly configured with Copilot runtime",
-      model: "openai/gpt-4o",
-      cfg: {
+  };
+  it.each<[string, string | undefined, OpenClawConfig, boolean]>([
+    ["built-in Copilot", "github-copilot/gpt-4o", builtInConfig, false],
+    ["model opt-out", "github-copilot/gpt-4o", copilotModelOverrideConfig, false],
+    ["provider opt-in", "github-copilot/claude-sonnet-4", copilotModelOverrideConfig, true],
+    [
+      "non-Copilot provider opt-in",
+      "openai/gpt-4o",
+      {
         ...builtInConfig,
         ...providerRuntime("openai", "copilot", "https://provider.example.test"),
       },
-      install: false,
-    },
-    {
-      name: "Anthropic built-in",
-      model: "anthropic/claude-3",
-      cfg: builtInConfig,
-      install: false,
-    },
-    {
-      name: "OpenAI without Copilot runtime opt-in",
-      model: "openai/gpt-4o",
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "pi" } } } },
-        },
-      },
-      install: false,
-    },
-    { name: "undefined ref", cfg: builtInConfig, install: false },
-    { name: "empty ref", model: "", cfg: builtInConfig, install: false },
-    { name: "unprefixed ref", model: "gpt-4o", cfg: builtInConfig, install: false },
-    { name: "empty model id", model: "github-copilot/", cfg: builtInConfig, install: false },
-  ])("only installs an opted-in Copilot runtime: $name", async ({ model, cfg, install }) => {
+      false,
+    ],
+    ["Anthropic built-in", "anthropic/claude-3", builtInConfig, false],
+    ["OpenAI opt-out", "openai/gpt-4o", explicitPiConfig, false],
+    ["undefined ref", undefined, builtInConfig, false],
+    ["empty ref", "", builtInConfig, false],
+    ["unprefixed ref", "gpt-4o", builtInConfig, false],
+    ["empty model id", "github-copilot/", builtInConfig, false],
+  ])("only installs an opted-in Copilot runtime: %s", async (_name, model, cfg, install) => {
     if (install) {
       mockInstall("installed", cfg, { pluginId: "copilot" });
     }

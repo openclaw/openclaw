@@ -56,6 +56,24 @@ function createTestPrompter(params: { text: string[]; select?: string[]; confirm
   };
 }
 
+function mockDiscoveredModels(ids: string[] = []) {
+  discoveryFetch.mockImplementation(async () => ({
+    response: Response.json({ data: ids.map((id) => ({ id })) }),
+    release: async () => {},
+  }));
+}
+
+function expectModelOptions(prompter: ReturnType<typeof createTestPrompter>, ids: string[]) {
+  expect(prompter.select).toHaveBeenCalledWith(
+    expect.objectContaining({
+      options: [
+        ...ids.map((id) => ({ value: id, label: id })),
+        { value: "", label: "Enter a model ID manually" },
+      ],
+    }),
+  );
+}
+
 function stubFetchSequence(
   responses: Array<{ ok: boolean; status?: number }>,
 ): ReturnType<typeof vi.fn> {
@@ -92,10 +110,7 @@ async function runPromptCustomApi(
 describe("promptCustomApiConfig", () => {
   beforeEach(() => {
     discoveryFetch.mockReset();
-    discoveryFetch.mockImplementation(async () => ({
-      response: Response.json({ data: [] }),
-      release: async () => {},
-    }));
+    mockDiscoveredModels();
     loadManifestMetadataSnapshot.mockReset();
     loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
   });
@@ -199,10 +214,7 @@ describe("promptCustomApiConfig", () => {
   });
 
   it("selects an advertised model during deferred custom setup", async () => {
-    discoveryFetch.mockImplementation(async () => ({
-      response: Response.json({ data: [{ id: "local-small" }, { id: "local-large" }] }),
-      release: async () => {},
-    }));
+    mockDiscoveredModels(["local-small", "local-large"]);
     const prompter = createTestPrompter({
       text: ["http://localhost:1234/v1", "fixture-key", "custom", ""],
       select: ["plaintext", "openai", "local-large"],
@@ -214,15 +226,7 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
       "local-large",
     ]);
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: [
-          { value: "local-small", label: "local-small" },
-          { value: "local-large", label: "local-large" },
-          { value: "", label: "Enter a model ID manually" },
-        ],
-      }),
-    );
+    expectModelOptions(prompter, ["local-small", "local-large"]);
     expect(discoveryFetch).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         url: "http://localhost:1234/v1/models",
@@ -233,10 +237,7 @@ describe("promptCustomApiConfig", () => {
   });
 
   it("keeps manual model entry available when discovery succeeds", async () => {
-    discoveryFetch.mockImplementation(async () => ({
-      response: Response.json({ data: [{ id: "advertised-model" }] }),
-      release: async () => {},
-    }));
+    mockDiscoveredModels(["advertised-model"]);
     const prompter = createTestPrompter({
       text: ["http://localhost:1234/v1", "", "unlisted-model", "custom", ""],
       select: ["plaintext", "openai-responses", ""],
@@ -244,14 +245,7 @@ describe("promptCustomApiConfig", () => {
     const result = await runPromptCustomApi(prompter, { verification: "deferred" });
     expect(result.modelId).toBe("unlisted-model");
     expect(discoveryFetch).toHaveBeenCalledOnce();
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: [
-          { value: "advertised-model", label: "advertised-model" },
-          { value: "", label: "Enter a model ID manually" },
-        ],
-      }),
-    );
+    expectModelOptions(prompter, ["advertised-model"]);
   });
 
   it.each(["empty", "invalid", "http", "timeout"])(

@@ -19,9 +19,7 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: Cleanup routing fixtures supply config without reading operator state.
 vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
-  return {
-    ...createTestConfigReadMocks(mocks, "loadConfig"),
-  };
+  return createTestConfigReadMocks(mocks, "loadConfig");
 });
 
 vi.mock("./sessions-cleanup.runtime.js", () => ({
@@ -106,6 +104,15 @@ function previewEntry(sessionId: string, updatedAt: number, label?: string) {
   return { sessionId, updatedAt, model: "test:opus", ...(label === undefined ? {} : { label }) };
 }
 
+function artifactStats(
+  scannedFiles = 0,
+  removedFiles = 0,
+  freedBytes = 0,
+  olderThanMs = 604800000,
+) {
+  return { scannedFiles, removedFiles, freedBytes, olderThanMs };
+}
+
 function mockPreviews(...previewResults: ReturnType<typeof cleanupPreview>[]) {
   mocks.runSessionsCleanup.mockResolvedValue({
     mode: "warn",
@@ -184,8 +191,7 @@ describe("sessionsCleanupCommand", () => {
       ...applied,
       storePath: "/resolved/openclaw-agent.sqlite",
     });
-    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
-    expect(mocks.runSessionsCleanup.mock.calls[0]?.[0]).toEqual({
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledExactlyOnceWith({
       cfg: { session: { store: "/cfg/sessions.json" } },
       opts: expect.objectContaining({ enforce: true, activeKey: "agent:main:main" }),
       targets: [{ agentId: "main", storePath: "/resolved/sessions.json" }],
@@ -256,12 +262,7 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             pruned: 0,
-            unreferencedArtifacts: {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: 0,
-            },
+            unreferencedArtifacts: artifactStats(0, 0, 0, 0),
           }),
           appliedCount: 0,
         },
@@ -299,12 +300,7 @@ describe("sessionsCleanupCommand", () => {
           capArchived: 1,
           pruned: 1,
           capped: 1,
-          unreferencedArtifacts: {
-            scannedFiles: 5,
-            removedFiles: 2,
-            freedBytes: 128,
-            olderThanMs: 604800000,
-          },
+          unreferencedArtifacts: artifactStats(5, 2, 128),
         },
         {
           beforeStore: {
@@ -380,12 +376,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 3,
           pruned: 3,
           capped: 1,
-          unreferencedArtifacts: {
-            scannedFiles: 0,
-            removedFiles: 0,
-            freedBytes: 0,
-            olderThanMs: 604800000,
-          },
+          unreferencedArtifacts: artifactStats(),
         },
         {
           beforeStore: {
@@ -435,11 +426,7 @@ describe("sessionsCleanupCommand", () => {
         cleanupPreview({ ...target, pruned: 1 }, { staleKeys: new Set(["stale"]) }),
       ),
     );
-    await cleanup({
-      json: true,
-      dryRun: true,
-      allAgents: true,
-    });
+    await cleanup({ json: true, dryRun: true, allAgents: true });
 
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
