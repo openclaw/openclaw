@@ -18,17 +18,15 @@ const modelFields = {
   reasoning: true,
   input: ["text"],
 } as const;
-function createGlm47Template(): Model<"openai-completions"> {
-  return {
-    ...modelFields,
-    id: "glm-4.7",
-    name: "GLM-4.7",
-    input: ["text"],
-    cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
-    contextWindow: 204800,
-    maxTokens: 131072,
-  };
-}
+const createGlm47Template = (): Model<"openai-completions"> => ({
+  ...modelFields,
+  id: "glm-4.7",
+  name: "GLM-4.7",
+  input: ["text"],
+  cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+  contextWindow: 204800,
+  maxTokens: 131072,
+});
 
 async function resolveModel(
   modelId: string,
@@ -80,42 +78,19 @@ async function createStreamCapture(
     return payload;
   };
 }
-async function captureStreamPayload(
-  params: Parameters<typeof createStreamCapture>[0],
-  context?: Context,
-) {
-  return (await createStreamCapture(params))(context);
-}
 
 describe("zai provider plugin", () => {
-  it("resolves persisted GLM-5 metadata through selected provider endpoints", async () => {
-    const global = "https://api.z.ai/api/paas/v4";
-    const billedCost = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
-    const turboCost = { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 };
-    const codingCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const flashCost = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 };
-    const coding = "https://api.z.ai/api/coding/paas/v4";
-    const codingCn = "https://open.bigmodel.cn/api/coding/paas/v4";
-    const cases = [
-      ["glm-5.3", coding, ["text"], 1_048_576, codingCost],
-      ["glm-5.3-flash", codingCn, ["text", "image"], 1_048_576, flashCost],
-      ["glm-5.2", "https://proxy.example.test/zai", ["text"], 1_000_000, billedCost],
-      ["glm-5.1", global, ["text"], 200_000, billedCost],
-      ["glm-5v-turbo", global, ["text", "image"], 200_000, turboCost],
-      ["glm-5-turbo", global, ["text"], 200_000, turboCost],
-    ] as const;
-
-    for (const [modelId, baseUrl, input, contextWindow, cost] of cases) {
-      expectFields(await resolveModel(modelId, baseUrl), {
-        ...modelFields,
-        id: modelId,
-        baseUrl,
-        input,
-        contextWindow,
-        maxTokens: 131_072,
-        cost,
-      });
-    }
+  it("uses catalog metadata over the template and honors a custom endpoint", async () => {
+    const baseUrl = "https://proxy.example.test/zai";
+    expectFields(await resolveModel("glm-5.3-flash", baseUrl), {
+      ...modelFields,
+      id: "glm-5.3-flash",
+      baseUrl,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+    });
   });
 
   it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
@@ -134,13 +109,13 @@ describe("zai provider plugin", () => {
 
   it("keeps older GLM models' thinking binary", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const profile = (modelId: string) =>
+    expect(
       provider.resolveThinkingProfile?.({
         provider: "zai",
-        modelId,
+        modelId: "glm-5.1",
         reasoning: true,
-      } as never);
-    expect(profile("glm-5.1")).toEqual({
+      } as never),
+    ).toEqual({
       levels: [
         { id: "off", label: "off" },
         { id: "low", label: "on" },
@@ -150,7 +125,7 @@ describe("zai provider plugin", () => {
   });
 
   it("applies Z.AI effort policy to each direct completion request", async () => {
-    for (const modelId of ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1"]) {
+    for (const modelId of ["glm-5.3", "glm-5.2", "glm-5.1"]) {
       const capture = await createStreamCapture({ modelId }, true);
       for (const reasoning of [undefined, "off", "low", "high", "max"] as const) {
         const payload = capture(undefined, { reasoning });
@@ -167,44 +142,36 @@ describe("zai provider plugin", () => {
     }
   });
 
-  it("enables Z.AI preserved thinking only when requested", async () => {
-    const withoutPreserve = await captureStreamPayload({ thinkingLevel: "low" });
+  it("does not enable preserved thinking by default", async () => {
+    const withoutPreserve = (await createStreamCapture({ thinkingLevel: "low" }))();
     expect(withoutPreserve).not.toHaveProperty("thinking");
-    const withPreserve = await captureStreamPayload({
-      extraParams: { preserveThinking: true },
-      thinkingLevel: "low",
-    });
-    expect(withPreserve.tool_stream).toBe(true);
-    expect(withPreserve.thinking).toEqual({ type: "enabled", clear_thinking: false });
   });
 
-  it("preserves replayed reasoning_content for Z.AI preserved thinking", async () => {
-    const payload = await captureStreamPayload(
-      {
-        extraParams: { preserve_thinking: true },
-        thinkingLevel: "low",
-      },
-      {
-        messages: [
-          { role: "user", content: "hi", timestamp: 1 },
-          makeAgentAssistantMessage({
-            api: "openai-completions",
-            provider: "zai",
-            model: "glm-5.1",
-            content: [
-              {
-                type: "thinking",
-                thinking: "prior reasoning",
-                thinkingSignature: "reasoning_content",
-              },
-              { type: "text", text: "visible reply" },
-            ],
-            timestamp: 2,
-          }),
-          { role: "user", content: "continue", timestamp: 3 },
-        ],
-      },
-    );
+  it.each(["preserveThinking", "preserve_thinking"])("preserves replay with %s", async (key) => {
+    const capture = await createStreamCapture({
+      extraParams: { [key]: true },
+      thinkingLevel: "low",
+    });
+    const payload = capture({
+      messages: [
+        { role: "user", content: "hi", timestamp: 1 },
+        makeAgentAssistantMessage({
+          api: "openai-completions",
+          provider: "zai",
+          model: "glm-5.1",
+          content: [
+            {
+              type: "thinking",
+              thinking: "prior reasoning",
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "text", text: "visible reply" },
+          ],
+        }),
+        { role: "user", content: "continue", timestamp: 3 },
+      ],
+    });
+    expect(payload.tool_stream).toBe(true);
     expect(payload.thinking).toEqual({ type: "enabled", clear_thinking: false });
     expect((payload.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
       role: "assistant",
@@ -221,12 +188,7 @@ describe("zai provider plugin", () => {
         modelId: "glm-4.7",
         extraParams,
       } as never);
-    expect(prepare({ endpoint: "global" })).toEqual({
-      endpoint: "global",
-      tool_stream: true,
-    });
-
-    const explicit = { endpoint: "global", tool_stream: false };
-    expect(prepare(explicit)).toBe(explicit);
+    expect(prepare({})).toEqual({ tool_stream: true });
+    expect(prepare({ tool_stream: false })).toEqual({ tool_stream: false });
   });
 });

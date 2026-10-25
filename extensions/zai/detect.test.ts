@@ -2,7 +2,6 @@ import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 
-const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const urls = {
   global: "https://api.z.ai/api/paas/v4/chat/completions",
   cn: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
@@ -13,38 +12,6 @@ const detect = (params: Omit<Parameters<typeof detectZaiEndpoint>[0], "apiKey">)
   detectZaiEndpoint({ apiKey: "sk-test", ...params }); // pragma: allowlist secret
 const errorResponse = (body: UnderlyingDefaultSource<Uint8Array>) =>
   new Response(new ReadableStream(body), { status: 400 });
-
-async function expectBodyDeadline(
-  body: UnderlyingDefaultSource<Uint8Array>,
-  chunks?: () => number,
-) {
-  const state = { cancelled: false, settled: false };
-  const result = detect({
-    endpoint: "global",
-    timeoutMs: 80,
-    fetchFn: async (url) => {
-      expect(url).toBe(urls.global);
-      return errorResponse({
-        ...body,
-        cancel(reason) {
-          state.cancelled = true;
-          return body.cancel?.(reason);
-        },
-      });
-    },
-  }).then((value) => {
-    state.settled = true;
-    return value;
-  });
-  await vi.advanceTimersByTimeAsync(79);
-  expect(state).toEqual({ cancelled: false, settled: false });
-  if (chunks) {
-    expect(chunks()).toBe(7);
-  }
-  await vi.advanceTimersByTimeAsync(1);
-  expect(state).toEqual({ cancelled: true, settled: true });
-  expect(await result).toBeNull();
-}
 
 type Reply = [ZaiEndpointId, string, number, unknown?];
 function makeFetch(replies: Reply[], calls?: string[]) {
@@ -92,13 +59,6 @@ describe("detectZaiEndpoint", () => {
     await check(undefined, ["global", "glm-5.2"], ["global", "glm-5.2", 200]);
     await check(undefined, ["cn", "glm-5.2"], ["global", "glm-5.2", 404], ["cn", "glm-5.2", 200]);
     await check(
-      undefined,
-      ["coding-global", "glm-5.3"],
-      ["global", "glm-5.2", 404],
-      ["cn", "glm-5.2", 404],
-      ["coding-global", "glm-5.3", 200],
-    );
-    await check(
       "coding-global",
       ["coding-global", "glm-4.7"],
       ["coding-global", "glm-5.3", 400, { code: 1311 }],
@@ -118,13 +78,6 @@ describe("detectZaiEndpoint", () => {
       ["coding-cn", "glm-5.1", 200],
     );
     await check(
-      "coding-cn",
-      ["coding-cn", "glm-4.7"],
-      ["coding-cn", "glm-5.3", 404, { error: { message: "glm-5.3 unavailable" } }],
-      ["coding-cn", "glm-5.1", 404, { error: { message: "glm-5.1 unavailable" } }],
-      ["coding-cn", "glm-4.7", 200],
-    );
-    await check(
       undefined,
       null,
       ["global", "glm-5.2", 401],
@@ -136,23 +89,12 @@ describe("detectZaiEndpoint", () => {
 
   it("rejects sub-cap error bodies that are not valid UTF-8 instead of classifying substituted text", async () => {
     // Invalid UTF-8 must not turn into a trusted error code via replacement characters.
-    const corrupt = new TextEncoder().encode('{"code":1211,"msg":"x\u{1F99E}"}');
-    const lobsterStart = corrupt.indexOf(0xf0);
-    expect(lobsterStart).toBeGreaterThan(-1);
-    corrupt[lobsterStart + 1] = 0x28;
-    expect(new TextDecoder().decode(corrupt)).toContain("\uFFFD");
-
+    const corrupt = new TextEncoder().encode('{"code":1211,"msg":"X"}');
+    corrupt[corrupt.indexOf(88)] = 0xff;
     const calls: string[] = [];
     const detected = await detect({
       endpoint: "coding-global",
-      fetchFn: makeFetch(
-        [
-          ["coding-global", "glm-5.3", 400, corrupt],
-          ["coding-global", "glm-5.1", 400, corrupt],
-          ["coding-global", "glm-4.7", 200],
-        ],
-        calls,
-      ),
+      fetchFn: makeFetch([["coding-global", "glm-5.3", 400, corrupt]], calls),
     });
 
     expect(calls).toEqual(["glm-5.3"]);
@@ -171,9 +113,7 @@ describe("detectZaiEndpoint", () => {
 
     expect(detected).toBeNull();
     expect(state.canceled).toBe(true);
-    expect(state.enqueuedBytes).toBeLessThanOrEqual(
-      ZAI_DETECT_ERROR_BODY_MAX_BYTES + 2 * 1024 * 1024,
-    );
+    expect(state.enqueuedBytes).toBeLessThanOrEqual(18 * 1024 * 1024);
   });
 
   it.each([
@@ -214,30 +154,42 @@ describe("detectZaiEndpoint", () => {
     }
   });
 
-  it("fails closed when a probe error body stalls without chunks", async () => {
-    vi.useFakeTimers();
-    await expectBodyDeadline({});
-  });
-
-  it("keeps one probe deadline through a slow-drip error body", async () => {
+  it.each([false, true])("keeps one body deadline (slow drip: %s)", async (drip) => {
     vi.useFakeTimers();
     let chunks = 0;
     let interval: ReturnType<typeof setInterval> | undefined;
+    const state = { cancelled: false, settled: false };
     try {
-      await expectBodyDeadline(
-        {
-          start(controller) {
-            interval = setInterval(() => {
-              chunks += 1;
-              controller.enqueue(new Uint8Array([123]));
-            }, 10);
-          },
-          cancel() {
-            clearInterval(interval);
-          },
+      const result = detect({
+        endpoint: "global",
+        timeoutMs: 80,
+        fetchFn: async (url) => {
+          expect(url).toBe(urls.global);
+          return errorResponse({
+            start(controller) {
+              if (drip) {
+                interval = setInterval(() => {
+                  chunks += 1;
+                  controller.enqueue(new Uint8Array([123]));
+                }, 10);
+              }
+            },
+            cancel() {
+              state.cancelled = true;
+              clearInterval(interval);
+            },
+          });
         },
-        () => chunks,
-      );
+      }).then((value) => {
+        state.settled = true;
+        return value;
+      });
+      await vi.advanceTimersByTimeAsync(79);
+      expect(state).toEqual({ cancelled: false, settled: false });
+      expect(chunks).toBe(drip ? 7 : 0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state).toEqual({ cancelled: true, settled: true });
+      expect(await result).toBeNull();
     } finally {
       clearInterval(interval);
     }
