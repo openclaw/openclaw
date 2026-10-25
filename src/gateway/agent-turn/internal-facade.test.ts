@@ -260,6 +260,7 @@ it.for([
     await Promise.allSettled([request, ...joins]);
     await scope.drain();
     signal.removeEventListener("abort", unblock);
+    // mock-isolation: Restore the controlled turn service after the admission and abort cases.
     vi.doMock("./agent-turn-service.js", service);
     vi.resetModules();
   }

@@ -32,6 +32,7 @@ vi.mock("node:os", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:os")>()),
   availableParallelism: () => runtime.parallelism,
 }));
+// mock-isolation: Worker hashing tests do not initialize the process-wide logging subsystem.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug() {} }),
 }));

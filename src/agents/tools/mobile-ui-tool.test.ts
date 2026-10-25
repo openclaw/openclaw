@@ -1,5 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
@@ -18,13 +20,6 @@ const { createMobileUiTool } = await import("./mobile-ui-tool.js");
 
 const OBSERVE = "mobile.ui.observe";
 const ACT = "mobile.ui.act";
-const observe = (tool = createMobileUiTool(), extra: Record<string, unknown> = {}) =>
-  tool.execute("observe-1", { action: "observe", ...extra });
-const act = (
-  tool: ReturnType<typeof createMobileUiTool>,
-  extra: Record<string, unknown> = {},
-  id = "act-1",
-) => tool.execute(id, { ...activation, ...extra });
 
 function androidMobileUiNode(overrides?: Record<string, unknown>) {
   return {
@@ -91,8 +86,8 @@ function invokeBodies(command: string) {
 
 async function observedTool(params: Parameters<typeof installGatewayBehavior>[0] = {}) {
   installGatewayBehavior(params);
-  const tool = createMobileUiTool({ idempotencyScope: "run-1" });
-  await observe(tool);
+  const tool = createMobileUiTool();
+  await tool.execute("observe-1", { action: "observe" });
   return tool;
 }
 
@@ -116,7 +111,7 @@ it("selects the connected Android node advertising mobileUI", async () => {
   ]);
   installGatewayBehavior();
 
-  await observe();
+  await createMobileUiTool().execute("observe-1", { action: "observe" });
 
   expect(invokeBodies(OBSERVE)[0]).toMatchObject({ nodeId: "android-ready", params: {} });
 });
@@ -172,7 +167,9 @@ it.each([
   },
 ])("rejects $name without invoking the Gateway", async ({ nodes, node, error }) => {
   listNodesMock.mockResolvedValue(nodes);
-  await expect(observe(createMobileUiTool(), { node })).rejects.toThrow(error);
+  await expect(
+    createMobileUiTool().execute("observe-1", { action: "observe", node }),
+  ).rejects.toThrow(error);
   expect(callGatewayToolMock).not.toHaveBeenCalled();
 });
 
@@ -180,7 +177,9 @@ it("rejects swipes longer than Android's gesture-duration limit", async () => {
   const tool = await observedTool();
 
   await expect(
-    act(tool, {
+    tool.execute("act-1", {
+      action: "act",
+      snapshotId: "snapshot-1",
       mobileAction: { type: "swipe", x1: 0, y1: 0, x2: 100, y2: 100, durationMs: 60_001 },
     }),
   ).rejects.toThrow(/durationMs must be an integer between 1 and 60000/);
@@ -190,7 +189,9 @@ it("rejects swipes longer than Android's gesture-duration limit", async () => {
 it("gives long actions headroom in both gateway and node timeouts", async () => {
   const tool = await observedTool();
 
-  await act(tool, {
+  await tool.execute("act-1", {
+    action: "act",
+    snapshotId: "snapshot-1",
     mobileAction: { type: "wait", ms: 100_000 },
     timeoutMs: 60_000,
   });
@@ -206,7 +207,7 @@ it("surfaces target_stale and requires use of the fresh snapshot", async () => {
   const code = "target_stale";
   const tool = await observedTool({ outcome: { code, message: "Observe again" } });
 
-  const result = await act(tool, { confirmed: true });
+  const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
   expect(result.details).toMatchObject({
     outcome: { code, message: "Observe again" },
@@ -221,7 +222,7 @@ it("preserves a completed act outcome when postcondition observation fails", asy
     freshSnapshot: new Error("accessibility service disconnected"),
   });
 
-  const result = await act(tool, { confirmed: true });
+  const result = await tool.execute("act-1", { ...activation, confirmed: true });
 
   expect(result.details).toEqual({
     outcome: { code: "completed", message: null },
@@ -231,10 +232,44 @@ it("preserves a completed act outcome when postcondition observation fails", asy
       message: "accessibility service disconnected",
     },
   });
-  await expect(act(tool, { confirmed: true }, "act-2")).rejects.toThrow(
+  await expect(tool.execute("act-2", { ...activation, confirmed: true })).rejects.toThrow(
     /observe again before acting/,
   );
   expect(invokeBodies(ACT)).toHaveLength(1);
+});
+
+it("scopes act idempotency keys to the assistant response while preserving replay keys", async () => {
+  installGatewayBehavior({ freshSnapshot: snapshotPayload() });
+
+  for (const responseId of ["response-1", "response-2", "response-1"]) {
+    const tool = createMobileUiTool({ idempotencyScope: "run-1" });
+    const observed = await tool.execute("observe", { action: "observe" });
+    const snapshotId = (observed.details as { snapshotId: string }).snapshotId;
+    const input = { ...activation, snapshotId, confirmed: true };
+    const toolCall = {
+      type: "toolCall" as const,
+      id: "mobile_0",
+      name: "mobile_ui",
+      arguments: input,
+    };
+    await runWithAgentToolExecutionContext(
+      {
+        assistantMessage: makeAssistantMessageFixture({
+          responseId,
+          content: [toolCall],
+          stopReason: "toolUse",
+        }),
+        toolCall,
+      },
+      () => tool.execute(toolCall.id, input),
+    );
+  }
+
+  const keys = invokeBodies(ACT).map((body) => body.idempotencyKey);
+  expect(keys).toHaveLength(3);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(keys[2]).toBe(keys[0]);
+  expect(keys[0]).toMatch(/^mobile\.ui\.act:v2:[0-9a-f]{64}$/);
 });
 
 it.each<[string, RegExp]>([
@@ -248,7 +283,9 @@ it.each<[string, RegExp]>([
   ],
 ])("adds remediation for %s", async (message, remediation) => {
   callGatewayToolMock.mockRejectedValue(new Error(message));
-  await expect(observe()).rejects.toThrow(remediation);
+  await expect(createMobileUiTool().execute("observe-1", { action: "observe" })).rejects.toThrow(
+    remediation,
+  );
 });
 
 it("uses keyword matches only to enrich a required confirmation", async () => {
@@ -256,7 +293,7 @@ it("uses keyword matches only to enrich a required confirmation", async () => {
     firstSnapshot: snapshotPayload({ packageName: "com.example.messages", text: "Send message" }),
   });
 
-  const result = await act(tool);
+  const result = await tool.execute("act-1", activation);
 
   expect(result.details).toEqual({
     code: "confirmation_required",
@@ -268,24 +305,55 @@ it("uses keyword matches only to enrich a required confirmation", async () => {
 });
 
 it.each([
-  [activation.mobileAction, "Next"],
-  [{ type: "set_text", ref: "n1", text: "hello" }, "Next"],
-  [{ type: "tap", x: 25, y: 35 }, "coordinates (25, 35)"],
-  [{ type: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 500 }, "coordinates (1, 2) to (3, 4)"],
-] as const)("requires confirmation for %j before dispatch", async (mobileAction, target) => {
+  {
+    mobileAction: activation.mobileAction,
+    target: "Next",
+    proposedEffect: "perform a state-changing action (activate) on example.app targeting Next",
+  },
+  { mobileAction: { type: "set_text", ref: "n1", text: "hello" }, target: "Next" },
+  {
+    mobileAction: { type: "tap", x: 25, y: 35 },
+    target: "coordinates (25, 35)",
+    proposedEffect:
+      "perform a state-changing action (tap) on example.app targeting coordinates (25, 35)",
+  },
+])(
+  "requires confirmation for $mobileAction.type before dispatch",
+  async ({ mobileAction, target, proposedEffect }) => {
+    const tool = await observedTool();
+    const args = { ...activation, mobileAction };
+    const result = await tool.execute("unconfirmed", args);
+    const expected = {
+      code: "confirmation_required",
+      target,
+      ...(proposedEffect ? { proposedEffect } : {}),
+    };
+    if (mobileAction.type === "activate") {
+      expect(result.details).toEqual({ ...expected, package: "example.app" });
+    } else {
+      expect(result.details).toMatchObject(expected);
+    }
+    expect(invokeBodies(ACT)).toHaveLength(0);
+    await expect(tool.execute("confirmed", { ...args, confirmed: true })).resolves.toMatchObject({
+      details: { outcome: { code: "completed" } },
+    });
+    expect(invokeBodies(ACT)).toHaveLength(1);
+  },
+);
+
+it("fails closed for blind swipes", async () => {
   const tool = await observedTool();
-  expect((await act(tool, { mobileAction }, "unconfirmed")).details).toEqual({
-    code: "confirmation_required",
-    package: "example.app",
-    target,
-    proposedEffect: `perform a state-changing action (${mobileAction.type}) on example.app targeting ${target}`,
+
+  await expect(
+    tool.execute("swipe-unconfirmed", {
+      action: "act",
+      snapshotId: "snapshot-1",
+      mobileAction: { type: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 500 },
+    }),
+  ).resolves.toMatchObject({
+    details: { code: "confirmation_required", target: "coordinates (1, 2) to (3, 4)" },
   });
   expect(invokeBodies(ACT)).toHaveLength(0);
-  await expect(act(tool, { mobileAction, confirmed: true }, "confirmed")).resolves.toMatchObject({
-    details: { outcome: { code: "completed" } },
-  });
-  expect(invokeBodies(ACT)).toHaveLength(1);
-  expect(invokeBodies(ACT)[0]?.idempotencyKey).toMatch(/^mobile\.ui\.act:v2:[0-9a-f]{64}$/);
 });
 
 it.each([
@@ -295,8 +363,8 @@ it.each([
 ])("does not require confirmation for %s", async (_label, mobileAction) => {
   const tool = await observedTool();
 
-  await expect(act(tool, { mobileAction })).resolves.toMatchObject({
-    details: { outcome: { code: "completed" } },
-  });
+  await expect(
+    tool.execute("act-1", { action: "act", snapshotId: "snapshot-1", mobileAction }),
+  ).resolves.toMatchObject({ details: { outcome: { code: "completed" } } });
   expect(invokeBodies(ACT)).toHaveLength(1);
 });

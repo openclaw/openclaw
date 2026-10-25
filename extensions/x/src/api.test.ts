@@ -122,7 +122,7 @@ describe("X API authentication", () => {
           });
           return assertCurrent;
         }
-        assertCurrent();
+        return assertCurrent();
       };
       await expect(
         operation === "reply"

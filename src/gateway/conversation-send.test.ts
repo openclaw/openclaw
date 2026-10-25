@@ -324,15 +324,27 @@ describe("runGatewayConversationSend", () => {
   });
 
   it("owns durable delivery in the Gateway and binds the source session", async () => {
-    const sourceSessionKey = "agent:main:telegram:direct:operator";
-    const result = await deps.send("send-1", { sourceSessionKey, message: "hello molty" });
+    const result = await deps.send("send-1", {
+      sourceSessionKey: "agent:main:telegram:direct:operator",
+      message: "hello molty",
+    });
+
     expect(await deps.get("send-1")).toMatchObject({
       operationId: "send-1",
       operationKind: "send",
       conversationRef: conversation.conversationRef,
-      sourceSessionKey,
+      sourceSessionKey: "agent:main:telegram:direct:operator",
       status: "sent",
     });
+    expect(deps.runMessageAction.mock.calls[0]?.[0]).toMatchObject({
+      defaultAccountId: conversation.accountId,
+      gatewayOwnedDelivery: true,
+      forceCoreDelivery: true,
+      requireQueuePersistence: true,
+      suppressTranscriptMirror: true,
+      sessionKey: "agent:main:telegram:direct:operator",
+    });
+    expect(deps.runMessageAction.mock.calls[0]?.[0]?.params).not.toHaveProperty("accountId");
     expect(result).toEqual({
       status: "sent",
       conversationRef: conversation.conversationRef,

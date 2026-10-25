@@ -19,6 +19,7 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -180,12 +181,13 @@ describe("requester-settle processing survives later user turns", () => {
     expect(io.emitAcceptance).not.toHaveBeenCalled();
   };
   const appendNewerTurn = async (manager: SessionManager, key: string, text: string) => {
-    await manager.appendMessageAsync({
+    const user: PersistedUserTurnMessage = {
       role: "user",
       content: text,
       timestamp: 3,
       idempotencyKey: key,
-    });
+    };
+    await manager.appendMessageAsync(user);
     await manager.appendMessageAsync(assistant("stop", `${text} finished`));
   };
   const expectCompletedReplay = async (
