@@ -59,8 +59,7 @@ it("assembles full Gateway plugin tools without widening the selected model gene
     async (state) => {
       const providerFile = await state.writeText(
         "plugins/provider/index.cjs",
-        `globalThis[${JSON.stringify(probeKey)}]("provider-load");
-module.exports = {
+        `module.exports = {
   id: ${JSON.stringify(providerPluginId)},
   register(api) {
     api.registerProvider({
@@ -165,10 +164,7 @@ module.exports = {
       expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
-      const warnings: string[] = [];
-      const warn = vi.spyOn(logger, "logWarn").mockImplementation((message) => {
-        warnings.push(message);
-      });
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
       const inventoryParams = {
         agentId: "main",
         agentDir: state.agentDir(),
@@ -178,34 +174,29 @@ module.exports = {
       };
       const resolveInventory = async (inventoryConfig: OpenClawConfig, normalizeProvider = true) =>
         await withPluginRuntimeRegistryScope(owner.registry, async () => {
-          const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+          await using acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
             cfg: inventoryConfig,
             ...inventoryParams,
           });
-          try {
-            return await acquired.run((runtime) => {
-              (globalThis as unknown as Record<string, (...args: unknown[]) => void>)[probeKey]?.(
-                "before-resolve",
-              );
-              return resolveEffectiveToolInventory({
-                cfg: inventoryConfig,
-                ...inventoryParams,
-                modelProvider: normalizeProvider ? providerId : undefined,
-                modelId: normalizeProvider ? modelId : undefined,
-                modelApi: normalizeProvider ? runtime.modelApi : undefined,
-                runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
-              }).then((inventory) => inventory.groups.flatMap((group) => group.tools));
-            });
-          } finally {
-            await acquired[Symbol.asyncDispose]();
-          }
+          return await acquired.run((runtime) =>
+            resolveEffectiveToolInventory({
+              cfg: inventoryConfig,
+              ...inventoryParams,
+              modelProvider: normalizeProvider ? providerId : undefined,
+              modelId: normalizeProvider ? modelId : undefined,
+              modelApi: normalizeProvider ? runtime.modelApi : undefined,
+              runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
+            }).then((inventory) => inventory.groups.flatMap((group) => group.tools)),
+          );
         });
       try {
         const inventory = await resolveInventory(config);
         expect(inventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
-        expect(warnings.filter((message) => message.includes("unknown entries"))).toEqual([]);
+        expect(warn.mock.calls.some(([message]) => message.includes("unknown entries"))).toBe(
+          false,
+        );
 
         const disabledConfig: OpenClawConfig = {
           ...config,

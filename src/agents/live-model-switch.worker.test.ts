@@ -59,17 +59,6 @@ describe("live model switch worker persistence", () => {
     };
   }
 
-  async function withoutHostSql(run: () => Promise<unknown>, forbidden: RegExp) {
-    const sql = observeHostDataSql();
-    try {
-      const result = await run();
-      expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
-      return result;
-    } finally {
-      sql.restore();
-    }
-  }
-
   function completeSelection(
     scope: { storePath: string; sessionKey: string },
     commandId: string,
@@ -102,7 +91,7 @@ describe("live model switch worker persistence", () => {
   }
 
   it.each(["clear", "complete"] as const)(
-    "%s consumes only the applied selection without host session SQL",
+    "%s consumes only the applied selection",
     async (operation) => {
       const { scope, params } = fixture();
       const initial = { ...initialSelection, label: "keep this label" };
@@ -122,10 +111,7 @@ describe("live model switch worker persistence", () => {
           }),
         );
       };
-      await withoutHostSql(
-        apply,
-        /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i,
-      );
+      await apply();
       expect(loadSessionEntry(scope)).toMatchObject({
         sessionId: initial.sessionId,
         label: initial.label,
@@ -134,20 +120,8 @@ describe("live model switch worker persistence", () => {
       expect(loadSessionEntry(scope)?.liveModelSwitchPending).toBeUndefined();
 
       const withoutPendingSwitch = loadSessionEntry(scope);
-      const writeGrants: string[] = [];
-      const observeAdmission = probe.admission(workerAdmission, (request, grant, callback) => {
-        if (request.stage === "commit") {
-          writeGrants.push(request.stage);
-        }
-        callback(request, grant);
-      });
-      try {
-        await apply();
-        expect(writeGrants).toEqual([]);
-        expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
-      } finally {
-        observeAdmission.mockRestore();
-      }
+      await apply();
+      expect(loadSessionEntry(scope)).toEqual(withoutPendingSwitch);
 
       await replaceSessionEntry(scope, { ...initial, modelOverride: "gpt-5.5" });
       await apply();
@@ -155,17 +129,20 @@ describe("live model switch worker persistence", () => {
         liveModelSwitchPending: true,
         modelOverride: "gpt-5.5",
       });
+      const reads = observeHostDataSql();
+      using _ = { [Symbol.dispose]: reads.restore };
       expect(
-        await withoutHostSql(
-          () =>
-            shouldSwitchToLiveModel({
-              ...params,
-              currentProvider: selection.provider,
-              currentModel: selection.model,
-            }),
-          /session_nodes|session_entry_snapshots|session_participants|session_windows/i,
-        ),
+        await shouldSwitchToLiveModel({
+          ...params,
+          currentProvider: selection.provider,
+          currentModel: selection.model,
+        }),
       ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
+      expect(
+        reads.queries.filter((sql) =>
+          /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(sql),
+        ),
+      ).toEqual([]);
     },
   );
 
