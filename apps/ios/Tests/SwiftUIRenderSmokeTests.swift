@@ -306,6 +306,14 @@ struct SwiftUIRenderSmokeTests {
                 nodeId: "node-mobile",
                 agentId: "main",
                 expiresAtMs: Int64.max))
+            appModel.activeGatewayConnectConfig = try GatewayConnectConfig(
+                url: #require(URL(string: "wss://127.0.0.1:1")),
+                stableID: prompt.gatewayStableID,
+                tls: nil, token: nil, bootstrapToken: nil, password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node", scopes: [], caps: [], commands: [], permissions: [:],
+                    clientId: "ios", clientMode: "node", clientDisplayName: "Approval render fixture",
+                    includeDeviceIdentity: false, allowStoredDeviceAuth: false))
             appModel._test_presentExecApprovalPrompt(prompt)
 
             let root = Color.clear
