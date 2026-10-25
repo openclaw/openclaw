@@ -39,7 +39,7 @@ const canvasDocId = "cv_resource_retention";
 const canvasDocumentUrl = `/__openclaw__/canvas/documents/${canvasDocId}/index.html`;
 const canvasRunId = "resource-retention-run";
 const mcpResourceCount = 3;
-const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle<HTMLElement | SVGElement>>>();
+const retainedMcpFrames = new WeakMap<Page, Array<ElementHandle<Node>>>();
 
 export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
