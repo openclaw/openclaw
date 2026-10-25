@@ -4,6 +4,7 @@
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
+// --stress-tool-search adds a verified catalog search before each --stress-tools execution.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -95,6 +96,7 @@ const { values } = parseArgs({
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
+    "stress-tool-search": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
@@ -332,6 +334,9 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+if (values["stress-tool-search"] && !values["stress-tools"]) {
+  throw new Error("--stress-tool-search requires --stress-tools");
+}
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
   chatActiveHoldMs &&
@@ -2196,6 +2201,9 @@ const mock = createServer((req, res) => {
                     awaitResults: true,
                     code:
                       storeCode +
+                      (values["stress-tool-search"]
+                        ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
                       `json(await read({ path: ${JSON.stringify(values["worktree-tool-churn"] && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
                       `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(toolWorktree)} });\n` +
                       `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(toolWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
@@ -6458,6 +6466,7 @@ try {
         }
       : {}),
     stressSessionStore: values["stress-session-store"],
+    stressToolSearch: values["stress-tool-search"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
     cronOperatorTurn: values["cron-operator-turn"],
