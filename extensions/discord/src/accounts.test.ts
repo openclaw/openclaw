@@ -32,6 +32,10 @@ function config(discord: DiscordConfig = {}, owners?: string[]): OpenClawConfig 
 }
 const secret = (id: string) => ({ source: "env" as const, provider: "default", id });
 const enabledIds = (cfg: OpenClawConfig) => listEnabledDiscordAccounts(cfg).map((a) => a.accountId);
+const inspect = (cfg: OpenClawConfig, ...ids: string[]) =>
+  ids.map((accountId) => inspectDiscordAccount({ cfg, accountId }));
+const tokenForWork = (token: NonNullable<DiscordConfig["accounts"]>[string]["token"]) =>
+  config({ accounts: { work: { token } } });
 
 describe("Discord accounts", () => {
   it("createDiscordActionGate uses configured defaultAccount when accountId is omitted", () => {
@@ -92,24 +96,16 @@ describe("Discord accounts", () => {
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
     expect(isDiscordAccountEnabledForRuntime(inactiveAccount, cfg)).toBe(false);
     expect(resolveDiscordAccountDisabledReason(inactiveAccount, cfg)).toBe("disabled");
-    expect(inspectDiscordAccount({ cfg, accountId: "active" })).toMatchObject({
-      enabled: true,
-      configured: true,
-    });
-    expect(inspectDiscordAccount({ cfg, accountId: "disabled" })).toMatchObject({
-      enabled: false,
-      configured: true,
-      stateReason: "disabled",
-    });
+    expect(inspect(cfg, "active", "disabled")).toMatchObject([
+      { enabled: true, configured: true },
+      { enabled: false, configured: true, stateReason: "disabled" },
+    ]);
     expect(enabledIds(cfg)).toEqual(["active"]);
   });
 
   it("inspects config-token precedence over a matching environment token", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
-    const cfg = config({ accounts: { work: { token: "same-token" } } });
-    expect(
-      ["default", "work"].map((accountId) => inspectDiscordAccount({ cfg, accountId })),
-    ).toMatchObject([
+    expect(inspect(tokenForWork("same-token"), "default", "work")).toMatchObject([
       {
         enabled: false,
         configured: true,
@@ -136,11 +132,8 @@ describe("resolveDiscordToken", () => {
   });
 
   it("uses the active runtime snapshot when resolving a matching source config", () => {
-    const source = config({ accounts: { work: { token: secret("DISCORD_WORK_TOKEN") } } });
-    setRuntimeConfigSnapshot(
-      config({ accounts: { work: { token: "Bot runtime-work-token" } } }),
-      source,
-    );
+    const source = tokenForWork(secret("DISCORD_WORK_TOKEN"));
+    setRuntimeConfigSnapshot(tokenForWork("Bot runtime-work-token"), source);
     expect(resolveDiscordToken(source, { accountId: "work" })).toEqual({
       token: "runtime-work-token",
       source: "config",
