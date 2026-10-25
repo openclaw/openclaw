@@ -21,6 +21,14 @@ import {
 const mocks = githubPublicationTestMocks();
 const headCommit = "a".repeat(40);
 const url = "https://github.com/example/repository/pull/7";
+const repository = (id: number, full_name: string, type: string, push: boolean) => ({
+  id,
+  full_name,
+  private: false,
+  archived: false,
+  owner: { type },
+  permissions: { push },
+});
 
 async function fixture(previousPublication = false, prepared = true) {
   const f = previousPublication
@@ -33,22 +41,8 @@ async function fixture(previousPublication = false, prepared = true) {
     identity: { accountId: 101, login: "contributor" },
     authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
   });
-  const base = {
-    id: 10,
-    full_name: "example/repository",
-    private: false,
-    archived: false,
-    owner: { type: "Organization" },
-    permissions: { push: true },
-  };
-  const head = {
-    id: 20,
-    full_name: "contributor/repository",
-    private: false,
-    archived: false,
-    owner: { type: "User" },
-    permissions: { push: false },
-  };
+  const base = repository(10, "example/repository", "Organization", true);
+  const head = repository(20, "contributor/repository", "User", false);
   const scope = { agentId: "main", sessionKey: SESSION_KEY };
   const entry = loadSessionEntryReadOnly(scope)!;
   const binding = {
@@ -142,9 +136,12 @@ async function fixture(previousPublication = false, prepared = true) {
     }
     return commandResult("{}");
   });
+  const invoke = createPublicationActionInvoker(f);
   return {
     ...f,
-    invoke: createPublicationActionInvoker(f),
+    invoke,
+    act: (action: string, input: Record<string, unknown> = {}) =>
+      invoke("guest", { action, expectedHeadCommit: headCommit, ...input }),
     state,
     base,
     head,
@@ -191,22 +188,15 @@ describe("actions on the imported original PR", () => {
   it("edits, requests the fixed review and marks ready without pushing source", async () => {
     const f = await fixture();
     const checkpoints = checkpoint.mock.calls.length;
-    await f.invoke("guest", {
-      action: "edit",
-      expectedHeadCommit: headCommit,
+    await f.act("edit", {
       expectedTitle: "Original title",
       title: "Updated title",
     });
-    const review = await f.invoke("guest", {
-      action: "request_review",
-      expectedHeadCommit: headCommit,
-    });
+    const review = await f.act("request_review");
     expect(review.details).toMatchObject({
       reviewRequest: { status: "posted", url: `${url}#issuecomment-123` },
     });
-    expect(
-      (await f.invoke("guest", { action: "ready", expectedHeadCommit: headCommit })).details,
-    ).toMatchObject({ state: "open" });
+    expect((await f.act("ready")).details).toMatchObject({ state: "open" });
     expect(f.writes).toEqual([
       { endpoint: "repos/example/repository/pulls/7", input: { title: "Updated title" } },
       {
@@ -229,8 +219,7 @@ describe("actions on the imported original PR", () => {
     expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
       headCommit: newerHead,
     });
-    await f.invoke("guest", {
-      action: "edit",
+    await f.act("edit", {
       expectedHeadCommit: newerHead,
       expectedTitle: "Original title",
       title: "Newer head metadata",
@@ -254,9 +243,7 @@ describe("actions on the imported original PR", () => {
         field === "title"
           ? { expectedTitle: "Original title", title: "Requested title" }
           : { expectedBody: "Original contributor description", body: "Requested body" };
-      await expect(
-        f.invoke("guest", { action: "edit", expectedHeadCommit: headCommit, ...changes }),
-      ).rejects.toThrow("metadata changed");
+      await expect(f.act("edit", changes)).rejects.toThrow("metadata changed");
       expect(f.state[field]).toBe("New human edit");
       expect(f.writes).toEqual([]);
     },
@@ -281,7 +268,7 @@ describe("actions on the imported original PR", () => {
         ),
       ).rejects.toThrow(/scope|permission/iu);
     }
-    await f.invoke("guest", { action: "ready", expectedHeadCommit: headCommit });
+    await f.act("ready");
     const merged = await f.invoke("admin", {
       action: "merge",
       mergeMethod: "squash",
@@ -299,57 +286,45 @@ describe("actions on the imported original PR", () => {
     });
   });
 
-  it.each([
-    "author",
-    "head repository",
-    "base repository",
-    "branch",
-    "head",
-    "publisher permission",
-    "private access",
-    "session",
-    "requester",
-  ] as const)("denies changed %s before any effect", async (change) => {
-    const f = await fixture();
-    if (change === "author") {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  const changes: Record<string, (f: Fixture) => void> = {
+    author: (f) => {
       f.state.user.id = 999;
-    }
-    if (change === "head repository") {
+    },
+    "head repository": (f) => {
       f.head.id = 99;
-    }
-    if (change === "base repository") {
+    },
+    "base repository": (f) => {
       f.base.id = 99;
-    }
-    if (change === "branch") {
+    },
+    branch: (f) => {
       f.state.head.ref = "other";
-    }
-    if (change === "head") {
+    },
+    head: (f) => {
       f.state.head.sha = "f".repeat(40);
-    }
-    if (change === "publisher permission") {
+    },
+    "publisher permission": (f) => {
       f.state.maintainer_can_modify = false;
-    }
-    if (change === "private access") {
+    },
+    "private access": (f) => {
       f.base.private = true;
       f.setPermission("none");
-    }
-    if (change === "session" || change === "requester") {
+    },
+    session: (f) =>
       f.onRead(async () => {
-        if (change === "requester") {
-          await f.revoke();
-        } else {
-          await upsertSessionEntryCore(f.scope, {
-            worktree: {
-              ...loadSessionEntryReadOnly(f.scope)!.worktree!,
-              githubPullRequest: { ...f.binding, number: 8 },
-            },
-          });
-        }
-      });
-    }
-    await expect(
-      f.invoke("guest", { action: "request_review", expectedHeadCommit: headCommit }),
-    ).rejects.toThrow();
+        await upsertSessionEntryCore(f.scope, {
+          worktree: {
+            ...loadSessionEntryReadOnly(f.scope)!.worktree!,
+            githubPullRequest: { ...f.binding, number: 8 },
+          },
+        });
+      }),
+    requester: (f) => f.onRead(() => f.revoke()),
+  };
+  it.each(Object.entries(changes))("denies changed %s before any effect", async (_name, change) => {
+    const f = await fixture();
+    change(f);
+    await expect(f.act("request_review")).rejects.toThrow();
     expect(f.writes).toEqual([]);
   });
 

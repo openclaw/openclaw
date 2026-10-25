@@ -51,6 +51,10 @@ const user = (content: unknown, fields = {}) => ({ role: "user", content, ...fie
 const assistant = (content: unknown) => ({ role: "assistant", content });
 const repeatedReplies = (count: number, content: string) =>
   Array.from({ length: count }, () => assistant(content));
+const activeEvents = () =>
+  vi.importActual<typeof import("../config/sessions/session-accessor.sqlite-active-events.js")>(
+    "../config/sessions/session-accessor.sqlite-active-events.js",
+  );
 async function writeSqliteMessages(
   sessionId: string,
   messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
@@ -116,8 +120,9 @@ describe("session transcript title hydration", () => {
     });
     const database = fixture.database();
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: database.path });
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
-    try {
+    {
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
       await expect(
         runSessionColdStorageMaintenance({
           config: {
@@ -129,8 +134,6 @@ describe("session transcript title hydration", () => {
           },
         }),
       ).resolves.toMatchObject({ archivedTranscripts: 1 });
-    } finally {
-      clock.mockRestore();
     }
     const archive = readSessionColdTranscript(database.db, cold.sessionId);
     expect(archive).toBeDefined();
@@ -169,11 +172,11 @@ describe("session transcript title hydration", () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
       event("old", null, user("hidden old prompt")),
-      event("kept-routed", "old", {
-        role: "user",
-        content: "kept routed prompt",
-        provenance: { kind: "inter_session" },
-      }),
+      event(
+        "kept-routed",
+        "old",
+        user("kept routed prompt", { provenance: { kind: "inter_session" } }),
+      ),
       event("kept-user", "kept-routed", user("kept prompt")),
       event("kept-assistant", "kept-user", assistant("kept answer")),
     ]);
@@ -225,12 +228,10 @@ describe("session transcript title hydration", () => {
     const scope = await writeSqliteMessages("reader-title-concurrent-append", [
       user("Original question"),
       user("Later question"),
-      ...Array.from({ length: 18 }, () => assistant("Older reply")),
+      ...repeatedReplies(18, "Older reply"),
     ]);
     await sessionAccessor.replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const actual = await vi.importActual<
-      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
-    >("../config/sessions/session-accessor.sqlite-active-events.js");
+    const actual = await activeEvents();
     const pageReader = vi.mocked(sessionAccessor.readSessionTranscriptMessageEventPage);
     pageReader.mockImplementationOnce((readScope, options) => {
       expect(
@@ -274,7 +275,7 @@ describe("session transcript title hydration", () => {
     const sessionId = "reader-title-oversized-assistant-false";
     const scope = await writeSqliteMessages(sessionId, [
       user("Original question"),
-      ...Array.from({ length: 25 }, () => assistant("Earlier reply")),
+      ...repeatedReplies(25, "Earlier reply"),
     ]);
     expect(readTitles(scope).firstUserMessage).toBe("Original question");
     await writeSqliteMessages(sessionId, [assistant("x".repeat(70 * 1024))]);
@@ -295,11 +296,11 @@ describe("session transcript Markdown title previews", () => {
     const hiddenMessages = [
       { role: "toolResult", content: "tool output" },
       { role: "system", content: "system event" },
-      { role: "assistant", content: [{ type: "thinking", thinking: "private thought" }] },
+      assistant([{ type: "thinking", thinking: "private thought" }]),
       assistant("NO_REPLY"),
       { role: "assistant", content: "ANNOUNCE_SKIP", display: false },
       { role: "assistant", content: "REPLY_SKIP", display: false },
-      { role: "assistant", content: [{ type: "text", text: "" }] },
+      assistant([{ type: "text", text: "" }]),
       assistant("```ts\nconst hidden = true;\n```"),
     ];
     const olderText = "Earlier **reply**";
@@ -311,24 +312,12 @@ describe("session transcript Markdown title previews", () => {
     const olderSeq = prefix.length + 1;
     const scope = await writeSqliteMessages("reader-title-short-circuit-true", [
       ...prefix,
-      { role: "assistant", content: [{ type: "text", text: olderText }] },
-      {
-        role: "assistant",
-        content: "# Latest\n\nRead the [guide](https://example.com).",
-        display: true,
-      },
+      assistant([{ type: "text", text: olderText }]),
+      { ...assistant("# Latest\n\nRead the [guide](https://example.com)."), display: true },
       ...Array.from({ length: 3 }, () => hiddenMessages).flat(),
     ]);
-    const actual = await vi.importActual<
-      typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
-    >("../config/sessions/session-accessor.sqlite-active-events.js");
+    const actual = await activeEvents();
     const readOlderText = vi.fn(() => olderText);
-    const watchedText = {
-      type: "text",
-      get text() {
-        return readOlderText();
-      },
-    };
     let observedRows = 0;
     const observeOlderContent = (
       entries: Pick<SessionTranscriptMessageEvent, "event" | "seq">[],
@@ -340,11 +329,15 @@ describe("session transcript Markdown title previews", () => {
         observedRows += 1;
         entry.event = {
           ...asOptionalRecord(entry.event),
-          message: {
-            role: "assistant",
-            // Nested text survives transcript metadata normalization; only projection reads it.
-            content: [watchedText],
-          },
+          message: assistant([
+            {
+              type: "text",
+              // Nested text survives normalization; only projection reads it.
+              get text() {
+                return readOlderText();
+              },
+            },
+          ]),
         };
       }
     };
