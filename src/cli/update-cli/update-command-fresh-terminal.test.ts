@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as packageJson from "../../infra/package-json.js";
 import {
   openPackageActivationJournal,
@@ -159,11 +160,11 @@ describe("fresh update terminal reporting", () => {
         fs.writeFileSync(file, "existing operator artifact\n");
       }
       const readState = () =>
-        fs
-          .readdirSync(stateDir, { recursive: true })
-          .toSorted((left, right) => String(left).localeCompare(String(right)))
+        listDirectoryTreeStrictSync(stateDir)
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted((left, right) => left.localeCompare(right))
           .map((relative) => {
-            const file = path.join(stateDir, String(relative));
+            const file = path.join(stateDir, relative);
             return [relative, fs.statSync(file).isFile() ? fs.readFileSync(file) : null];
           });
       const anchor = resolvePackageActivationAnchor(fixture.root);
