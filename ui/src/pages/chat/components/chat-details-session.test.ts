@@ -36,7 +36,7 @@ const details = (overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps =>
   selectedSession: session(),
   ...overrides,
 });
-const query = <E extends Element = HTMLElement>(root: ParentNode, selector: string) =>
+const query = <E extends Element = HTMLElement>(root: ParentNode, selector: string): E | null =>
   root.querySelector<E>(selector);
 const domText = (root: ParentNode, selector: string) => query(root, selector)?.textContent;
 const detailsGroup = (root: ParentNode, name: string) =>

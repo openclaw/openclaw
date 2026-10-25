@@ -116,31 +116,28 @@ describe("loadWebMedia", () => {
     ["/__openclaw__/canvas/documents/../collection.media/tiny.png", "path-not-allowed"],
     ["media://outbound/tiny.png", "path-not-allowed"],
     ["media://inbound/nested%2Ftiny.png", "invalid-path"],
-  ] as const)(
-    "rejects unsafe path %s (%s)",
-    async (url, code, beforeFs = false, windows = false) => {
-      const platform = windows
-        ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
-        : undefined;
-      const realpath = vi.spyOn(fs, "realpath");
-      try {
-        await expectAccessError(
-          loadLocal(
-            url.startsWith("FILE:")
-              ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
-              : url,
-          ),
-          code,
-        );
-        if (beforeFs) {
-          expect(realpath).not.toHaveBeenCalled();
-        }
-      } finally {
-        platform?.mockRestore();
-        realpath.mockRestore();
+  ] as const)("rejects unsafe path %s (%s)", async (url, code, beforeFs, windows) => {
+    const platform = windows
+      ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
+      : undefined;
+    const realpath = vi.spyOn(fs, "realpath");
+    try {
+      await expectAccessError(
+        loadLocal(
+          url.startsWith("FILE:")
+            ? expectDefined(parseReplyDirectives(`MEDIA:${url}`).mediaUrls?.[0], "file URL")
+            : url,
+        ),
+        code,
+      );
+      if (beforeFs) {
+        expect(realpath).not.toHaveBeenCalled();
       }
-    },
-  );
+    } finally {
+      platform?.mockRestore();
+      realpath.mockRestore();
+    }
+  });
 
   it("preserves oriented JPEG bytes and corrects a stale HEIF filename with model limits", async () => {
     const jpeg = await resizeToJpeg({

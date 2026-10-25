@@ -26,7 +26,7 @@ type RawContent = Parameters<typeof MarkdownContent>[0];
 let messageView: ReturnType<typeof mountSolid<PresentedMessage>> | undefined;
 let rawView: ReturnType<typeof mountSolid<RawContent>> | undefined;
 let messageProps: PresentedMessage;
-const find = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container) =>
+const find = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container): T =>
   root.querySelector<T>(selector)!;
 const control = (name: string, root: ParentNode = container) =>
   find<HTMLButtonElement>(`.code-block-${name}`, root);

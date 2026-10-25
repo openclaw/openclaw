@@ -19,7 +19,7 @@ const container = document.createElement("div");
 const query = <T extends HTMLElement = HTMLElement>(
   selector: string,
   root: ParentNode = container,
-) => root.querySelector<T>(selector)!;
+): T => root.querySelector<T>(selector)!;
 const rect = (element: Element) => element.getBoundingClientRect();
 const styles = baseStyles + componentsStyles + layoutStyles + detailsStyles + desktopDetailsStyles;
 const visible = (element: HTMLElement) =>

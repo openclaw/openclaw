@@ -92,7 +92,7 @@ const part = (root: HTMLElement, name: string) =>
   root.querySelector<HTMLElement>(`.chat-pane__${name}`);
 const item = (root: HTMLElement, value: string) =>
   root.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
-const query = <T extends Element = HTMLElement>(root: HTMLElement, selector: string) =>
+const query = <T extends Element = HTMLElement>(root: HTMLElement, selector: string): T | null =>
   root.querySelector<T>(selector);
 const memberRow = (root: HTMLElement, id: string) => query(root, `[data-value="member:${id}"]`);
 const alert = (root: HTMLElement) => query(root, '[role="alert"]');
