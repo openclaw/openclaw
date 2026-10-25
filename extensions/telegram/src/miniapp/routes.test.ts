@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { connect, Socket } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -28,13 +28,14 @@ const issueDeviceBootstrapToken = vi.hoisted(() =>
     }),
   ),
 );
-const resolveTelegramMiniAppUrls = vi.hoisted(() =>
-  vi.fn(async () => ({
+const { publishedUrls, resolveTelegramMiniAppUrls } = vi.hoisted(() => {
+  const urls = {
     pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
     controlUiUrl: "https://host.tailnet.ts.net/openclaw",
     gatewayUrl: "wss://host.tailnet.ts.net",
-  })),
-);
+  };
+  return { publishedUrls: urls, resolveTelegramMiniAppUrls: vi.fn(async () => urls) };
+});
 
 vi.mock("openclaw/plugin-sdk/device-bootstrap", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/device-bootstrap")>()),
@@ -87,27 +88,22 @@ class MockResponse extends EventEmitter {
   }
 }
 
-function createRoute(
-  cfg: OpenClawConfig,
-  currentConfig?: () => OpenClawConfig,
-): OpenClawPluginHttpRouteParams {
-  let route: OpenClawPluginHttpRouteParams | null = null;
+function createRoute(cfg = config(), currentConfig = () => cfg): OpenClawPluginHttpRouteParams {
+  const routes: OpenClawPluginHttpRouteParams[] = [];
   const api = createTestPluginApi({
     config: cfg,
-    registerHttpRoute(params) {
-      route = params;
-    },
+    registerHttpRoute: (route) => routes.push(route),
   });
   api.runtime.config = {
-    current: currentConfig ?? (() => cfg),
+    current: currentConfig,
     mutateConfigFile: vi.fn(),
     replaceConfigFile: vi.fn(),
   };
   registerTelegramMiniAppRoutes(api, launchTickets);
-  if (!route) {
+  if (!routes[0]) {
     throw new Error("expected miniapp route registration");
   }
-  return route;
+  return routes[0];
 }
 
 async function callRouteRequest(route: OpenClawPluginHttpRouteParams, req: IncomingMessage) {
@@ -123,11 +119,7 @@ function callAuth(
   contentType = "application/json",
 ) {
   const req = createMockIncomingRequest([typeof body === "string" ? body : JSON.stringify(body)]);
-  req.method = "POST";
-  req.url = "/__openclaw_tg_miniapp/auth";
-  req.headers = { "content-type": contentType };
-  Object.defineProperty(req.socket, "remoteAddress", { value: ip });
-  return callRouteRequest(route, req);
+  return callRouteRequest(route, prepareAuthRequest(req, ip, contentType));
 }
 
 function registerMiniApp(cfg: OpenClawConfig) {
@@ -163,10 +155,13 @@ function registerMiniApp(cfg: OpenClawConfig) {
 }
 
 function createPendingAuthRequest(ip: string): IncomingMessage {
-  const req = new IncomingMessage(new Socket());
+  return prepareAuthRequest(new IncomingMessage(new Socket()), ip);
+}
+
+function prepareAuthRequest(req: IncomingMessage, ip: string, contentType = "application/json") {
   req.method = "POST";
   req.url = "/__openclaw_tg_miniapp/auth";
-  req.headers = { "content-type": "application/json" };
+  req.headers = { "content-type": contentType };
   Object.defineProperty(req.socket, "remoteAddress", { value: ip });
   return req;
 }
@@ -179,20 +174,9 @@ function expectBodyReadListenersCleaned(req: IncomingMessage) {
 
 async function readSocketResponse(socket: Socket): Promise<string> {
   const chunks: Buffer[] = [];
-  return await new Promise((resolve, reject) => {
-    let done = false;
-    const finish = () => {
-      if (done) {
-        return;
-      }
-      done = true;
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    };
-    socket.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    socket.on("end", finish);
-    socket.on("close", finish);
-    socket.on("error", reject);
-  });
+  socket.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+  await once(socket, "close");
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function expectClosedHttpRequest(
@@ -205,7 +189,7 @@ async function expectClosedHttpRequest(
   if (advanceMs) {
     vi.useFakeTimers();
   }
-  const route = createRoute(config());
+  const route = createRoute();
   const started = Promise.withResolvers<void>();
   const handled: Promise<unknown>[] = [];
   let request: IncomingMessage | undefined;
@@ -218,9 +202,7 @@ async function expectClosedHttpRequest(
   try {
     const port = await listenOnLoopback(server);
     socket = connect({ host: "127.0.0.1", port });
-    await new Promise<void>((resolve) => {
-      socket?.once("connect", resolve);
-    });
+    await once(socket, "connect");
     const responsePromise = readSocketResponse(socket);
     socket.write(
       [
@@ -243,10 +225,10 @@ async function expectClosedHttpRequest(
     expect(response.split("\r\n\r\n", 2)[1] ?? "").toBe(expectedBody);
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
     await Promise.all(handled);
-    expect(request?.socket.destroyed).toBe(true);
     if (!request) {
       throw new Error("expected auth request");
     }
+    expect(request.socket.destroyed).toBe(true);
     expectBodyReadListenersCleaned(request);
   } finally {
     if (advanceMs) {
@@ -259,14 +241,9 @@ async function expectClosedHttpRequest(
   }
 }
 
-function config(allowFrom: string[] = ["123456"]): OpenClawConfig {
+function config(allowFrom: string[] = ["123456"], botToken = BOT_TOKEN): OpenClawConfig {
   return {
-    channels: {
-      telegram: {
-        botToken: BOT_TOKEN,
-        allowFrom,
-      },
-    },
+    channels: { telegram: { botToken, allowFrom } },
     gateway: { tailscale: { mode: "funnel" } },
   };
 }
@@ -284,14 +261,13 @@ function signedInitData(userId: string, nonce: string): string {
   return params.toString();
 }
 
-function authBody(params: { userId?: string; nonce: string; accountId?: string }): string {
-  const userId = params.userId ?? "123456";
-  const accountId = params.accountId ?? "default";
-  return JSON.stringify({
-    initData: signedInitData(userId, params.nonce),
+function authBody(nonce: string, accountId?: string, launchTicket?: string) {
+  return {
+    initData: signedInitData("123456", nonce),
     accountId,
-    launchTicket: launchTickets.issue({ accountId, userId }),
-  });
+    launchTicket:
+      launchTicket ?? launchTickets.issue({ accountId: accountId ?? "default", userId: "123456" }),
+  };
 }
 
 describe("registerTelegramMiniAppRoutes", () => {
@@ -424,7 +400,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       }
 
       // A previously issued ticket must not bypass the auth route's owner check.
-      const body = authBody({ accountId: "ops", nonce: "group-owner" });
+      const body = authBody("group-owner", "ops");
       const res = await callAuth(createRoute(cfg), body, `203.0.113.${100 + signedNonceSequence}`);
       expect(res.statusCode).toBe(allowed ? 200 : 403);
       expect(issueDeviceBootstrapToken).toHaveBeenCalledTimes(allowed ? 1 : 0);
@@ -451,11 +427,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       resolveTelegramMiniAppUrls.mockImplementationOnce(async () => {
         entered.resolve();
         await resume.promise;
-        return {
-          pageUrl: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/",
-          controlUiUrl: "https://host.tailnet.ts.net/openclaw",
-          gatewayUrl: "wss://host.tailnet.ts.net",
-        };
+        return publishedUrls;
       });
     } else if (stage === "credential response") {
       issueDeviceBootstrapToken.mockImplementationOnce(async () => {
@@ -485,7 +457,7 @@ describe("registerTelegramMiniAppRoutes", () => {
       if (stage === "body") {
         currentConfig = config(["999999"]);
       }
-      req.push(Buffer.from(authBody({ nonce: `revoked-${stage}` })));
+      req.push(Buffer.from(JSON.stringify(authBody(`revoked-${stage}`))));
       req.complete = true;
       req.push(null);
       if (stage !== "body") {
@@ -496,10 +468,7 @@ describe("registerTelegramMiniAppRoutes", () => {
           ]),
         ).toBe("entered");
         if (stage === "bot token") {
-          currentConfig = {
-            ...config(),
-            channels: { telegram: { botToken: "replacement", allowFrom: ["123456"] } },
-          };
+          currentConfig = config(["123456"], "replacement");
         } else if (stage !== "unchanged") {
           currentConfig = config(["999999"]);
         }
@@ -526,10 +495,8 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("rejects replayed init-data without minting again", async () => {
-    const route = createRoute(config());
-    const initData = signedInitData("123456", "replay");
-    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
-    const body = { initData, launchTicket };
+    const route = createRoute();
+    const body = authBody("replay");
     await callAuth(route, body, "203.0.113.20");
     const replay = await callAuth(route, body, "203.0.113.20");
 
@@ -539,11 +506,8 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("reserves validated init-data before minting", async () => {
-    const route = createRoute(config());
-    const initData = signedInitData("123456", "concurrent");
-    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
-
-    const body = JSON.stringify({ initData, launchTicket });
+    const route = createRoute();
+    const body = authBody("concurrent");
     const responses = await Promise.all([
       callAuth(route, body, "203.0.113.21"),
       callAuth(route, body, "203.0.113.22"),
@@ -555,32 +519,21 @@ describe("registerTelegramMiniAppRoutes", () => {
 
   it("rejects non-owner Mini App auth requests", async () => {
     const route = createRoute(config(["999999"]));
-    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
-    const res = await callAuth(
-      route,
-      {
-        initData: signedInitData("123456", "non-owner"),
-        launchTicket,
-      },
-      "203.0.113.30",
-    );
+    const body = authBody("non-owner");
+    const res = await callAuth(route, body, "203.0.113.30");
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toBe("Restricted to the bot owner.");
     expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(
-      launchTickets.consume({ ticket: launchTicket, accountId: "default", userId: "123456" }),
+      launchTickets.consume({ ticket: body.launchTicket, accountId: "default", userId: "123456" }),
     ).toBe(true);
   });
 
   it("rejects owner init-data without an issued launch ticket", async () => {
-    const route = createRoute(config());
     const res = await callAuth(
-      route,
-      {
-        initData: signedInitData("123456", "missing-ticket"),
-        launchTicket: "not-issued",
-      },
+      createRoute(),
+      authBody("missing-ticket", "default", "not-issued"),
       "203.0.113.31",
     );
 
@@ -591,10 +544,8 @@ describe("registerTelegramMiniAppRoutes", () => {
 
   it("does not consume a launch ticket when URL resolution fails", async () => {
     resolveTelegramMiniAppUrls.mockRejectedValueOnce(new Error("not published"));
-    const route = createRoute(config());
-    const initData = signedInitData("123456", "url-retry");
-    const launchTicket = launchTickets.issue({ accountId: "default", userId: "123456" });
-    const body = JSON.stringify({ initData, launchTicket });
+    const route = createRoute();
+    const body = authBody("url-retry");
     const unavailable = await callAuth(route, body, "203.0.113.32");
     const retry = await callAuth(route, body, "203.0.113.32");
 
@@ -604,10 +555,10 @@ describe("registerTelegramMiniAppRoutes", () => {
   });
 
   it("rate-limits repeated auth requests by IP", async () => {
-    const route = createRoute(config());
+    const route = createRoute();
     let last: MockResponse | null = null;
     for (let i = 0; i < 11; i += 1) {
-      last = await callAuth(route, authBody({ nonce: `rate-${i}` }), "203.0.113.40");
+      last = await callAuth(route, authBody(`rate-${i}`), "203.0.113.40");
     }
 
     expect(last?.statusCode).toBe(429);
@@ -631,7 +582,7 @@ describe("registerTelegramMiniAppRoutes", () => {
   );
 
   it("settles an early client close without leaking request-body listeners", async () => {
-    const route = createRoute(config());
+    const route = createRoute();
     const req = createPendingAuthRequest("203.0.113.51");
     const responsePromise = callRouteRequest(route, req);
 
