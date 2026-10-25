@@ -13,6 +13,7 @@ import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.
 import { environmentsHandlers } from "./environments.js";
 import { adoptSuggestedWorkerProfile } from "./environments.suggested-profile.js";
 import { workerService } from "./environments.test-support.js";
+import { expectRpcResult } from "./rpc-response.test-support.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
@@ -172,14 +173,10 @@ it.each(profileScenarios)(
       contextOverrides: { getRuntimeConfig: () => storedConfig },
     });
     await environmentsHandlers["environments.list"]!(options);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        environments: [],
-        ...(available ? { suggestedProfile: { id: "cloud", providerId: "crabbox" } } : {}),
-      },
-      undefined,
-    );
+    expectRpcResult(respond, {
+      environments: [],
+      ...(available ? { suggestedProfile: { id: "cloud", providerId: "crabbox" } } : {}),
+    });
     expectDestination(storedConfig, false);
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
     if (profiles && "custom" in profiles) {
@@ -227,11 +224,9 @@ it.each([false, true])("adopts only a missing cloud profile (existing=%s)", asyn
       value: { profileId: "cloud" },
     });
   }
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    { profile: { id: "cloud", providerId: exists ? "static-ssh" : "crabbox" } },
-    undefined,
-  );
+  expectRpcResult(respond, {
+    profile: { id: "cloud", providerId: exists ? "static-ssh" : "crabbox" },
+  });
 });
 
 it("keeps a saved profile unavailable until the restart applies it", async () => {

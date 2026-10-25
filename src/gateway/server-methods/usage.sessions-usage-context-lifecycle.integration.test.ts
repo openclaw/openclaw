@@ -11,6 +11,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
+import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import * as sessionCostUsage from "../../infra/session-cost-usage.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -105,12 +106,8 @@ it.for([
       };
       const timestamp = Date.now();
       const originalReport = {
-        source: "run" as const,
-        generatedAt: timestamp,
+        ...promptReport(timestamp, 100, 0),
         systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
       };
       const changedReport = { ...originalReport, generatedAt: timestamp + 1 };
       const siblingReport = { ...originalReport, generatedAt: timestamp + 2 };

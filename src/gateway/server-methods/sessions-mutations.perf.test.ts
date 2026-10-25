@@ -17,6 +17,7 @@ import {
   historyLane,
   rotateDatabaseWorkers,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import type { CronJob } from "../../cron/types.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -104,14 +105,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       const targetKey = "agent:main:single-patch-target";
       const snapshots = {
         skillsSnapshot: { prompt: "synthetic skill instructions ".repeat(1_000), skills: [] },
-        systemPromptReport: {
-          source: "run" as const,
-          generatedAt: 1,
-          systemPrompt: { chars: 30_000, projectContextChars: 0, nonProjectContextChars: 30_000 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 30_000, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
+        systemPromptReport: promptReport(1, 30_000, 30_000),
       };
       await seedSession(targetKey, "session-single-patch-target", { updatedAt: 1, ...snapshots });
       await upsertAcpSessionMeta({
