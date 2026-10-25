@@ -21,12 +21,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { createDoctorPrompterFixture } from "./doctor-health-context.test-support.js";
-import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
+import { runAuthProfileMigration } from "./doctor-auth-health.js";
 import {
   createDoctorHealthFlowContext,
-  resolveDoctorHealthContributions,
-} from "./doctor-health-contributions.test-support.js";
+  createDoctorPrompterFixture,
+} from "./doctor-health-context.test-support.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 
 // mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
@@ -130,16 +130,6 @@ function loadMigratedStore(state: OpenClawTestState) {
   );
 }
 
-function authProfileMigrationContribution() {
-  const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:auth-profile-migration",
-  );
-  if (!contribution) {
-    throw new Error("doctor:auth-profile-migration contribution is not registered");
-  }
-  return contribution;
-}
-
 afterEach(async () => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -178,7 +168,7 @@ describe("interactive Doctor auth migration", () => {
       const { prompter } = ctx;
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
-      await authProfileMigrationContribution().run(ctx);
+      await runAuthProfileMigration(ctx);
       showDoctorHealthSummary(ctx);
       const summary = vi
         .mocked(ctx.runtime.log)
@@ -224,7 +214,7 @@ describe("interactive Doctor auth migration", () => {
     await writeLegacyRotationState(state);
     const ctx = context(state, true);
 
-    await authProfileMigrationContribution().run(ctx);
+    await runAuthProfileMigration(ctx);
 
     expect(loadMigratedStore(state)).toMatchObject({
       profiles: {

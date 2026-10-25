@@ -151,14 +151,38 @@ describe("Doctor Windows database path repair", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([String.raw`C:\synthetic\state`, String.raw`\\server\share\state`])(
+  it.each([
+    [String.raw`C:\synthetic\state`, false],
+    [String.raw`\\server\share\state`, false],
+    [String.raw`C:\synthetic\state`, true],
+  ] as const)(
     "consolidates namespace aliases at %s before the next update baseline",
-    async (stateDir) => {
+    async (stateDir, canonicalNewer) => {
       const state = seedDatabase(stateDir);
+      if (canonicalNewer) {
+        state.update(relative, { last_seen_at: 500, size_bytes: null });
+      }
+      const retained = databaseRow(
+        String.raw`agents\main\archive\openclaw-agent.sqlite`,
+        18,
+        400,
+        40,
+      );
+      state.insert([retained]);
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-      expect(state.readRows()).toHaveLength(2);
-      expect(state.readRows()).toContainEqual(databaseRow(relative));
-      expect(state.readRows()).toContainEqual(databaseRow(state.external, 20, 300, 30));
+      const repaired = state.readRows();
+      expect(repaired).toHaveLength(3);
+      expect(repaired).toEqual(
+        expect.arrayContaining([
+          canonicalNewer ? databaseRow(relative, 18, 500, null) : databaseRow(relative),
+          databaseRow(state.external, 20, 300, 30),
+          retained,
+        ]),
+      );
+      fixture.note.mockClear();
+      await initialDoctorHealthContribution("doctor:state-integrity").run(context());
+      expect(state.readRows()).toEqual(repaired);
+      expect(fixture.note).not.toHaveBeenCalled();
       const baseline = state.versions();
       state.startUpdate();
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
@@ -166,36 +190,6 @@ describe("Doctor Windows database path repair", () => {
       expect(state.matches(baseline, true)).toBe(true);
     },
   );
-
-  it("keeps newer canonical facts when the namespace alias is older", async () => {
-    const state = seedDatabase();
-    state.update(relative, { last_seen_at: 500, size_bytes: null });
-    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-    expect(state.readRows().find((row) => row.path === relative)).toEqual(
-      databaseRow(relative, 18, 500, null),
-    );
-    expect(state.readRows()).toHaveLength(2);
-  });
-
-  it("preserves distinct internal databases for one agent and does nothing on a standalone rerun", async () => {
-    const state = seedDatabase();
-    const retained = databaseRow(
-      String.raw`agents\main\archive\openclaw-agent.sqlite`,
-      18,
-      400,
-      40,
-    );
-    state.insert([retained]);
-    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-    const repaired = state.readRows();
-    expect(repaired).toHaveLength(3);
-    expect(repaired).toContainEqual(retained);
-    fixture.note.mockClear();
-
-    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-    expect(state.readRows()).toEqual(repaired);
-    expect(fixture.note).not.toHaveBeenCalled();
-  });
 
   it("rechecks the update ledger after admission and records a warning without changing the baseline", async () => {
     const state = seedDatabase();
@@ -211,27 +205,23 @@ describe("Doctor Windows database path repair", () => {
     expect(state.matches(baseline)).toBe(true);
   });
 
-  it.each([{ OPENCLAW_UPDATE_IN_PROGRESS: "1" }])(
-    "leaves candidate and update Doctor inventory unchanged for %j",
-    async (env) => {
+  it.each([true, false])(
+    "leaves inventory unchanged with update Doctor = %s",
+    async (updateDoctor) => {
       const state = seedDatabase();
       const before = state.readRows();
-      const ctx = context(env);
+      const ctx = context(updateDoctor ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {}, updateDoctor);
       await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
       expect(state.readRows()).toEqual(before);
-      expect(ctx.updateWarnings).toEqual([
-        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
-      ]);
+      if (updateDoctor) {
+        expect(ctx.updateWarnings).toEqual([
+          "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
+        ]);
+      } else {
+        expect(fixture.note).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("leaves ordinary Doctor inspection read-only", async () => {
-    const state = seedDatabase();
-    const before = state.readRows();
-    await initialDoctorHealthContribution("doctor:state-integrity").run(context({}, false));
-    expect(state.readRows()).toEqual(before);
-    expect(fixture.note).not.toHaveBeenCalled();
-  });
 
   it("refuses unrecognized shared-state ownership before removing aliases", async () => {
     const state = seedDatabase();

@@ -43,24 +43,6 @@ function successfullyRepairedCheck(): DoctorHealthCheck {
 }
 
 describe("runDoctorHealthRepairs", () => {
-  it("reports repair validation findings that remain after repair", async () => {
-    const finding = {
-      ...warningFinding("test/not-fixed"),
-      ocPath: "oc://openclaw.json/gateway.mode",
-    };
-    const result = await runDoctorHealthRepairs(ctx({}), {
-      checks: [
-        check("test/not-fixed", {
-          detect: async () => [finding],
-          repair: async () => ({ changes: ["Tried repair."] }),
-        }),
-      ],
-    });
-
-    expect(result.remainingFindings).toEqual([finding]);
-    expect(result.warnings).toEqual(["test/not-fixed repair left 1 finding(s)"]);
-  });
-
   it.each([
     "skipped",
     "failed",

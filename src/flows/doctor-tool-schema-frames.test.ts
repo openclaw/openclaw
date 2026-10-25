@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createDoctorPluginMetadataSnapshotScope } from "../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,17 +19,10 @@ const realModel = () =>
   vi.importActual<typeof import("../agents/embedded-agent-runner/model.js")>(
     "../agents/embedded-agent-runner/model.js",
   );
-function model(id: string, contextWindow = 32000) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens: 4096,
-  };
-}
+const model = (id: string, contextWindow = 32000) =>
+  modelDefinition(id, { reasoning: false, contextWindow, maxTokens: 4096 });
+const prepare = (cfg: OpenClawConfig, env: NodeJS.ProcessEnv) =>
+  prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env });
 
 beforeEach(() => {
   resolveModelAsync.mockReset();
@@ -48,7 +42,7 @@ it.each([false, true])(
       resolveModelAsync.mockImplementation(async (provider: string, id: string) => ({
         model: { ...model(id), provider, api: "google-generative-ai" },
       }));
-      const result = await prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env: state.env });
+      const result = await prepare(cfg, state.env);
       expect(result.findings).toEqual([]);
       expect(result.frames).toEqual([
         expect.objectContaining({
@@ -91,7 +85,7 @@ it("retains the selected alias's runtime metadata instead of normalizing it agai
     );
     const cfg: OpenClawConfig = { agents: { defaults: { model: `${provider}/entry` } } };
     const result = await withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-      prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env: state.env }),
+      prepare(cfg, state.env),
     );
     expect(result.findings).toEqual([]);
     expect(result.frames).toHaveLength(1);
@@ -129,10 +123,9 @@ it.each([
             });
           }
         };
-        const paths: string[] = [];
-        for (const provider of providers) {
-          paths.push(
-            await state.writeText(
+        const paths = await Promise.all(
+          providers.map(async (provider) => {
+            const entry = await state.writeText(
               `plugins/${provider}/index.cjs`,
               `module.exports = { id: ${JSON.stringify(provider)}, register(api) {
               process.emit(${JSON.stringify(event)}, ${JSON.stringify(provider)}, api.config);
@@ -142,19 +135,20 @@ it.each([
                   contextWindow: 64000
                 }) });
             } };`,
-            ),
-          );
-          await state.writeJson(`plugins/${provider}/openclaw.plugin.json`, {
-            id: provider,
-            providers: [provider],
-            configSchema: { type: "object", additionalProperties: false },
-          });
-          stores.modelRegistry.registerProvider(provider, {
-            api: "openai-completions",
-            baseUrl: "https://doctor-fixture.example/v1",
-            models: [model("selected")],
-          });
-        }
+            );
+            await state.writeJson(`plugins/${provider}/openclaw.plugin.json`, {
+              id: provider,
+              providers: [provider],
+              configSchema: { type: "object", additionalProperties: false },
+            });
+            stores.modelRegistry.registerProvider(provider, {
+              api: "openai-completions",
+              baseUrl: "https://doctor-fixture.example/v1",
+              models: [model("selected")],
+            });
+            return entry;
+          }),
+        );
         const cfg = captureRuntimeConfig({
           agents: {
             ownership: "explicit",
@@ -264,7 +258,7 @@ it("records deferred model preparation and continues with a healthy agent", asyn
         },
       },
     };
-    const result = await prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env: state.env });
+    const result = await prepare(cfg, state.env);
     expect(result.findings).toEqual([
       expect.objectContaining({
         severity: "warning",
