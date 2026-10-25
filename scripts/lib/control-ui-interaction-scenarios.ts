@@ -831,6 +831,7 @@ async function exerciseResourceBoard(page: Page): Promise<InteractionEvidence> {
       throw new Error("Board tab switching discarded the counter state");
     }
     const counts = await assertResourceBoardInventory(page);
+    await settleSidebarCapture(page);
     return { mountedFrames: counts.mounted, parkedFrames: counts.parked, retained: true };
   } finally {
     await retained.dispose();
@@ -1185,6 +1186,16 @@ async function prepareSidebarInventory(page: Page, gateway: MockGatewayControls)
   await more.waitFor({ state: "hidden" });
 }
 
+async function settleSidebarCapture(page: Page) {
+  // Cross the snapshot owner's 500 ms debounce and idle turn, including oversized cache refusals.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+      }),
+  );
+}
+
 async function settleSidebarBackgroundWork(page: Page) {
   // The prefetch owner automatically warms New Session; other groups require navigation intent.
   const prefetchAssets = await page.evaluate(async () => {
@@ -1226,13 +1237,7 @@ async function settleSidebarBackgroundWork(page: Page) {
       cause: error,
     });
   }
-  // Cross the snapshot owner's 500 ms debounce and idle turn, including oversized cache refusals.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
-      }),
-  );
+  await settleSidebarCapture(page);
   await page.waitForLoadState("networkidle");
   await frames(page);
 }

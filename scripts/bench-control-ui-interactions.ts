@@ -562,6 +562,11 @@ try {
           const events: unknown[] = [];
           const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
+            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+              // Native default contexts allow service workers, which hide fixture fetches from page.route.
+              cdp = await context.newCDPSession(page);
+              await cdp.send("Network.setBypassServiceWorker", { bypass: true });
+            }
             const fixture = createInteractionFixture(
               slot.build.buildId,
               slot.build.version,
@@ -588,6 +593,9 @@ try {
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await scenario.prepare(page, gateway);
+            if (cdp) {
+              await cdp.send("Network.setBypassServiceWorker", { bypass: false });
+            }
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             const activePet = await page.evaluate(
@@ -597,7 +605,7 @@ try {
               throw new Error("Warm interaction fixture must disable unrelated pet visits");
             }
             await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
-            cdp = await context.newCDPSession(page);
+            cdp ??= await context.newCDPSession(page);
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
