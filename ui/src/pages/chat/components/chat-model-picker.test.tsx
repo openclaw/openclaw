@@ -20,12 +20,8 @@ beforeAll(async () => {
 beforeEach(installModelPickerLayout);
 afterEach(() => vi.restoreAllMocks());
 
-function control<T extends HTMLElement = HTMLButtonElement>(
-  root: ParentNode,
-  name: string,
-  value?: string,
-): T | null {
-  return root.querySelector<T>(modelControlSelector(name, value));
+function control(root: ParentNode, name: string, value?: string): HTMLElement | null {
+  return root.querySelector<HTMLElement>(modelControlSelector(name, value));
 }
 
 function searchFor(input: HTMLInputElement, value: string) {
@@ -162,9 +158,7 @@ it.each([false, true])(
     expect(more.isConnected).toBe(false);
     expect(rest()?.hidden).toBe(false);
     // Keyboard focus lands on the first selectable revealed model, else back on search.
-    expect(document.activeElement).toBe(
-      restDisabled ? control<HTMLElement>(container, "search") : rest(),
-    );
+    expect(document.activeElement).toBe(restDisabled ? control(container, "search") : rest());
 
     group.click();
     flush();
@@ -237,7 +231,7 @@ it("keeps search live while targets load, then ranks model, target, and account 
   });
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
-  const search = control<HTMLInputElement>(container, "search")!;
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
   expect(
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
