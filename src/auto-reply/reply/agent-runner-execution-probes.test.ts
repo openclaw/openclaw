@@ -436,17 +436,15 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const terminalLifecycleEvents = lifecycleEvents("run-non-fallbackable-error");
-    expect(terminalLifecycleEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({
-            phase: "error",
-            error: "Command may have changed state",
-            executionSettled: true,
-            replayInvalid: true,
-          }),
+    expect(terminalLifecycleEvents).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "error",
+          error: "Command may have changed state",
+          executionSettled: true,
+          replayInvalid: true,
         }),
-      ]),
+      }),
     );
     expect(
       terminalLifecycleEvents.some(
@@ -494,12 +492,10 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const events = lifecycleEvents("run-cli-exhausted");
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({ phase: "error", executionSettled: true }),
-        }),
-      ]),
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", executionSettled: true }),
+      }),
     );
     expect(events.some((event) => event.data.phase === "end")).toBe(false);
   });

@@ -90,16 +90,10 @@ async function createStorePath(prefix: string): Promise<string> {
   return path.join(root, "sessions.json");
 }
 
-async function writeStore(
-  storePath: string,
-  store: Record<string, SessionEntry | Record<string, unknown>>,
-): Promise<void> {
+async function writeStore(storePath: string, store: Record<string, SessionEntry>): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
-    const sessionEntry = entry as Partial<SessionEntry>;
-    if (typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()) {
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry as SessionEntry);
-    }
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
   }
 }
 
@@ -166,31 +160,12 @@ async function initStoredSessionState(params: {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expect(value).toMatchObject(expected);
 }
 
-function requireHookCall(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} hook call`);
-  }
-  const [event, context] = call;
-  if (!event || typeof event !== "object") {
-    throw new Error(`expected ${label} hook event`);
-  }
-  if (context !== undefined && (!context || typeof context !== "object")) {
-    throw new Error(`expected ${label} hook context`);
-  }
-  return [event as Record<string, unknown>, context as Record<string, unknown> | undefined];
+function requireHookCall<T extends unknown[]>(mock: { mock: { calls: T[] } }, label: string): T {
+  expect(mock, label).toHaveBeenCalled();
+  return mock.mock.calls[0]!;
 }
 
 function holdRolloverHooks(onRelease?: (name: string) => Promise<void>) {
@@ -224,16 +199,13 @@ describe("session hook context wiring", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     hookRunnerMocks.hasHooks.mockReset();
-    hookRunnerMocks.runSessionStart.mockReset();
-    hookRunnerMocks.runSessionEnd.mockReset();
-    hookRunnerMocks.runBeforeReset.mockReset();
+    hookRunnerMocks.runSessionStart.mockReset().mockResolvedValue(undefined);
+    hookRunnerMocks.runSessionEnd.mockReset().mockResolvedValue(undefined);
+    hookRunnerMocks.runBeforeReset.mockReset().mockResolvedValue(undefined);
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockClear();
     sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     sessionCleanupMocks.resetRegisteredAgentHarnessSessions.mockClear();
     sessionCleanupMocks.retireSessionMcpRuntime.mockClear();
-    hookRunnerMocks.runSessionStart.mockResolvedValue(undefined);
-    hookRunnerMocks.runSessionEnd.mockResolvedValue(undefined);
-    hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
     hookRunnerMocks.hasHooks.mockImplementation(
       (hookName) => hookName === "session_start" || hookName === "session_end",
     );

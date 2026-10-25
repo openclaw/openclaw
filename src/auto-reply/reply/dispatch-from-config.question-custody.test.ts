@@ -56,6 +56,15 @@ import { bindReplySourceToFollowup } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
+
+function requireRunState(options: GetReplyOptions | undefined) {
+  const state = resolveReplyOperationRunState(options);
+  if (!state) {
+    throw new Error("missing dispatch run state");
+  }
+  return state;
+}
+
 describe("question custody", () => {
   beforeEach(() => {
     describe0BeforeEach0();
@@ -85,10 +94,7 @@ describe("question custody", () => {
       dispatcher,
       replyResolver: async (_ctx, opts) => {
         await opts?.onToolResult?.(payload);
-        const runState = resolveReplyOperationRunState(opts);
-        if (!runState) {
-          throw new Error("expected reply operation run state");
-        }
+        const runState = requireRunState(opts);
         runState.replyCompletion = resolveReplyCompletion(
           runState.replyCompletion?.expectation ?? "required",
           "blocked",
@@ -227,10 +233,7 @@ describe("question custody", () => {
         }
       });
       const resolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-        const state = resolveReplyOperationRunState(opts);
-        if (!state) {
-          throw new Error("missing dispatch run state");
-        }
+        const state = requireRunState(opts);
         state.admission =
           outcome === "confirmed"
             ? { status: "accepted", mode: "steer" }
@@ -294,11 +297,7 @@ describe("question custody", () => {
             turnAdoptionLifecycle: { onAdopted: async () => {} },
           },
           replyResolver: (ctx, opts) => {
-            const state = resolveReplyOperationRunState(opts);
-            if (!state) {
-              throw new Error("missing dispatch run state");
-            }
-            state.preRunRejection = "session-directive-rejected";
+            requireRunState(opts).preRunRejection = "session-directive-rejected";
             return fixture.resolveAnswer(ctx, opts);
           },
         });
@@ -365,8 +364,10 @@ describe("question custody", () => {
           expect.objectContaining({ text: expect.stringContaining("still open") }),
         );
         await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
-        expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
-        expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
+        expect(broker.get({ id: questionId }).question).toMatchObject({
+          status: "pending",
+          answers: undefined,
+        });
         expect(onResolved).not.toHaveBeenCalled();
         expect(onResumed).not.toHaveBeenCalled();
         expect(fixture.cancel).not.toHaveBeenCalled();
@@ -377,16 +378,13 @@ describe("question custody", () => {
         expect(onResolved).not.toHaveBeenCalled();
 
         await answerQuestion("1: Lisbon\n2: 2000", "complete-answer");
-        expect(broker.get({ id: questionId }).question).toMatchObject({
+        const answered = {
           status: "answered",
           answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
-        });
+        };
+        expect(broker.get({ id: questionId }).question).toMatchObject(answered);
         await resumed;
-        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-          id: questionId,
-          status: "answered",
-          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
-        });
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith({ id: questionId, ...answered });
         expect(onResumed).toHaveBeenCalledOnce();
         expect(replyResolver).toHaveBeenCalledTimes(2);
         expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
@@ -645,9 +643,8 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     expect(nextDispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(nextReply);
     expect(processedEvents).toMatchObject([
       { messageId: "1", outcome: "skipped", reason: "session-directive-rejected" },
-      { messageId: "2", outcome: "completed" },
+      { messageId: "2", outcome: "completed", reason: undefined },
     ]);
-    expect(processedEvents[1]?.reason).toBeUndefined();
   });
 
   it.each<[string, ReplyPayload[] | undefined, string?, boolean?]>([
@@ -714,9 +711,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         { replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState } },
       );
 
-      expect(processedEvents).toMatchObject([{ outcome }]);
-      expect(processedEvents[0]?.reason).toBe(reason);
-      expect(processedEvents[0]?.error).toBeUndefined();
+      expect(processedEvents).toMatchObject([{ outcome, reason, error: undefined }]);
     },
   );
 });
