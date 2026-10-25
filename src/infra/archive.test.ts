@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
@@ -32,6 +32,11 @@ async function archiveCase(ext: "zip" | "tar", fileName = "package/hello.txt", c
     workDir,
     archivePath,
     extractDir,
+    outside: async () => {
+      const outsideDir = path.join(workDir, "outside");
+      await fs.mkdir(outsideDir);
+      return outsideDir;
+    },
     extract: (options: Partial<ExtractArchiveOptions> = {}) =>
       extractArchive({
         archivePath,
@@ -59,6 +64,7 @@ async function expectPathMissing(filePath: string) {
 
 beforeAll(() => fixtureRootTracker.setup());
 afterAll(() => fixtureRootTracker.cleanup());
+afterEach(() => vi.restoreAllMocks());
 
 describe("archive utils", () => {
   it("rejects the returned promise when an option getter throws", async () => {
@@ -84,7 +90,7 @@ describe("archive utils", () => {
     const extractedPath = path.join(await fs.realpath(extractDir), "package", "hello.txt");
     let fileSyncs = 0;
     const originalOpen = fs.open;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await originalOpen(...args);
       if (String(args[0]) === extractedPath) {
         const sync = handle.sync.bind(handle);
@@ -95,28 +101,20 @@ describe("archive utils", () => {
       }
       return handle;
     });
-    try {
-      await extractArchive(
-        Object.freeze(
-          new (class {
-            get archivePath() {
-              return archivePath;
-            }
-            get destDir() {
-              return extractDir;
-            }
-            get timeoutMs() {
-              return ARCHIVE_EXTRACT_TIMEOUT_MS;
-            }
-            get durable() {
-              return durable;
-            }
-          })(),
-        ),
-      );
-    } finally {
-      openSpy.mockRestore();
-    }
+    await extractArchive(
+      Object.freeze(
+        new (class {
+          get archivePath() {
+            return archivePath;
+          }
+          destDir = extractDir;
+          timeoutMs = ARCHIVE_EXTRACT_TIMEOUT_MS;
+          get durable() {
+            return durable;
+          }
+        })(),
+      ),
+    );
     expect(fileSyncs > 0).toBe(durable !== false);
     const rootDir = await resolvePackedRootDir(extractDir);
     const content = await fs.readFile(path.join(rootDir, "hello.txt"), "utf-8");
@@ -154,9 +152,8 @@ describe("archive utils", () => {
   it.each(["zip", "tar"] as const)(
     "rejects %s entries traversing destination symlinks",
     async (ext) => {
-      const { workDir, extractDir, extract } = await archiveCase(ext, "escape/pwn.txt", "owned");
-      const outsideDir = path.join(workDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
+      const { outside, extractDir, extract } = await archiveCase(ext, "escape/pwn.txt", "owned");
+      const outsideDir = await outside();
       await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
 
       await expectRejectedCode(extract(), "destination-symlink-traversal");
@@ -166,9 +163,8 @@ describe("archive utils", () => {
   );
 
   it("does not clobber an out-of-destination file during a zip symlink-rebind race", async () => {
-    const { workDir, extractDir, extract } = await archiveCase("zip", "slot/target.txt", "owned");
-    const outsideDir = path.join(workDir, "outside");
-    await fs.mkdir(outsideDir, { recursive: true });
+    const { outside, extractDir, extract } = await archiveCase("zip", "slot/target.txt", "owned");
+    const outsideDir = await outside();
     const slotDir = path.join(extractDir, "slot");
     await fs.mkdir(slotDir, { recursive: true });
 
@@ -201,13 +197,12 @@ describe("archive utils", () => {
   it.runIf(process.platform !== "win32")(
     "rejects zip extraction when a hardlink appears during destination verification",
     async () => {
-      const { workDir, extractDir, extract } = await archiveCase(
+      const { outside, extractDir, extract } = await archiveCase(
         "zip",
         "package/payload.bin",
         "owned",
       );
-      const outsideDir = path.join(workDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
+      const outsideDir = await outside();
       const outsideAlias = path.join(outsideDir, "payload.bin");
       const extractedPath = path.join(extractDir, "package", "payload.bin");
 
@@ -215,7 +210,7 @@ describe("archive utils", () => {
 
       const realLstat = fsSync.lstatSync.bind(fsSync);
       let linked = false;
-      const lstatSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
         const observed = realLstat(...args);
         if (!linked && String(args[0]) === extractedRealPath) {
           fsSync.linkSync(extractedRealPath, outsideAlias);
@@ -225,11 +220,7 @@ describe("archive utils", () => {
         return observed;
       });
 
-      try {
-        await expectRejectedCode(extract(), /^(?:destination-symlink-traversal|hardlink)$/u);
-      } finally {
-        lstatSpy.mockRestore();
-      }
+      await expectRejectedCode(extract(), /^(?:destination-symlink-traversal|hardlink)$/u);
 
       // Reject without unlinking or truncating the now-shared published inode.
       await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
@@ -238,30 +229,18 @@ describe("archive utils", () => {
     },
   );
 
-  it.each(["zip", "tar"] as const)(
-    "rejects %s archives that exceed extracted size budget",
-    async (ext) => {
-      const { extract } = await archiveCase(ext, "package/big.txt", "x".repeat(64));
-
-      await expect(extract({ limits: { maxExtractedBytes: 32 } })).rejects.toThrow(
-        "archive extracted size exceeds limit",
-      );
-    },
-  );
-
-  it.each(["zip", "tar"] as const)(
-    "rejects %s archives that exceed archive size budget",
-    async (ext) => {
-      const { archivePath, extract } = await archiveCase(ext, "package/file.txt", "ok");
-      const stat = await fs.stat(archivePath);
-
-      await expect(
-        extract({
-          limits: { maxArchiveBytes: Math.max(1, stat.size - 1) },
-        }),
-      ).rejects.toThrow("archive size exceeds limit");
-    },
-  );
+  it.each(
+    (["zip", "tar"] as const).flatMap((ext) =>
+      (["maxExtractedBytes", "maxArchiveBytes"] as const).map((limit) => ({ ext, limit })),
+    ),
+  )("rejects $ext archives exceeding $limit", async ({ ext, limit }) => {
+    const { archivePath, extract } = await archiveCase(ext, "package/big.txt", "x".repeat(64));
+    const compressed = limit === "maxArchiveBytes";
+    const maximum = compressed ? Math.max(1, (await fs.stat(archivePath)).size - 1) : 32;
+    await expect(extract({ limits: { [limit]: maximum } })).rejects.toThrow(
+      compressed ? "archive size exceeds limit" : "archive extracted size exceeds limit",
+    );
+  });
 
   it("rejects zip archives whose actual central directory exceeds the entry limit before parsing", async () => {
     const { archivePath, extractDir, extract } = await archiveCase("zip");

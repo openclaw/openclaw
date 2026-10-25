@@ -175,33 +175,17 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("keeps window and balance-only snapshots with injected auth", async () => {
-    const snapshots: ProviderUsageSnapshot[] = [
-      { ...claude, windows: [{ label: "5h", usedPercent: 20 }] },
-      { provider: "deepseek", displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
-    ];
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) =>
-      structuredClone(snapshots.find((snapshot) => snapshot.provider === provider) ?? null),
-    );
-    const mockFetch = unusedFetch();
-
-    const summary = await loadUsageWithAuth(
-      loadProviderUsageSummary,
-      [
-        { provider: "anthropic", token: "token-a" },
-        { provider: "deepseek", token: "token-d" },
-      ],
-      mockFetch,
-    );
-
-    expect(summary.providers).toEqual(snapshots);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("returns live siblings at the deadline while retaining the unfinished provider", async () => {
+  it("returns window and balance-only siblings at the deadline while retaining unfinished work", async () => {
     vi.useFakeTimers();
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(unusedFetch());
     const scope = new AsyncWorkScope();
     const heldSnapshot = createDeferredCore<ProviderUsageSnapshot>();
+    const balance: ProviderUsageSnapshot = {
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      summary: "Balance ¥42.50",
+    };
     const lateSnapshot: ProviderUsageSnapshot = {
       ...claude,
       windows: [{ label: "5h", usedPercent: 20 }],
@@ -213,13 +197,14 @@ describe("provider-usage.load", () => {
         if (provider === "anthropic") {
           return await heldSnapshot.promise;
         }
-        return structuredClone({ ...codex, provider });
+        return structuredClone(provider === "deepseek" ? balance : { ...codex, provider });
       });
       summaryPromise = scope.track(() =>
         load({
           auth: [
             { provider: "anthropic", token: "token-a" },
             { provider: "openai", token: "token-codex" },
+            { provider: "deepseek", token: "token-d" },
           ],
           timeoutMs: 5_000,
         }),
@@ -237,7 +222,8 @@ describe("provider-usage.load", () => {
       const summary = await summaryPromise;
 
       expect(settledAtDeadline).toBe(true);
-      expect(summary.providers).toEqual([{ ...claude, error: "Timeout" }, codex]);
+      expect(summary.providers).toEqual([{ ...claude, error: "Timeout" }, codex, balance]);
+      expect(fetch).not.toHaveBeenCalled();
       let drained = false;
       draining = scope.drain().then(() => {
         drained = true;
