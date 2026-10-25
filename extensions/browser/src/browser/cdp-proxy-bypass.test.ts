@@ -98,32 +98,14 @@ describe("cdp-proxy-bypass", () => {
     },
   );
 
+  const configured = `${loopback},myhost.internal`;
+  const lookalikes = "notlocalhost,127.0.0.10,[::1].example";
   it.each([
-    {
-      name: "preserves complete entries",
-      upper: `${loopback},myhost.internal`,
-      lower: `${loopback},myhost.internal`,
-      appended: false,
-    },
-    {
-      name: "extends both casings when one is stale",
-      upper: `${loopback},myhost.internal`,
-      lower: "myhost.internal",
-      appended: true,
-    },
-    {
-      name: "mirrors lowercase-only entries",
-      upper: undefined,
-      lower: "corp.internal",
-      appended: true,
-    },
-    {
-      name: "rejects substring matches",
-      upper: "notlocalhost,127.0.0.10,[::1].example",
-      lower: "notlocalhost,127.0.0.10,[::1].example",
-      appended: true,
-    },
-  ])("$name", async ({ upper, lower, appended }) => {
+    ["preserves complete entries", configured, configured, false],
+    ["extends both casings when one is stale", configured, "myhost.internal", true],
+    ["mirrors lowercase-only entries", undefined, "corp.internal", true],
+    ["rejects substring matches", lookalikes, lookalikes, true],
+  ] as const)("%s", async (_name, upper, lower, appended) => {
     if (upper !== undefined) {
       process.env.NO_PROXY = upper;
     }
