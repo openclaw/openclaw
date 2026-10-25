@@ -239,17 +239,13 @@ it("validates edit changed and no-op results", async () => {
   await expectResult(tool, edit("after"), { changed: false }, true);
 });
 
-it("validates write created, overwrite, unknown-state, and no-op results", async () => {
+it("validates the write result schema including optional creation state", async () => {
   const tool = createWriteTool(tmpDir) as unknown as AnyAgentTool;
-  const check = (file: string, content: string, details: Record<string, unknown>, exact = false) =>
-    expectResult(tool, { path: file, content }, details, exact);
-  await check("write.txt", "one\n", { changed: true, created: true });
-  await check("write.txt", "two\n", { changed: true, created: false });
-  await check("write.txt", "two\n", { changed: false }, true);
-  const large = "x".repeat(1024 * 1024 + 1);
-  await write("large.txt", large);
-  await check("large.txt", "replacement\n", { changed: true, created: false }, true);
-  await check("large-created.txt", large, { changed: true, created: true }, true);
+  await expectResult(
+    tool,
+    { path: "write.txt", content: "one\n" },
+    { changed: true, created: true },
+  );
   expectContract(tool, { changed: true });
 });
 

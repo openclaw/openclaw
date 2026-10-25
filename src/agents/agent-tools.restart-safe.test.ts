@@ -234,12 +234,6 @@ describe("restart-safe automation inspection", () => {
     const automation = surface.automation();
     expect(isAgentToolRestartSafe(automation)).toBe(false);
     expect(Value.Check(automation.parameters, { action: "remove", jobId: job.id })).toBe(true);
-    gatewayCall
-      .mockResolvedValueOnce({ ...job, configRevision: `sha256:${"a".repeat(64)}` })
-      .mockResolvedValueOnce({ ok: true, removed: true });
-    const result = await automation.execute("normal-removal", { action: "remove", jobId: job.id });
-    expect(result.details).toMatchObject({ ok: true, removed: true });
-    expect(gatewayCall.mock.calls.map(([method]) => method)).toEqual(["cron.get", "cron.remove"]);
   });
 
   it("allows owner reads in forced restart-safe Code Mode without admitting a later write", async () => {

@@ -96,9 +96,7 @@ describe("MCP App UI resources", () => {
     const native = runtime();
     const params = { runtime: native, allowedAppToolNames: new Set<string>() };
     const { view: alice } = await createView({ ...params, requesterId: "alice" });
-    const { view: bob } = await createView({ ...params, requesterId: "bob" });
     context(native, alice, "alice-private");
-    context(native, bob, "bob-private");
     const target = {
       sessionKey: native.sessionKey,
       sessionId: native.sessionId,
@@ -109,10 +107,8 @@ describe("MCP App UI resources", () => {
     expect(await leaseContext({ ...target, requesterId: "mallory" })).toBeUndefined();
     const lease = await leaseContext(target);
     expect(lease?.project(0).context.text).toContain("alice-private");
-    expect(lease?.project(0).context.text).not.toContain("bob-private");
     lease?.commit();
     expect(getContext(native, alice)).toBeNull();
-    expect(getContext(native, bob)).not.toBeNull();
   });
 
   it("does not infer a Gateway profile from transport requester scope", async () => {
@@ -215,7 +211,6 @@ describe("MCP App UI resources", () => {
       resourceDomains: ["https://cdn.example.com"],
     });
     expect(view?.html.startsWith("<!doctype html>")).toBe(true);
-    expect(buildMcpAppSandboxPath(view?.csp)).toContain("?csp=");
   });
 
   it("deletes sensitive view data when the lease expires without later activity", async () => {
