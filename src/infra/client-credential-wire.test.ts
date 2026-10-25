@@ -94,85 +94,73 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     key,
     observedToken: token.token,
   });
-  const removals: {
-    name: string;
-    persistedToken: string;
-    expectedToken?: string | null;
-    observedToken?: string;
-  }[] = [
-    {
-      name: "normalized expected accepts exact raw observation",
-      persistedToken: " cached-token ",
-      expectedToken: "cached-token",
-      observedToken: " cached-token ",
-    },
-    {
-      name: "normalized expected rejects a different raw token with the same trim",
-      persistedToken: "\tcached-token\n",
-      expectedToken: "cached-token",
-      observedToken: " cached-token ",
-    },
-    {
-      name: "raw observation must normalize to expected",
-      persistedToken: "unrelated-token",
-      expectedToken: "cached-token",
-      observedToken: "unrelated-token",
-    },
-    {
-      name: "exact expected does not require a matching observation",
-      persistedToken: "cached-token",
-      expectedToken: "cached-token",
-      observedToken: "unrelated-token",
-    },
-    {
-      name: "observed-only removal rejects trim-equivalent bytes",
-      persistedToken: "cached-token",
-      observedToken: " cached-token ",
-    },
-    {
-      name: "observed-only removal accepts exact bytes",
-      persistedToken: " cached-token ",
-      observedToken: " cached-token ",
-    },
-    {
-      name: "explicit null does not allow a raw observation fallback",
-      persistedToken: " cached-token ",
-      expectedToken: null,
-      observedToken: " cached-token ",
-    },
-    {
-      name: "omitted expected and observation remove unconditionally",
-      persistedToken: " cached-token ",
-    },
-    {
-      name: "normalization preserves composed and decomposed UTF8 bytes",
-      persistedToken: " e\u0301 ",
-      expectedToken: "\u00e9",
-      observedToken: " e\u0301 ",
-    },
-    {
-      name: "raw observation uses ECMAScript BOM trimming",
-      persistedToken: "\ufeffcached-token\ufeff",
-      expectedToken: "cached-token",
-      observedToken: "\ufeffcached-token\ufeff",
-    },
-    {
-      name: "raw observation does not trim Unicode next-line",
-      persistedToken: "\u0085cached-token\u0085",
-      expectedToken: "cached-token",
-      observedToken: "\u0085cached-token\u0085",
-    },
-  ];
-  for (const removal of removals) {
-    const persisted = { ...token, token: removal.persistedToken };
-    record(`${removal.name}: seed`, { kind: "token.replace", key, token: persisted });
-    record(removal.name, {
-      kind: "token.remove",
+  const removals: [name: string, persisted: string, expected?: string | null, observed?: string][] =
+    [
+      [
+        "normalized expected accepts exact raw observation",
+        " cached-token ",
+        "cached-token",
+        " cached-token ",
+      ],
+      [
+        "normalized expected rejects a different raw token with the same trim",
+        "\tcached-token\n",
+        "cached-token",
+        " cached-token ",
+      ],
+      [
+        "raw observation must normalize to expected",
+        "unrelated-token",
+        "cached-token",
+        "unrelated-token",
+      ],
+      [
+        "exact expected does not require a matching observation",
+        "cached-token",
+        "cached-token",
+        "unrelated-token",
+      ],
+      [
+        "observed-only removal rejects trim-equivalent bytes",
+        "cached-token",
+        undefined,
+        " cached-token ",
+      ],
+      ["observed-only removal accepts exact bytes", " cached-token ", undefined, " cached-token "],
+      [
+        "explicit null does not allow a raw observation fallback",
+        " cached-token ",
+        null,
+        " cached-token ",
+      ],
+      ["omitted expected and observation remove unconditionally", " cached-token "],
+      [
+        "normalization preserves composed and decomposed UTF8 bytes",
+        " e\u0301 ",
+        "\u00e9",
+        " e\u0301 ",
+      ],
+      [
+        "raw observation uses ECMAScript BOM trimming",
+        "\ufeffcached-token\ufeff",
+        "cached-token",
+        "\ufeffcached-token\ufeff",
+      ],
+      [
+        "raw observation does not trim Unicode next-line",
+        "\u0085cached-token\u0085",
+        "cached-token",
+        "\u0085cached-token\u0085",
+      ],
+    ];
+  for (const [name, persistedToken, expectedToken, observedToken] of removals) {
+    record(`${name}: seed`, {
+      kind: "token.replace",
       key,
-      expectedToken: removal.expectedToken,
-      observedToken: removal.observedToken,
+      token: { ...token, token: persistedToken },
     });
-    record(`${removal.name}: durable result`, { kind: "token.read", key });
+    record(name, { kind: "token.remove", key, expectedToken, observedToken });
+    record(`${name}: durable result`, { kind: "token.read", key });
   }
   const native = { ...token, role: "opérateur", token: "native/token/雪", updated_at_ms: 50 };
   const nativeKey = { device_id: native.device_id, role: native.role };
