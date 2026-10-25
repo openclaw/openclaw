@@ -65,7 +65,7 @@ function configureIdentity(avatar?: string) {
   };
 }
 function expectSuccess(respond: ReturnType<typeof vi.fn>, payload = expect.anything()) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
 }
 async function expectPersistedAvatar() {
   expect(await readIdentity()).toContain(inlineAvatar);
@@ -188,11 +188,7 @@ it.each([
     resume.resolve();
     const respond = await pending;
     if (accepted) {
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        method === "agents.update" ? updated : expect.anything(),
-        undefined,
-      );
+      expectSuccess(respond, method === "agents.update" ? updated : expect.anything());
       expect(await readConfig()).toContain(inlineAvatar);
       expect(await readIdentity()).toBe(admittedIdentity);
       if (stage === "remote-write") {

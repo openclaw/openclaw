@@ -1,6 +1,3 @@
-// Chat error broadcast tests ensure chat.send failures still respond and emit
-// error-state broadcasts for connected UI clients.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -22,19 +19,27 @@ vi.mock("./chat-send-agent-dispatch.js", () => ({
 }));
 
 function createMockContext() {
-  const broadcast = vi.fn();
-  const nodeSendToSession = vi.fn();
-
   return {
     ...createDirectChatContext(),
-    broadcast,
-    nodeSendToSession,
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
     getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     recordClientActivity: vi.fn<(client: GatewayClient | null) => void>(),
   };
+}
+
+function withChatState(run: (ctx: ReturnType<typeof createMockContext>) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    await run(createMockContext());
+  });
+}
+
+function expectRejected(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 function sendExternal(
@@ -53,10 +58,8 @@ function sendExternal(
 }
 
 describe("chat.send error broadcast", () => {
-  it("rejects a claimed leaf for a session that has not materialized", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const ctx = createMockContext();
+  it("rejects a claimed leaf for a session that has not materialized", () =>
+    withChatState(async (ctx) => {
       const respond = await sendExternal(ctx, {
         sessionKey: "main",
         message: "hello",
@@ -64,26 +67,19 @@ describe("chat.send error broadcast", () => {
         idempotencyKey: "test-fresh-stale-leaf",
       });
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          details: { reason: "active-leaf-changed" },
-        }),
-      );
+      expectRejected(respond, {
+        code: "INVALID_REQUEST",
+        details: { reason: "active-leaf-changed" },
+      });
       expect(ctx.addChatRun).not.toHaveBeenCalled();
       expect(ctx.broadcast).not.toHaveBeenCalled();
       expect(ctx.recordClientActivity).not.toHaveBeenCalled();
-    });
-  });
+    }));
 
   it.each([false, true])(
     "records new admission activity only if the socket remains live (closed=%s)",
-    async (closedDuringAdmission) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await loadOrCreateProcessDeviceIdentityAsync();
-        const ctx = createMockContext();
+    (closedDuringAdmission) =>
+      withChatState(async (ctx) => {
         const client: GatewayWsClient = {
           connId: "activity-send",
           presenceKey: "activity-send",
@@ -127,11 +123,7 @@ describe("chat.send error broadcast", () => {
         expect(client.personPresence?.lastActivityAt).toBeUndefined();
         const duplicateResponse = vi.fn();
         await handleChatSend({ ...options, respond: duplicateResponse });
-        expect(duplicateResponse).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-        );
+        expectRejected(duplicateResponse, { code: "UNAVAILABLE", retryable: true });
         expect(ctx.recordClientActivity).not.toHaveBeenCalled();
         if (closedDuringAdmission) {
           clients.delete(client);
@@ -158,8 +150,7 @@ describe("chat.send error broadcast", () => {
         });
         expect(cachedResponse.mock.calls[0]?.[3]).toMatchObject({ cached: true });
         expect(ctx.recordClientActivity).toHaveBeenCalledExactlyOnceWith(client);
-      });
-    },
+      }),
   );
 
   it("rejects a stale routing contract before a stop side effect", async () => {
@@ -171,18 +162,12 @@ describe("chat.send error broadcast", () => {
       idempotencyKey: "test-stale-stop-routing",
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "session-routing-changed" } }),
-    );
+    expectRejected(respond, { details: { reason: "session-routing-changed" } });
     expect(ctx.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("scopes selected-agent global errors to the linked agent", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const ctx = createMockContext();
+  it("scopes selected-agent global errors to the linked agent", () =>
+    withChatState(async (ctx) => {
       ctx.addChatRun.mockImplementation(() => {
         throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
       });
@@ -201,9 +186,7 @@ describe("chat.send error broadcast", () => {
         expect.any(Object),
       );
 
-      // The global agent alias canonicalizes to the agent's main session before
-      // load, so errors broadcast on the same key the visible thread subscribes
-      // to — the alias fan-out keys no longer carry sends.
+      // Global aliases must broadcast on the canonical key the UI subscribes to.
       expect(ctx.broadcast).toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({
@@ -222,6 +205,5 @@ describe("chat.send error broadcast", () => {
         errorMessage: expect.stringContaining("LLM timeout"),
       });
       expect(canonicalPayload).not.toHaveProperty("message");
-    });
-  });
+    }));
 });

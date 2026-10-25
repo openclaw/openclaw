@@ -30,9 +30,9 @@ import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpe
 
 setupGatewaySessionsHandlerTestHarness();
 
-function requireStateDir() {
+function statePath(...parts: string[]) {
   const value = process.env.OPENCLAW_STATE_DIR;
-  return expectDefined(value || undefined, "OPENCLAW_STATE_DIR is required");
+  return path.join(expectDefined(value || undefined, "OPENCLAW_STATE_DIR is required"), ...parts);
 }
 
 async function configureStore(storePath?: string) {
@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 async function configureFixedSessionStore(): Promise<string> {
-  const storePath = path.join(requireStateDir(), "shared-abort-sessions-default", "sessions.json");
+  const storePath = statePath("shared-abort-sessions-default", "sessions.json");
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.agentsConfig = { entries: { main: {} } };
@@ -68,13 +68,13 @@ async function configureFixedSessionStore(): Promise<string> {
 function agentSqlitePath(agentId: string) {
   return resolveOpenClawAgentSqlitePath({
     agentId,
-    env: { OPENCLAW_STATE_DIR: requireStateDir() },
+    env: { OPENCLAW_STATE_DIR: statePath() },
   });
 }
 
 function expectNoAgentStore(agentId: string) {
-  const env = { OPENCLAW_STATE_DIR: requireStateDir() };
-  expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "agents", agentId))).toBe(false);
+  const env = { OPENCLAW_STATE_DIR: statePath() };
+  expect(fs.existsSync(statePath("agents", agentId))).toBe(false);
   expect(fs.existsSync(agentSqlitePath(agentId))).toBe(false);
   expect(listOpenClawRegisteredAgentDatabases({ env }).map((entry) => entry.agentId)).not.toContain(
     agentId,
@@ -86,6 +86,13 @@ function detachedAbortContext(
 ) {
   const { getRuntimeConfig: _getRuntimeConfig, ...context } = createChatAbortContext({ sources });
   return context;
+}
+
+function expectAborted(result: Awaited<ReturnType<typeof directSessionReq>>, runId: string) {
+  expect(result).toMatchObject({
+    ok: true,
+    payload: { ok: true, abortedRunId: runId, status: "aborted" },
+  });
 }
 
 test.each([false, true])(
@@ -112,21 +119,15 @@ test.each([false, true])(
 test.each(["default", "fixed", "template", "absent"] as const)(
   "aborts a retired agent with a %s store",
   async (layout) => {
-    const agentId =
-      layout === "absent" ? "active-only" : layout === "template" ? "template-retired" : "retired";
-    const fixtureId = layout === "fixed" ? "retired-fixed" : agentId;
+    const agentId = `retired-${layout}`;
     const sessionKey = `agent:${agentId}:${layout === "absent" ? "running" : "existing"}`;
-    const sessionId = layout === "absent" ? undefined : `session-${fixtureId}`;
-    const runId = `run-${fixtureId}`;
-    let storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+    const sessionId = layout === "absent" ? undefined : `session-${agentId}`;
+    const runId = `run-${agentId}`;
+    let storePath = statePath("agents", agentId, "sessions", "sessions.json");
     if (layout === "fixed") {
       storePath = await configureFixedSessionStore();
     } else if (layout === "template") {
-      const template = path.join(
-        requireStateDir(),
-        "external-abort-stores",
-        "sessions-{agentId}.json",
-      );
+      const template = statePath("external-abort-stores", "sessions-{agentId}.json");
       testState.agentsConfig = { entries: { main: {} } };
       await configureStore(template);
       storePath = template.replace("{agentId}", agentId);
@@ -141,10 +142,7 @@ test.each(["default", "fixed", "template", "absent"] as const)(
       { context: detachedAbortContext(new Map([[runId, activeRun]])) },
     );
 
-    expect(result).toMatchObject({
-      ok: true,
-      payload: { ok: true, abortedRunId: runId, status: "aborted" },
-    });
+    expectAborted(result, runId);
     expect(activeRun.input.abortSignal.aborted).toBe(true);
     if (layout === "absent") {
       expectNoAgentStore(agentId);
@@ -202,13 +200,9 @@ test("native Stop persists before ACK and fences its successor until cleanup", a
       successorStarted = true;
     });
     publish.resolve();
-    await expect(withinTest(request, signal)).resolves.toMatchObject({
-      ok: true,
-      payload: { ok: true, abortedRunId: runId, status: "aborted" },
-    });
+    expectAborted(await withinTest(request, signal), runId);
     expect([nativeSettled, successorStarted]).toEqual([false, false]);
-    const env = { OPENCLAW_STATE_DIR: requireStateDir() };
-    expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "agents", agentId))).toBe(false);
+    expect(fs.existsSync(statePath("agents", agentId))).toBe(false);
     expect(fs.existsSync(agentSqlitePath(agentId))).toBe(false);
     clearTestEmbeddedRun(sessionId, handle, sessionKey);
     await withinTest(Promise.all([nativeSettlement, successor]), signal);
