@@ -118,27 +118,6 @@ describe("Windows Gateway task supervisor", () => {
     }
   });
 
-  it("runs the Gateway child through the anchored Job Object and waits for its tree", async () => {
-    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "1";
-    const waitForExtinction = vi.fn(async () => {});
-    spawn.mockResolvedValue(childRun(undefined, waitForExtinction));
-    await runSupervisor();
-
-    expect(bindWindowsTaskLauncher).not.toHaveBeenCalled();
-    expect(spawn.mock.calls[0]?.[0]).toMatchObject({
-      mode: "anchored-shell",
-      command: expect.stringContaining("gateway"),
-      scopeKey: `gateway-task-supervisor:${process.pid}`,
-      captureOutput: false,
-    });
-    expect(spawn.mock.calls[0]?.[0].command).not.toMatch(/"--task-supervisor"(?:\s|$)/u);
-    expect(spawn.mock.calls[0]?.[0].command).toContain(`${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}=`);
-    expect(spawn.mock.calls[0]?.[0].command).toContain("--import");
-    expect(spawn.mock.calls[0]?.[0].command).toContain("tsx");
-    readSpawnRestartExitCode(spawn.mock.calls[0]?.[0]);
-    expect(waitForExtinction).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { exitCode: 75, exitSignal: null, reason: "exit", expectedCode: 75 },
     { exitCode: null, exitSignal: "SIGTERM", reason: "signal", expectedCode: 1 },
@@ -200,7 +179,8 @@ describe("Windows Gateway task supervisor", () => {
     expect(flushLogger).toHaveBeenCalledOnce();
   });
 
-  it("replaces only a child that requests an ordinary Gateway restart", async () => {
+  it("runs anchored children and replaces only a child requesting a Gateway restart", async () => {
+    process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = "1";
     const firstExtinction = vi.fn(async () => {});
     const secondExtinction = vi.fn(async () => {});
     spawn
@@ -209,7 +189,18 @@ describe("Windows Gateway task supervisor", () => {
       )
       .mockResolvedValueOnce(childRun(undefined, secondExtinction));
     await runSupervisor();
-
+    const input = spawn.mock.calls[0]?.[0];
+    expect(input).toMatchObject({
+      mode: "anchored-shell",
+      command: expect.stringContaining("gateway"),
+      scopeKey: `gateway-task-supervisor:${process.pid}`,
+      captureOutput: false,
+    });
+    expect(input.command).not.toMatch(/"--task-supervisor"(?:\s|$)/u);
+    for (const argument of [`${WINDOWS_TASK_SUPERVISOR_CHILD_FLAG}=`, "--import", "tsx"]) {
+      expect(input.command).toContain(argument);
+    }
+    expect(bindWindowsTaskLauncher).not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(firstExtinction).toHaveBeenCalledOnce();
     expect(secondExtinction).toHaveBeenCalledOnce();

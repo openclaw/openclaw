@@ -178,15 +178,11 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     },
   );
 
-  it.each([
-    { supervisor: "external", seconds: undefined },
-    { supervisor: "external", seconds: 0 },
-    { supervisor: "external", seconds: 47 },
-  ])(
-    "caps restart drain only at a finite deadline ($supervisor/$seconds)",
-    async ({ supervisor, seconds }) => {
+  it.each([undefined, 0, 47])(
+    "caps restart drain only at a finite deadline (%s seconds)",
+    async (seconds) => {
       execLaunchctl.mockResolvedValue(seconds === undefined ? unavailable : printed(seconds));
-      const budget = await resolveBudget(supervisor, stoppingNow);
+      const budget = await resolveBudget("external", stoppingNow);
       expect(budget.nativeStopBudget).toBe(seconds === 47);
       const drain = resolveDrain({ budget, requestedRestartDrainTimeoutMs: 600_000 });
       if (seconds === 47) {
