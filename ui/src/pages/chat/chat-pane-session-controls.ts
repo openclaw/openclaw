@@ -273,7 +273,7 @@ export function renderChatPaneComposerControls(params: {
         },
         onModelSelect: (next, targetSessionKey, agentRuntime) =>
           modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-            ? switchChatModel(state, next, targetSessionKey, agentRuntime)
+            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel)
             : Promise.resolve(false),
         onThinkingSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)

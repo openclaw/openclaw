@@ -12,8 +12,8 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
+import { linePlugin } from "./channel.js";
 import { resolveLineQuoteToken } from "./quote-tokens.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -57,7 +57,7 @@ type PostbackEvent = webhook.PostbackEvent;
 
 const lineBindingsPlugin = {
   id: "line",
-  bindings: lineBindingsAdapter,
+  bindings: linePlugin.bindings,
   conversationBindings: {
     defaultTopLevelPlacement: "current",
     supportsCurrentConversationBinding: true,
@@ -466,7 +466,9 @@ describe("buildLineMessageContext", () => {
   });
 
   it("normalizes canonical LINE targets through the plugin bindings surface", () => {
-    const compiled = lineBindingsAdapter.compileConfiguredBinding({
+    const binding = { agentId: "main", match: { channel: "line" } };
+    const compiled = linePlugin.bindings!.compileConfiguredBinding({
+      binding,
       conversationId: "line:U1234567890abcdef1234567890abcdef",
     });
 
@@ -474,14 +476,16 @@ describe("buildLineMessageContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      lineBindingsAdapter.resolveCommandConversation({
+      linePlugin.bindings!.resolveCommandConversation!({
+        accountId: "default",
         originatingTo: "line:U1234567890abcdef1234567890abcdef",
       }),
     ).toEqual({
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
     expect(
-      lineBindingsAdapter.matchInboundConversation({
+      linePlugin.bindings!.matchInboundConversation({
+        binding,
         compiledBinding: compiled!,
         conversationId: "U1234567890abcdef1234567890abcdef",
       }),

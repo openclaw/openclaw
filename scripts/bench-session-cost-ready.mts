@@ -98,9 +98,6 @@ const setPhase = (next: string) => {
   phase = next;
   phaseStart = Date.now();
   writeFileSync(path.join(output, "phase"), phase);
-  if (gateway?.connected) {
-    gateway.send({ type: "session-cost-ready-phase", phase });
-  }
 };
 writeFileSync(path.join(output, "phase"), phase);
 const server = createServer((req, res) => {

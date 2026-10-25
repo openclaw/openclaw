@@ -198,8 +198,8 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
   }, true);
 });
 
-it("refreshes activity state without rematerializing accepted rows or reading databases", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, query, entry, reads, resume }) => {
+it("refreshes activity state independently of queued materialization and category preparation", async () => {
+  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
     const revision = suffix.databaseFactsRevision;
     const owner = Symbol("activity-state");
     const target = { key: query.key, agentId: query.agentId };
@@ -224,20 +224,42 @@ it("refreshes activity state without rematerializing accepted rows or reading da
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
       expect(projection.materializedCount).toBe(materializations);
+
+      const facts = projection.capture(query)?.facts;
+      for (const state of ["updating", "unavailable", undefined] as const) {
+        // Automation queues a refresh without changing the accepted database facts.
+        sessionChanges.emit({ ...scope, scope: "automation" });
+        setSessionActivitySummaryState(target, owner, state && { ...value, state });
+        expect(projection.dirtyRowCount).toBe(1);
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.activitySummary?.state).toBe(state ?? "stale");
+        expect(projection.capture(query)?.facts).toBe(facts);
+        expect(projection.dirtyRowCount).toBe(0);
+      }
       expect(reads).toHaveLength(1);
       expect(sharedReads).not.toHaveBeenCalled();
       expect(projection.capture(query)?.databaseFactsRevision).toBe(revision);
 
+      // Category uncertainty blocks presentation, but equal reconciliation can reuse these facts.
+      sessionChanges.emit({ sessionKey: query.key, factsInvalidated: "category" });
+      expect(ready(projection.capture(query))).toBe(false);
+      setSessionActivitySummaryState(target, owner, value);
+      expect(projection.dirtyRowCount).toBe(1);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("updating");
+      expect(projection.capture(query)?.facts).toBe(facts);
+      expect(projection.dirtyRowCount).toBe(0);
+
       // An explicit storage uncertainty still wins over the presentation scope.
+      const readsBeforeInvalidation = reads.length;
       sessionChanges.emit({
-        sessionKey: query.key,
-        agentId: query.agentId,
+        ...scope,
         storePath: suffix.storeTarget.storePath,
         scope: "runtime",
         factsInvalidated: true,
       });
       await projection.ensureMaterialized();
-      expect(reads.length).toBeGreaterThan(1);
+      expect(reads.length).toBeGreaterThan(readsBeforeInvalidation);
       expect(projection.snapshot(query).row?.label).toBe("accepted-1");
     } finally {
       setSessionActivitySummaryState(target, owner);

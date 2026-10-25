@@ -34,7 +34,10 @@ import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  transcriptMessage,
+  messageEvent as createMessageEvent,
+} from "./transcript-message.test-support.js";
 
 type SqliteInstruction = {
   opcode: string;
@@ -64,12 +67,8 @@ function budgetDatabase() {
   );
   return db;
 }
-const messageEvent = (id: string, parentId: string | null, content: string, role = "user") => ({
-  type: "message",
-  id,
-  parentId,
-  message: { role, content },
-});
+const messageEvent = (id: string, parentId: string | null, content: string, role = "user") =>
+  createMessageEvent(id, parentId, { role, content });
 
 const readers: Array<
   [string, (scope: SessionTranscriptReadScope & { agentId: string }) => unknown]

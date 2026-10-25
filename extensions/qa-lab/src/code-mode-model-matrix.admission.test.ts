@@ -53,10 +53,7 @@ describe("Code Mode matrix paired admission", () => {
       ]),
     );
     const started: string[] = [];
-    let release: (() => void) | undefined;
-    const pairReady = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: pairReady, resolve: release } = Promise.withResolvers<void>();
     const result = await runCodeModeModelMatrix(
       matrixOptions(root, {
         modes: ["direct", "code"],

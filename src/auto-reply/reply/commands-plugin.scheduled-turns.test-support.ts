@@ -22,13 +22,12 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agen
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
-import { createGatewayCronAgentJobRunner } from "../../gateway/server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
-import { listPluginCommandScheduleHosts } from "../../plugins/plugin-command-schedule-hosts.js";
 import { getPluginInstanceIncarnation } from "../../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -199,7 +198,7 @@ export async function withCommandPlugin(
       () => gateway,
       () => registry,
     );
-    const runAgentJob = createGatewayCronAgentJobRunner({
+    const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
@@ -221,9 +220,9 @@ export async function withCommandPlugin(
           sessionEventPrompts.push(text);
           return { status: "error", error: "ordinary session prompt" };
         },
-        resolvePluginCommandScheduleHosts: () => listPluginCommandScheduleHosts(registry),
+        resolvePluginCommandScheduleHosts: gatewayCronAgentDeps.resolvePluginCommandScheduleHosts,
         runIsolatedAgentJob: async (request) => {
-          const result = await runAgentJob({
+          const result = await gatewayCronAgentDeps.runIsolatedAgentJob({
             ...request,
             onExecutionStarted: (info) => {
               if (info) {

@@ -280,16 +280,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
   installAdmissions(stale);
   expect(recordsFor(location)).toEqual([]);
 
-  first.open();
-  expect(getFact(first, key)).toBeUndefined();
-  expect(schemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
-  admitSqliteSchema(first);
-  expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
-  expect(schemaFacts(first)?.tables.has("proof")).toBe(true);
+  using reopened = openNodeSqliteDatabase(location);
+  expect(schemaFacts(reopened)?.admissionId).toBe(admittedSchema?.admissionId);
+  expect(getFact(reopened, key)).toBeUndefined();
+  expect(reopened.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+  expect(schemaFacts(reopened)?.tables.has("proof")).toBe(true);
   const readmitted = recordsFor(location)[0]!;
   expect(readmitted.generationId).not.toBe(original.generationId);
   expect(readmitted.descriptor).toBe(original.descriptor);
-  first.close();
+  reopened.close();
   expect(recordsFor(location)).toEqual([]);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();

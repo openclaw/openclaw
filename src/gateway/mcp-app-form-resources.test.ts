@@ -15,7 +15,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../agents/harness/host-private-capabilities.js";
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
-import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
+import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.runtime.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
 import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {

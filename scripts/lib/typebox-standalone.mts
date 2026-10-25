@@ -414,7 +414,7 @@ export async function compileStandaloneValidators(
 }
 
 /** Retain TypeBox's license alongside bundled generated helper code. */
-export function standaloneValidatorLicense(): string {
+function standaloneValidatorLicense(): string {
   const license = readFileSync(path.resolve(typeboxBuildRoot, "../license"), "utf8").trim();
   return `/*!\n${license}\n*/\n`;
 }

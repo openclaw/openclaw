@@ -19,6 +19,10 @@ import { createWorkerEnvironmentStore } from "../gateway/worker-environments/sto
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -76,6 +80,13 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
+const legacyIndexOrderingSql = withLegacyPostgresIndexOrdering(
+  postgresIndexOrderingMigration(
+    [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
+      "\n",
+    ),
+  ),
+);
 const legacyWriteIndexesSql = `
   DROP INDEX idx_state_leases_owner;
   ${statePostgresRuntime.preWriteIndexesV27Sql.state_leases}
@@ -590,6 +601,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         await client.query(legacyPublicationInsert);
         await client.query(`
         ${statePostgresRuntime.clientCredentialSource.sql}
+        ${legacyIndexOrderingSql}
         ${previousVersion < 27 ? legacyWriteIndexesSql : ""}
         UPDATE schema_meta SET schema_version = ${previousVersion};
         UPDATE config_machine_state SET value_json = '${previousVersion}'
@@ -781,6 +793,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       await restorePublicationSchemaV27(client);
       await client.query(`
         ${statePostgresRuntime.clientCredentialSource.sql}
+        ${legacyIndexOrderingSql}
         ${legacyWriteIndexesSql}
         UPDATE openclaw_schema_meta
           SET version = 24, fingerprint = NULL, ddl_hash = NULL, server_major = NULL

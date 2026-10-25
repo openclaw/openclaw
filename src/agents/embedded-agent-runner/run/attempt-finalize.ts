@@ -100,7 +100,6 @@ export function finalizeEmbeddedAttempt(
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
-      result.lastToolError !== undefined ||
       hasAsyncActivity(result.toolMetas) ||
       (stopReason !== "toolUse" &&
         (params.hasTerminalOutput ||

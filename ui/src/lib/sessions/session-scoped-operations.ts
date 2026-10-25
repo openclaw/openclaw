@@ -1,3 +1,4 @@
+import type { GatewaySessionMessageSubscriptionOptions } from "@openclaw/gateway-client/browser";
 import type {
   SessionsRecoverParams,
   SessionsRecoverResult,
@@ -154,7 +155,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
 
   const subscribeMessages = async (
     key: string,
-    options: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" } = {},
+    options: GatewaySessionMessageSubscriptionOptions = {},
   ): Promise<SessionMessageSubscription> => {
     const scope = host.connection.capture();
     if (!scope || disposed) {
@@ -162,7 +163,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     }
     const normalizedKey = key.trim();
     const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
-    const { mode, includeApprovals } = options;
+    const { mode, includeApprovals, initialHistory } = options;
     const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     if (disposed || !host.connection.isCurrent(scope)) {
       throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -175,6 +176,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         agentId,
         ...(includeApprovals ? { includeApprovals: true } : {}),
         ...(mode ? { mode } : {}),
+        ...(initialHistory ? { initialHistory } : {}),
       });
     ownedSubscriptions.add(subscription);
     if (disposed || !host.connection.isCurrent(scope)) {

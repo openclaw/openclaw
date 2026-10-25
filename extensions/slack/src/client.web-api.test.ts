@@ -40,10 +40,7 @@ async function withSlackApiServer(
   mode: number | "drop" | "stall",
   use: (baseUrl: string, socketClosed: Promise<void>) => Promise<void>,
 ) {
-  let resolveSocketClosed = () => {};
-  const socketClosed = new Promise<void>((resolve) => {
-    resolveSocketClosed = resolve;
-  });
+  const { promise: socketClosed, resolve: resolveSocketClosed } = Promise.withResolvers<void>();
   await withServer(
     (request, response) => {
       const entry = {

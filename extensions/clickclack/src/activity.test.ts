@@ -111,11 +111,7 @@ describe("createClickClackActivityPublisher", () => {
 
   it("updates a durable row when only the outcome changes to failed", async () => {
     const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const publisher = createClickClackActivityPublisher({
-      client,
-      target: { channelId: "chn_1" },
-      turnId: "msg_turn",
-    });
+    const publisher = createPublisher(client);
     const item = {
       itemId: "work",
       kind: "tool",

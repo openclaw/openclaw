@@ -95,7 +95,6 @@ it("sheds isolate-local caches at eighty percent of the actual worker heap limit
       kind: "prewarm" as const,
       database: { agentId: opened.agentId, path: opened.path },
       env: {},
-      history: false,
     };
     try {
       worker.heap = { used_heap_size: 799, heap_size_limit: 1000 };
@@ -306,9 +305,7 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(
-          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
-        ).resolves.toEqual({
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

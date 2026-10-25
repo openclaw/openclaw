@@ -321,7 +321,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         externalAbort: externalAbort || signalOwnedInterruption,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
-        terminalAuthFailure: input,
+        terminalFailure: input,
       }) ??
       ((authoredSilenceRequiresResult || settledTurnFinalizationAttempted) &&
       terminalFacts.payloadCount === 0 &&

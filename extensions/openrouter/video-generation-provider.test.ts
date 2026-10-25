@@ -795,7 +795,7 @@ describe("openrouter video generation provider", () => {
 
   it("returns unsigned URL-only videos when downloads exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue(
-      releasedJson(completedVideoJob("https://cdn.openrouter.test/video.mp4")),
+      releasedJson(completedVideoJob("  https://cdn.openrouter.test/video.mp4  ")),
     );
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedVideo({ contentType: "video/mp4", bytes: "too-large" }),

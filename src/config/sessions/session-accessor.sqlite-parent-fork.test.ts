@@ -9,7 +9,10 @@ import {
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { createExactAssistantMessage } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  timedMessageEvent,
+} from "./transcript-message.test-support.js";
 
 function createHistory() {
   const events: Record<string, unknown>[] = [
@@ -20,27 +23,23 @@ function createHistory() {
     turn(label: string, active = false) {
       const userId = `${label}-user`;
       const timestamp = "2026-10-07T00:00:00.000Z";
-      events.push({
-        type: "message",
-        id: userId,
-        parentId: events.length > 1 ? events.at(-1)?.id : null,
-        timestamp,
-        message: { role: "user", content: `${label} question`, timestamp: 0 },
-      });
-      events.push({
-        type: "message",
-        id: `${label}-assistant`,
-        parentId: userId,
-        timestamp,
-        message: {
+      events.push(
+        timedMessageEvent(userId, events.length > 1 ? events.at(-1)?.id : null, timestamp, {
+          role: "user",
+          content: `${label} question`,
+          timestamp: 0,
+        }),
+      );
+      events.push(
+        timedMessageEvent(`${label}-assistant`, userId, timestamp, {
           ...createExactAssistantMessage({
             content: active
               ? [{ type: "toolCall", id: `${label}-call`, name: "lookup", arguments: {} }]
               : [{ type: "text", text: `${label} answer` }],
           }),
           stopReason: active ? "toolUse" : "stop",
-        },
-      });
+        }),
+      );
     },
     reset(context: "clear" | "preserve-tail") {
       events.push(
@@ -145,17 +144,13 @@ describe("last-completed parent forks", () => {
 
   it("does not count retained unanswered input against an empty fork", () => {
     const history = createHistory();
-    history.events.push({
-      type: "message",
-      id: "unanswered-user",
-      parentId: null,
-      timestamp: "2026-10-07T00:00:00.000Z",
-      message: {
+    history.events.push(
+      timedMessageEvent("unanswered-user", null, "2026-10-07T00:00:00.000Z", {
         role: "user",
         content: "long unanswered prompt ".repeat(25_000),
         timestamp: 0,
-      },
-    });
+      }),
+    );
     history.reset("preserve-tail");
     expect(history.events.at(-1)).toHaveProperty("firstKeptEntryId", "unanswered-user");
     history.turn("active", true);

@@ -2,6 +2,7 @@ import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { Message } from "../../llm/types.js";
+import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
 // Persistence-only metadata is absent from provider messages; content is hashed separately.
@@ -126,7 +127,7 @@ export function fingerprintMessage(
     }
     return cached;
   }
-  const immutableMessage = isOwnedTranscriptPayload(message);
+  const immutableMessage = isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message);
   const { content } = message;
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
   let blocks: string[];
@@ -144,7 +145,8 @@ export function fingerprintMessage(
   } else {
     stringFingerprints.delete(message);
     // Append normalization owns the content root and freezes every descendant.
-    const immutableContent = immutableMessage || isOwnedTranscriptPayload(content);
+    const immutableContent =
+      immutableMessage || isOwnedTranscriptPayload(content) || isDeeplyFrozenPlainData(content);
     fingerprints = content.map((block) => fingerprintRecord(block, undefined, immutableContent));
     blocks = fingerprints.map(({ digest }) => digest);
   }

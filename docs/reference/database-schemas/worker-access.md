@@ -68,6 +68,9 @@ A new worker or database generation receives a complete snapshot.
 Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
+Reference and fact publications reuse the last complete scope sweep while its
+shared revision remains current. Importing scope cells invalidates that result;
+keyed publication never certifies that unrelated remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -495,6 +498,11 @@ outcomes return reads to the canonical worker. Bounded transcript payload reads
 remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
+
+Inside the durable worker, hot state and its stored entry row share one owned
+decoded entry. Mutations replace that entry instead of editing it in place;
+transaction forks retain the previous entry for rollback. Incoming postimages
+and outgoing public reads remain detached from the resident state.
 
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
@@ -6675,6 +6683,13 @@ retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot
 semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+
+Initial model-context snapshots also reuse equal string values from the loaded
+SessionManager. The context reader still owns selection and admission; its projected
+fields, property order, and mutable containers remain authoritative. Resident SDK
+edits and accessors cannot change the returned context, and frozen resident payloads
+do not make the initial model view immutable. Fresh reader-owned message containers
+are reused in place; an admitted cohort still detaches the manager's mutable view.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

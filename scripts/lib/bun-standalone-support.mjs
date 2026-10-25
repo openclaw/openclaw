@@ -14,7 +14,7 @@ import {
 /** @typedef {Artifact & {build: NonNullable<BuildInfo["build"]>}} CompiledArtifact */
 
 /** @param {string[]} pluginIds */
-export function standalonePluginSetSha256(pluginIds) {
+function standalonePluginSetSha256(pluginIds) {
   return createHash("sha256")
     .update(JSON.stringify([...new Set(pluginIds)].toSorted()))
     .digest("hex");
@@ -108,7 +108,7 @@ export const STANDALONE_BUILD_MARKER = "__OPENCLAW_STANDALONE_BUILD_INFO__";
  * Flavor stamps are the sole intentional difference in the staged module graph.
  * @param {string[]} entries @param {unknown} buildInfo
  */
-export function stampStandaloneBuild(entries, buildInfo) {
+function stampStandaloneBuild(entries, buildInfo) {
   const marker = JSON.stringify(STANDALONE_BUILD_MARKER);
   /** @type {Map<string, string>} */
   const originals = new Map();

@@ -333,7 +333,7 @@ it.each([
   const emptyHeight = textarea.clientHeight;
   await expectStableSize("A short editable draft.");
   const draft =
-    "A typed line that wraps within the available composer width. ".repeat(8) +
+    "A typed line that wraps within the available composer width. ".repeat(12) +
     "\nA second editable line.";
   await control.fill(draft);
   await afterLayout();
