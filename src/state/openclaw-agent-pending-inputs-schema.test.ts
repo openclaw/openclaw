@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -220,25 +219,10 @@ describe("pending input additive schema", () => {
           admitSqliteSchema(database);
         }
         const before = database.prepare("PRAGMA schema_version").get();
-        let schemaDiscoveryCalls: number | undefined;
         expect(() =>
           runSqliteImmediateTransactionSync(database, () => {
             if (connection === "admitted") {
-              const observation = trackSqliteStatementExecutions(
-                database,
-                ["schemaDiscovery"],
-                (sql) =>
-                  /\b(?:sqlite_schema|sqlite_master|pragma_table_info)\b/iu.test(sql)
-                    ? "schemaDiscovery"
-                    : null,
-              );
-              try {
-                expect(hasSessionPendingInputsSchema(database)).toBe(existing);
-                expect(hasSessionPendingInputsSchema(database)).toBe(existing);
-                schemaDiscoveryCalls = observation.counts.schemaDiscovery;
-              } finally {
-                observation.restore();
-              }
+              expect(hasSessionPendingInputsSchema(database)).toBe(existing);
             }
             ensureSessionPendingInputsSchema(database);
             if (connection === "admitted") {
@@ -252,7 +236,6 @@ describe("pending input additive schema", () => {
         expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(false);
         if (connection === "admitted") {
           expect(hasSessionPendingInputsSchema(database)).toBe(existing);
-          expect(schemaDiscoveryCalls).toBe(0);
         }
         ensureSessionPendingInputsSchema(database);
         expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(true);

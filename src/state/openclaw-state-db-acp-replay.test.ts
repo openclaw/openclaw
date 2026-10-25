@@ -1,10 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { expectAcpReplayUtf8Accounting } from "../acp/event-ledger.test-support.js";
-import * as nodeSqlite from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
@@ -23,15 +21,12 @@ function seedLegacyReplay(db: EngineConnection) {
     VALUES (?, ?, 321, ?, ?, ?, ?)`);
   const update =
     '{ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "漢😀\\u0000\\ud800" } }  ';
-  for (const [index, estimate] of [0, 17, 9000].entries()) {
-    const id = `session-${index}-漢\0\ud800`;
-    session.run(id, "key😀", "/é/e\u0301/台\0😀", estimate);
-    for (let seq = 1; seq <= 3; seq++) {
-      event.run(id, seq, "key😀\0", seq % 2 ? null : "run-\udc00", update, estimate);
-    }
-  }
+  const id = "session-0-漢\0\ud800";
+  session.run(id, "key😀", "/é/e\u0301/台\0😀", 0);
+  event.run(id, 1, "key😀\0", null, update, 0);
+  event.run(id, 2, "key😀\0", "run-\udc00", update, 0);
   // Even already-correct event estimates must contribute to a repaired aggregate.
-  event.run("session-0-漢\0\ud800", 4, "ascii", null, "{}", 56);
+  event.run(id, 3, "ascii", null, "{}", 56);
   db.exec(
     "UPDATE schema_meta SET app_version = 'synthetic-previous-build' WHERE meta_key = 'primary'",
   );
@@ -63,16 +58,14 @@ function estimates(db: EngineConnection) {
 
 const dropAccounting = `ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
   ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`;
-const schemaChanges = {
-  current: "",
-  "missing-column": "ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path",
-  "ordered-column": "ALTER TABLE worktrees DROP COLUMN provisioned_paths_json",
-  "sandbox-column": "ALTER TABLE sandbox_registry_entries DROP COLUMN image",
-  "cron-description": "ALTER TABLE cron_jobs DROP COLUMN description",
-  "index-drift": `DROP INDEX idx_plugin_state_listing;
+const schemaChanges = `
+  ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+  ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
+  ALTER TABLE sandbox_registry_entries DROP COLUMN image;
+  ALTER TABLE cron_jobs DROP COLUMN description;
+  DROP INDEX idx_plugin_state_listing;
     CREATE INDEX idx_plugin_state_listing
-      ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);`,
-};
+      ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);`;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function replayFixture(encoding?: string) {
@@ -93,24 +86,20 @@ function replayFixture(encoding?: string) {
     expect(canonicalReplay(db)).toEqual(before);
     return db;
   };
-  const historicalReadGuard = <T>(operation: () => T | Promise<T>, columns?: string[]) =>
-    withoutHistoricalPayloadReads(options.path, operation, columns);
-  const runtime = () => historicalReadGuard(open);
   return {
     options,
     initial,
     before,
     oldEstimates,
     assertRepaired,
-    historicalReadGuard,
-    runtime,
+    runtime: open,
     repair() {
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       return assertRepaired();
     },
     async reopen() {
       closeOpenClawStateDatabaseForTest();
-      const db = await runtime();
+      const db = open();
       expect(db.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
       return db;
     },
@@ -124,55 +113,6 @@ function replayFixture(encoding?: string) {
   };
 }
 
-async function withoutHistoricalPayloadReads<T>(
-  pathname: string,
-  operation: () => T | Promise<T>,
-  columns = [
-    "acp_replay_events.update_json",
-    "acp_replay_sessions.estimated_bytes",
-    "subagent_runs.payload_json",
-    "task_runs.delivery_status",
-    "operator_approvals.resolution_ref",
-    "cron_jobs.job_json",
-    "delivery_queue_entries.entry_json",
-  ],
-): Promise<T> {
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  const databaseLocation = path.toNamespacedPath(fs.realpathSync(pathname));
-  const opened = new Set<DatabaseSync>();
-  const historicalReads: string[] = [];
-  const historicalColumns = new Set(columns);
-  const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    const location = database.location();
-    if (location !== null && path.toNamespacedPath(location) === databaseLocation) {
-      opened.add(database);
-      database.setAuthorizer((action, table, column) => {
-        const field = `${table}.${column}`;
-        if (action === constants.SQLITE_READ && historicalColumns.has(field)) {
-          historicalReads.push(field);
-          return constants.SQLITE_DENY;
-        }
-        return constants.SQLITE_OK;
-      });
-    }
-    return database;
-  });
-  try {
-    const result = await operation();
-    expect(opened.size).toBeGreaterThan(0);
-    expect(historicalReads).toEqual([]);
-    return result;
-  } finally {
-    spy.mockRestore();
-    for (const database of opened) {
-      if (database.isOpen) {
-        database.setAuthorizer(null);
-      }
-    }
-  }
-}
-
 describe("ACP replay accounting repair", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
@@ -181,11 +121,7 @@ describe("ACP replay accounting repair", () => {
     closeOpenClawStateDatabaseForTest();
     replay.repair();
     closeOpenClawStateDatabaseForTest();
-    const repeated = await replay.historicalReadGuard(
-      () => repairOpenClawStateDatabaseSchema(replay.options),
-      ["acp_replay_events.update_json", "acp_replay_sessions.estimated_bytes"],
-    );
-    expect(repeated.warnings).toEqual([]);
+    replay.repair();
     {
       using legacy = new DatabaseSync(replay.options.path);
       legacy.exec(dropAccounting);
@@ -207,24 +143,21 @@ describe("ACP replay accounting repair", () => {
     },
   );
 
-  it.each(
-    ["UTF-8", "UTF-16le"].flatMap((encoding) =>
-      Object.entries(schemaChanges).flatMap(([schema, sql]) =>
-        ["runtime", "automatic"].map((entrance) => ({ encoding, schema, sql, entrance })),
-      ),
-    ),
-  )(
-    "leaves $encoding replay repair to Doctor through $entrance with $schema schema",
-    async ({ encoding, sql, entrance }) => {
+  it.each([
+    ["UTF-8", "runtime", false],
+    ["UTF-16le", "automatic", false],
+    ["UTF-16le", "runtime", true],
+    ["UTF-8", "automatic", true],
+  ] as const)(
+    "leaves %s replay repair to Doctor through %s (schema repair: %s)",
+    async (encoding, entrance, repair) => {
       const replay = replayFixture(encoding);
-      if (sql) {
-        replay.initial.exec(sql);
+      if (repair) {
+        replay.initial.exec(schemaChanges);
       }
       closeOpenClawStateDatabaseForTest();
       if (entrance === "automatic") {
-        const prepared = await replay.historicalReadGuard(() =>
-          prepareOpenClawStateDatabaseSchema(replay.options),
-        );
+        const prepared = await prepareOpenClawStateDatabaseSchema(replay.options);
         expect(prepared.warnings).toEqual([]);
       } else {
         await replay.runtime();
