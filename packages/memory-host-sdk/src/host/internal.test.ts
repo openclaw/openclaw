@@ -153,15 +153,24 @@ describe("memory host SDK package internals", () => {
     ]);
     expect(
       normalizeExtraMemoryPathEntries(workspaceDir, [
+        " notes ",
+        { path: "notes" },
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "archive/**/*.md" },
+        "reference",
         { path: "reference", evergreen: true },
+        { path: "canonical", evergreen: true },
+        "canonical",
+        { path: "archive", pattern: "**/*.md", evergreen: true },
       ]),
     ).toEqual([
+      { path: path.resolve(workspaceDir, "notes") },
       { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
       { path: path.resolve(workspaceDir, "reference"), evergreen: true },
+      { path: path.resolve(workspaceDir, "canonical") },
+      { path: path.resolve(workspaceDir, "archive"), pattern: "**/*.md", evergreen: true },
     ]);
   });
 
@@ -195,65 +204,43 @@ describe("memory host SDK package internals", () => {
   });
 
   it.each([
-    {
-      label: "primary memory file",
-      target: (workspaceDir: string) => path.join(workspaceDir, "USER.md"),
-      extraPaths: (_workspaceDir: string) => undefined,
-    },
-    {
-      label: "workspace memory directory",
-      target: (workspaceDir: string) => path.join(workspaceDir, "memory"),
-      extraPaths: (_workspaceDir: string) => undefined,
-    },
-    {
-      label: "configured extra path",
-      target: (workspaceDir: string) => path.join(workspaceDir, "extra"),
-      extraPaths: (workspaceDir: string) => [path.join(workspaceDir, "extra")],
-    },
-  ])("propagates operational scan failures for $label", async ({ target, extraPaths }) => {
-    const workspaceDir = getTmpDir();
-    const failedPath = target(workspaceDir);
-    const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code: "EIO" });
-    const realLstat = fs.lstat;
-    vi.spyOn(fs, "lstat").mockImplementation(
-      async (...args: Parameters<typeof fs.lstat>): ReturnType<typeof fs.lstat> => {
-        if (path.resolve(String(args[0])) === failedPath) {
-          throw scanError;
-        }
-        return await realLstat(...args);
-      },
-    );
-
-    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toMatchObject({
-      name: "MemorySourceScanError",
-      path: failedPath,
-      code: "EIO",
-      cause: scanError,
-      message: `memory source scan failed at ${failedPath} (EIO): I/O failure: ${failedPath}`,
-    });
-  });
-
-  it.each([
-    ["canonical memory file", "", "EIO"],
-    ["memory directory", "memory", "EIO"],
-    ["nested memory directory", "memory/nested", "EACCES"],
-  ])("names the %s that blocks a memory scan", async (_label, relative, code) => {
+    ["lstat", "USER.md", "EIO"],
+    ["lstat", "memory", "EIO"],
+    ["lstat", "extra", "EIO"],
+    ["readdir", "", "EIO"],
+    ["readdir", "memory", "EIO"],
+    ["readdir", "memory/nested", "EACCES"],
+  ] as const)("names a %s failure at %s", async (operation, relative, code) => {
     const workspaceDir = getTmpDir();
     const failedPath = path.join(workspaceDir, relative);
-    fsSync.mkdirSync(failedPath, { recursive: true });
-    if (relative.includes("/")) {
-      writeFiles(workspaceDir, { "memory/ok.md": "# ok\n" });
+    if (operation === "readdir") {
+      fsSync.mkdirSync(failedPath, { recursive: true });
+      if (relative.includes("/")) {
+        writeFiles(workspaceDir, { "memory/ok.md": "# ok\n" });
+      }
     }
     const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code });
-    const realReaddir = fs.readdir;
-    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
-      if (path.resolve(String(args[0])) === failedPath) {
+    const failTarget = (target: unknown) => {
+      if (path.resolve(String(target)) === failedPath) {
         throw scanError;
       }
-      return await realReaddir(...args);
-    });
-
-    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+    };
+    if (operation === "lstat") {
+      const original = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+        failTarget(args[0]);
+        return original(...args);
+      });
+    } else {
+      const original = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+        failTarget(args[0]);
+        return original(...args);
+      });
+    }
+    await expect(
+      listMemoryFiles(workspaceDir, relative === "extra" ? [failedPath] : undefined),
+    ).rejects.toMatchObject({
       name: "MemorySourceScanError",
       path: failedPath,
       code,
@@ -301,65 +288,31 @@ describe("memory host SDK package internals", () => {
     },
   );
 
+  const fixtureFiles = [
+    "root.md",
+    "notes/team/keep.md",
+    "notes/team/deeper/keep.md",
+    "logs.cache/deep/keep.md",
+    "archive/deep/keep.md",
+    ".hidden/deep/keep.md",
+    "scratch/deep/keep.md",
+  ];
   it.each([
-    {
-      label: "a union of root, wildcard, and trailing-globstar patterns",
-      patterns: ["*.md", "notes/*/*.md", "logs.cache/**"],
-      expectedFiles: ["root.md", "notes/team/keep.md", "logs.cache/deep/keep.md"],
-      expectedDirectories: ["", "notes", "notes/team", "logs.cache", "logs.cache/deep"],
-    },
-    {
-      label: "a bare globstar",
-      patterns: ["**"],
-      expectedFiles: undefined,
-      expectedDirectories: undefined,
-    },
-    {
-      label: "brace alternatives containing separators and extglobs",
-      patterns: ["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"],
-      expectedFiles: undefined,
-      expectedDirectories: undefined,
-    },
-    {
-      label: "an explicit hidden directory",
-      patterns: [".hidden/**/*.md"],
-      expectedFiles: [".hidden/deep/keep.md"],
-      expectedDirectories: ["", ".hidden", ".hidden/deep"],
-    },
-    {
-      label: "an invalid pattern alongside a valid pattern",
-      patterns: ["x".repeat(65_537), "notes/team/*.md"],
-      expectedFiles: ["notes/team/keep.md"],
-      expectedDirectories: ["", "notes", "notes/team"],
-    },
-    {
-      label: "an unrestricted entry alongside a narrow pattern",
-      patterns: ["notes/team/*.md", undefined],
-      expectedFiles: [
-        "root.md",
-        "notes/team/keep.md",
-        "notes/team/deeper/keep.md",
-        "logs.cache/deep/keep.md",
-        "archive/deep/keep.md",
-        ".hidden/deep/keep.md",
-        "scratch/deep/keep.md",
-      ],
-      expectedDirectories: undefined,
-    },
-  ])(
-    "scans a shared extra root once for $label without losing matching files",
-    async ({ patterns, expectedFiles, expectedDirectories }) => {
+    [
+      ["*.md", "notes/*/*.md", "logs.cache/**"],
+      [0, 1, 3],
+      " notes notes/team logs.cache logs.cache/deep",
+    ],
+    [["**"], undefined, undefined],
+    [["{notes,archive/deep}/**/*.md", "@(logs.cache|scratch)/**/*.md"], undefined, undefined],
+    [[".hidden/**/*.md"], [5], " .hidden .hidden/deep"],
+    [["x".repeat(65_537), "notes/team/*.md"], [1], " notes notes/team"],
+    [["notes/team/*.md", undefined], [0, 1, 2, 3, 4, 5, 6], undefined],
+  ] as const)(
+    "scans a shared extra root once for %j without losing matching files",
+    async (patterns, expectedFiles, expectedDirectories) => {
       const workspaceDir = getTmpDir();
       const extraDir = path.join(workspaceDir, "extra");
-      const fixtureFiles = [
-        "root.md",
-        "notes/team/keep.md",
-        "notes/team/deeper/keep.md",
-        "logs.cache/deep/keep.md",
-        "archive/deep/keep.md",
-        ".hidden/deep/keep.md",
-        "scratch/deep/keep.md",
-      ];
       writeFiles(extraDir, Object.fromEntries(fixtureFiles.map((file) => [file, "# Memory\n"])));
       const readdir = vi.spyOn(fs, "readdir");
 
@@ -372,7 +325,7 @@ describe("memory host SDK package internals", () => {
         files.map((file) => path.relative(extraDir, file).replaceAll(path.sep, "/")).toSorted(),
       ).toEqual(
         (
-          expectedFiles ??
+          expectedFiles?.map((index) => fixtureFiles[index]) ??
           // Node and Bun differ on dotfiles and extglobs. Pruning must preserve
           // each runtime's existing exhaustive leaf-match results.
           fixtureFiles.filter((file) =>
@@ -385,7 +338,10 @@ describe("memory host SDK package internals", () => {
         .filter((dir) => dir === extraDir || dir.startsWith(`${extraDir}${path.sep}`));
       if (expectedDirectories) {
         expect(scannedDirectories.toSorted()).toEqual(
-          expectedDirectories.map((dir) => path.join(extraDir, dir)).toSorted(),
+          expectedDirectories
+            .split(" ")
+            .map((dir) => path.join(extraDir, dir))
+            .toSorted(),
         );
       } else {
         expect(scannedDirectories.filter((dir) => dir === extraDir)).toHaveLength(1);
@@ -434,26 +390,6 @@ describe("memory host SDK package internals", () => {
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
 
-  it("builds markdown and multimodal file entries", async () => {
-    const tmpDir = getTmpDir();
-    const notePath = path.join(tmpDir, "note.md");
-    const imagePath = path.join(tmpDir, "diagram.png");
-    fsSync.writeFileSync(notePath, "hello", "utf-8");
-    fsSync.writeFileSync(imagePath, Buffer.from("png"));
-
-    expect(await buildFileEntry(notePath, tmpDir)).toMatchObject({
-      path: "note.md",
-      kind: "markdown",
-    });
-    expect(await buildFileEntry(imagePath, tmpDir, multimodal)).toMatchObject({
-      path: "diagram.png",
-      kind: "multimodal",
-      modality: "image",
-      mimeType: "image/png",
-      contentText: "Image file: diagram.png",
-    });
-  });
-
   it("retries transient markdown reads while building file entries", async () => {
     const tmpDir = getTmpDir();
     const notePath = path.join(tmpDir, "note.md");
@@ -461,29 +397,23 @@ describe("memory host SDK package internals", () => {
 
     const realOpen = fs.open;
     let attempts = 0;
-    const openSpy = vi
-      .spyOn(fs, "open")
-      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
-        const [target, flags, mode] = args;
-        if (typeof target === "string" && path.resolve(target) === notePath && attempts++ === 0) {
-          const err = new Error(
-            "Unknown system error -11: Unknown system error -11, open",
-          ) as NodeJS.ErrnoException;
-          err.code = "UNKNOWN";
-          err.errno = -11;
-          throw err;
-        }
-        return await realOpen(target, flags, mode);
-      });
-
-    try {
-      const entry = expectFileEntry(await buildFileEntry(notePath, tmpDir));
-      expect(entry.path).toBe("note.md");
-      expect(entry.kind).toBe("markdown");
-      expect(attempts).toBe(2);
-    } finally {
-      openSpy.mockRestore();
-    }
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+      const [target, flags, mode] = args;
+      if (typeof target === "string" && path.resolve(target) === notePath && attempts++ === 0) {
+        const err = new Error(
+          "Unknown system error -11: Unknown system error -11, open",
+        ) as NodeJS.ErrnoException;
+        err.code = "UNKNOWN";
+        err.errno = -11;
+        throw err;
+      }
+      return await realOpen(target, flags, mode);
+    });
+    expect(await buildFileEntry(notePath, tmpDir)).toMatchObject({
+      path: "note.md",
+      kind: "markdown",
+    });
+    expect(attempts).toBe(2);
   });
 
   it("builds multimodal chunks lazily and rejects changed files", async () => {
@@ -492,6 +422,13 @@ describe("memory host SDK package internals", () => {
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
 
     const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
+    expect(entry).toMatchObject({
+      path: "diagram.png",
+      kind: "multimodal",
+      modality: "image",
+      mimeType: "image/png",
+      contentText: "Image file: diagram.png",
+    });
     const built = expectMultimodalIndexingChunk(await buildMultimodalChunkForIndexing(entry));
     const parts = expectEmbeddingInput(built.chunk).parts ?? [];
     expect(parts[0]).toEqual({ type: "text", text: "Image file: diagram.png" });
@@ -505,7 +442,7 @@ describe("memory host SDK package internals", () => {
     await expect(buildMultimodalChunkForIndexing(entry)).resolves.toBeNull();
   });
 
-  it("chunks mixed text and preserves surrogate pairs", () => {
+  it("chunks mixed text", () => {
     const mixed = Array.from(
       { length: 30 },
       (_, index) => `Line ${index}: 这是中英文混合的测试内容 with English`,
@@ -513,15 +450,6 @@ describe("memory host SDK package internals", () => {
     const mixedChunks = chunkMarkdown(mixed, { tokens: 50, overlap: 0 });
     expect(mixedChunks.length).toBeGreaterThan(1);
     expect(mixedChunks.map((chunk) => chunk.text).join("\n")).toContain("Line 29");
-
-    const surrogateChar = "\u{20000}";
-    const surrogateChunks = chunkMarkdown(surrogateChar.repeat(120), {
-      tokens: 31,
-      overlap: 0,
-    });
-    for (const chunk of surrogateChunks) {
-      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
-    }
   });
 
   it("preserves a surrogate pair at the coarse split boundary", () => {
@@ -607,21 +535,11 @@ describe("memory host SDK package internals", () => {
 
   it("strips recall annotation carriers while preserving source line positions", () => {
     const text = [
-      "- Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 -->",
-      "  <!-- project: github.com/openclaw/openclaw -->",
-      "  Keep this ordinary <!-- note: visible --> comment.",
+      "- Keep. <!-- trigger: recall --> <!-- importance: 9 -->",
+      "  <!-- project: project/key -->",
+      "  Note <!-- note: visible -->.",
     ].join("\n");
-
-    const stripped = stripMemoryAnnotationCarriers(text);
-
-    expect(stripped).toBe(
-      [
-        "- Keep the gateway local.",
-        "",
-        "  Keep this ordinary <!-- note: visible --> comment.",
-      ].join("\n"),
-    );
-    expect(stripped.split("\n")).toHaveLength(text.split("\n").length);
+    expect(stripMemoryAnnotationCarriers(text)).toBe("- Keep.\n\n  Note <!-- note: visible -->.");
   });
 
   it("keeps promotion headings and markers out of neighboring entries", () => {
@@ -656,9 +574,6 @@ describe("memory host SDK package internals", () => {
 
     remapChunkLines(chunks, lineMap);
 
-    expect(expectDefined(chunks[0], "chunks[0] test invariant").startLine).toBe(4);
-    expect(
-      expectDefined(chunks[chunks.length - 1], "chunks[chunks.length - 1] test invariant").endLine,
-    ).toBe(13);
+    expect([chunks[0]?.startLine, chunks.at(-1)?.endLine]).toEqual([4, 13]);
   });
 });

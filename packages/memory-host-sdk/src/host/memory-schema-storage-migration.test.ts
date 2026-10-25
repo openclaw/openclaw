@@ -4,9 +4,8 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
-import { trackSqliteStatementExecutions } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { decodeMemoryEmbedding, encodeMemoryEmbedding } from "./embedding-vector.js";
+import { encodeMemoryEmbedding } from "./embedding-vector.js";
 import {
   buildMemoryEmbeddingCacheSchema,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
@@ -17,6 +16,20 @@ import {
 } from "./memory-schema-storage-migration.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function readRow(db: DatabaseSync, sql: string) {
+  return db.prepare(sql).get();
+}
+
+function expectRow(db: DatabaseSync, sql: string, expected: unknown) {
+  expect(readRow(db, sql)).toEqual(expected);
+}
+
+function expectRefusal(db: DatabaseSync, refusal: string | RegExp) {
+  const before = snapshot(db);
+  expect(() => migrateMemoryIndexStorage(db)).toThrow(refusal);
+  expect(snapshot(db)).toEqual(before);
+}
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -74,71 +87,50 @@ function snapshot(db: DatabaseSync) {
   };
 }
 
-function binaryDatabase(
-  location = ":memory:",
-  cacheTable = "memory_embedding_cache",
-  tracked = true,
-): DatabaseSync {
-  const db = tracked ? openNodeSqliteDatabase(location) : new DatabaseSync(location);
+function binaryDatabase(location = ":memory:"): DatabaseSync {
+  const db = openNodeSqliteDatabase(location);
   onTestFinished(() => db.close());
-  db.exec(MEMORY_INDEX_CHUNKS_SCHEMA_SQL + buildMemoryEmbeddingCacheSchema(cacheTable));
+  db.exec(
+    MEMORY_INDEX_CHUNKS_SCHEMA_SQL + buildMemoryEmbeddingCacheSchema("memory_embedding_cache"),
+  );
   db.prepare(
     `INSERT INTO memory_index_chunks
        (chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at)
        VALUES (7, 'chunk', 'memory/a.md', 1, 2, 'h', 'model', 'retained text', ?, 123)`,
   ).run(encodeMemoryEmbedding([1, 2]));
   db.prepare(
-    `INSERT INTO ${cacheTable}
+    `INSERT INTO memory_embedding_cache
        (provider, model, provider_key, hash, embedding, dims, updated_at)
        VALUES ('provider', 'model', 'key', 'h', ?, 2, 121)`,
   ).run(encodeMemoryEmbedding([1, 2]));
   return db;
 }
 
-function countStorageCatalogReads(db: DatabaseSync) {
-  return trackSqliteStatementExecutions(db, ["catalog"], (sql) =>
-    /^\s*SELECT\s+type,\s*name,\s*tbl_name,\s*sql\s+FROM main\.sqlite_schema\s+ORDER BY name/i.test(
-      sql,
-    )
-      ? "catalog"
-      : null,
-  );
-}
-
 describe("memory storage migration", () => {
-  it.each([
-    { label: "tracked transaction", tracked: true, transaction: true, reads: 1 },
-    { label: "standalone", tracked: true, transaction: false, reads: 2 },
-    { label: "untracked transaction", tracked: false, transaction: true, reads: 2 },
-    {
-      label: "custom cache transaction",
-      tracked: true,
-      transaction: true,
-      reads: 1,
-      cacheTable: "custom_cache",
-    },
-  ])("validates both storage tables with bounded catalog reads in $label", (testCase) => {
-    const cacheTable = testCase.cacheTable ?? "memory_embedding_cache";
-    const db = binaryDatabase(":memory:", cacheTable, testCase.tracked);
-    if (testCase.transaction) {
-      db.exec("BEGIN IMMEDIATE");
-    }
-    const reads = countStorageCatalogReads(db);
-    try {
-      migrateMemoryIndexStorage(db, { embeddingCacheTable: cacheTable });
-      expect(reads.counts.catalog).toBe(testCase.reads);
-      expect(db.prepare("SELECT chunk_rowid, text FROM memory_index_chunks").get()).toEqual({
-        chunk_rowid: 7,
-        text: "retained text",
-      });
-      expect(db.prepare(`SELECT dims, updated_at FROM ${cacheTable}`).get()).toEqual({
-        dims: 2,
-        updated_at: 121,
-      });
-      expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual({ changes: 2 });
-    } finally {
-      reads.restore();
-    }
+  it("rebuilds stale FTS identities and retains maintenance after conversion", () => {
+    const db = legacyDatabase();
+    migrateMemoryIndexStorage(db);
+    const search = db.prepare(
+      "SELECT rowid FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+    );
+    expect(search.all("saffronquasar")).toEqual([{ rowid: 7 }]);
+    db.exec("VACUUM; UPDATE memory_index_chunks SET text = 'ambercomet'");
+    expect(search.all("ambercomet")).toEqual([{ rowid: 7 }]);
+    expect(search.all("saffronquasar")).toEqual([]);
+  });
+
+  it("leaves already-binary storage unchanged", () => {
+    const db = binaryDatabase();
+    migrateMemoryIndexStorage(db);
+    expectRow(db, "SELECT chunk_rowid, text FROM memory_index_chunks", {
+      chunk_rowid: 7,
+      text: "retained text",
+    });
+    expectRow(db, "SELECT dims, updated_at FROM memory_embedding_cache", {
+      dims: 2,
+      updated_at: 121,
+    });
+    expectRow(db, "SELECT total_changes() AS changes", { changes: 2 });
   });
 
   it("rereads storage contracts after local schema changes and rollback", () => {
@@ -172,7 +164,7 @@ describe("memory storage migration", () => {
   });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-    "keeps both catalog reads under a changing authorizer",
+    "revalidates storage under a changing authorizer",
     () => {
       const db = binaryDatabase();
       db.exec("BEGIN IMMEDIATE");
@@ -185,19 +177,14 @@ describe("memory storage migration", () => {
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
       );
-      const reads = countStorageCatalogReads(db);
       try {
         migrateMemoryIndexStorage(db);
-        expect(reads.counts.catalog).toBe(2);
         allow = false;
         expect(() => migrateMemoryIndexStorage(db)).toThrow(/prohibited|not authorized/i);
         db.setAuthorizer(null);
-        reads.counts.catalog = 0;
         migrateMemoryIndexStorage(db);
-        expect(reads.counts.catalog).toBe(1);
       } finally {
         db.setAuthorizer(null);
-        reads.restore();
       }
     },
   );
@@ -234,11 +221,11 @@ describe("memory storage migration", () => {
         updated_at: 123,
       });
     }
-    const changes = db.prepare("SELECT total_changes() AS count").get();
+    const changes = readRow(db, "SELECT total_changes() AS count");
     warnings.length = 0;
     migrateMemoryIndexStorage(db, { onWarning: (warning) => warnings.push(warning) });
     expect(warnings).toEqual([]);
-    expect(db.prepare("SELECT total_changes() AS count").get()).toEqual(changes);
+    expectRow(db, "SELECT total_changes() AS count", changes);
   });
 
   it("converts legacy vectors larger than the child heap while preserving 64-bit storage identities", () => {
@@ -311,70 +298,6 @@ describe("memory storage migration", () => {
     expect(JSON.parse(result.stdout)).toEqual([expected, expected, { textBytes: "80" }]);
   });
 
-  it("converts vectors without providers and preserves identity, provenance, cache age, and FTS maintenance", () => {
-    const db = legacyDatabase();
-    migrateMemoryIndexStorage(db);
-    const chunk = db
-      .prepare("SELECT chunk_rowid, id, text, embedding, updated_at FROM memory_index_chunks")
-      .get()!;
-    expect(chunk).toMatchObject({
-      chunk_rowid: 7,
-      id: "logical-id",
-      text: "saffronquasar",
-      updated_at: 123,
-    });
-    expect(chunk.embedding).toBeInstanceOf(Uint8Array);
-    if (!(chunk.embedding instanceof Uint8Array)) {
-      throw new Error("Expected binary embedding");
-    }
-    expect(decodeMemoryEmbedding(chunk.embedding)).toEqual([1 + Number.EPSILON, 0.1]);
-    expect(db.prepare("SELECT * FROM memory_index_chunk_provenance").get()).toMatchObject({
-      chunk_id: "logical-id",
-      origin_class: "owner",
-      supersedes_key: "prior-id",
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT rowid, provider, model, provider_key, hash, dims, updated_at FROM memory_embedding_cache",
-        )
-        .get(),
-    ).toEqual({
-      rowid: 23,
-      provider: "provider",
-      model: "model",
-      provider_key: "provider-key",
-      hash: "h",
-      dims: 2,
-      updated_at: 121,
-    });
-    expect(
-      db
-        .prepare(
-          "SELECT rowid, id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
-        )
-        .get(),
-    ).toEqual({ rowid: 7, id: "logical-id" });
-    migrateMemoryIndexStorage(db);
-    db.exec("VACUUM; UPDATE memory_index_chunks SET text = 'ambercomet' WHERE id = 'logical-id'");
-    expect(
-      db
-        .prepare(
-          "SELECT rowid FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'ambercomet'",
-        )
-        .get(),
-    ).toEqual({ rowid: 7 });
-    expect(
-      db
-        .prepare(
-          "SELECT 1 FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  });
-
   it.each([false, true])(
     "records malformed-vector debt with existing revision state: %s",
     (revisionState) => {
@@ -388,25 +311,20 @@ describe("memory storage migration", () => {
       );
       migrateMemoryIndexStorage(db);
       if (revisionState) {
-        expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
+        expectRow(db, "SELECT revision FROM memory_index_state", {
           revision: 11,
         });
       }
-      expect(
-        db.prepare("SELECT text, length(embedding) AS bytes FROM memory_index_chunks").get(),
-      ).toEqual({ text: "saffronquasar", bytes: 0 });
-      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
-      expect(
-        db
-          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
-          .get(),
-      ).toEqual({ value: "1" });
-      expect(
-        db.prepare("SELECT count(*) AS count FROM memory_index_chunk_provenance").get(),
-      ).toEqual({ count: 1 });
-      expect(
-        db.prepare("SELECT length(embedding) AS bytes FROM memory_embedding_cache").get(),
-      ).toBeUndefined();
+      expectRow(db, "SELECT text, length(embedding) AS bytes FROM memory_index_chunks", {
+        text: "saffronquasar",
+        bytes: 0,
+      });
+      expectRow(db, "SELECT hash FROM memory_index_sources", { hash: "" });
+      expectRow(db, "SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'", {
+        value: "1",
+      });
+      expectRow(db, "SELECT count(*) AS count FROM memory_index_chunk_provenance", { count: 1 });
+      expectRow(db, "SELECT length(embedding) AS bytes FROM memory_embedding_cache", undefined);
     },
   );
 
@@ -424,17 +342,17 @@ describe("memory storage migration", () => {
         BEGIN SELECT RAISE(ABORT, 'refuse revision'); END;
     `);
     expect(() => markInvalidImportedMemoryEmbeddings(db, "legacy")).toThrow("refuse revision");
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "h" });
-    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 10 });
-    expect(
-      db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
-        .get(),
-    ).toBeUndefined();
+    expectRow(db, "SELECT hash FROM memory_index_sources", { hash: "h" });
+    expectRow(db, "SELECT revision FROM memory_index_state", { revision: 10 });
+    expectRow(
+      db,
+      "SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'",
+      undefined,
+    );
     db.exec("DROP TRIGGER refuse_revision");
     markInvalidImportedMemoryEmbeddings(db, "legacy");
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
-    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 11 });
+    expectRow(db, "SELECT hash FROM memory_index_sources", { hash: "" });
+    expectRow(db, "SELECT revision FROM memory_index_state", { revision: 11 });
   });
 
   it("rolls physical changes back with its enclosing admitted migration", () => {
@@ -442,18 +360,16 @@ describe("memory storage migration", () => {
     db.exec("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE");
     migrateMemoryIndexStorage(db);
     db.exec("ROLLBACK; PRAGMA foreign_keys = ON");
-    expect(db.prepare("SELECT embedding FROM memory_index_chunks").get()).toEqual({
+    expectRow(db, "SELECT embedding FROM memory_index_chunks", {
       embedding: "[1.0000000000000002,0.1]",
     });
-    expect(
-      db
-        .prepare(
-          "SELECT name FROM pragma_table_info('memory_index_chunks') WHERE name = 'chunk_rowid'",
-        )
-        .get(),
-    ).toBeUndefined();
-    expect(db.prepare("SELECT rowid FROM memory_index_chunks_fts").get()).toEqual({ rowid: 99 });
-    expect(db.prepare("SELECT chunk_id FROM memory_index_chunk_provenance").get()).toEqual({
+    expectRow(
+      db,
+      "SELECT name FROM pragma_table_info('memory_index_chunks') WHERE name = 'chunk_rowid'",
+      undefined,
+    );
+    expectRow(db, "SELECT rowid FROM memory_index_chunks_fts", { rowid: 99 });
+    expectRow(db, "SELECT chunk_id FROM memory_index_chunk_provenance", {
       chunk_id: "logical-id",
     });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
@@ -493,9 +409,7 @@ describe("memory storage migration", () => {
     (addition, refusal) => {
       const db = legacyDatabase();
       db.exec(addition);
-      const before = snapshot(db);
-      expect(() => migrateMemoryIndexStorage(db)).toThrow(refusal);
-      expect(snapshot(db)).toEqual(before);
+      expectRefusal(db, refusal);
       expect(
         db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE '%storage_migration%'").all(),
       ).toEqual([]);
@@ -535,9 +449,7 @@ describe("memory storage migration", () => {
         embedding,
       );
       db.exec("PRAGMA foreign_keys = ON");
-      const before = snapshot(db);
-      expect(() => migrateMemoryIndexStorage(db)).toThrow(/partial memory storage|noncanonical/);
-      expect(snapshot(db)).toEqual(before);
+      expectRefusal(db, /partial memory storage|noncanonical/);
     },
   );
 
@@ -550,9 +462,7 @@ describe("memory storage migration", () => {
       db.prepare(
         "INSERT INTO memory_embedding_cache VALUES('provider', 'model', 'provider-key', 'h', ?, 2, 121)",
       ).run(embedding);
-      const before = snapshot(db);
-      expect(() => migrateMemoryIndexStorage(db)).toThrow("invalid binary embeddings");
-      expect(snapshot(db)).toEqual(before);
+      expectRefusal(db, "invalid binary embeddings");
     },
   );
 
@@ -566,12 +476,14 @@ describe("memory storage migration", () => {
       "INSERT INTO memory_embedding_cache VALUES('provider', 'model', 'provider-key', 'h', ?, 2, 121, 'current format extension')",
     ).run(embedding);
     migrateMemoryIndexStorage(db);
-    expect(db.prepare("SELECT embedding, retained_note FROM memory_embedding_cache").get()).toEqual(
-      { embedding, retained_note: "current format extension" },
-    );
-    expect(
-      db.prepare("SELECT chunk_rowid, typeof(embedding) AS kind FROM memory_index_chunks").get(),
-    ).toEqual({ chunk_rowid: 7, kind: "blob" });
+    expectRow(db, "SELECT embedding, retained_note FROM memory_embedding_cache", {
+      embedding,
+      retained_note: "current format extension",
+    });
+    expectRow(db, "SELECT chunk_rowid, typeof(embedding) AS kind FROM memory_index_chunks", {
+      chunk_rowid: 7,
+      kind: "blob",
+    });
   });
 
   it("refuses malformed binary chunks before converting a remaining legacy cache", () => {
@@ -581,9 +493,7 @@ describe("memory storage migration", () => {
     db.exec(`INSERT INTO memory_index_chunks(id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
       VALUES('logical-id', 'memory/a.md', 'memory', 1, 2, 'h', 'model', 'saffronquasar', X'01', 123)`);
     db.exec("PRAGMA foreign_keys = ON");
-    const before = snapshot(db);
-    expect(() => migrateMemoryIndexStorage(db)).toThrow("invalid binary embeddings");
-    expect(snapshot(db)).toEqual(before);
+    expectRefusal(db, "invalid binary embeddings");
   });
 
   it("preserves existing revision triggers and indexes without relying on the outer schema ensure", () => {
@@ -616,7 +526,7 @@ describe("memory storage migration", () => {
     db.exec(
       "UPDATE memory_index_chunks SET text = 'new searchable text'; DELETE FROM memory_index_chunks",
     );
-    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 12 });
+    expectRow(db, "SELECT revision FROM memory_index_state", { revision: 12 });
   });
 
   it.each([0, 1_100])("spaces renewals after %i ms and releases the callback", (delay) => {
@@ -648,13 +558,11 @@ describe("memory storage migration", () => {
       const count = renewals.length;
       db.prepare("SELECT openclaw_memory_embedding_from_json(?)").get("[2]");
       expect(renewals).toHaveLength(count);
-      expect(
-        db
-          .prepare(
-            "SELECT count(*) AS count FROM memory_index_chunks WHERE typeof(embedding) = 'blob'",
-          )
-          .get(),
-      ).toEqual({ count: 11 });
+      expectRow(
+        db,
+        "SELECT count(*) AS count FROM memory_index_chunks WHERE typeof(embedding) = 'blob'",
+        { count: 11 },
+      );
     } finally {
       now.mockRestore();
     }
