@@ -69,7 +69,7 @@ const fixtures = Array.from({ length: sessionCount }, (_, index) => {
   return { key, entry, retained };
 });
 function publish(index: number) {
-  const fixture = fixtures[index % sessionCount];
+  const fixture = fixtures[index % sessionCount]!;
   const entry = {
     ...fixture.entry,
     updatedAt: index,
