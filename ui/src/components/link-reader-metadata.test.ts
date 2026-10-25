@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -7,6 +7,11 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import { subscribeLinkReaderMetadata } from "./link-reader-metadata.ts";
+import {
+  LINK_READER_METADATA_REQUEST_EVENT,
+  LINK_READER_METADATA_UPDATED_EVENT,
+} from "./link-reader-response.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./link-reader-panel.tsx";
 
@@ -38,12 +43,15 @@ const merged: ControlUiLinkReaderDocument = {
   badge: { label: "Merged", tone: "accent" },
   metadata: [{ label: "Additions", value: "42" }],
 };
-function makeProvider() {
+function makeProvider(client?: GatewayBrowserClient) {
   const host = document.createElement(tag);
   if (!(host instanceof LinkReaderHovercardProvider)) {
     throw new Error("Missing reader bridge");
   }
   host.readers = [reader];
+  if (client) {
+    host.client = client;
+  }
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.className = "markdown-github-item";
@@ -91,6 +99,82 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+it("shares metadata delivery and panel replay across a mounting batch of providers", async () => {
+  const client = createTestGatewayClient(() => Promise.resolve(merged));
+  const panel = await openPanel({ client });
+  await waitForSolid(() =>
+    expect(panel.querySelector(".lr-state")?.textContent).toContain("Merged"),
+  );
+  const requestMetadata = vi.fn();
+  window.addEventListener(LINK_READER_METADATA_REQUEST_EVENT, requestMetadata);
+  onTestFinished(() =>
+    window.removeEventListener(LINK_READER_METADATA_REQUEST_EVENT, requestMetadata),
+  );
+  const listen = vi.spyOn(window, "addEventListener");
+  const unlisten = vi.spyOn(window, "removeEventListener");
+  const rows = Array.from({ length: 100 }, () => makeProvider(client));
+  expect(
+    listen.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(1);
+  await waitForSolid(() =>
+    expect(rows.every(({ anchor }) => anchor.getAttribute("aria-description") === "Merged")).toBe(
+      true,
+    ),
+  );
+  expect(requestMetadata).toHaveBeenCalledOnce();
+
+  rows[0]!.host.agentId = "another-agent";
+  await Promise.resolve();
+  expect(rows[0]!.anchor.hasAttribute("aria-description")).toBe(false);
+  expect(rows[1]!.anchor.getAttribute("aria-description")).toBe("Merged");
+  rows.slice(0, 99).forEach(({ host }) => host.remove());
+  expect(
+    unlisten.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(0);
+  rows[99]!.host.remove();
+  expect(
+    unlisten.mock.calls.filter(([type]) => type === LINK_READER_METADATA_UPDATED_EVENT),
+  ).toHaveLength(1);
+
+  requestMetadata.mockClear();
+  const retired = makeProvider();
+  retired.host.remove();
+  await Promise.resolve();
+  expect(requestMetadata).not.toHaveBeenCalled();
+});
+
+it("isolates metadata callbacks and retires duplicate registrations independently", () => {
+  const client = createTestGatewayClient(() => Promise.resolve(merged));
+  const scope = { client, agentId: undefined, sessionKey: undefined };
+  const report = vi.fn();
+  vi.stubGlobal("reportError", report);
+  const notify = vi.fn();
+  const failure = new Error("Metadata presentation failed");
+  let stopRetired = () => {};
+  const stopFirst = subscribeLinkReaderMetadata(window, scope, () => {
+    stopRetired();
+    throw failure;
+  });
+  stopRetired = subscribeLinkReaderMetadata(window, scope, notify);
+  const stopLast = subscribeLinkReaderMetadata(window, scope, notify);
+  onTestFinished(() => {
+    stopFirst();
+    stopRetired();
+    stopLast();
+  });
+  window.dispatchEvent(
+    new CustomEvent(LINK_READER_METADATA_UPDATED_EVENT, {
+      detail: {
+        ...scope,
+        target: { href: url, reader },
+        preview: merged,
+      },
+    }),
+  );
+  expect(notify).toHaveBeenCalledOnce();
+  expect(report).toHaveBeenCalledExactlyOnceWith(failure);
 });
 
 it.each([
