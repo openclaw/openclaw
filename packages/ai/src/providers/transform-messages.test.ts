@@ -9,10 +9,11 @@ import { transformMessages } from "./transform-messages.js";
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
-
 const model = makeProviderModel("openai-completions", "openai", "text-only-model");
 afterEach(() => vi.restoreAllMocks());
 const text = (value: string) => ({ type: "text" as const, text: value });
+const omittedImage = text("(image omitted: model does not support images)");
+const omittedVideo = text("(video omitted: provider does not support video input)");
 function image(data: string, mimeType = "image/png") {
   return { type: "image" as const, data, mimeType };
 }
@@ -67,12 +68,19 @@ it("replays missing synchronous and delayed asynchronous results with their orig
   expect(messages.map(({ role }) => role)).toEqual(["assistant", "assistant"]);
 });
 
-it("keeps host-sanitized repetition history through provider replay", () => {
-  const message = makeAssistant(
+it.each([
+  makeAssistant(
     [text("Earlier answer stays intact."), text("[Repetitive output stopped]")],
     "error",
-    { errorCode: "openclaw_repetitive_output" },
-  );
+    {
+      errorCode: "openclaw_repetitive_output",
+    },
+  ),
+  makeAssistant(
+    [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
+    "length",
+  ),
+])("preserves same-model $stopReason history", (message) => {
   expect(transformMessages([message], model)).toEqual([message]);
 });
 
@@ -96,15 +104,6 @@ it.each(["partial text", "partial tool-call turn", "placeholder with hidden reas
     expect(failed).toEqual(original);
   },
 );
-it("preserves native same-model reasoning on a length stop", () => {
-  const assistant = makeAssistant(
-    [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
-    "length",
-  );
-
-  expect(transformMessages([assistant], model)).toEqual([assistant]);
-});
-
 it("normalizes null or missing content before provider transforms", () => {
   const { content: _content, ...missingContent } = toolResult([]);
   const messages = [
@@ -119,29 +118,23 @@ it("normalizes null or missing content before provider transforms", () => {
 
 it("replaces unsupported user media in order without exposing video bytes", () => {
   const sentinel = "video-secret-sentinel";
-  const messages = [
-    {
-      role: "user",
-      content: [
-        text("before"),
-        image("image-one"),
-        { type: "video", data: sentinel, mimeType: "video/mp4" },
-        text("after"),
-        image("image-two", "image/jpeg"),
-      ],
-      timestamp: 1,
-    },
-  ] satisfies [ProviderMessage];
-
-  const originalContent = structuredClone(messages[0].content);
+  const content = [
+    text("before"),
+    image("image-one"),
+    { type: "video" as const, data: sentinel, mimeType: "video/mp4" },
+    text("after"),
+    image("image-two", "image/jpeg"),
+  ];
+  const messages = [{ role: "user", content, timestamp: 1 }] satisfies [ProviderMessage];
+  const originalContent = structuredClone(content);
   const transformed = transformProviderMessages(messages, model);
 
   expect(transformed[0]?.content).toEqual([
     text("before"),
-    text("(image omitted: model does not support images)"),
-    text("(video omitted: provider does not support video input)"),
+    omittedImage,
+    omittedVideo,
     text("after"),
-    text("(image omitted: model does not support images)"),
+    omittedImage,
   ]);
   expect(JSON.stringify(transformed)).not.toContain(sentinel);
 
@@ -156,9 +149,7 @@ it("replaces unsupported user media in order without exposing video bytes", () =
     ...advertisedVideoModel,
     api: "openai-responses",
   });
-  expect(responses[0]?.content).toContainEqual(
-    text("(video omitted: provider does not support video input)"),
-  );
+  expect(responses[0]?.content).toContainEqual(omittedVideo);
   expect(JSON.stringify(responses)).not.toContain(sentinel);
 });
 
@@ -173,15 +164,10 @@ it("preserves structured tool blocks while projecting only real images", () => {
     metadata,
     image("image-three", "image/webp"),
   ] as unknown as ToolResultMessage["content"];
-  const [transformed] = transformMessages([toolResult(content)], model);
-  const projected = (transformed as ToolResultMessage).content;
-
-  expect(projected).toEqual([
-    resource,
-    text("(tool image omitted: model does not support images)"),
-    metadata,
-    text("(tool image omitted: model does not support images)"),
-  ]);
+  const projected = (transformMessages([toolResult(content)], model)[0] as ToolResultMessage)
+    .content;
+  const omitted = text("(tool image omitted: model does not support images)");
+  expect(projected).toEqual([resource, omitted, metadata, omitted]);
   expect(projected[0]).toBe(resource);
   expect(projected[2]).toBe(metadata);
 });
@@ -195,26 +181,15 @@ it.each([
     model: async ? "source-model" : model.id,
     timestamp: 1,
   });
-  const messages: Message[] = [
-    assistant,
-    ...(async ? [{ ...assistant, content: [text("later answer")] }] : []),
-    toolResult([text("actual result")], toolCallId, 2),
-  ];
+  const later = async ? [{ ...assistant, content: [text("later answer")] }] : [];
+  const recorded = toolResult([text("actual result")], toolCallId, 2);
+  const messages: Message[] = [assistant, ...later, recorded];
   const original = structuredClone(messages);
 
-  const transformed = transformMessages(messages, model);
-
-  expect(transformed.map((message) => message.role)).toEqual([
-    "assistant",
-    "toolResult",
-    ...(async ? ["assistant"] : []),
+  expect(transformMessages(messages, model)).toEqual([
+    { ...assistant, content: [call()] },
+    { ...recorded, toolCallId: "call_1" },
+    ...later,
   ]);
-  expect(transformed[0]?.content).toEqual([call()]);
-  expect(transformed[1]).toMatchObject({
-    role: "toolResult",
-    toolCallId: "call_1",
-    isError: false,
-    content: [text("actual result")],
-  });
   expect(messages).toEqual(original);
 });
