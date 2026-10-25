@@ -10,11 +10,25 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { projectAgentSelection, projectGateway } from "./reactive/application.ts";
+import { parseAgentSessionKey } from "./sessions/session-key.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
   Map<string, Promise<McpAppDiscoverResult>>
 >();
+
+/** A qualified session key already owns its agent; keep independently updated selection out. */
+export function resolveMcpAppExtensionTarget(input: {
+  sessionKey?: string;
+  agentId?: string;
+}): McpAppExtensionTarget {
+  const sessionKey = input.sessionKey?.trim() ?? "";
+  if (!sessionKey) {
+    return { sessionKey, ...(input.agentId ? { agentId: input.agentId } : {}) };
+  }
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  return { sessionKey, ...(agentId ? { agentId } : {}) };
+}
 
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
 export function createMcpAppCatalog(

@@ -8,7 +8,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
+import { createMcpAppCatalog, resolveMcpAppExtensionTarget } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -30,10 +30,11 @@ export function AppsPage(props: { appSearch?: string }) {
   const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
   const catalog = createMcpAppCatalog(
     context,
-    () => ({
-      sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
-      agentId: selection.read().state.selectedId ?? undefined,
-    }),
+    () =>
+      resolveMcpAppExtensionTarget({
+        sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
+        agentId: selection.read().state.selectedId ?? undefined,
+      }),
     () => true,
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {

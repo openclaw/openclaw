@@ -17,7 +17,7 @@ import type {
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { UserFacingError } from "../lib/format-error.ts";
-import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
+import { createMcpAppCatalog, resolveMcpAppExtensionTarget } from "../lib/mcp-app-catalog.ts";
 import { mcpAppRouteSearch } from "../lib/mcp-app-route.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -71,10 +71,11 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
   onSettled(() => () => {
     active = false;
   });
-  const target = () => ({
-    sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
-    agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
-  });
+  const target = () =>
+    resolveMcpAppExtensionTarget({
+      sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
+      agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
+    });
   function captureOperation() {
     const client = context.gateway.snapshot.client;
     const initialTarget = target();
