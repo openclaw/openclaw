@@ -11,26 +11,29 @@ function createClient(requestImpl: (method: string, params: unknown) => unknown)
     async (method: string, params: unknown) => await requestImpl(method, params),
   );
   const client = { request } as unknown as CodexAppServerClient;
-  return { client, request };
+  return { ...resumeFixture(client), request };
 }
 
-function resumeRequestedThread(
-  client: CodexAppServerClient,
-  overrides: Omit<Parameters<typeof resumeCodexAppServerThread>[0], "client" | "request"> & {
-    request?: CodexThreadResumeParams;
-  },
-) {
-  return resumeCodexAppServerThread({
-    client,
-    request: { threadId: "thread-1" },
-    ...overrides,
-  });
+function resumeFixture(client: CodexAppServerClient) {
+  const abandonClient = vi.fn(async () => undefined);
+  const resume = (
+    overrides: Partial<
+      Omit<Parameters<typeof resumeCodexAppServerThread>[0], "client" | "abandonClient">
+    > = {},
+  ) =>
+    resumeCodexAppServerThread({
+      client,
+      abandonClient,
+      request: { threadId: "thread-1" },
+      ...overrides,
+    });
+  return { client, abandonClient, resume };
 }
 
 function createHarness(options?: Parameters<typeof createClientHarness>[0]) {
   const harness = createClientHarness(options);
   onTestFinished(() => harness.client.close());
-  return harness;
+  return { ...harness, ...resumeFixture(harness.client) };
 }
 
 describe("resumeCodexAppServerThread", () => {
@@ -41,7 +44,7 @@ describe("resumeCodexAppServerThread", () => {
     "preserves subscription certainty (custom=$custom, written=$written)",
     async ({ custom, written }) => {
       const harness = createHarness();
-      const abandonClient = vi.fn(async () => undefined);
+      const { abandonClient } = harness;
       const rejection = new Error("host lineage changed");
       const withCurrent = async (write: () => void) => {
         if (written) {
@@ -50,8 +53,7 @@ describe("resumeCodexAppServerThread", () => {
         throw rejection;
       };
       await expect(
-        resumeRequestedThread(harness.client, {
-          abandonClient,
+        harness.resume({
           withCurrent,
           ...(custom
             ? {
@@ -107,14 +109,13 @@ describe("resumeCodexAppServerThread", () => {
         },
         method,
       );
-      const { client, request } = createClient((requestMethod) => {
+      const { resume, abandonClient, request } = createClient((requestMethod) => {
         if (requestMethod === "thread/resume") {
           throw rejection;
         }
         return { status: "unsubscribed" };
       });
-      const abandonClient = vi.fn(async () => undefined);
-      await expect(resumeRequestedThread(client, { abandonClient })).rejects.toBe(rejection);
+      await expect(resume()).rejects.toBe(rejection);
       expect(request.mock.calls.map(([requestMethod]) => requestMethod)).toEqual(
         closing ? ["thread/resume"] : ["thread/resume", "thread/unsubscribe"],
       );
@@ -125,10 +126,9 @@ describe("resumeCodexAppServerThread", () => {
   it("preserves a physical pre-write ownership rejection without cleanup or retirement", async () => {
     const rejection = new Error("host authority ended");
     const harness = createHarness();
-    const abandonClient = vi.fn(async () => undefined);
+    const { abandonClient } = harness;
     await expect(
-      resumeRequestedThread(harness.client, {
-        abandonClient,
+      harness.resume({
         assertCurrent: () => {
           throw rejection;
         },
@@ -158,11 +158,10 @@ describe("resumeCodexAppServerThread", () => {
     });
     const request = vi.spyOn(harness.client, "request");
     const assertCurrent = vi.fn();
-    const abandonClient = vi.fn(async () => undefined);
+    const { abandonClient } = harness;
     const onSubscriptionReleased = vi.fn();
     await expect(
-      resumeRequestedThread(harness.client, {
-        abandonClient,
+      harness.resume({
         onSubscriptionReleased,
         assertCurrent,
       }),
@@ -183,9 +182,9 @@ describe("resumeCodexAppServerThread", () => {
   it("retires the exact client after a written structured failure loses cleanup ownership", async () => {
     const harness = createHarness();
     let current = true;
-    const abandonClient = vi.fn(async () => harness.client.close());
-    const resume = resumeRequestedThread(harness.client, {
-      abandonClient,
+    const { abandonClient } = harness;
+    abandonClient.mockImplementation(async () => harness.client.close());
+    const resume = harness.resume({
       assertCurrent: () => {
         if (!current) {
           throw new CodexAdoptedThreadActiveError();
@@ -212,15 +211,13 @@ describe("resumeCodexAppServerThread", () => {
   });
 
   it("retires the exact client when the response names another thread", async () => {
-    const { client } = createClient(async () => threadStartResult("thread-2", "/repo"));
-    const abandonClient = vi.fn(async () => undefined);
+    const { resume, abandonClient } = createClient(async () =>
+      threadStartResult("thread-2", "/repo"),
+    );
 
-    await expect(
-      resumeRequestedThread(client, {
-        abandonClient,
-        request: { threadId: "thread-1", excludeTurns: true },
-      }),
-    ).rejects.toThrow("returned thread-2 for thread-1");
+    await expect(resume({ request: { threadId: "thread-1", excludeTurns: true } })).rejects.toThrow(
+      "returned thread-2 for thread-1",
+    );
     expect(abandonClient).toHaveBeenCalledOnce();
   });
 });

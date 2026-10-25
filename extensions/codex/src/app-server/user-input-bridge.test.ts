@@ -34,10 +34,6 @@ function requestParams(overrides: Record<string, unknown> = {}, secret = false) 
   };
 }
 
-function secretRequestParams(overrides: Record<string, unknown> = {}) {
-  return requestParams(overrides, true);
-}
-
 function setup(
   options: Pick<
     Parameters<typeof createCodexUserInputBridge>[0],
@@ -59,7 +55,11 @@ function setup(
     bridge.handleRequest({ id, params: input });
   const answerText = (text: string) =>
     claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text });
-  return { params, gateway, onOrdinaryResponse, bridge, request, answerText };
+  const prompt = async (count = 1) => {
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(count));
+    return vi.mocked(params.onBlockReply!).mock.calls[count - 1]![0];
+  };
+  return { params, gateway, onOrdinaryResponse, bridge, request, answerText, prompt };
 }
 
 function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
@@ -74,9 +74,9 @@ function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
 describe("Codex app-server user input bridge", () => {
   it("cancels the gateway record on run abort", async () => {
     const controller = new AbortController();
-    const { params, gateway, onOrdinaryResponse, bridge } = setup({ signal: controller.signal });
+    const { prompt, gateway, onOrdinaryResponse, bridge } = setup({ signal: controller.signal });
     const response = bridge.handleRequest({ id: "input-abort", params: requestParams() });
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await prompt();
     const lateAnswer = gateway.call(
       "question.resolve",
       {},
@@ -101,11 +101,11 @@ describe("Codex app-server user input bridge", () => {
       firstPending = false;
       return await firstWait.promise;
     });
-    const { params, onOrdinaryResponse, request } = setup({
+    const { prompt, onOrdinaryResponse, request } = setup({
       gatewayCall: gateway.call,
     });
     const first = request("first", requestParams({ itemId: "first" }));
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await prompt();
     const second = request("second", requestParams({ itemId: "second" }));
     expect(gateway.calls.filter(({ method }) => method === "question.request")).toHaveLength(1);
     firstWait.reject(new Error("Gateway wait failed"));
@@ -130,11 +130,9 @@ describe("Codex app-server user input bridge", () => {
   });
 
   it("keeps secret questions on the warned text-only path", async () => {
-    const { params, gateway, onOrdinaryResponse, request, answerText } = setup();
-    const response = request("input-secret", secretRequestParams());
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-
-    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    const { prompt, gateway, onOrdinaryResponse, request, answerText } = setup();
+    const response = request("input-secret", requestParams({}, true));
+    const payload = await prompt();
     expect(payload.text).toContain("This channel may show your reply");
     expect(payload.channelData).toBeUndefined();
     expect(gateway.calls).toHaveLength(0);
@@ -144,7 +142,7 @@ describe("Codex app-server user input bridge", () => {
   });
 
   it("requires isSecret to be an own input property", async () => {
-    const { params, gateway, request, answerText } = setup();
+    const { prompt, gateway, request, answerText } = setup();
     const question = Object.assign(Object.create({ isSecret: true }), {
       id: "token",
       header: "Token",
@@ -154,37 +152,28 @@ describe("Codex app-server user input bridge", () => {
     });
 
     const response = request("input-inherited-secret", requestParams({ questions: [question] }));
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-
+    const payload = await prompt();
     expect(gateway.calls.some((entry) => entry.method === "question.request")).toBe(true);
-    expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].text).not.toContain(
-      "This channel may show your reply",
-    );
+    expect(payload.text).not.toContain("This channel may show your reply");
     await answerText("public");
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["public"] } } });
   });
 
   it("queues a replacement secret request when an earlier prompt later fails", async () => {
     const firstDelivery = createDeferred<void>();
-    const { params, request, answerText } = setup({ gatewayCall: undefined });
+    const { params, prompt, request, answerText } = setup({ gatewayCall: undefined });
     params.onBlockReply = vi
       .fn()
       .mockReturnValueOnce(firstDelivery.promise)
       .mockResolvedValue(undefined);
 
-    const first = request("input-secret-replaced", secretRequestParams());
-    const replacement = request("input-secret-current", secretRequestParams());
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    const first = request("input-secret-replaced", requestParams({}, true));
+    const replacement = request("input-secret-current", requestParams({}, true));
+    expect((await prompt()).text).toContain("may show your reply");
 
     firstDelivery.reject(new Error("previous prompt delivery failed"));
     await expect(first).resolves.toEqual({ answers: {} });
-    await vi.waitFor(() =>
-      expect(
-        vi
-          .mocked(params.onBlockReply!)
-          .mock.calls.filter(([payload]) => payload.text?.includes("may show your reply")),
-      ).toHaveLength(2),
-    );
+    expect((await prompt(2)).text).toContain("may show your reply");
 
     await expect(answerText("replacement secret")).resolves.toBe(true);
     await expect(replacement).resolves.toEqual({
@@ -194,9 +183,9 @@ describe("Codex app-server user input bridge", () => {
 
   it("dismisses a resolved inbound request without recording an invented empty answer", async () => {
     const controller = new AbortController();
-    const { params, gateway, onOrdinaryResponse, bridge } = setup();
+    const { prompt, gateway, onOrdinaryResponse, bridge } = setup();
     const response = bridge.handleRequest({ id: 42, params: requestParams() }, controller.signal);
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    await prompt();
     controller.abort(new CodexServerRequestResolvedError());
 
     await expect(response).resolves.toEqual({ answers: {} });

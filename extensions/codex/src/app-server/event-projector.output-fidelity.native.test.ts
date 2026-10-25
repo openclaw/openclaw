@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import {
@@ -18,6 +17,7 @@ import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   listenForNativeResponses,
   nativeAppServerOptions,
+  runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -138,30 +138,21 @@ it(
     );
     const threadId = started.thread.id;
     const notifications: CodexServerNotification[] = [];
-    const completed = createDeferred<unknown>();
-    void completed.promise.catch(() => undefined);
     const removeHandler = client.addNotificationHandler((notification) => {
       if (!isJsonObject(notification.params) || notification.params.threadId !== threadId) {
         return;
       }
       notifications.push(notification);
-      if (notification.method === "turn/completed") {
-        completed.resolve(notification.params.turn);
-      }
     });
     context.onTestFinished(removeHandler);
-    const timer = setTimeout(
-      () => completed.reject(new Error("Native output fidelity turn timed out")),
-      30_000,
+    const turn = requireRecord(
+      await runNativeTurn(client, threadId, "Read source.txt.", { completionTimeoutMs: 30_000 }),
+      "completed turn",
     );
-    timer.unref();
-    context.onTestFinished(() => clearTimeout(timer));
-    const turn = await client.request("turn/start", {
-      threadId,
-      input: [{ type: "text", text: "Read source.txt.", text_elements: [] }],
-    });
-    await expect(completed.promise).resolves.toMatchObject({ status: "completed" });
-    clearTimeout(timer);
+    expect(turn).toMatchObject({ status: "completed" });
+    if (typeof turn.id !== "string") {
+      throw new Error("Expected completed turn ID");
+    }
     expect(failures).toEqual([]);
     expect(requests).toHaveLength(2);
 
@@ -208,7 +199,7 @@ it(
     const projector = new CodexAppServerEventProjector(
       { ...(await createParams()), workspaceDir: native.cwd },
       threadId,
-      turn.turn.id,
+      turn.id,
     );
     for (const notification of notifications) {
       await projector.handleNotification(prepareCodexServerNotification(notification));
