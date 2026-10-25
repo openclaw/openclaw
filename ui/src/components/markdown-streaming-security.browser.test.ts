@@ -4,12 +4,7 @@ import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-te
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import transcriptCorpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import {
-  partitionMarkdownContent,
-  toMarkdownContent,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownDomParts,
-} from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownDomParts } from "./markdown.ts";
 
 type SecurityCase = { name: string; source: string; options?: MarkdownRenderOptions };
 
@@ -235,7 +230,9 @@ function serializedContent(root: HTMLElement): string {
   const walker = document.createTreeWalker(copy, NodeFilter.SHOW_COMMENT);
   const markers: Node[] = [];
   for (let marker = walker.nextNode(); marker; marker = walker.nextNode()) {
-    markers.push(marker);
+    if (marker.nodeValue === "") {
+      markers.push(marker);
+    }
   }
   for (const marker of markers) {
     marker.parentNode?.removeChild(marker);
@@ -275,11 +272,14 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
     const staticContainer = document.body.appendChild(document.createElement("div"));
     const staticReconciler = new MarkdownDomReconciler(staticContainer, () => () => {});
     try {
-      staticReconciler.update(
-        `security:${sample.name}:static`,
+      const settled = prepareMessageMarkdown(
         sample.source,
-        partitionMarkdownContent(toMarkdownContent(sample.source, sample.options)),
+        `security:${sample.name}:static`,
+        { role: "assistant", isStreaming: false },
+        sample.options ?? {},
       );
+      expect(settled.parts.every((part) => typeof part === "string")).toBe(true);
+      staticReconciler.update(settled.messageKey, settled.source, settled.parts);
       expect(unsafeDom(staticContainer), `${sample.name}, static`).toEqual([]);
       expect(serializedContent(staticContainer), `${sample.name}, static`).toBe(expected);
     } finally {

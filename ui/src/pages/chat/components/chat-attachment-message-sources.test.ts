@@ -19,10 +19,6 @@ beforeEach(() => {
   mounted = undefined;
   view = document.body.appendChild(document.createElement("div"));
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation((value) => value);
-  vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation((value): [string, string] => [
-    "",
-    `<div class="streaming-markdown">${value}</div>`,
-  ]);
 });
 
 afterEach(() => {

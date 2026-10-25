@@ -1,7 +1,7 @@
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
-  partitionMarkdownContent,
-  toMarkdownContent,
+  partitionMarkdownHtml,
+  toSanitizedMarkdownHtml,
   toStreamingMarkdownDomParts,
 } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
@@ -48,7 +48,7 @@ export function prepareMessageMarkdown(
     : markdownRenderOptions;
   const parts: [MarkdownContent, MarkdownContent] = opts.isStreaming
     ? toStreamingMarkdownDomParts(source, options, isAssistant ? messageKey : undefined)
-    : partitionMarkdownContent(toMarkdownContent(source, options), messageKey);
+    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
   if (duplicateSuffix) {
     const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
     const template = document.createElement("template");
@@ -66,7 +66,10 @@ export function prepareMessageMarkdown(
     badge.setAttribute("aria-label", duplicateSuffix.label);
     badge.textContent = `×${duplicateSuffix.count}`;
     (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-    parts[terminalPart] = { html: template.innerHTML, fragment: template.content };
+    parts[terminalPart] =
+      typeof content === "string"
+        ? template.innerHTML
+        : { html: template.innerHTML, fragment: template.content };
   }
   return { messageKey, source, parts, recoverFullMessage };
 }

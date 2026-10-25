@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281513,
-  "reason": "Token-to-DOM renderer: Peter accepted the chat boot tradeoff after streaming script CPU fell 8.6% and HTML assignments 2129 to 178 in the original experiment; final pre-conflict 20-pair refresh measured -6.7% CPU and -88.5% assignments. After integrating main368b9dc52b9, startup measures 281513 B with unchanged requests; ratchet to this measured head.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 281465,
+  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "updatedAt": "2026-10-25"
 }

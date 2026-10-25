@@ -4,8 +4,8 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import * as markdownText from "./markdown-text.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const sanitizedInputLengths = vi.hoisted(() => {
   // Cached markdown sanitizers must be created through this file's factory wrapper.

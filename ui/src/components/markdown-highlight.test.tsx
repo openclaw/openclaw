@@ -11,7 +11,8 @@ import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import corpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { MarkdownHtml } from "./solid/markdown-html.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 

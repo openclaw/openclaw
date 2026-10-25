@@ -44,7 +44,7 @@ const MARKDOWN_CHAR_LIMIT = 140_000;
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
-const markdownCache = new Map<string, { content: MarkdownContent; highlighting?: boolean }>();
+const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
 const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
@@ -234,11 +234,10 @@ export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderO
     .replaceAll("\r", "&#13;");
 }
 
-function cachedMarkdown(
+export function toSanitizedMarkdownHtml(
   markdownLocal: string,
-  options: MarkdownRenderOptions,
-  direct: boolean,
-): MarkdownContent {
+  options: MarkdownRenderOptions = {},
+): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const prepared =
     renderOptions.mode === "document" || markdownLocal.length <= MARKDOWN_PARSE_LIMIT
@@ -256,39 +255,24 @@ function cachedMarkdown(
     return "";
   }
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
-    return renderSanitizedMarkdown(renderInput, renderOptions, undefined, direct);
+    return markdownContentHtml(renderSanitizedMarkdown(renderInput, renderOptions));
   }
-  const cacheKey = `${direct}\0${markdownRenderKey(renderOptions)}\0${renderInput}`;
+  const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
   let cached = markdownCache.get(cacheKey);
   // Only highlightable code changes when the optional highlighter loads.
   if (
     !cached ||
     (cached.highlighting !== undefined && cached.highlighting !== markdownHighlightingReady())
   ) {
-    cached = { content: renderSanitizedMarkdown(renderInput, renderOptions, undefined, direct) };
-    if (HIGHLIGHTABLE_CODE_RE.test(markdownContentHtml(cached.content))) {
+    cached = { html: markdownContentHtml(renderSanitizedMarkdown(renderInput, renderOptions)) };
+    if (HIGHLIGHTABLE_CODE_RE.test(cached.html)) {
       cached.highlighting = markdownHighlightingReady();
     }
   }
   markdownCache.delete(cacheKey);
   markdownCache.set(cacheKey, cached);
   pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
-  return cached.content;
-}
-
-/** Immutable prepared content; consumers clone the fragment before inserting or decorating it. */
-export function toMarkdownContent(
-  markdown: string,
-  options: MarkdownRenderOptions = {},
-): MarkdownContent {
-  return cachedMarkdown(markdown, options, true);
-}
-
-export function toSanitizedMarkdownHtml(
-  markdown: string,
-  options: MarkdownRenderOptions = {},
-): string {
-  return markdownContentHtml(cachedMarkdown(markdown, options, false));
+  return cached.html;
 }
 
 function markdownRenderKey(options: MarkdownRenderEnv): string {
@@ -303,51 +287,24 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
 }
 
 /** Keep late highlighting in the same mutable DOM owner, including stream finalization. */
-export function partitionMarkdownContent(
-  content: MarkdownContent,
-  streamKey?: string,
-): [MarkdownContent, MarkdownContent] {
-  const html = markdownContentHtml(content);
+export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
   if (!HIGHLIGHTABLE_CODE_RE.test(html) || !markdownHighlightingPending()) {
-    return [content, ""];
+    return [html, ""];
   }
   const previous = streamingMarkdownStableHtml(streamKey);
   const stable = html.startsWith(previous) ? previous : "";
   return [stable, html.slice(stable.length)];
 }
 
-export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
-  const [stable, tail] = partitionMarkdownContent(html, streamKey);
-  return [markdownContentHtml(stable), markdownContentHtml(tail)];
-}
-
-export function toStreamingMarkdownParts(
-  markdown: string,
-  options: MarkdownRenderOptions = {},
-  streamKey?: string,
-): [string, string] {
-  const [stable, tail] = streamingMarkdownParts(markdown, options, streamKey, false);
-  return [markdownContentHtml(stable), markdownContentHtml(tail)];
-}
-
 export function toStreamingMarkdownDomParts(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
   streamKey?: string,
-): [MarkdownContent, MarkdownContent] {
-  return streamingMarkdownParts(markdown, options, streamKey, true);
-}
-
-function streamingMarkdownParts(
-  markdownLocal: string,
-  options: MarkdownRenderOptions,
-  streamKey: string | undefined,
-  direct: boolean,
 ): [MarkdownContent, MarkdownContent] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   // Explicit selections are complete user input, not incremental assistant text.
   if (renderOptions.humanMentions.length) {
-    return partitionMarkdownContent(cachedMarkdown(markdownLocal, options, direct), streamKey);
+    return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
   }
   const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
@@ -417,6 +374,8 @@ function streamingMarkdownParts(
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
+  // Only the live tail uses direct construction; settled messages and the
+  // completed prefix retain the bulk HTML + DOMPurify path.
   // The whole input was classified above; an isolated tail is not block art.
   const tailHtml = renderSanitizedMarkdown(
     tailRepairStart === null
@@ -424,7 +383,7 @@ function streamingMarkdownParts(
       : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
     tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
     false,
-    direct,
+    true,
   );
   return [stableHtml, tailHtml];
 }

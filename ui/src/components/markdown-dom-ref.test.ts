@@ -3,7 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
-import { toStreamingMarkdownParts } from "./markdown.ts";
+import { toStreamingMarkdownDomParts } from "./markdown.ts";
 
 it("commits Markdown before onUpdate and retires a replaced island", () => {
   const container = document.body.appendChild(document.createElement("div"));
@@ -43,7 +43,7 @@ it.each([
       content: {
         messageKey: "stream",
         source: source(),
-        parts: toStreamingMarkdownParts(source()),
+        parts: toStreamingMarkdownDomParts(source()),
       },
     }))(fragment);
     return Array.from(fragment.childNodes);
