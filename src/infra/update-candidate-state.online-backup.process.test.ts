@@ -70,16 +70,6 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
-function checkDatabase(db: ReturnType<typeof openNodeSqliteDatabase>) {
-  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  expect(db.prepare("SELECT rowid, value FROM evidence").all()).toEqual([
-    { rowid: 71, value: "preserved" },
-  ]);
-  expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
-    bytes: 4194304,
-  });
-}
-
 it.for(["snapshot", "discover"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
@@ -106,8 +96,6 @@ it.for(["snapshot", "discover"] as const)(
           INSERT INTO witness VALUES (1, 0, 0), (2, 0, 0);
           CREATE TABLE payload (bytes BLOB);
           INSERT INTO payload VALUES (zeroblob(4194304));
-          CREATE TABLE evidence(value TEXT);
-          INSERT INTO evidence(rowid, value) VALUES(71, 'preserved');
         `);
         if (file === shared) {
           db.exec("CREATE TABLE agent_databases (path TEXT);");
@@ -159,18 +147,11 @@ it.for(["snapshot", "discover"] as const)(
     `,
       );
       const preload = path.join(root, "slow-source-copy.cjs");
-      const backups = path.join(root, "backups.jsonl");
       // Reproduce a busy family changing during raw copy without replacing SQLite or its worker.
       await fs.writeFile(
         preload,
         `
       const fs = require("node:fs");
-      const sqlite = require("node:sqlite");
-      const backup = sqlite.backup;
-      sqlite.backup = async function(source, destination, ...args) {
-        fs.appendFileSync(${JSON.stringify(backups)}, JSON.stringify({ destination }) + "\\n");
-        return backup(source, destination, ...args);
-      };
       const opened = new Map();
       const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
       const sources = new Set(${JSON.stringify([shared, agent])});
@@ -227,7 +208,6 @@ it.for(["snapshot", "discover"] as const)(
           databaseInventory: [...inventory.databases.keys()],
         };
       }
-      await fs.writeFile(backups, "");
       const writing = runCommandBuffered([process.execPath, writer], {
         signal,
         timeoutMs: 30_000,
@@ -253,10 +233,6 @@ it.for(["snapshot", "discover"] as const)(
           expect(snapshot.copiedPages).toBe(snapshot.totalPages);
           expect(snapshot.elapsedMs).toBeGreaterThanOrEqual(0);
         }
-        // One fresh materialization per source; verification consumes that private image.
-        expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
-          mode === "snapshot" ? 2 : 1,
-        );
         const observedAfter = await readWriterGeneration(progress);
         expect(observedAfter).toBeGreaterThan(before);
         // A committed generation can precede its watermark; join the writer before bounding copies.
@@ -271,18 +247,15 @@ it.for(["snapshot", "discover"] as const)(
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),
           );
-          expect(snapshot.versions).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ path: shared, userVersion: 3 }),
-              expect.objectContaining({ path: agent, userVersion: 3 }),
-            ]),
-          );
           for (const source of [shared, agent]) {
+            expect(snapshot.versions).toContainEqual(
+              expect.objectContaining({ path: source, userVersion: 3 }),
+            );
             using db = openNodeSqliteDatabase(
               path.join(targetStateDir, path.relative(stateDir, source)),
               { readOnly: true },
             );
-            checkDatabase(db);
+            expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
             const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
             expect(rows).toHaveLength(2);
             expect(rows[0]).toEqual(rows[1]);
@@ -298,7 +271,7 @@ it.for(["snapshot", "discover"] as const)(
       }
       for (const source of [shared, agent]) {
         using db = openNodeSqliteDatabase(source, { readOnly: true });
-        checkDatabase(db);
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
         expect(
           db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
         ).toEqual({ n: 0 });

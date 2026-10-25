@@ -11,7 +11,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   migrateCanonicalTranscriptArchives,
-  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE as batchSize,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
@@ -176,7 +176,7 @@ describe("canonical archive migration progress", () => {
     expect(String(failure)).toMatch(
       /040:retained.*OpenClaw state database read admission is closed/,
     );
-    f.expectProgress(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE, {
+    f.expectProgress(batchSize, {
       sessionId: "031",
       generation: "retained",
     });
@@ -193,14 +193,14 @@ describe("canonical archive migration progress", () => {
       f.interrupted(() =>
         transcriptDirectiveArchivesNeedMigration(f.database, f.options.start, (raw, owner) => {
           const line = directiveLine(raw, owner);
-          if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
+          if (++calls === batchSize) {
             f.controller.abort(interrupted);
           }
           return line;
         }),
       ),
     ).rejects.toBe(interrupted);
-    expect(calls).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(calls).toBe(batchSize);
     expect(f.rewritten()).toBe(0);
   });
 
@@ -219,11 +219,7 @@ describe("canonical archive migration progress", () => {
     };
     await f.migrate({
       onArchive(archivePath) {
-        if (
-          Number(path.basename(archivePath, ".jsonl")) %
-            TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE ===
-          0
-        ) {
+        if (Number(path.basename(archivePath, ".jsonl")) % batchSize === 0) {
           now += 75;
         }
       },
@@ -270,7 +266,7 @@ describe("canonical archive migration progress", () => {
         return;
       }
       await expect(operation).rejects.toThrow(interrupted);
-      f.expectProgress(publication ? 64 : TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE, {
+      f.expectProgress(publication ? 64 : batchSize, {
         sessionId: "031",
         generation: "retained",
       });

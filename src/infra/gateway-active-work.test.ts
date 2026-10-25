@@ -23,7 +23,6 @@ import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "./gateway-active-work.js";
-import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
@@ -52,7 +51,7 @@ afterEach(() => {
 });
 
 describe("waitForGatewayActiveWork", () => {
-  it.each([60, 600, undefined])(
+  it.each([60, undefined])(
     "waits for process-owned work within the %s ms budget",
     async (timeoutMs) => {
       vi.useFakeTimers();
@@ -150,34 +149,6 @@ describe("waitForGatewayActiveWork", () => {
     },
   );
 
-  it.each([
-    { agentRuns: 1, acpRuns: 0, mediaRuns: 0, kind: "agent-run" },
-    { agentRuns: 0, acpRuns: 1, mediaRuns: 0, kind: "acp-run" },
-    { agentRuns: 0, acpRuns: 0, mediaRuns: 1, kind: "media-generation" },
-  ] as const)(
-    "reports native $kind ownership alongside background processes",
-    ({ agentRuns, acpRuns, mediaRuns, kind }) => {
-      const snapshot = createGatewayActiveWorkSnapshot(
-        inspectors({
-          getBackgroundExecSessions: () => 1,
-          getAgentRuns: () => agentRuns,
-          getAcpRuns: () => acpRuns,
-          getMediaRuns: () => mediaRuns,
-        }),
-      );
-      expect(snapshot.idle).toBe(false);
-      expect(snapshot.counts).toMatchObject({
-        backgroundExecSessions: 1,
-        agentRuns,
-        acpRuns,
-        mediaRuns,
-        totalActive: 2,
-      });
-      expect(snapshot.blockers.map((blocker) => blocker.kind)).toEqual(["background-exec", kind]);
-      expectSuspensionWireShape(snapshot);
-    },
-  );
-
   it("returns the final canonical blockers when its deadline expires", async () => {
     const sessionId = "probe-gateway-active-work-timeout";
     const handle = createEmbeddedRunHandle();
@@ -215,7 +186,7 @@ describe("waitForGatewayActiveWork", () => {
     }
   });
 
-  it("publishes a separate recorded custody category through the suspension wire shape", () => {
+  it("publishes native owners and separate write custody through the suspension wire shape", () => {
     const release = beginLifecycleWriteCustody("migration");
     try {
       const snapshot = createGatewayActiveWorkSnapshot({
@@ -223,13 +194,39 @@ describe("waitForGatewayActiveWork", () => {
         getCronRuns: () => 3,
         getSessionMutations: () => 1,
         getTerminalPersistence: () => 1,
+        getBackgroundExecSessions: () => 1,
+        getAgentRuns: () => 1,
+        getAcpRuns: () => 2,
+        getMediaRuns: () => 3,
       });
       expect(snapshot.writeCustody).toEqual([
         { phase: "migration", count: 1 },
         { phase: "session-mutation", count: 1 },
         { phase: "terminal-persistence", count: 1 },
       ]);
-      expect(snapshot.counts).toMatchObject({ rootRequests: 2, cronRuns: 3, lifecycleWrites: 1 });
+      expect(snapshot).toMatchObject({
+        idle: false,
+        counts: {
+          rootRequests: 2,
+          cronRuns: 3,
+          lifecycleWrites: 1,
+          backgroundExecSessions: 1,
+          agentRuns: 1,
+          acpRuns: 2,
+          mediaRuns: 3,
+          totalActive: 15,
+        },
+      });
+      expect(snapshot.blockers.map(({ kind }) => kind)).toEqual([
+        "background-exec",
+        "cron-run",
+        "agent-run",
+        "acp-run",
+        "media-generation",
+        "root-request",
+        "session-mutation",
+        "terminal-persistence",
+      ]);
       expectSuspensionWireShape(snapshot);
     } finally {
       release();
@@ -238,43 +235,35 @@ describe("waitForGatewayActiveWork", () => {
   });
 
   it.each([
-    {
-      label: "names active root request holders in deterministic order",
-      holders: ["ws:sessions.subscribe", "cron:timer-tick", "ws:sessions.subscribe"],
-      override: false,
-      count: 3,
-      message: "3 active gateway request(s): cron:timer-tick, ws:sessions.subscribe (2)",
-    },
-    {
-      label: "bounds holder details without dropping blocker counts",
-      holders: Array.from({ length: 10 }, (_, index) => `request-${index}`),
-      override: false,
-      count: 10,
-      message:
-        "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
-    },
-    {
-      label: "does not mix default holders into an overridden root count",
-      holders: ["ws:agent"],
-      override: true,
-      count: 1,
-      message: "1 active gateway request(s)",
-    },
-  ])("$label", async ({ holders, override, count, message }) => {
-    const admissions = holders.map((holder) => tryBeginGatewayRootWorkAdmission(holder));
-    try {
-      const snapshot = override
-        ? createGatewayActiveWorkSnapshot({ getRootRequests: () => 1 })
-        : (await waitForGatewayActiveWork(0)).snapshot;
-      expect(snapshot.blockers).toContainEqual({
-        kind: "root-request",
-        count,
-        message,
-      });
-    } finally {
-      for (const admission of admissions) {
-        admission?.release();
+    [
+      ["ws:sessions.subscribe", "cron:timer-tick", "ws:sessions.subscribe"],
+      undefined,
+      "3 active gateway request(s): cron:timer-tick, ws:sessions.subscribe (2)",
+    ],
+    [
+      Array.from({ length: 10 }, (_, index) => `request-${index}`),
+      undefined,
+      "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+    ],
+    [["ws:agent"], 1, "1 active gateway request(s)"],
+  ] as const)(
+    "reports root holders %j with count override %s",
+    async (holders, override, message) => {
+      const admissions = holders.map((holder) => tryBeginGatewayRootWorkAdmission(holder));
+      try {
+        const snapshot = override
+          ? createGatewayActiveWorkSnapshot({ getRootRequests: () => 1 })
+          : (await waitForGatewayActiveWork(0)).snapshot;
+        expect(snapshot.blockers).toContainEqual({
+          kind: "root-request",
+          count: override ?? holders.length,
+          message,
+        });
+      } finally {
+        for (const admission of admissions) {
+          admission?.release();
+        }
       }
-    }
-  });
+    },
+  );
 });

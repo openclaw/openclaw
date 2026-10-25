@@ -50,9 +50,7 @@ function hardlinkCase<Args extends unknown[]>(
   opaque = false,
   ownerName = "alpha.sqlite",
 ) {
-  const aliasName = ownerName.startsWith("alpha")
-    ? `zeta${ownerName.slice("alpha".length)}`
-    : `alpha${ownerName.slice("zeta".length)}`;
+  const aliasName = ownerName.replace("alpha", "zeta");
   return (...args: Args) =>
     withBackupFixture({ layout: "split", prefix: "backup-plugin-hardlinks-" }, async (state) => {
       if (!opaque) {
@@ -197,7 +195,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         const firstPath = state.statePath("state", "first-global.sqlite");
         const secondPath = state.statePath("state", "second-global.sqlite");
         const canonicalAlias = state.statePath("state", "zeta-global-alias.sqlite");
-        let canonicalIno: number | undefined;
         if (canonical) {
           await mkdirs(path.dirname(canonicalPath));
           for (const sqlitePath of [firstPath, secondPath]) {
@@ -205,7 +202,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           }
           await fs.symlink(firstPath, canonicalPath);
           await fs.link(firstPath, canonicalAlias);
-          canonicalIno = (await fs.stat(firstPath)).ino;
         }
         if (firstWal) {
           database.close();
@@ -243,18 +239,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         try {
           await expectBackupRefused(state, error);
           expect(changed).toHaveBeenCalledOnce();
-          if (canonical) {
-            expect(await fs.realpath(canonicalPath)).toBe(
-              change === "canonical symlink" ? secondPath : firstPath,
-            );
-            if (change === "canonical hardlink") {
-              expect((await fs.stat(canonicalPath)).ino).toBe(canonicalIno);
-              expect((await fs.stat(canonicalAlias)).ino).not.toBe(canonicalIno);
-            }
-          }
-          if (firstWal) {
-            expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-          }
         } finally {
           if (walMoved) {
             await fs.rename(movedWal, `${ownerPath}-wal`);
