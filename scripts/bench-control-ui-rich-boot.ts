@@ -11,6 +11,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
+import { emulateNavigationWorkerNetwork } from "./lib/control-ui-navigation-network.ts";
 
 // A small initial transcript isolates first-paint delays in optional rich renderers.
 const { values } = parseArgs({
@@ -20,6 +21,7 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-rich-boot" },
     pairs: { type: "string", default: "20" },
     "network-latency-ms": { type: "string", default: "0" },
+    "service-worker": { type: "boolean", default: false },
   },
 });
 if (!values["bundle-dir"] || !values["compare-bundle-dir"]) {
@@ -76,11 +78,19 @@ const historyMessages = [
 await mkdir(output, { recursive: true });
 const server = await startControlUiBenchGatewayServer(base);
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+let workerNetwork: Awaited<ReturnType<typeof emulateNavigationWorkerNetwork>> | undefined;
 const results: unknown[] = [];
 try {
   browser = await chromium.launch({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   });
+  if (values["service-worker"]) {
+    workerNetwork = await emulateNavigationWorkerNetwork(browser, {
+      latency: networkLatencyMs,
+      downloadThroughput: networkLatencyMs ? 1_250_000 : -1,
+      uploadThroughput: -1,
+    });
+  }
   for (let pair = 0; pair < pairs; pair++) {
     for (const [variant, bundle] of variants) {
       await server.selectBuild(bundle);
@@ -89,7 +99,7 @@ try {
       const context = await browser.newContext({
         viewport: { width: 1440, height: 1100 },
         colorScheme: "light",
-        serviceWorkers: "block",
+        serviceWorkers: values["service-worker"] ? "allow" : "block",
       });
       const page = await context.newPage();
       const errors: string[] = [];
@@ -182,7 +192,50 @@ try {
           content: `;(() => { const __name = (fn) => fn; (${init.toString()})(${JSON.stringify(initOptions)}); })();`,
         });
         const cdp = await context.newCDPSession(page);
+        const responses: Array<{
+          url: string;
+          protocol?: string;
+          status: number;
+          fromServiceWorker: boolean;
+          headers: Record<string, string>;
+        }> = [];
+        cdp.on("Network.responseReceived", ({ response }) => {
+          responses.push({
+            url: response.url,
+            protocol: response.protocol,
+            status: response.status,
+            fromServiceWorker: response.fromServiceWorker ?? false,
+            headers: Object.fromEntries(
+              Object.entries(response.headers)
+                .filter(([name]) => /^(cache-control|content-encoding|vary)$/i.test(name))
+                .map(([name, value]) => [name.toLowerCase(), String(value)]),
+            ),
+          });
+        });
         await cdp.send("Network.enable");
+        let workerSetup: { scriptUrl?: string; navigationPreloadEnabled?: boolean } | undefined;
+        if (values["service-worker"]) {
+          await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+          await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+          workerSetup = await page.evaluate(async () => {
+            const registration = await navigator.serviceWorker.ready;
+            return {
+              scriptUrl: registration.active?.scriptURL,
+              navigationPreloadEnabled: (await registration.navigationPreload?.getState())?.enabled,
+            };
+          });
+          // Retire the warm document before stopping its worker: its resume and
+          // offline-cache probes must not restart it during cold-state setup.
+          await page.goto("about:blank");
+          // Own browser/profile only: exercise a stopped worker with cold assets.
+          await cdp.send("ServiceWorker.enable");
+          await cdp.send("ServiceWorker.stopAllWorkers");
+          await cdp.send("Storage.clearDataForOrigin", {
+            origin: server.baseUrl,
+            storageTypes: "cache_storage,indexeddb,local_storage",
+          });
+        }
+        await cdp.send("Network.clearBrowserCache");
         await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
         await cdp.send("Network.emulateNetworkConditions", {
           offline: false,
@@ -193,6 +246,9 @@ try {
         await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
         const before = (await cdp.send("Performance.getMetrics")).metrics;
         const hostLoad = loadavg();
+        responses.length = 0;
+        server.requests.length = 0;
+        const workerRequestStart = workerNetwork?.snapshot().requests.length ?? 0;
         await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey), {
           waitUntil: "domcontentloaded",
         });
@@ -208,11 +264,25 @@ try {
           { timeout: 30000 },
         );
         const after = (await cdp.send("Performance.getMetrics")).metrics;
+        workerNetwork?.assertHealthy();
         const data = await page.evaluate(() => ({
           readiness: Reflect.get(window, "__richRiskReadiness"),
+          navigation: performance.getEntriesByType("navigation").map((entry) => entry.toJSON()),
           resources: performance.getEntriesByType("resource").map((entry) => ({
             name: entry.name,
             startTime: entry.startTime,
+            duration: entry.duration,
+            fetchStart: Reflect.get(entry, "fetchStart"),
+            domainLookupStart: Reflect.get(entry, "domainLookupStart"),
+            domainLookupEnd: Reflect.get(entry, "domainLookupEnd"),
+            connectStart: Reflect.get(entry, "connectStart"),
+            connectEnd: Reflect.get(entry, "connectEnd"),
+            requestStart: Reflect.get(entry, "requestStart"),
+            responseStart: Reflect.get(entry, "responseStart"),
+            responseEnd: Reflect.get(entry, "responseEnd"),
+            nextHopProtocol: Reflect.get(entry, "nextHopProtocol"),
+            encodedBodySize: Reflect.get(entry, "encodedBodySize"),
+            decodedBodySize: Reflect.get(entry, "decodedBodySize"),
             transferSize: Reflect.get(entry, "transferSize"),
           })),
         }));
@@ -224,7 +294,24 @@ try {
                 before.find((metric) => metric.name === key)!.value),
           ]),
         );
-        results.push({ pair, variant, buildId, hostLoad, ...data, cpu, errors });
+        const documentPath = new URL(controlUiSessionUrl(server.baseUrl, sessionKey)).pathname;
+        const documentRequests = server.requests.filter((request) => request.url === documentPath);
+        if (documentRequests.length !== 1) {
+          throw new Error(`Expected one document request, received ${documentRequests.length}`);
+        }
+        results.push({
+          pair,
+          variant,
+          buildId,
+          hostLoad,
+          ...data,
+          responses,
+          requests: [...server.requests],
+          workerRequests: workerNetwork?.snapshot().requests.slice(workerRequestStart),
+          workerSetup,
+          cpu,
+          errors,
+        });
         await writeFile(
           path.join(output, "summary.json"),
           JSON.stringify(
@@ -234,6 +321,7 @@ try {
               head,
               pairs,
               networkLatencyMs,
+              serviceWorker: values["service-worker"],
               results,
             },
             null,
@@ -273,7 +361,11 @@ try {
   }
 } finally {
   try {
-    await browser?.close();
+    try {
+      await workerNetwork?.close();
+    } finally {
+      await browser?.close();
+    }
   } finally {
     await server.close();
   }

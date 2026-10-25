@@ -39,11 +39,11 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Earlier signing plus deferred interactions measure 7/26/20 requests.
-  // Route gzip remains below the base; the signer was already fetched on demand.
-  startupJsRequests: 9,
-  chatBootJsRequests: 26,
-  newBootJsRequests: 20,
+  // Consolidated eager/route partitions measure 5/20/16 requests over HTTP/1.1.
+  // Preserve the initial two-request headroom; route limits match their measured graphs.
+  startupJsRequests: 7,
+  chatBootJsRequests: 20,
+  newBootJsRequests: 16,
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
@@ -59,7 +59,9 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  largestJsGzipBytes: 215 * KIB,
+  // Fewer boot requests save 15,090 B across Chat JS/CSS. The consolidated
+  // Chat chunk measures 462,964 B; retain the previous 25,441 B headroom.
+  largestJsGzipBytes: 488_405,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
