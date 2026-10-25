@@ -34,6 +34,10 @@ const CHANNEL = "linux-stable";
 const INITIAL_BODY = "OpenClaw Linux update channel. Publication is not complete.";
 const METADATA_LIMIT = 1024 * 1024;
 const BUNDLE_LIMIT = 2 * 1024 * 1024 * 1024;
+// GitHub's CDN can serve a replaced same-name metadata asset past the old 17s
+// allowance. Only API-confirmed mutable metadata waits this out, bounded at two
+// minutes total; immutable bundles and uncertain uploads stay fail-fast.
+const METADATA_CONVERGENCE_DELAYS = [0, 2, 5, 10, 15, 20, 30, 38];
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
 let commandOverride;
@@ -359,10 +363,11 @@ class GitHub {
       "Invalid asset digest",
     );
     const expected = expectedHash ?? entry.digest?.slice(7);
-    // Only API-confirmed mutable metadata gets a convergence window. Immutable
-    // bundles and uncertain uploads remain fail-fast; these reads never repeat a write.
+    // Only API-confirmed mutable metadata gets the bounded convergence window.
+    // Immutable bundles and uncertain uploads remain fail-fast; these reads never
+    // repeat a write.
     const converging = entry.digest != null && limit === METADATA_LIMIT;
-    const delays = converging ? [0, 2, 5, 10] : [0];
+    const delays = converging ? METADATA_CONVERGENCE_DELAYS : [0];
     let observed;
     for (const delay of delays) {
       if (delay) {
