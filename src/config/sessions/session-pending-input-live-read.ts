@@ -30,7 +30,8 @@ export async function prepareForeignLiveSessionPendingInputEntries(
     : captureSessionStoreReadTarget(captured, "Live input changed its captured database owner");
   const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
   signal?.throwIfAborted();
-  const physical = target?.resolve(resolved);
+  const sessionKey = resolveSqliteSessionKey(captured.sessionKey, resolved.agentId);
+  const physical = target?.resolve({ ...resolved, sessionKey });
   // An uncreated store has no foreign custody; its path can still match later accepted input.
   const assertReadCurrent = physical?.identity.key.startsWith("file:")
     ? physical.assertReadCurrent
@@ -39,7 +40,7 @@ export async function prepareForeignLiveSessionPendingInputEntries(
   const inputScope = {
     databasePath: memory?.path ?? physical!.identity.canonicalPath,
     sessionId: scope.sessionId,
-    sessionKey: resolveSqliteSessionKey(captured.sessionKey, resolved.agentId),
+    sessionKey,
   };
   return () => {
     signal?.throwIfAborted();
