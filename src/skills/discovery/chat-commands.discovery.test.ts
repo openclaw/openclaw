@@ -34,6 +34,33 @@ function bridge() {
   return { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() };
 }
 
+const skillNames = (commands: readonly { skillName: string }[]) =>
+  commands.map((command) => command.skillName);
+const commandLoaders = (params: Parameters<typeof createSkillCommandLoaders>[1]) =>
+  createSkillCommandLoaders(() => import("./chat-commands.runtime.js"), params);
+
+async function remoteFixture(name: string, description: string, bins?: string[]) {
+  const root = tempDirs.make("remote-skill-commands-");
+  const gateway = path.join(root, "missing-gateway-workspace");
+  const remote = path.join(root, "remote");
+  await putSkill(path.join(remote, "skills"), name, description);
+  const cfg = configFor({ main: { workspace: gateway, ...(bins ? {} : { skills: [name] }) } });
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge: bridge(),
+    loadSkills: async (request) => ({
+      ...readWorkspaceSkillSources({
+        ...request,
+        sourcePlan:
+          bins && request.sourcePlan.roots.length === 0
+            ? request.sourcePlan
+            : resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
+      }),
+      ...(bins ? { runtime: { platform: process.platform, bins } } : {}),
+    }),
+  });
+  return { root, cfg, release, params: { workspaceDir: gateway, cfg, agentId: "main" } };
+}
+
 async function withBundledDir(root: string, run: () => Promise<void>) {
   const bundledSkillsDir = path.join(root, "bundled");
   await fs.mkdir(bundledSkillsDir);
@@ -50,10 +77,8 @@ function menuNames(cfg: OpenClawConfig, workspace: string) {
     workspaceDir: workspace,
     agentId: "main",
   });
-  expect(workspaceMenu.map((command) => command.skillName)).toEqual(
-    agentMenu.map((command) => command.skillName),
-  );
-  return agentMenu.map((command) => command.skillName);
+  expect(skillNames(workspaceMenu)).toEqual(skillNames(agentMenu));
+  return skillNames(agentMenu);
 }
 
 describe("skill command discovery through workspace loading", () => {
@@ -92,34 +117,13 @@ describe("skill command discovery through workspace loading", () => {
   });
 
   it("includes a registered remote workspace absent from the Gateway filesystem", async () => {
-    const root = tempDirs.make("remote-skill-commands-");
-    const gateway = path.join(root, "missing-gateway-workspace");
-    const remote = path.join(root, "remote");
-    await putSkill(path.join(remote, "skills"), "hello", "Remote command");
-    const cfg = configFor({ main: { workspace: gateway, skills: ["hello"] } });
-    const release = registerAgentWorkspaceAccess(gateway, {
-      bridge: bridge(),
-      loadSkills: async (request) =>
-        readWorkspaceSkillSources({
-          ...request,
-          sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-        }),
-    });
+    const { cfg, release, params } = await remoteFixture("hello", "Remote command");
     try {
-      expect(
-        (await prepareSkillCommandsForAgents({ cfg, agentIds: ["main"] })).map(
-          (command) => command.skillName,
-        ),
-      ).toEqual(["hello"]);
-      expect(listSkillCommandsForAgents({ cfg, agentIds: ["main"] })).toEqual([]);
-      const loaders = createSkillCommandLoaders(() => import("./chat-commands.runtime.js"), {
-        workspaceDir: gateway,
-        cfg,
-        agentId: "main",
-      });
-      expect((await loaders.loadSkillCommands!()).map((command) => command.skillName)).toEqual([
+      expect(skillNames(await prepareSkillCommandsForAgents({ cfg, agentIds: ["main"] }))).toEqual([
         "hello",
       ]);
+      expect(listSkillCommandsForAgents({ cfg, agentIds: ["main"] })).toEqual([]);
+      expect(skillNames(await commandLoaders(params).loadSkillCommands!())).toEqual(["hello"]);
     } finally {
       release();
     }
@@ -129,42 +133,20 @@ describe("skill command discovery through workspace loading", () => {
   });
 
   it("loads Gateway bundled instructions with Harness binary eligibility despite a workspace collision", async () => {
-    const root = tempDirs.make("remote-bundled-command-");
-    const gateway = path.join(root, "gateway");
-    const remote = path.join(root, "remote");
+    // Host facts differ from the Gateway; command filtering must use these facts.
+    const { root, release, params } = await remoteFixture("control-ui", "Workspace replacement", [
+      "remote-dashboard-helper",
+    ]);
     const bundled = path.join(root, "gateway-bundled");
-    await putSkill(
-      bundled,
-      "control-ui",
-      "Gateway bundled dashboard",
-      '{"openclaw":{"requires":{"bins":["remote-dashboard-helper"]}}}',
-    );
-    await putSkill(path.join(remote, "skills"), "control-ui", "Workspace replacement");
-    const cfg = configFor({ main: { workspace: gateway } });
-    const release = registerAgentWorkspaceAccess(gateway, {
-      bridge: bridge(),
-      loadSkills: async (request) => {
-        const sources = readWorkspaceSkillSources({
-          ...request,
-          sourcePlan:
-            request.sourcePlan.roots.length === 0
-              ? request.sourcePlan
-              : resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
-        });
-        // Host facts differ from the Gateway; command filtering must use these facts.
-        return {
-          ...sources,
-          runtime: { platform: process.platform, bins: ["remote-dashboard-helper"] },
-        };
-      },
-    });
     try {
+      await putSkill(
+        bundled,
+        "control-ui",
+        "Gateway bundled dashboard",
+        '{"openclaw":{"requires":{"bins":["remote-dashboard-helper"]}}}',
+      );
       await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundled }, async () => {
-        const params = { workspaceDir: gateway, cfg, agentId: "main" };
-        const loaders = createSkillCommandLoaders(
-          () => import("./chat-commands.runtime.js"),
-          params,
-        );
+        const loaders = commandLoaders(params);
         expect(await loaders.loadSkillCommands!()).toEqual([
           expect.objectContaining({
             skillName: "control-ui",
@@ -176,7 +158,7 @@ describe("skill command discovery through workspace loading", () => {
           description: "Gateway bundled dashboard",
           skillFile: await fs.realpath(path.join(bundled, "control-ui", "SKILL.md")),
         });
-        const filtered = createSkillCommandLoaders(() => import("./chat-commands.runtime.js"), {
+        const filtered = commandLoaders({
           ...params,
           skillFilter: ["another-skill"],
         });
@@ -226,11 +208,11 @@ describe("skill command discovery through workspace loading", () => {
         });
         // Learned (Workshop) skills belong to their agent and bypass its allowlist.
         const visible = source === "workshop" ? ["allowed", "hidden"] : ["allowed"];
-        expect(skillCommands.map((command) => command.skillName)).toEqual(visible);
+        expect(skillNames(skillCommands)).toEqual(visible);
         expect(await prepareSkillCommandsForAgents({ cfg: config, agentIds: ["alpha"] })).toEqual(
           skillCommands,
         );
-        expect(allSkillCommands.map((command) => command.skillName)).toEqual(["allowed", "hidden"]);
+        expect(skillNames(allSkillCommands)).toEqual(["allowed", "hidden"]);
         for (const text of source === "workshop"
           ? []
           : ["Use $hidden for this task.", "/hidden run it", "/skill hidden run it"]) {
@@ -242,9 +224,7 @@ describe("skill command discovery through workspace loading", () => {
           });
         }
         expect(
-          listSkillCommandsForWorkspace({ ...params, skillFilter: ["hidden"] }).map(
-            (command) => command.skillName,
-          ),
+          skillNames(listSkillCommandsForWorkspace({ ...params, skillFilter: ["hidden"] })),
         ).toEqual(["hidden"]);
       });
     },
