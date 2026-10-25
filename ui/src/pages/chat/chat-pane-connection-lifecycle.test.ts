@@ -35,7 +35,11 @@ import {
 } from "./history-merge.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  applyChatCacheSnapshot,
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+} from "./session-message-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -185,6 +189,43 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it("uses a snapshot hydrated during connect preparation for the pipelined delta", async () => {
+    const h = openingPane();
+    const snapshot = {
+      messages: h.history.messages,
+      sessionId: h.history.sessionId!,
+      pagination: { hasMore: false as const },
+      deltaCursor: "warm-cursor",
+      historyState: {
+        commands: [],
+        stateRevision: {
+          commands: "commands-1",
+          pendingInputs: "pending-1",
+          sessionInfo: "session-1",
+        },
+      },
+    };
+    applyChatCacheSnapshot(h.state, snapshot);
+    cacheChatSessionSnapshot(
+      h.state.chatMessagesBySession,
+      h.state,
+      { sessionKey: h.state.sessionKey },
+      snapshot,
+    );
+    h.dispatchConnect();
+    await h.requested;
+    expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
+      initialHistory: { cursor: "warm-cursor", knownState: { commands: "commands-1" } },
+    });
+    expect(h.state.connected).toBe(false);
+    h.pane.applyGatewaySnapshot(h.connected);
+    h.subscription.resolve({
+      key: h.state.sessionKey,
+      initialHistory: { ok: true, payload: h.history },
+    });
+    await chatHistoryRequests(h.state).subscriptionReady;
+  });
+
   it.each([false, true])(
     "pipelines history before hello without early writes or duplicate history (approvals: %s)",
     async (approvals) => {

@@ -31,6 +31,9 @@ export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
 
 export function prewarmChatSnapshot(cacheKey: string): void {
   discardPrewarmedChatSnapshot();
+  // Load alongside storage so a warm transcript can send its cursor with connect.
+  // Keep board restoration independent of this optional metadata validator.
+  void import("../../lib/protocol-validators.generated/history-state.js").catch(() => undefined);
   const generation = snapshotStoreGeneration;
   const entry: PrewarmedSnapshot = {
     cacheKey,

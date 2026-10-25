@@ -232,6 +232,22 @@ async function synchronizeSelectedSessionMessageSubscription(
     let attempt = 0;
     while (isCurrent()) {
       try {
+        let run: ReturnType<typeof captureChatHistoryRun>;
+        let observation: InitialChatHistoryReceipt["observation"] | undefined;
+        const admit = () => {
+          if (state.connected && opts?.initialHistory && !observation) {
+            observation = { owner: sessions, reconcile: sessions.captureReconcile() };
+            run = captureChatHistoryRun(state, isCurrent);
+          }
+        };
+        if (opts?.beforeHello) {
+          paneRequests.openingSubscription = { isCurrent, admit };
+          if (!(await openingDispatch) || !isCurrent()) {
+            return null;
+          }
+        }
+        // Storage can hydrate during connect preparation. Capture its latest cursor
+        // at dispatch, without holding the network behind a slow storage read.
         const cursor = opts?.initialHistory ? readChatHistoryCursor(state) : undefined;
         const requestAgentId = isUiSelectedGlobalSessionKey(state, nextKey)
           ? resolveUiSelectedSessionAgentId(state)
@@ -246,22 +262,7 @@ async function synchronizeSelectedSessionMessageSubscription(
               readChatHistoryState(state, cursor),
             )
           : undefined;
-        let run = params && state.connected ? captureChatHistoryRun(state, isCurrent) : undefined;
-        let observation =
-          params && state.connected
-            ? { owner: sessions, reconcile: sessions.captureReconcile() }
-            : undefined;
-        if (opts?.beforeHello) {
-          paneRequests.openingSubscription = {
-            isCurrent,
-            admit: () => {
-              if (state.connected && params && !observation) {
-                observation = { owner: sessions, reconcile: sessions.captureReconcile() };
-                run = captureChatHistoryRun(state, isCurrent);
-              }
-            },
-          };
-        }
+        admit();
         // Subscription can start just before the initial history owner claims its version.
         const historyVersion =
           paneRequests.historyVersion +
