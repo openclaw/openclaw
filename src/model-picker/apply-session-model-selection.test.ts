@@ -11,6 +11,7 @@ import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createModelSelectionInputs,
+  createRequest,
   selectionMocks,
   useSelectionEffects,
   useSelectionStore,
@@ -33,27 +34,12 @@ function select(overrides: Partial<ApplySessionModelSelectionParams>) {
   return applySessionModelSelection(createParams(overrides));
 }
 
-function createRequest(
-  provider: string,
-  model: string,
-  overrides: Partial<ApplySessionModelSelectionParams["request"]> = {},
-): ApplySessionModelSelectionParams["request"] {
-  return { provider, model, isDefault: false, runtime: { kind: "unchanged" }, ...overrides };
-}
-
 beforeAll(() => prepareSharedAuthStoreOwnership());
 
 it.each([false, true])("uses configured default only with reset intent=%s", async (reset) => {
-  const modelCatalog = [
-    { provider: "fixture", id: "automatic", name: "Automatic" },
-    { provider: "fixture", id: "manual", name: "Manual" },
-  ];
   const params = createFixtureParams(
-    modelCatalog,
-    {
-      model: "fixture/automatic",
-      modelPolicy: { allow: ["fixture/manual"] },
-    },
+    ["automatic", "manual"].map((id) => ({ provider: "fixture", id, name: id })),
+    { model: "fixture/automatic", modelPolicy: { allow: ["fixture/manual"] } },
     {
       defaultModel: "stale-default-hint",
       request: createRequest("fixture", reset ? "manual" : "automatic", {
@@ -145,19 +131,14 @@ it.each([undefined, { allow: ["openai/*"] }])(
   "persists an off-catalog selection under policy %j without credentials",
   async (modelPolicy) => {
     const sessionEntry = createEntry({ thinkingLevel: "high" });
-    const cfg: OpenClawConfig = { agents: { defaults: { modelPolicy } } };
     const result = await select({
-      cfg,
+      cfg: { agents: { defaults: { modelPolicy } } },
       sessionEntry,
       modelCatalog: [catalog[0]!],
       thinkingCatalog: [catalog[0]!],
       request: createRequest("openai", "gpt-5.6-luna"),
     });
-    expect(result).toMatchObject({
-      status: "applied",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    });
+    expect(result).toMatchObject({ status: "applied", provider: "openai", model: "gpt-5.6-luna" });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-luna",
@@ -169,7 +150,7 @@ it.each([undefined, { allow: ["openai/*"] }])(
 );
 
 it("publishes a profile-only selection after the scoped session has persisted", async () => {
-  const { sessionEntry, sessionKey, storePath } = await persistedSession(
+  const target = await persistedSession(
     createSelectedEntry("openai", "gpt-5.6-luna", {
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "auto",
@@ -178,24 +159,20 @@ it("publishes a profile-only selection after the scoped session has persisted", 
   );
   let publishedEntry: SessionEntry | undefined;
   const unsubscribe = onSessionLifecycleEvent(() => {
-    publishedEntry = loadSessionEntryReadOnly({ sessionKey, storePath });
+    publishedEntry = loadSessionEntryReadOnly(target);
   });
   try {
     const result = await select({
-      sessionEntry,
-      sessionKey,
-      storePath,
+      ...target,
       currentProvider: "openai",
       currentModel: "gpt-5.6-luna",
       modelCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna" }],
-      request: createRequest("openai", "gpt-5.6-luna", {
-        profileOverride: "openai:work",
-      }),
+      request: createRequest("openai", "gpt-5.6-luna", { profileOverride: "openai:work" }),
     });
 
     expect(result).toMatchObject({ status: "applied", changed: true });
     expect(lifecycleEvents).toEqual([
-      { sessionKey, agentId: "main", reason: "patch", catalogChanged: true },
+      { sessionKey: target.sessionKey, agentId: "main", reason: "patch", catalogChanged: true },
     ]);
     expect(publishedEntry).toMatchObject({
       sessionId: "session-1",
@@ -309,10 +286,7 @@ it.each(["anthropic", "openai"])(
 it("resolves SDK effective persistence from the current write draft", async () => {
   const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
   const draft = {
-    agents: {
-      ...cfg.agents,
-      entries: { main: { model: "anthropic/claude-sonnet-4-6" } },
-    },
+    agents: { ...cfg.agents, entries: { main: { model: "anthropic/claude-sonnet-4-6" } } },
   };
   effects.mutateConfigFileWithRetry.mockImplementationOnce(
     async ({ mutate }: { mutate: (config: OpenClawConfig) => string }) => ({
@@ -359,10 +333,7 @@ it.each([undefined, "codex"])(
     } else {
       expect(result).toMatchObject({
         ok: true,
-        entry: {
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-6",
-        },
+        entry: { providerOverride: "anthropic", modelOverride: "claude-opus-4-6" },
       });
       expect(
         result.ok && [result.entry.agentRuntimeOverride, result.entry.nativeRuntimeConsent],
@@ -375,7 +346,7 @@ it.each([undefined, "codex"])(
 it.each([undefined, "openclaw", "claude-cli"])(
   "persists SDK model-only selection with inherited runtime %s",
   async (agentRuntimeOverride) => {
-    const { sessionEntry, sessionKey, storePath } = await persistedSession(
+    const target = await persistedSession(
       createEntry({
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-6",
@@ -385,27 +356,22 @@ it.each([undefined, "openclaw", "claude-cli"])(
       }),
       "agent:main:dm:runtime-compat",
     );
-    const result = await select({
-      cfg: {
-        agents: {
-          defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "openclaw" } } } },
-        },
-      },
-      sessionEntry,
-      sessionKey,
-      storePath,
-    });
+    const cfg = {
+      agents: { defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "openclaw" } } } } },
+    };
+    const result = await select({ ...target, cfg });
     expect(result).toMatchObject({
       status: "applied",
       provider: "openai",
       model: "gpt-4o",
       agentRuntime: "openclaw",
     });
-    const stored = loadSessionEntryReadOnly({ sessionKey, storePath });
-    expect(stored).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-4o" });
     const compatible = agentRuntimeOverride === "openclaw";
-    expect(stored?.agentRuntimeOverride).toBe(compatible ? "openclaw" : undefined);
-    expect(stored?.nativeRuntimeConsent).toBe(compatible ? "openclaw" : undefined);
+    const stored = loadSessionEntryReadOnly(target);
+    expect(stored).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-4o" });
+    expect([stored?.agentRuntimeOverride, stored?.nativeRuntimeConsent]).toEqual(
+      compatible ? ["openclaw", "openclaw"] : [undefined, undefined],
+    );
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   },
 );
@@ -482,9 +448,7 @@ it("rejects account selection authority revoked during metadata preparation", as
   let authorized = true;
   const params = createParams({
     validateAuthProfileSelection: () => (authorized ? undefined : "Select an account you own."),
-    request: createRequest("openai", "gpt-4o", {
-      profileOverride: "openai:work",
-    }),
+    request: createRequest("openai", "gpt-4o", { profileOverride: "openai:work" }),
   });
   const initial = structuredClone(params.sessionEntry);
   const pending = applySessionModelSelection(params);
@@ -500,7 +464,7 @@ it("rejects account selection authority revoked during metadata preparation", as
 });
 
 it("preserves the persisted requested level across reasoning capability switches", async () => {
-  const { sessionEntry, sessionKey, storePath } = await persistedSession(
+  const target = await persistedSession(
     createEntry({ thinkingLevel: "high" }),
     "agent:main:dm:thinking-switch",
   );
@@ -512,9 +476,7 @@ it("preserves the persisted requested level across reasoning capability switches
     [plain, reasoner],
   ] as const) {
     const result = await select({
-      sessionEntry,
-      sessionKey,
-      storePath,
+      ...target,
       modelCatalog: thinkingCatalog,
       thinkingCatalog,
       currentProvider: current.provider,
@@ -522,7 +484,7 @@ it("preserves the persisted requested level across reasoning capability switches
       request: createRequest(selected.provider, selected.id),
     });
     expect(result.status).toBe("applied");
-    expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.thinkingLevel).toBe("high");
+    expect(loadSessionEntryReadOnly(target)?.thinkingLevel).toBe("high");
   }
 });
 

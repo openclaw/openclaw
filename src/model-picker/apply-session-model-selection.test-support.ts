@@ -159,13 +159,6 @@ export function createModelSelectionInputs() {
     { provider: "openai", id: "gpt-4o", name: "GPT-4o", contextTokens: 16_000 },
   ] satisfies ModelCatalogEntry[];
 
-  function createRequest(
-    provider: string,
-    model: string,
-  ): InternalApplySessionModelSelectionParams["request"] {
-    return { provider, model, isDefault: false, runtime: { kind: "unchanged" } };
-  }
-
   function createEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
     return { sessionId: "session-1", updatedAt: 1, delivery: { kind: "none" }, ...overrides };
   }
@@ -239,4 +232,12 @@ export function createModelSelectionInputs() {
   }
 
   return { catalog, createEntry, createSelectedEntry, createParams, createFixtureParams };
+}
+
+export function createRequest(
+  provider: string,
+  model: string,
+  overrides: Partial<InternalApplySessionModelSelectionParams["request"]> = {},
+): InternalApplySessionModelSelectionParams["request"] {
+  return { provider, model, isDefault: false, runtime: { kind: "unchanged" }, ...overrides };
 }
