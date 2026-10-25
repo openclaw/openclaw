@@ -228,12 +228,12 @@ const blockedPhase = repairDeadline
   ? "plugins"
   : doctorDeadline
     ? "doctor"
-    : scenario === "phase-hang"
+    : scenario === "phase-hang" || scenario === "borrowed-phase"
       ? "configSnapshot"
       : scenario === "completion-hang"
         ? "completionCache"
         : undefined;
-if (blockedPhase || scenario === "borrowed-phase") {
+if (blockedPhase) {
   // Doctor needs time for native admission; its output markers advance the deadline.
   // Keep real phase ownership and the short budget for other blocked phases.
   stub(
