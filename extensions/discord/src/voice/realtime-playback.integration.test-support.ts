@@ -210,9 +210,7 @@ export function createRealtimePlaybackFixture(
     onPlayerError,
     close() {
       roomPlayer.close();
-      for (const lane of lanes) {
-        lane.close();
-      }
+      lanes.forEach((lane) => lane.close());
       void audio.stop();
       player.off("error", onPlayerError);
       stop.mockRestore();
