@@ -46,6 +46,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
@@ -511,10 +512,8 @@ describe("auth publication generation recovery", () => {
     async (fails, { signal }) => {
       const { snapshot, config } = await publishOwner();
       const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!;
-      const retryStarted = createDeferred();
-      const releaseRetry = createDeferred();
-      const successorStarted = createDeferred();
-      const releaseSuccessor = createDeferred();
+      const retry = createEnteredGate();
+      const nextPublication = createEnteredGate();
       const failure = new Error("successor credential acquisition failed");
       mocks.resolveAmbientCredentials
         .mockClear()
@@ -522,13 +521,11 @@ describe("auth publication generation recovery", () => {
           throw new PluginInstanceUnavailableError("synthetic retired generation");
         })
         .mockImplementationOnce(async () => {
-          retryStarted.resolve();
-          await releaseRetry.promise;
+          await retry.wait();
           return {};
         })
         .mockImplementationOnce(async () => {
-          successorStarted.resolve();
-          await releaseSuccessor.promise;
+          await nextPublication.wait();
           if (fails) {
             throw failure;
           }
@@ -541,16 +538,16 @@ describe("auth publication generation recovery", () => {
       void dispatch.catch(() => {});
       let successor: ReturnType<typeof publish> | undefined;
       try {
-        await withinTest(retryStarted.promise, signal);
+        await withinTest(retry.entered, signal);
         successor = publish(owner.input, {
           force: true,
           provenance: "configured",
           catalogMode: "static",
         });
         void successor.catch(() => {});
-        releaseRetry.resolve();
-        await withinTest(successorStarted.promise, signal);
-        releaseSuccessor.resolve();
+        retry.release();
+        await withinTest(nextPublication.entered, signal);
+        nextPublication.release();
         if (fails) {
           await expect(successor).rejects.toBe(failure);
           await expect(reader).rejects.toThrow(failure.message);
@@ -565,8 +562,8 @@ describe("auth publication generation recovery", () => {
         }
         expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
       } finally {
-        releaseRetry.resolve();
-        releaseSuccessor.resolve();
+        retry.release();
+        nextPublication.release();
         await Promise.allSettled([reader, dispatch, successor]);
       }
     },

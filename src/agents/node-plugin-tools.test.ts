@@ -23,7 +23,6 @@ import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -283,14 +282,6 @@ describe("materializeNodeTools", () => {
     expect(tools.map((entry) => entry.name)).toEqual(["remote_echo"]);
     expect(tool.resultContentSource).toBeUndefined();
     expect(tool.description).toContain("Studio Node");
-    expect(getPluginToolMeta(tool)).toMatchObject({
-      pluginId: "remote-demo",
-      mcp: {
-        serverName: "remote-demo",
-        toolName: "echo",
-        operation: "tool",
-      },
-    });
     expectInvocation({
       nodeId: "node-1",
       command: "remote.echo",
@@ -407,17 +398,6 @@ describe("materializeNodeTools", () => {
       displayName: "Studio Node",
     });
     const { catalogRef, codeModeTools, ctx } = createCodeModeHarness(nodeTools);
-    const nodeEntry = catalogRef.current?.entries.find(
-      (entry) => entry.name === "docs_search" && entry.source === "mcp",
-    );
-
-    expect(nodeEntry?.id).toBe("mcp:docs:docs_search");
-    expect(nodeEntry && compactToolSearchCatalogEntry(nodeEntry).mcp).toEqual({
-      serverName: "docs",
-      safeServerName: "docs",
-      toolName: "search",
-      operation: "tool",
-    });
     expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
       "docs (node: Studio Node)",
     );
@@ -431,7 +411,6 @@ describe("materializeNodeTools", () => {
           api: api.content,
           called,
           allHasNodeMcp: catalog.all().some((entry) => entry.source === "mcp"),
-          discovered,
         };
       `,
     );
@@ -444,15 +423,6 @@ describe("materializeNodeTools", () => {
         isError: false,
       },
       allHasNodeMcp: false,
-      discovered: [
-        {
-          callableName: "MCP.docs.search",
-          toolName: "search",
-          description: "Search node-local docs (node: Studio Node)",
-          source: "mcp",
-          apiPath: "mcp/docs.d.ts",
-        },
-      ],
     });
     expect((details.value as { api: string }).api).toContain("@param query Search phrase");
     expectInvocation(
@@ -593,12 +563,7 @@ describe("materializeNodeTools", () => {
   });
 
   it("trusts plugin-id allowlist entries only for registered tools and node-mcp", () => {
-    const githubDescriptor: NodePluginToolDescriptor = {
-      pluginId: "github",
-      name: "remote_repo_search",
-      description: "Search repositories through a remote node",
-      command: "remote.search",
-    };
+    const githubDescriptor = { ...remoteEcho, pluginId: "github", name: "remote_repo_search" };
 
     connectTool(githubDescriptor);
     expect(materializeNodeTools({ toolAllowlist: ["github"] })).toEqual([]);

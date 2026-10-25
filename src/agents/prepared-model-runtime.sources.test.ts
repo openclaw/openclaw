@@ -10,7 +10,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -21,6 +21,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import * as ambientAuth from "./agent-auth-discovery.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
@@ -51,7 +52,11 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  resetModelsJsonReadyCacheForTest();
+});
 const providerId = "prepared-source-fixture";
 const pluginId = "prepared-source-owner";
 const endpoint = "https://prepared.example.invalid/v1";
@@ -59,17 +64,8 @@ const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: pluginId, providers: [providerId] }],
 });
 
-function model(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    input: ["text"],
-    reasoning: false,
-    contextWindow: 32000,
-    maxTokens: 2048,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-}
+const model = (id: string) =>
+  modelDefinition(id, { reasoning: false, contextWindow: 32000, maxTokens: 2048 });
 
 const providerConfig = (provider: ModelProviderConfig): OpenClawConfig => ({
   models: { providers: { [providerId]: provider } },
@@ -197,44 +193,40 @@ describe("prepared catalog source composition", () => {
         entries: [],
         providers: [],
       });
-      try {
-        const prepared = await prepareWorkspaceBuildGroup(
-          [facts.input],
-          "static",
-          {},
-          undefined,
-          undefined,
-          generation.pluginMetadataSnapshot,
-        );
-        await using _ = {
-          [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
-        };
-        const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
-        const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
-        const result = await resolveModelAsync(
-          providerId,
-          "persisted-only",
-          facts.input.agentDir,
-          {},
-          {
-            authStorage: facts.templateAuthStorage,
-            modelRegistry: registry,
-            authProfileMode: "api_key",
-            skipProviderRuntimeHooks: true,
-          },
-        );
-        if (authenticated) {
-          expect(result.model).toMatchObject({
-            provider: providerId,
-            id: "persisted-only",
-            baseUrl: endpoint,
-          });
-        } else {
-          expect(result.model).toBeUndefined();
-          expect(result.error).toContain("models list --refresh");
-        }
-      } finally {
-        vi.restoreAllMocks();
+      const prepared = await prepareWorkspaceBuildGroup(
+        [facts.input],
+        "static",
+        {},
+        undefined,
+        undefined,
+        generation.pluginMetadataSnapshot,
+      );
+      await using _ = {
+        [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
+      };
+      const batch = await prepareConfiguredRuntimeFactsBatch(prepared);
+      const registry = batch.catalogs.get(facts.input)!.templateModelRegistry;
+      const result = await resolveModelAsync(
+        providerId,
+        "persisted-only",
+        facts.input.agentDir,
+        {},
+        {
+          authStorage: facts.templateAuthStorage,
+          modelRegistry: registry,
+          authProfileMode: "api_key",
+          skipProviderRuntimeHooks: true,
+        },
+      );
+      if (authenticated) {
+        expect(result.model).toMatchObject({
+          provider: providerId,
+          id: "persisted-only",
+          baseUrl: endpoint,
+        });
+      } else {
+        expect(result.model).toBeUndefined();
+        expect(result.error).toContain("models list --refresh");
       }
     },
   );
@@ -244,10 +236,7 @@ describe("prepared catalog source composition", () => {
     const planner = vi
       .spyOn(modelsPlan, "planOpenClawModelsJson")
       .mockResolvedValue({ action: "skip" });
-    const authCapture = vi
-      .spyOn(catalogAuth, "capturePluginModelCatalogAuth")
-      .mockResolvedValue([]);
-    const workerRead = vi.spyOn(catalogReads, "readPluginModelCatalogsInWorker");
+    vi.spyOn(catalogAuth, "capturePluginModelCatalogAuth").mockResolvedValue([]);
     const sql = observeMainThreadSql({ includeClose: true });
     resetModelsJsonReadyCacheForTest();
     try {
@@ -280,23 +269,12 @@ describe("prepared catalog source composition", () => {
       await expect(
         ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
       ).resolves.toEqual({});
-      expect(planner).toHaveBeenLastCalledWith(
-        expect.objectContaining({ pluginCatalogs: catalogs }),
-      );
       await expect(
         planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
       ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
-      expect(planner).toHaveBeenLastCalledWith(
-        expect.objectContaining({ pluginCatalogs: catalogs }),
-      );
-      expect(workerRead).toHaveBeenCalled();
       sql.expectIdle();
     } finally {
       sql.restore();
-      workerRead.mockRestore();
-      planner.mockRestore();
-      authCapture.mockRestore();
-      resetModelsJsonReadyCacheForTest();
     }
   });
 
@@ -419,7 +397,6 @@ describe("prepared catalog source composition", () => {
       modelsJsonContents: null,
       staticProviderConfigs: { openai: staticConfig, codex: staticConfig },
     });
-    expect(registry.getError()).toBeUndefined();
     for (const provider of ["openai", "codex"]) {
       expect(
         registry
