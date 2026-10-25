@@ -116,27 +116,44 @@ describe("root memory repair", () => {
     await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
   });
 
-  it("preserves invalid UTF-8 introduced into the legacy memory archive", async () => {
-    const canonical = Buffer.from("# Canonical\n");
-    const invalid = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
-    if (!(await seedMemory(canonical))) {
-      return;
-    }
-    onArchive(undefined, (_source, target) => fs.writeFile(target, invalid));
-
-    await repair();
-
-    await expect(fs.readFile(canonicalPath)).resolves.toEqual(canonical);
-    const message = String(note.mock.calls[0]?.[0]);
-    for (const text of ["not valid UTF-8", canonicalPath, legacyPath]) {
-      expect(message).toContain(text);
-    }
-    expect(message).not.toContain("Workspace memory root merged");
-    await expectPathMissing(legacyPath);
-    const archive = await expectArchivedLegacyMemory();
-    await expect(fs.readFile(archive)).resolves.toEqual(invalid);
-    expect(message).toContain(`- preserved archive: ${archive}`);
-  });
+  it.each(["invalid UTF-8", "oversized"])(
+    "preserves the archive when its content becomes %s after validation",
+    async (failure) => {
+      if (!(await seedMemory())) {
+        return;
+      }
+      const invalid = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
+      const oversized = failure === "oversized";
+      onArchive(
+        oversized ? (source) => fs.appendFile(source, Buffer.alloc(9 * 1024 * 1024)) : undefined,
+        (source, target) =>
+          oversized
+            ? fs.writeFile(source, "# Concurrent replacement\n")
+            : fs.writeFile(target, invalid),
+      );
+      await repair();
+      await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+      const archive = await expectArchivedLegacyMemory();
+      if (!oversized) {
+        await expect(fs.readFile(archive)).resolves.toEqual(invalid);
+      }
+      const message = String(note.mock.calls[0]?.[0]);
+      for (const text of [
+        oversized ? "safe read limit" : "not valid UTF-8",
+        canonicalPath,
+        legacyPath,
+        `- preserved archive: ${archive}`,
+      ]) {
+        expect(message).toContain(text);
+      }
+      expect(message).not.toContain("Workspace memory root merged");
+      if (oversized) {
+        await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Concurrent replacement\n");
+      } else {
+        await expectPathMissing(legacyPath);
+      }
+    },
+  );
 
   it("reads legacy content after moving it into the archive", async () => {
     if (!(await seedMemory())) {
@@ -149,29 +166,6 @@ describe("root memory repair", () => {
     const canonical = await fs.readFile(canonicalPath, "utf8");
     expect(canonical).toContain("# Legacy");
     expect(canonical).toContain("# Added before archive");
-  });
-
-  it("preserves a concurrent legacy replacement beside the archive", async () => {
-    if (!(await seedMemory())) {
-      return;
-    }
-
-    onArchive(
-      (source) => fs.appendFile(source, Buffer.alloc(9 * 1024 * 1024)),
-      (source) => fs.writeFile(source, "# Concurrent replacement\n", "utf8"),
-    );
-
-    await repair();
-
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Workspace memory root repair skipped (a file exceeded the safe read limit):",
-      ),
-      "Doctor changes",
-    );
-    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Concurrent replacement\n");
-    await expectArchivedLegacyMemory();
-    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
   });
 
   it("warns and repairs split-brain root memory through workspace doctor helpers", async () => {

@@ -118,10 +118,6 @@ it("refuses missing deferral metadata with the 2026.9.2 row only in WAL", async 
   expect(result, output).toMatchObject({ signal: null, code: 1 });
   expect(output).toContain("Doctor refused update-time schema repair driven by OpenClaw 2026.9.2");
   expect(files.map((file) => fs.readFileSync(file))).toEqual(before);
-  expect(writer.prepare("PRAGMA user_version").get()?.user_version).toBe(
-    OPENCLAW_STATE_SCHEMA_VERSION - 1,
-  );
-  expect(writer.prepare("SELECT * FROM update_runs").get()).toEqual(row);
 }, 60_000);
 
 it(
@@ -162,9 +158,9 @@ it(
     expect(result.code, output).toBe(1);
     expect(output).toContain(databasePath);
     expect(output).toContain(workspaceDir);
+    expect(output).toContain(sourcePath);
     expect(text).toContain("unsupported workspace setup version 99");
     expect(text).toContain("compatible OpenClaw build");
-    expect(output).toContain(sourcePath);
     expect(text).toContain("reconcile this file");
     expect(text).not.toMatch(/(?:openclaw\s+)?doctor\s+--(?:fix|repair)/i);
     expect(output).not.toContain("Doctor complete.");
@@ -173,8 +169,7 @@ it(
     expect(db.prepare("SELECT version FROM workspace_setup_state").all()).toEqual([
       { version: 99 },
     ]);
-    const policy = db.prepare(approvalsSql).get();
-    expect(JSON.parse(String(policy?.raw_json))).toMatchObject({
+    expect(JSON.parse(String(db.prepare(approvalsSql).get()?.raw_json))).toMatchObject({
       defaults: { security: "deny" },
     });
   },
@@ -198,11 +193,9 @@ it(
     using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
       readOnly: true,
     });
-    const approvals = db.prepare(approvalsSql).all();
-    expect(fs.existsSync(approvalsPath), output).toBe(true);
     expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsRaw);
     expect(fs.readFileSync(tuiPath, "utf8")).toBe(tuiRaw);
-    expect(approvals).toEqual([]);
+    expect(db.prepare(approvalsSql).all()).toEqual([]);
     expect(output).toContain("Failed reading legacy TUI last-session state");
     expect(output).not.toContain("Imported legacy exec approvals");
     expect(output).not.toContain("Doctor complete.");

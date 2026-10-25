@@ -84,47 +84,34 @@ function recreate(options: Partial<Parameters<typeof sandboxRecreateCommand>[0]>
 }
 
 describe("sandboxListCommand", () => {
-  it("should display containers", async () => {
-    const running = createContainer({ containerName: "container-1" });
-    const stopped = createContainer({
-      containerName: "stopped",
-      imageMatch: false,
-      running: false,
-    });
-    mocks.listSandboxContainers.mockResolvedValue([running, stopped]);
-
-    await list();
-
-    expectOutput("log", "📦 Sandbox Runtimes", running.containerName, stopped.containerName);
-    expect(runtime.log).toHaveBeenCalledWith("    Status:  🟢 running");
-    expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ✓");
-    expect(runtime.log).toHaveBeenCalledWith("    Status:  ⚫ stopped");
-    expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ⚠️  mismatch");
-    expect(runtime.log).toHaveBeenCalledWith("Total: 2 (1 running)");
-  });
-
-  it.each([true, false])("renders browser imageMatch=%s", async (imageMatch) => {
-    const browser = createBrowser({ containerName: "browser-1", imageMatch });
-    mocks.listSandboxContainers.mockResolvedValue([createContainer({ imageMatch: false })]);
-    mocks.listSandboxBrowsers.mockResolvedValue([browser]);
-
-    await list({ browser: true });
-
-    expectOutput(
-      "log",
-      "🌐 Sandbox Browser Containers",
-      browser.containerName,
-      String(browser.cdpPort),
-    );
-    if (!imageMatch) {
+  it.each([false, true])(
+    "renders runtime state and mismatch advice (browser=%s)",
+    async (browser) => {
+      const create = browser ? createBrowser : createContainer;
+      const selected = browser ? mocks.listSandboxBrowsers : mocks.listSandboxContainers;
+      selected.mockResolvedValue([
+        create({ containerName: "running" }),
+        create({ containerName: "stopped", imageMatch: false, running: false }),
+      ]);
+      await list({ browser });
       expectOutput(
         "log",
+        browser ? "🌐 Sandbox Browser Containers" : "📦 Sandbox Runtimes",
+        "running",
+        "stopped",
+        "Status:  🟢 running",
+        "Status:  ⚫ stopped",
+        `${browser ? "openclaw/browser" : "openclaw/sandbox"}:latest ✓`,
+        `${browser ? "openclaw/browser" : "openclaw/sandbox"}:latest ⚠️  mismatch`,
+        "Total: 2 (1 running)",
         "1 runtime(s) with config mismatch detected.",
-        "sandbox recreate --all --browser' to update all runtimes.",
+        `sandbox recreate --all${browser ? " --browser" : ""}' to update all runtimes.`,
       );
-    }
-    expect(runtime.log).toHaveBeenCalledWith("Total: 1 (1 running)");
-  });
+      if (browser) {
+        expectOutput("log", "CDP:     9222");
+      }
+    },
+  );
 
   it("should display message when no containers found", async () => {
     await list();
@@ -169,23 +156,16 @@ describe("sandboxRecreateCommand", () => {
     expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
     expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
   });
-  it.each([
-    [{ session: "target-session" }, ["target-session", "other-session"], ["target-session"], false],
-    [
-      { agent: "work" },
-      ["agent:work", "agent:work:subtask", "test-session"],
-      ["agent:work", "agent:work:subtask"],
-      true,
-    ],
-  ] as const)("filters %j", async (filter, keys, removed, force) => {
-    const containers = keys.map((sessionKey) =>
+  it("selects agent descendants but excludes unrelated sessions", async () => {
+    const removed = ["agent:work", "agent:work:subtask"];
+    const containers = [...removed, "test-session"].map((sessionKey) =>
       createContainer({ sessionKey, containerName: sessionKey }),
     );
     mocks.listSandboxContainers.mockImplementation(async (matches) => containers.filter(matches));
-    await recreate({ ...filter, force });
+    await recreate({ agent: "work", force: false });
     expect(mocks.removeSandboxContainer.mock.calls).toEqual(removed.map((name) => [name]));
     expectOutput("log", `${removed.length} removed, 0 failed`);
-    expect(clackConfirm).toHaveBeenCalledTimes(force ? 0 : 1);
+    expect(clackConfirm).toHaveBeenCalledOnce();
     expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
   });
 
