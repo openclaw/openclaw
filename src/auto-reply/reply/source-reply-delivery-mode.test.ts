@@ -1,10 +1,16 @@
 // Tests source reply delivery visibility across message tool and visible reply modes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  BOT_SENDER_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import type { CommandTurnContext } from "../command-turn-context.js";
 import {
   resolveSourceReplyDeliveryMode,
+  resolveSourceReplyExpectation,
   resolveSourceReplyVisibilityPolicy,
+  resolveUserRequestDeliveryHint,
 } from "./source-reply-delivery-mode.js";
 
 const emptyConfig = {} as OpenClawConfig;
@@ -585,6 +591,37 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         suppressDelivery: true,
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
       },
+    );
+  });
+});
+
+describe("resolveUserRequestDeliveryHint", () => {
+  const groupTurn = { ChatType: "group", Provider: "telegram", WasMentioned: false } as const;
+
+  it.each([
+    { senderIsBot: true, group: "allow", hint: BOT_SENDER_DELIVERY_HINT },
+    { senderIsBot: true, group: "disallow", hint: MESSAGE_TOOL_ONLY_DELIVERY_HINT },
+    { senderIsBot: false, group: "allow", hint: MESSAGE_TOOL_ONLY_DELIVERY_HINT },
+    { senderIsBot: undefined, group: "allow", hint: MESSAGE_TOOL_ONLY_DELIVERY_HINT },
+  ] as const)(
+    "says a reply is optional only to a bot on an optional turn: bot=$senderIsBot group=$group",
+    ({ senderIsBot, group, hint }) => {
+      const cfg = { agents: { defaults: { silentReply: { group } } } } as OpenClawConfig;
+      const replyExpectation = resolveSourceReplyExpectation({ cfg, ctx: groupTurn });
+
+      expect(resolveUserRequestDeliveryHint({ senderIsBot, replyExpectation })).toBe(hint);
+    },
+  );
+
+  it("keeps the standard hint for a bot's explicit mention", () => {
+    const cfg = { agents: { defaults: { silentReply: { group: "allow" } } } } as OpenClawConfig;
+    const replyExpectation = resolveSourceReplyExpectation({
+      cfg,
+      ctx: { ...groupTurn, WasMentioned: true, MentionSource: "explicit_bot" },
+    });
+
+    expect(resolveUserRequestDeliveryHint({ senderIsBot: true, replyExpectation })).toBe(
+      MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     );
   });
 });

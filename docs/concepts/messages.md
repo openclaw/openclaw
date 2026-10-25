@@ -233,7 +233,7 @@ The terminal producer prepares the reply once and records whether it is visible 
 Conversation policy still controls admission and default reply expectations:
 
 - Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
-- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
+- Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`. In `message_tool` visible-reply mode, an optional group turn from a bot sender (the channel marks the sender as a bot) gets a delivery hint that says a reply is optional, so two agents in a group do not keep acknowledging each other. Explicitly mentioned bot turns, authorized commands and turns under `"disallow"` stay required and keep the standard hint.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 
 Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.

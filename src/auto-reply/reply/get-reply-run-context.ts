@@ -18,7 +18,6 @@ import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-author
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -72,6 +71,7 @@ import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
   isInternalSourceReplyChannel,
   resolveSourceReplyExpectation,
+  resolveUserRequestDeliveryHint,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -519,7 +519,10 @@ ${buildPrAttributionPrompt(
         : ROOM_EVENT_PARTICIPATION_RULE;
     }
     if (inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only") {
-      return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
+      return resolveUserRequestDeliveryHint({
+        senderIsBot: promptSessionCtx.SenderIsBot,
+        replyExpectation: terminalReplyExpectation,
+      });
     }
     return undefined;
   }

@@ -6,6 +6,10 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  BOT_SENDER_DELIVERY_HINT,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import { classifySilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -90,6 +94,21 @@ export function resolveSourceReplyDeliveryMode(params: {
   return configuredMode === "message_tool" && params.messageToolAvailable !== false
     ? "message_tool_only"
     : "automatic";
+}
+
+/**
+ * Selects the per-turn delivery hint for a `message_tool_only` user request.
+ * A bot sender on a turn admitted as optional is told a reply is optional;
+ * otherwise two agents in a group keep acknowledging each other. Every other
+ * turn keeps the instruction to send the final answer.
+ */
+export function resolveUserRequestDeliveryHint(params: {
+  senderIsBot: boolean | undefined;
+  replyExpectation: ReplyExpectation;
+}): string {
+  return params.senderIsBot === true && params.replyExpectation === "optional"
+    ? BOT_SENDER_DELIVERY_HINT
+    : MESSAGE_TOOL_ONLY_DELIVERY_HINT;
 }
 
 /** Selects reply requiredness at admission, preserving configured ambient group silence. */
