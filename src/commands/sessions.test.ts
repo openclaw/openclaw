@@ -594,6 +594,8 @@ type SessionsJsonPayload = {
       model?: string | null;
       agentRuntime?: { id: string; source: string };
       contextTokens?: number | null;
+      archived?: boolean;
+      archivedAt?: number;
     }
   >;
 };
@@ -715,5 +717,19 @@ describe("sessionsCommand model resolution", () => {
       agentRuntime: { id: "openclaw", source: "model" },
       contextTokens: 272_000,
     });
+  });
+
+  it("projects archived state and timestamp for archived sessions", async () => {
+    const archivedAt = Date.now() - 3_600_000;
+    const store = await writeSession("archived-session", {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      archivedAt,
+    });
+    const payload = await readSessionsJson(store);
+    const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+    expect(session?.archived).toBe(true);
+    expect(session?.archivedAt).toBe(archivedAt);
   });
 });
