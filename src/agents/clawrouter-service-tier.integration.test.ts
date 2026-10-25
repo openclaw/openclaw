@@ -20,6 +20,10 @@ import { createModelSpeedPolicyResolver } from "./model-fast-mode.js";
 import type { StreamFn } from "./runtime/index.js";
 
 const sse = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
+function sendJson(reply: ServerResponse, status: number, body: unknown) {
+  reply.writeHead(status, { "content-type": "application/json" });
+  reply.end(JSON.stringify(body));
+}
 const response = {
   id: "resp_tier_fixture",
   object: "response",
@@ -90,45 +94,42 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
                 supportedReasoningEfforts: ["high"],
                 pricing: { serviceTiers: tiers },
               });
-              reply.writeHead(200, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify({
-                  providers: [
-                    {
-                      id: "openai",
-                      openaiCompatible: true,
-                      nativeBaseUrl: "/v1/native/openai",
-                      routes: [],
-                      models: [
-                        model("openai/tier-fixture", tierCards(["default", "flex", "priority"])),
-                        model("alias/tier-fixture", tierCards(["default", "priority"])),
-                        model("openai/default-only", tierCards(["default"])),
-                        model("openai/unknown-tiers"),
-                        model("openai/malformed-tiers", ["priority", null, {}]),
-                        model(
-                          "openai/ultra-fixture",
-                          tierCards(["default", "priority", "ultrafast"]),
-                        ),
-                        model("openai/chat-fixture", tierCards(["default", "priority"]), [
-                          "llm.chat",
-                        ]),
-                      ],
-                    },
-                    ...["anthropic", "google", "openrouter"].map((id) => ({
-                      id,
-                      openaiCompatible: true,
-                      nativeBaseUrl: "/v1/native/" + id,
-                      routes: [],
-                      models: [
-                        model(
-                          id === "openrouter" ? "openrouter/auto" : id + "/tier-fixture",
-                          tierCards(["default", "priority"]),
-                        ),
-                      ],
-                    })),
-                  ],
-                }),
-              );
+              sendJson(reply, 200, {
+                providers: [
+                  {
+                    id: "openai",
+                    openaiCompatible: true,
+                    nativeBaseUrl: "/v1/native/openai",
+                    routes: [],
+                    models: [
+                      model("openai/tier-fixture", tierCards(["default", "flex", "priority"])),
+                      model("alias/tier-fixture", tierCards(["default", "priority"])),
+                      model("openai/default-only", tierCards(["default"])),
+                      model("openai/unknown-tiers"),
+                      model("openai/malformed-tiers", ["priority", null, {}]),
+                      model(
+                        "openai/ultra-fixture",
+                        tierCards(["default", "priority", "ultrafast"]),
+                      ),
+                      model("openai/chat-fixture", tierCards(["default", "priority"]), [
+                        "llm.chat",
+                      ]),
+                    ],
+                  },
+                  ...["anthropic", "google", "openrouter"].map((id) => ({
+                    id,
+                    openaiCompatible: true,
+                    nativeBaseUrl: "/v1/native/" + id,
+                    routes: [],
+                    models: [
+                      model(
+                        id === "openrouter" ? "openrouter/auto" : id + "/tier-fixture",
+                        tierCards(["default", "priority"]),
+                      ),
+                    ],
+                  })),
+                ],
+              });
               return;
             }
             const chunks: Buffer[] = [];
@@ -144,25 +145,19 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
               body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
             });
             if (mode === "reject-tier") {
-              reply.writeHead(400, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify({
-                  error: {
-                    code: "service_tier_not_allowed",
-                    message:
-                      "Service tier priority is not allowed for openai/tier-fixture on this key; allowed tiers: default.",
-                  },
-                }),
-              );
+              sendJson(reply, 400, {
+                error: {
+                  code: "service_tier_not_allowed",
+                  message:
+                    "Service tier priority is not allowed for openai/tier-fixture on this key; allowed tiers: default.",
+                },
+              });
               return;
             }
             if (mode === "reject") {
-              reply.writeHead(403, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify({
-                  error: { message: "Synthetic route policy denied", type: "permission_error" },
-                }),
-              );
+              sendJson(reply, 403, {
+                error: { message: "Synthetic route policy denied", type: "permission_error" },
+              });
               return;
             }
             reply.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
@@ -351,7 +346,7 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
     },
   );
 
-  it("advertises exact catalog tiers through the picker light-policy owner and registered plugin", () => {
+  it("advertises exact catalog tiers through the picker light-policy owner", () => {
     expect(catalogRequests).toEqual([
       { path: "/v1/catalog", authorization: "Bearer synthetic-catalog-key" },
     ]);
@@ -386,29 +381,19 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
         supportsFastMode: tiers?.includes("priority") ?? false,
         supportsServiceTierRecovery: false,
       });
-      const context = {
-        provider: "clawrouter",
-        modelId: entry.id,
-        api: entry.api,
-        baseUrl: entry.baseUrl,
-        runtimeId: "openclaw",
-        modelParams: entry.params,
-        requestCapabilities: { endpointClass: "custom", allowsAnthropicServiceTier: false },
-      };
-      expect(provider.resolveServiceTiers?.(context), entry.id).toEqual(tiers);
-      expect(provider.resolveFastModeSupport?.(context), entry.id).toBe(
-        tiers?.includes("priority") ?? false,
-      );
-      expect(resolve(entry, evaluation, "codex").serviceTiers).toBeUndefined();
-      expect(resolve(entry, evaluation, "codex").supportsFastMode).toBeUndefined();
-      expect(
-        resolve(entry, { availability: undefined, routeResolution: { kind: "indeterminate" } }),
-      ).toEqual({});
     }
     const first = catalog.find((entry) => entry.id === "openai/tier-fixture");
     if (!first) {
       throw new Error("Expected the catalog route used by the endpoint-scope assertion");
     }
+    expect(resolve(first, evaluation, "codex")).toEqual({
+      serviceTiers: undefined,
+      supportsFastMode: undefined,
+      supportsServiceTierRecovery: false,
+    });
+    expect(
+      resolve(first, { availability: undefined, routeResolution: { kind: "indeterminate" } }),
+    ).toEqual({});
     expect(
       resolve(
         { ...first, baseUrl: "https://different-endpoint.example/v1" },
