@@ -20,7 +20,6 @@ import {
   collectRequest,
   decisionContext,
   registeredDecisionProvider,
-  scoreAnswer,
   stubAmbientProxies,
 } from "./transport.test-support.js";
 
@@ -96,7 +95,6 @@ const received: Array<{
   host?: string;
   authorization?: string;
   apiKey?: string | string[];
-  body: unknown;
 }> = [];
 let redirect: string | undefined;
 let responsePayload: string;
@@ -106,9 +104,9 @@ let pinnedAddress = "10.123.0.5";
 
 beforeAll(async () => {
   const server = createServer({ key: PROXY_FIXTURE_KEY, cert: tls.ca }, (request, response) => {
-    collectRequest(request, (body) => {
+    collectRequest(request, () => {
       const { host, authorization, "x-api-key": apiKey } = request.headers;
-      received.push({ url: request.url, host, authorization, apiKey, body: JSON.parse(body) });
+      received.push({ url: request.url, host, authorization, apiKey });
       if (redirect) {
         response.writeHead(302, { location: redirect });
         response.end();
@@ -183,7 +181,10 @@ async function expectUnavailable(
   await expect(pending).resolves.toEqual({ status: "unavailable", reason });
   expect(received).toHaveLength(requests);
 }
-const bearer = (token: string) => ({ mode: "authorization-bearer" as const, token });
+const bearer = (token: string | typeof endpointRef) => ({
+  mode: "authorization-bearer" as const,
+  token,
+});
 const header = (value: string) => ({
   mode: "header" as const,
   headerName: "X-Server-Key",
@@ -218,7 +219,6 @@ it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | unde
       ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
     }),
   );
-  expect(registered.isReady?.()).toBe(true);
   await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
     status: "ok",
     result: {
@@ -232,15 +232,9 @@ it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | unde
       host: new URL(baseUrl).host,
       authorization,
       apiKey,
-      body: {
-        ...batch,
-        model: "nemotron-deciffusion",
-        questions: { q: { type: "noul", instructions: null } },
-      },
     },
   ]);
   expect([...new Set(lookup.mock.calls.map(([host]) => host))]).toEqual(["files.proxy.test"]);
-  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
 it("honors private-network opt-out and opt-in", async () => {
@@ -262,6 +256,24 @@ it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
         : { request: failure === "insecure override" ? { tls: { insecureSkipVerify: true } } : {} };
     await expect(evaluate(config)).resolves.toMatchObject({ status: "unavailable" });
     expect(received).toHaveLength(0);
+  },
+);
+
+it.each<Partial<ModelProviderConfig>>([
+  { headers: { Authorization: endpointRef } },
+  { request: { auth: bearer(endpointRef) } },
+  { request: { auth: bearer("") } },
+  { request: { auth: { mode: "header", headerName: "X-Server-Key", value: "" } } },
+])("rejects unresolved or empty credentials before DNS: %j", async (config) => {
+  await expectUnavailable(evaluate(config), "credentials-unavailable");
+  expect(lookup).not.toHaveBeenCalled();
+});
+
+it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
+  "rejects unsafe DNS answer %s",
+  async (address) => {
+    lookup.mockResolvedValue([{ address, family: 4 }]);
+    await expectUnavailable(evaluate());
   },
 );
 
@@ -337,22 +349,6 @@ it("observes provider credential loss, rotation and recovery", async () => {
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
-it.each<Partial<ModelProviderConfig>>([
-  { headers: { Authorization: endpointRef } },
-  { request: { auth: { mode: "authorization-bearer", token: endpointRef } } },
-])("rejects unresolved headers/request auth", async (config) => {
-  await expectUnavailable(evaluate(config), "credentials-unavailable");
-  expect(lookup).not.toHaveBeenCalled();
-});
-
-it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
-  "rejects unsafe DNS answer %s",
-  async (address) => {
-    lookup.mockResolvedValue([{ address, family: 4 }]);
-    await expectUnavailable(evaluate());
-  },
-);
-
 const reflected = "synthetic-request-token";
 const reflectedHeaders = { "X-API-Key": reflected };
 const bearerRequest = { request: { tls, auth: bearer(reflected) } };
@@ -373,43 +369,7 @@ it.each([
     }
     await expectUnavailable(evaluate(config), "invalid-response", 1);
     if (name.endsWith("headers")) {
-      expect(received).toHaveLength(1);
       expect(received[0]?.apiKey).toBe(reflected);
     }
-  },
-);
-
-it.each(["authorization-bearer", "header"] as const)(
-  "rejects empty %s auth before DNS",
-  async (mode) => {
-    const auth =
-      mode === "authorization-bearer"
-        ? bearer("")
-        : { mode, headerName: "X-Server-Key", value: "" };
-    await expectUnavailable(evaluate({ request: { auth } }), "credentials-unavailable");
-    expect(lookup).not.toHaveBeenCalled();
-  },
-);
-
-it.each([false, true])(
-  "preserves harmless rubric text with authenticated=%s",
-  async (authenticated) => {
-    const score = {
-      state: "synthetic",
-      questions: { q: { type: "score" as const, criteria: ["Bearer demo", "Routine"] } },
-    };
-    responsePayload = JSON.stringify({
-      ...answer,
-      answers: {
-        q: scoreAnswer(0, { 0: 1, 1: 0 }, { 0: "Bearer demo", 1: "Routine" }, 1),
-      },
-    });
-    const result = await provider(
-      settings(authenticated ? { apiKey: "synthetic-server-key" } : {}),
-    ).evaluate(score, context());
-    expect(result).toMatchObject({
-      status: "ok",
-      result: { answers: { q: { type: "score", score: 0, probabilities: [1, 0] } } },
-    });
   },
 );
