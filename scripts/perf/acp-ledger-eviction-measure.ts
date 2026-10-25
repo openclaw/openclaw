@@ -77,7 +77,7 @@ try {
   });
   const { child: gateway, log } = launch(
     buildGatewayBenchChildArgs(entry, port, gatewayBenchCpuProfileArgs(profiles), "token"),
-    { ...createGatewayBenchEnv(root, configPath), ...observed },
+    { ...createGatewayBenchEnv(root, configPath, {}), ...observed },
     "gateway",
   );
   gateway.stdout?.pipe(log);
@@ -126,7 +126,7 @@ try {
         "--token",
         token,
       ],
-      { ...createGatewayBenchEnv(bridgeRoot, configPath), ...observed },
+      { ...createGatewayBenchEnv(bridgeRoot, configPath, {}), ...observed },
       `bridge-${sample}`,
     );
     assert(bridge.stdin && bridge.stdout);
