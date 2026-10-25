@@ -11,6 +11,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
   persistSessionToolSurface,
@@ -58,12 +59,13 @@ function tools(published: boolean, description: string): AnyAgentTool[] {
     if (projection) {
       assert.equal(projection.violations.length, 0);
     }
+    const parameters = projection ? projection.schema : source;
+    assert.ok(isRecord(parameters));
     return {
       name: `fixture_${toolIndex}`,
       label: `Fixture ${toolIndex}`,
       description,
-      // Publication preserves this validated object schema while detaching its identity.
-      parameters: projection ? (projection.schema as typeof source) : source,
+      parameters,
       execute: async () => ({ content: [], details: {} }),
     };
   });
