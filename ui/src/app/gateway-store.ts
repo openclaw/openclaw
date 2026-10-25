@@ -24,7 +24,6 @@ import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
@@ -156,6 +155,10 @@ export function createApplicationGateway(
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
+    if (snapshot.phase === "connected" && previous.selfUser?.id !== snapshot.selfUser?.id) {
+      credentials.acceptHello(snapshot.hello?.auth, connection.token, snapshot.selfUser?.id);
+      credentials.bindAvatarContext(connection, snapshot.hello, options.resourceBasePath);
+    }
     messageBodies.synchronize();
     presenceObserver.synchronize(snapshot.phase === "connected" ? snapshot.hello : null);
     if (snapshot.phase !== "connecting" && snapshot.phase !== "reconnecting") {
@@ -366,19 +369,6 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Both connection setup and hello bind resources to this connection's credentials.
-    const updateAvatarContext = (hello?: GatewayHelloOk) => {
-      setAvatarGatewayOrigin(
-        nextConnection.gatewayUrl,
-        resolveControlUiAuthCandidates({
-          hello,
-          settings: nextConnection,
-          password: nextConnection.password,
-        }),
-        options.resourceBasePath,
-      );
-    };
-    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -431,7 +421,12 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
-        credentials.acceptHello(hello.auth, nextConnection.token);
+        const selfUser =
+          resolveSelfPresenceUser(
+            readPresenceEntries(hello.snapshot) ?? [],
+            nextClient.instanceId,
+          ) ?? undefined;
+        credentials.acceptHello(hello.auth, nextConnection.token, selfUser?.id);
         // The submitted secret is unclassified until this Gateway reports its mode.
         // Clear an old token too when the origin now uses password or proxy auth.
         persistSessionToken(
@@ -468,7 +463,7 @@ export function createApplicationGateway(
           }
           return;
         }
-        updateAvatarContext(hello);
+        credentials.bindAvatarContext(connection, hello, options.resourceBasePath);
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -499,11 +494,7 @@ export function createApplicationGateway(
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
           assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
           sessionKey,
-          selfUser:
-            resolveSelfPresenceUser(
-              readPresenceEntries(hello.snapshot) ?? [],
-              nextClient.instanceId,
-            ) ?? undefined,
+          selfUser,
         });
         void deferredIntents.flush();
         if (isCurrentClient(nextClient) && !snapshot.selfUser) {
@@ -530,7 +521,12 @@ export function createApplicationGateway(
           return;
         }
         canvasSurface.stop();
-        if (readConnectionAuthReason(error?.details) || error?.code === "PAIRING_REQUIRED") {
+        // Established grants can be revoked by a bare policy close, without an RPC error.
+        if (
+          code === 4001 ||
+          readConnectionAuthReason(error?.details) ||
+          error?.code === "PAIRING_REQUIRED"
+        ) {
           nextClient.retireOfflineRecoveryScope?.();
           everConnected = false;
           credentials.retire(false);
@@ -558,8 +554,9 @@ export function createApplicationGateway(
         const { restartPending, suspensionPhase, transient } = availability.observeClose(error);
         // Transport loss and announced unavailability keep this client's presentation;
         // any connect rejection (auth, pairing, protocol, build) fails closed.
-        const retainPresentation = transient && !nextClient.offlineRecoveryRetired;
+        const retainPresentation = code !== 4001 && transient && !nextClient.offlineRecoveryRetired;
         if (!retainPresentation) {
+          setAvatarGatewayOrigin(null);
           deferredIntents.discard();
           // A queue-count observer may stop or replace this client during discard.
           if (!isCurrentClient(nextClient)) {
@@ -625,6 +622,7 @@ export function createApplicationGateway(
         listeners: eventListeners,
       }),
     });
+    credentials.bindAvatarContext(connection, null, options.resourceBasePath);
     client = nextClient;
     setConnectionSnapshot({
       client: nextClient,
@@ -682,6 +680,7 @@ export function createApplicationGateway(
     start: () => connect(),
     stop: () => {
       stopped = true;
+      setAvatarGatewayOrigin(null);
       deferredIntents.discard();
       clearOfflineIndicatorTimer();
       setUnavailableDeadline("restartPending");
@@ -729,6 +728,7 @@ export function createApplicationGateway(
       connect,
       isStopped: () => stopped,
       retireOfflineAccess: () => {
+        setAvatarGatewayOrigin(null);
         client?.retireOfflineRecoveryScope?.();
         deferredIntents.discard();
         everConnected = false;

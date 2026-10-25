@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
+import { Blob as NodeBlob } from "node:buffer";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { projectSidebarSession } from "../../components/app-sidebar-session-navigation.test-support.ts";
-import { parseSidebarSnapshot, snapshotSessions } from "../../components/sidebar-snapshot-model.ts";
+import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-model.ts";
 import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -150,12 +150,20 @@ it("retires a legacy hierarchy without evicting valid sidebars or transcripts", 
   store.write(sessionKey, transcript);
   await store.flush();
   expect(await store.read(sessionKey)).toMatchObject(transcript);
-  const [parent, child] = snapshotSessions(
-    ["parent", "child"].map((name) =>
-      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
-    ),
-  );
-  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
+  const legacy = {
+    ...sidebarSnapshot,
+    sessions: [
+      {
+        key: "agent:main:parent",
+        label: "Parent",
+        pinned: false,
+        isChild: false,
+        children: [
+          { key: "agent:main:child", label: "Child", pinned: false, isChild: true, children: [] },
+        ],
+      },
+    ],
+  };
   expect(parseSidebarSnapshot(legacy)).toBeNull();
   const database = await openSessionSnapshotDatabase();
   if (!database) {
@@ -165,7 +173,7 @@ it("retires a legacy hierarchy without evicting valid sidebars or transcripts", 
   transaction.objectStore(SIDEBAR).put({
     sessionKey: key(scope),
     savedAt: 2000,
-    projectionVersion: 1,
+    projectionVersion: 3,
     model: legacy,
   });
   await transactionComplete(transaction);
@@ -197,6 +205,30 @@ it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
   expect(await read(store)).toBeNull();
   now += 31 * 24 * 60 * 60 * 1000;
   expect(await read(store, profile("newer"))).toBeNull();
+});
+
+it("counts native image bytes in the sidebar budget and preserves admitted Blob data", async () => {
+  vi.stubGlobal("Blob", NodeBlob);
+  const store = createStore();
+  const snapshot = (blob: Blob) => ({
+    ...sidebarSnapshot,
+    avatarImages: [{ url: "/avatar/juniper?v=fixture-revision", blob }],
+  });
+  expect(
+    await store.writeSidebar(
+      key(scope),
+      snapshot(new Blob([new Uint8Array(512 * 1024)], { type: "image/png" })),
+      parseSidebarSnapshot,
+    ),
+  ).toBe(false);
+  expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
+  const image = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
+  expect(await store.writeSidebar(key(scope), snapshot(image), parseSidebarSnapshot)).toBe(true);
+  const restored = await store.readSidebar(key(scope), parseSidebarSnapshot);
+  expect(restored?.avatarImages?.[0]?.blob).toBeInstanceOf(Blob);
+  expect(new Uint8Array(await restored!.avatarImages![0]!.blob!.arrayBuffer())).toEqual(
+    new Uint8Array([1, 2, 3]),
+  );
 });
 
 it("removes only the evicted transcript without invalidating sidebars", async () => {

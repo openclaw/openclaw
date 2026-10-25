@@ -4,6 +4,7 @@ import type {
   GatewayBrowserClientOptions,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import {
   bootRecordOwner,
@@ -14,6 +15,7 @@ import {
   type BootRecordOwner,
 } from "./boot-record.ts";
 import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 
@@ -28,7 +30,33 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
   let scope: string | undefined;
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
+  let avatarScope: string | null = null;
+  const bindAvatarScope = (
+    recoveryScope: string | undefined,
+    profileId: string | null | undefined,
+  ) => {
+    avatarScope =
+      scope && recoveryScope && profileId
+        ? JSON.stringify([scope, recoveryScope, profileId])
+        : null;
+  };
   return {
+    bindAvatarContext(
+      connection: ApplicationGatewayConnection,
+      hello: GatewayHelloOk | null,
+      resourceBasePath?: string,
+    ) {
+      setAvatarGatewayOrigin(
+        connection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: connection,
+          password: connection.password,
+        }),
+        resourceBasePath,
+        avatarScope,
+      );
+    },
     prepare(
       connection: ApplicationGatewayConnection,
       credentialsChanged: boolean,
@@ -50,6 +78,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (boot) {
         capturedOwner = bootRecordOwner(boot);
       }
+      bindAvatarScope(boot?.recoveryScope, boot?.profileId);
       return {
         offlineRecoveryScope:
           canOwnWarmBoot && !credentialsChanged
@@ -62,7 +91,8 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
         password: connection.password.trim() ? connection.password : undefined,
       };
     },
-    acceptHello(auth: GatewayHelloOk["auth"], token: string): void {
+    acceptHello(auth: GatewayHelloOk["auth"], token: string, profileId?: string): void {
+      bindAvatarScope(auth?.recoveryScope, profileId);
       if (!canOwnWarmBoot) {
         return;
       }
@@ -77,6 +107,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
           : undefined;
     },
     retire(clearCaches: boolean): void {
+      avatarScope = null;
       const gatewayScope = scope;
       const owners = capturedOwner ? [capturedOwner] : [];
       if (liveOwner && !sameBootRecordOwner(capturedOwner, liveOwner)) {

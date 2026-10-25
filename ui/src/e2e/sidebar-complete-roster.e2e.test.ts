@@ -3,6 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import {
+  persistColdLoadWarmState,
+  restoreColdLoadWarmState,
+} from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { sidebarPresentationProbe } from "../../../scripts/lib/control-ui-sidebar-presentation.test-support.ts";
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -209,6 +213,12 @@ suite.define(() => {
               ),
           );
           await saved().waitFor();
+          const warmState = await page.evaluate(persistColdLoadWarmState, {
+            sessionKey: fixture.selectedSessionKey,
+            sidebarView: "sessions",
+          });
+          expect(warmState.sidebarBytes).toBeGreaterThan(0);
+          expect(warmState.sidebarBytes).toBeLessThanOrEqual(250_000);
           const beforePresentation = await page.evaluate(() =>
             Reflect.get(window, "__sidebarPresentation").read(),
           );
@@ -243,6 +253,7 @@ suite.define(() => {
             JSON.stringify(beforeReload, null, 2),
           );
 
+          await restoreColdLoadWarmState(page, warmState.storage);
           await page.reload();
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
           await capture("cached");

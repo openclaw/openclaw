@@ -93,13 +93,16 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     () => host().sessionDataContext?.sessions.archiveVisibility(session().key) === "pending",
   );
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
-  const attentionKind = createMemo(
-    () => (team() ? (session().ownAttention ?? session().attention) : session().attention).kind,
-  );
+  const attentionKind = createMemo(() => {
+    const row = session();
+    return row.snapshot !== undefined
+      ? (row.snapshot.tone ?? "none")
+      : (team() ? (row.ownAttention ?? row.attention) : row.attention).kind;
+  });
   const label = createMemo(() => session().label);
   const subtitleInput = createMemo(
     () => {
-      const snapshot = host().sidebarSnapshot ? session().snapshotSubtitle : undefined;
+      const snapshot = host().sidebarSnapshot ? session().snapshot?.snapshotSubtitle : undefined;
       const input = snapshot ? null : sidebarSessionRowSubtitleParams(host(), session(), display());
       return {
         input,

@@ -201,6 +201,14 @@ suite.define(() => {
           ...sessionRow("warm-reload", "Warm reload conversation"),
           key: sessionKey,
         };
+        if (profile === "different") {
+          await page.route("**/api/users/profile-*/avatar?*", (route) =>
+            route.fulfill({
+              contentType: "image/svg+xml",
+              body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="seagreen"/></svg>',
+            }),
+          );
+        }
         const gateway = await installMockGateway(page, {
           sessionKey,
           assistantName: "Observatory",
@@ -212,6 +220,9 @@ suite.define(() => {
             {
               id: "profile-a",
               self: true,
+              ...(profile === "different"
+                ? { avatarUrl: "/api/users/profile-a/avatar?v=synthetic-a" }
+                : {}),
               ...(profile === "matching"
                 ? { identity: { type: "profile" as const, id: "profile-a" } }
                 : {}),
@@ -299,6 +310,9 @@ suite.define(() => {
         const transcript = page.locator(".chat-thread-inner");
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
+        if (profile === "different") {
+          await sidebar.locator('.viewer-avatar--footer[data-avatar-state="loaded"] img').waitFor();
+        }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }
@@ -387,6 +401,12 @@ suite.define(() => {
           await expectOwnMessageAlignment(page);
         }
         await capture(`warm-${profile}-before-hello.png`);
+        const previousAvatar =
+          profile === "different"
+            ? await sidebar
+                .locator('.viewer-avatar--footer[data-avatar-state="loaded"] img')
+                .getAttribute("src")
+            : null;
 
         await gateway.setSessionsListResponse({
           ownerSessionCounts: [],
@@ -424,7 +444,14 @@ suite.define(() => {
             snapshot: {
               ...hello.snapshot,
               presence: [
-                { instanceId: client.instanceId, reason: "connect", user: { id: "profile-b" } },
+                {
+                  instanceId: client.instanceId,
+                  reason: "connect",
+                  user: {
+                    id: "profile-b",
+                    avatarUrl: "/api/users/profile-b/avatar?v=synthetic-b",
+                  },
+                },
               ],
             },
           });
@@ -433,6 +460,21 @@ suite.define(() => {
         }
         const startup = await gateway.waitForRequest("chat.startup");
         if (profile === "different") {
+          await sidebar
+            .locator(
+              '.viewer-avatar--footer[data-viewer-id="profile-b"][data-avatar-state="loaded"] img',
+            )
+            .waitFor();
+          expect(previousAvatar).toMatch(/^blob:/u);
+          expect(
+            await sidebar
+              .locator("img")
+              .evaluateAll(
+                (images, previous) =>
+                  images.some((image) => image.getAttribute("src") === previous),
+                previousAvatar,
+              ),
+          ).toBe(false);
           expect(startup.params).toMatchObject({ sessionKey });
           expect(startup.params).not.toHaveProperty("cursor");
           await expect
@@ -457,6 +499,23 @@ suite.define(() => {
           profile === "different" ? "This is profile B's conversation." : transcriptText;
         await transcript.getByText(finalText, { exact: true }).waitFor();
         await capture(`warm-${profile}-after-hello.png`);
+        if (profile === "different") {
+          const avatar = await sidebar
+            .locator('.viewer-avatar--footer[data-avatar-state="loaded"] img')
+            .getAttribute("src");
+          if (!avatar?.startsWith("blob:")) throw new Error("Expected the loaded profile B image");
+          await gateway.closeLatest(4001, "Operator access denied");
+          expect(
+            await page.evaluate(async (url) => {
+              try {
+                await fetch(url);
+                return true;
+              } catch {
+                return false;
+              }
+            }, avatar),
+          ).toBe(false);
+        }
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);
           expect(await gateway.getRequests("chat.history")).toEqual([]);

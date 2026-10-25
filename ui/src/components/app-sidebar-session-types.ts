@@ -48,7 +48,7 @@ export type SidebarSessionAttention =
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
-const SIDEBAR_SESSION_ATTENTION_PRIORITY: Record<SidebarSessionAttention["kind"], number> = {
+export const SIDEBAR_SESSION_ATTENTION_PRIORITY: Record<SidebarSessionAttention["kind"], number> = {
   question: 3,
   approval: 3,
   agent: 2,
@@ -112,9 +112,8 @@ export type SidebarRecentSession = Readonly<{
   renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
-  /** Admitted display slot used only while restoring a sidebar snapshot. */
-  snapshotSubtitle?: { subtitle?: string; narration?: string; toolName?: string };
-  snapshotPresentation?: import("./sidebar-snapshot-data.ts").SidebarSnapshotSession["snapshotPresentation"];
+  /** Admitted last-visit display facts, retired when the live row arrives. */
+  snapshot?: import("./sidebar-snapshot-data.ts").SidebarSnapshotSession;
   workContext?: SessionWorkContext;
   active: boolean;
   visuallyActive: boolean;

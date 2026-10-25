@@ -1297,7 +1297,7 @@ try {
       }
     }
     const expansionSaved = async (expanded: boolean) => {
-      type SavedRow = { key: string; children?: SavedRow[] };
+      type SavedRow = string | { key: string; children?: SavedRow[] };
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open("openclaw-chat-snapshots");
         request.addEventListener("success", () => resolve(request.result), { once: true });
@@ -1311,6 +1311,7 @@ try {
         const records = await new Promise<
           Array<{
             model: {
+              rows?: Record<string, { children?: string[] }>;
               pinnedSessions: SavedRow[];
               sections: Array<{ visibleLimit: number; rows: SavedRow[] }>;
             };
@@ -1334,8 +1335,13 @@ try {
           const savedKeys = new Set<string>();
           const collect = (rows: SavedRow[]) => {
             for (const row of rows) {
-              savedKeys.add(row.key);
-              collect(row.children ?? []);
+              const key = typeof row === "string" ? row : row.key;
+              savedKeys.add(key);
+              collect(
+                typeof row === "string"
+                  ? (model.rows?.[key]?.children ?? [])
+                  : (row.children ?? []),
+              );
             }
           };
           collect(model.pinnedSessions);
@@ -1459,6 +1465,17 @@ try {
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
       snapshotSaves.push(saved);
+    }
+    if (values["sidebar-presentation-probe"]) {
+      for (const [index, storage] of warmStates.entries()) {
+        await writeFile(
+          path.join(artifactDir, `warm-sidebar-${index}.json`),
+          JSON.stringify({
+            records: storage.records.sidebarSnapshots,
+            blobs: storage.sidebarBlobs,
+          }),
+        );
+      }
     }
   }
   let historyValidatorRequests = 0;

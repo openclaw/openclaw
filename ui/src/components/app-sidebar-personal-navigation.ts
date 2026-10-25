@@ -23,7 +23,6 @@ import {
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
-import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = {
   readonly pinnedSessions: ReturnType<typeof createSidebarPinnedSessions>;
@@ -120,9 +119,7 @@ export function createSidebarPinnedSessions(
     return source;
   }
 
-  function seed(
-    snapshot: readonly (SidebarRecentSession | SidebarSnapshotModel["pinnedSessions"][number])[],
-  ): void {
+  function seed(snapshot: readonly SidebarRecentSession[]): void {
     synchronize();
     if (!scope) {
       return;
@@ -131,7 +128,7 @@ export function createSidebarPinnedSessions(
       if (!rows.has(row.key) && requested.get(row.key) !== "settled") {
         rows.set(row.key, {
           source: "presentation",
-          row: "renameValue" in row ? row : restoreSnapshotSession(row, host.getRouteSessionKey()),
+          row,
         });
       }
     }

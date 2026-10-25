@@ -10,6 +10,7 @@ type SidebarSnapshotModel = {
   navigationView: string;
   onlineUsers: unknown[];
   roster?: { result: { sessions: Array<{ key: string }> } } | null;
+  avatarImages?: Array<{ blob?: Blob | null }>;
 };
 
 type StoredTranscript = {
@@ -67,9 +68,36 @@ export async function persistColdLoadWarmState(input: {
     if (input.offRosterSession && rosterContainsSession) {
       throw new Error("Off-roster measurement found the selected session in the persisted roster");
     }
+    let blobBytes = 0;
+    const sidebarJson = JSON.stringify(sidebar.model, (_key, value: unknown) => {
+      if (!(value instanceof Blob)) return value;
+      blobBytes += value.size;
+      return null;
+    });
+    // Playwright's JSON boundary cannot carry IDB's native Blob values.
+    const sidebarBlobs: Array<{
+      sessionKey: string;
+      index: number;
+      type: string;
+      bytes: number[];
+    }> = [];
+    for (const record of sidebars) {
+      for (const [index, image] of (record.model.avatarImages ?? []).entries()) {
+        if (image.blob instanceof Blob) {
+          sidebarBlobs.push({
+            sessionKey: record.sessionKey,
+            index,
+            type: image.blob.type,
+            bytes: Array.from(new Uint8Array(await image.blob.arrayBuffer())),
+          });
+          image.blob = null;
+        }
+      }
+    }
     return {
       rosterContainsSession,
       storage: {
+        sidebarBlobs,
         records: { snapshots, sidebarSnapshots: sidebars, snapshotMetadata: metadata },
         local: Object.entries(localStorage),
         session: Object.entries(sessionStorage),
@@ -79,7 +107,7 @@ export async function persistColdLoadWarmState(input: {
       projectionVersion: record.projectionVersion,
       sidebarView: sidebar.model.navigationView,
       sidebarPeople: sidebar.model.onlineUsers.length,
-      sidebarBytes: new TextEncoder().encode(JSON.stringify(sidebar.model)).byteLength,
+      sidebarBytes: new TextEncoder().encode(sidebarJson).byteLength + blobBytes,
     };
   } finally {
     database.close();
@@ -98,6 +126,14 @@ export async function restoreColdLoadWarmState(
   await page.unroute(resetUrl);
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
+      for (const image of saved.sidebarBlobs) {
+        const record = saved.records.sidebarSnapshots.find(
+          (record) => record.sessionKey === image.sessionKey,
+        );
+        const target = record?.model.avatarImages?.[image.index];
+        if (!target) throw new Error("Warm sidebar image lost its snapshot owner");
+        target.blob = new Blob([new Uint8Array(image.bytes)], { type: image.type });
+      }
       const databases: Record<string, Record<string, unknown[]>> = {
         "openclaw-chat-snapshots": saved.records,
       };

@@ -127,15 +127,22 @@ const sidebarRecordsSchema = json.array(
   json.object(
     {
       ...metadataFields,
-      projectionVersion: json.literal(2),
+      projectionVersion: json.literal(3),
       model: json.unknown,
     },
     true,
   ),
 );
 type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
-const sidebarRecordBytes = (record: SidebarRecord) =>
-  new TextEncoder().encode(JSON.stringify(record)).byteLength;
+function sidebarRecordBytes(record: SidebarRecord): number {
+  let blobs = 0;
+  const metadata = JSON.stringify(record, (_key, value: unknown) => {
+    if (!(value instanceof Blob)) return value;
+    blobs += value.size;
+    return null;
+  });
+  return new TextEncoder().encode(metadata).byteLength + blobs;
+}
 type PreparedSnapshotRecord = {
   record: SessionSnapshotRecord;
   metadata: SessionSnapshotMetadata;
@@ -511,7 +518,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 2,
+        projectionVersion: 3,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {

@@ -13,7 +13,7 @@ import {
 } from "../test-helpers/agent-sidebar.test-support.ts";
 import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
-import { snapshotSessions } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshotWithRows } from "./sidebar-snapshot.test-support.ts";
 
 const mine = () =>
   ownedSession("agent:main:mine", viewer.id, { label: "My session", owner: { actor: viewer } });
@@ -103,18 +103,19 @@ it.each(["owner", "involving-me", "refresh"])(
       "query",
       async ({ sidebar, context, settle }) => {
         await settle();
-        const rows = snapshotSessions(
+        const saved = sidebarSnapshotWithRows(
           [mine()].map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
         );
         sidebar.restoreSidebarSnapshot({
           ...sidebarBootSnapshot(captureBootRoster(context.sessions.state)),
+          rows: saved.rows,
+          sessions: saved.sessions,
           ownerId: viewer.id,
           mode: "chip",
-          sessions: rows,
           sections: [
             {
               id: "ungrouped",
-              rows,
+              rows: saved.sessions,
               totalRowCount: 1,
               visibleRowCount: 1,
               visibleLimit: 10,

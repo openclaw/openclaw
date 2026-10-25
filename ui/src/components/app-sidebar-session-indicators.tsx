@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
-import { presenceMatchesProfile } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
@@ -31,6 +30,9 @@ export function renderSidebarSessionIndicators(
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const ownAttention = createMemo(() => readSession().ownAttention ?? readSession().attention);
   const hasApproval = createMemo(() => {
+    if (readSession().snapshot) {
+      return readSession().snapshot?.hasApproval === true;
+    }
     const attention = ownAttention();
     return attention.kind === "question"
       ? attention.requests.some((request) => request.kind === "approval")
@@ -38,14 +40,11 @@ export function renderSidebarSessionIndicators(
   });
   const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
   const initialPullRequest = createMemo(
-    () =>
-      readSession().pullRequest ??
-      readDisplay?.()?.pullRequest ??
-      readSession().snapshotPresentation?.pullRequest,
+    () => readSession().pullRequest ?? readDisplay?.()?.pullRequest,
   );
   const pullRequest = createMemo(() => {
     if (host().sidebarSnapshot) {
-      return readSession().snapshotPresentation?.pullRequest;
+      return readSession().pullRequest;
     }
     const readSessionValue = readSession();
     const initialPullRequestValue = initialPullRequest();
@@ -55,10 +54,7 @@ export function renderSidebarSessionIndicators(
       initialPullRequestValue,
     );
   });
-  const cached = createMemo(() => readSession().snapshotPresentation);
-  const owner = createMemo(
-    () => cached() ?? sidebarSessionOwnerPresentation(host(), readSession()),
-  );
+  const owner = createMemo(() => sidebarSessionOwnerPresentation(host(), readSession()));
   const gateway = createMemo(() => host().sessionDataContext?.gateway);
   const channelAvatarAuth = createMemo(() =>
     resolveControlUiAvatarAuth({
@@ -177,14 +173,8 @@ export function renderSidebarSessionIndicators(
         {" "}
         <span class="sidebar-recent-session__details-endcap">
           <ViewerFacepile
-            staticUsers={cached()
-              ?.viewers.filter(
-                (user) =>
-                  !(renderedIdentities() ?? EMPTY_VIEWER_IDENTITIES).some((identity) =>
-                    presenceMatchesProfile({ ...user, watchedSessions: [] }, identity),
-                  ),
-              )
-              .map((user) => ({ ...user, watchedSessions: [] }))}
+            staticUsers={readSession().snapshot?.viewers}
+            totalCount={readSession().snapshot?.viewerCount}
             presencePayload={host().sessionData.presencePayload}
             selfUser={host().sessionDataContext?.gateway.snapshot.selfUser}
             selfInstanceId={host().sessionData.presenceInstanceId}
@@ -222,8 +212,11 @@ export function renderSidebarSessionIndicators(
             pullRequest={pullRequest()}
             pullRequestCount={
               host().sidebarSnapshot
-                ? cached()?.pullRequestCount
-                : host().sessionPullRequests.count(readSession().key, cached()?.pullRequestCount)
+                ? readSession().snapshot?.pullRequestCount
+                : host().sessionPullRequests.count(
+                    readSession().key,
+                    readSession().snapshot?.pullRequestCount,
+                  )
             }
             hasApproval={hasApproval()}
           />

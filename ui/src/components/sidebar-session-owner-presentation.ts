@@ -17,6 +17,13 @@ export function sidebarSessionOwnerPresentation(
   >,
   row: SidebarRecentSession,
 ) {
+  if (row.snapshot) {
+    return {
+      owner: row.snapshot.owner ?? null,
+      attribution: row.snapshot.attribution ?? "created",
+      ownerViewing: row.snapshot.ownerViewing,
+    };
+  }
   const attribution: "archived" | "owned" | "created" =
     host.sessionsStatusFilter === "archived"
       ? "archived"

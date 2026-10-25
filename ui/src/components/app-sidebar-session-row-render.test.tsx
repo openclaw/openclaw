@@ -6,7 +6,11 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
+import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -29,9 +33,9 @@ import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
   parseSidebarSnapshot,
   restoreSnapshotSession,
-  snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshotWithRows } from "./sidebar-snapshot.test-support.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
@@ -120,15 +124,38 @@ function mountObservedHost(
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
+  const archived = {
+    key: "agent:main:archived",
+    kind: "direct" as const,
+    archived: true,
+    hasBoard: true,
+  };
+  const roster = captureBootRoster({
+    result: sessionsResult([archived], 1),
+    agentId: "main",
+    groups: [],
+    groupSettings: [],
+    sectionOrder: [],
+    loading: false,
+    error: null,
+  });
+  const saved = sidebarSnapshotWithRows(
+    [
+      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+      projectSidebarSession(archived),
+    ],
+    undefined,
+    roster,
+  );
+  expect(saved.rows[archived.key]).not.toHaveProperty("archived");
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
+    rows: saved.rows,
+    roster: saved.roster,
     mode: "roster",
     navigationView: "pages",
     pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions([
-      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
-      projectSidebarSession({ key: "agent:main:archived", hasBoard: true, archived: true }),
-    ]),
+    pages: saved.sessions,
   });
   host.invalidate();
   await host.updateComplete;
@@ -214,15 +241,16 @@ it("keeps cached agent rows while the live roster settles", async () => {
   host.sidebarLiveActivity = false;
   await requested.promise;
   await host.updateComplete;
-  const saved = snapshotSessions([projectSidebarSession({ key, label: "Cedar" })]);
+  const saved = sidebarSnapshotWithRows([projectSidebarSession({ key, label: "Cedar" })]);
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
+    rows: saved.rows,
+    sessions: saved.sessions,
     mode: "roster",
-    sessions: saved,
     sections: [
       {
         id: "agent:main:recent",
-        rows: saved,
+        rows: saved.sessions,
         totalRowCount: 1,
         visibleRowCount: 1,
         visibleLimit: 10,
@@ -443,12 +471,12 @@ it("keeps the rendered preview slot after caching without restoring live run aut
     <RecentSession host={observedHost} session={current()} />
   ));
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
-  const [cached] = snapshotSessions([session], (row) => ({
+  const cached = sidebarSnapshotWithRows([session], (row) => ({
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   }));
-  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, sessions: [cached] });
+  host.sidebarSnapshot = parseSidebarSnapshot({ ...cached, mode: "chip" });
   expect(host.sidebarSnapshot).not.toBeNull();
-  const restored = restoreSnapshotSession(host.sidebarSnapshot!.sessions[0]!, session.key);
+  const restored = restoreSnapshotSession(host.sidebarSnapshot!, session.key, session.key);
   setCurrent(restored);
   update();
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");

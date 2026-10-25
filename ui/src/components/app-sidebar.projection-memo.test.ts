@@ -29,7 +29,7 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
-import { snapshotSessions } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshotWithRows } from "./sidebar-snapshot.test-support.ts";
 
 type Sidebar = AppSidebarSessionNavigationElement & HTMLElement;
 
@@ -134,19 +134,20 @@ describe("sidebar projection memo", () => {
       sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
     ).toBe(sectionId);
     vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
-    const rows = snapshotSessions(
+    const saved = sidebarSnapshotWithRows(
       sessionsToShow.map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
     );
     owner.restoreSidebarSnapshot({
       ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      rows: saved.rows,
+      sessions: saved.sessions,
       mode: "chip",
-      sessions: rows,
       entries: [],
       sections: [
         {
           id: sectionId,
-          rows: rows.slice(0, 20),
-          totalRowCount: rows.length,
+          rows: saved.sessions.slice(0, 20),
+          totalRowCount: saved.sessions.length,
           visibleRowCount: 20,
           visibleLimit: 20,
           collapsedVisibleRowCount: 10,

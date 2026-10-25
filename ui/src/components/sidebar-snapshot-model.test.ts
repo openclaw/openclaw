@@ -4,10 +4,13 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import {
   parseSidebarSnapshot,
   restoreSnapshotSession,
+  createSidebarSnapshotRows,
   snapshotSections,
-  snapshotSessions,
 } from "./sidebar-snapshot-model.ts";
-import { sidebarSnapshot as model } from "./sidebar-snapshot.test-support.ts";
+import {
+  sidebarSnapshot as model,
+  sidebarSnapshotWithRows,
+} from "./sidebar-snapshot.test-support.ts";
 
 function captureRoster(rows: Parameters<typeof sessionsResult>[0]) {
   return captureBootRoster({
@@ -22,7 +25,8 @@ function captureRoster(rows: Parameters<typeof sessionsResult>[0]) {
 }
 function displayRow(key: string, label: string, pinned = false) {
   return restoreSnapshotSession(
-    { key, label, pinned, isChild: false, children: [] },
+    { ...model, rows: { [key]: { label, pinned, isChild: false, children: [] } } },
+    key,
     pinned ? key : "",
   );
 }
@@ -37,17 +41,90 @@ it("keeps unread and state presentation at the cached-to-live handoff", () => {
     failedChildCount: 1,
     unreadChildCount: 3,
   };
-  const captured = snapshotSessions([row]);
-  const saved = parseSidebarSnapshot(JSON.parse(JSON.stringify({ ...model, sessions: captured })));
+  const captured = sidebarSnapshotWithRows([row]);
+  const saved = parseSidebarSnapshot(JSON.parse(JSON.stringify(captured)));
   expect(saved).not.toBeNull();
-  expect(restoreSnapshotSession(saved!.sessions[0]!, "")).toMatchObject({
+  expect(restoreSnapshotSession(saved!, saved!.sessions[0]!, "")).toMatchObject({
     unread: true,
-    status: "failed",
     hasAutomation: true,
-    runningChildCount: 2,
-    failedChildCount: 1,
-    unreadChildCount: 3,
+    hasActiveRun: false,
+    runningChildCount: 0,
+    failedChildCount: 0,
+    snapshot: { run: "subagents", slotActive: 2, slotUnread: 4, slotFailed: true },
   });
+  expect(JSON.stringify(saved)).not.toMatch(/subagentSummary|hasActiveRun|runningChildCount/);
+});
+
+it("stores a row once across saved placements without retaining request content", () => {
+  const row = {
+    ...displayRow("agent:main:work", "Only one visible row title"),
+    participantCount: 1,
+    participants: [{ identity: { type: "profile" as const, id: "alex" }, label: "Alex visible" }],
+    attention: {
+      kind: "approval" as const,
+      requests: [
+        {
+          id: "private-request",
+          kind: "approval" as const,
+          count: 1,
+          createdAtMs: 1,
+          preview: "Hidden approval request payload",
+        },
+      ],
+    },
+  };
+  const owner = {
+    type: "human" as const,
+    id: "alex",
+    label: "Alex visible",
+    identity: { type: "profile" as const, id: "alex" },
+  };
+  const captured = sidebarSnapshotWithRows([row], () => ({
+    owner,
+    viewers: [{ id: "alex", name: owner.label, identity: owner.identity, watchedSessions: [] }],
+  }));
+  captured.pages = captured.sessions;
+  captured.pinnedSessions = captured.sessions;
+  const encoded = JSON.stringify(captured);
+  expect(encoded.match(/Only one visible row title/gu)).toHaveLength(1);
+  expect(captured.rows[row.key]?.participants).toHaveLength(1);
+  expect(encoded).not.toContain("Hidden approval request payload");
+  const saved = parseSidebarSnapshot(JSON.parse(encoded));
+  expect(saved).not.toBeNull();
+  const restored = restoreSnapshotSession(saved!, row.key, row.key);
+  expect(restored.snapshot?.attention).toEqual(["approval", "shieldQuestion"]);
+  expect(restored.attention).toEqual({ kind: "none" });
+});
+
+it("reuses boot roster headers and stores only visible overlays for held rows", () => {
+  const roster = captureRoster([
+    { key: "agent:main:held", kind: "direct", label: "Held title", icon: "🔧", pinned: true },
+  ]);
+  const held = { ...displayRow("agent:main:held", "Held title", true), icon: "🔧", unread: true };
+  const offRoster = displayRow("agent:main:old-pin", "Off-roster pin", true);
+  const saved = sidebarSnapshotWithRows([held, offRoster], undefined, roster);
+  expect(saved.rows[held.key]).not.toHaveProperty("icon");
+  expect(saved.rows[held.key]?.label).toBeUndefined();
+  expect(JSON.stringify(saved).match(/Held title/gu)).toHaveLength(1);
+  expect(restoreSnapshotSession(saved, held.key, "")).toMatchObject({
+    label: "Held title",
+    icon: "🔧",
+    pinned: true,
+    unread: true,
+  });
+  expect(restoreSnapshotSession(saved, offRoster.key, "")).toMatchObject({
+    label: "Off-roster pin",
+    pinned: true,
+  });
+});
+
+it("discards malformed row references instead of restoring another row or recursing", () => {
+  const captured = sidebarSnapshotWithRows([displayRow("agent:main:work", "Work")]);
+  const key = captured.sessions[0]!;
+  expect(parseSidebarSnapshot({ ...captured, pinnedSessions: ["agent:main:missing"] })).toBeNull();
+  captured.rows[key]!.children = [key];
+  captured.rows[key]!.childLoadParentKeys = [key];
+  expect(parseSidebarSnapshot(captured)).toBeNull();
 });
 
 it("roundtrips hidden-run child queries without retaining incognito parent keys", () => {
@@ -55,24 +132,35 @@ it("roundtrips hidden-run child queries without retaining incognito parent keys"
   const child = displayRow("agent:main:child", "Child");
   const hiddenRun = "agent:main:subagent:review";
   const incognitoRun = "agent:main:subagent:incognito-private";
-  const captured = snapshotSessions([
+  const captured = sidebarSnapshotWithRows([
     { ...parent, children: [child], childLoadParentKeys: [parent.key, hiddenRun, incognitoRun] },
   ]);
-  expect(captured[0]?.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
-  const saved = parseSidebarSnapshot(structuredClone({ ...model, sessions: captured }));
+  expect(captured.rows[parent.key]?.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
+  const saved = parseSidebarSnapshot(structuredClone(captured));
   expect(saved).not.toBeNull();
-  const restored = restoreSnapshotSession(saved!.sessions[0]!, parent.key);
+  const restored = restoreSnapshotSession(saved!, saved!.sessions[0]!, parent.key);
   expect(restored.childLoadParentKeys).toEqual([parent.key, hiddenRun]);
   expect(restored.children.map((row) => row.key)).toEqual([child.key]);
-  const legacyParent = { ...captured[0], childLoadParentKeys: undefined };
-  expect(parseSidebarSnapshot({ ...model, sessions: [legacyParent] })).toBeNull();
+  const legacyParent = { ...captured.rows[parent.key], childLoadParentKeys: undefined };
   expect(
-    parseSidebarSnapshot({ ...model, sessions: [{ ...legacyParent, children: [] }] }),
+    parseSidebarSnapshot({ ...captured, rows: { ...captured.rows, [parent.key]: legacyParent } }),
+  ).toBeNull();
+  expect(
+    parseSidebarSnapshot({
+      ...captured,
+      rows: { ...captured.rows, [parent.key]: { ...legacyParent, children: [] } },
+    }),
   ).not.toBeNull();
   expect(
     parseSidebarSnapshot({
-      ...model,
-      sessions: [{ ...captured[0], childLoadParentKeys: [parent.key, incognitoRun] }],
+      ...captured,
+      rows: {
+        ...captured.rows,
+        [parent.key]: {
+          ...captured.rows[parent.key],
+          childLoadParentKeys: [parent.key, incognitoRun],
+        },
+      },
     }),
   ).toBeNull();
 });
@@ -143,18 +231,18 @@ it("keeps display data without persisting authority, executable plugins, or watc
 it("excludes incognito roots and descendants and restores no live mutation facts", () => {
   const row = displayRow("agent:main:visible", "Project", true);
   const privateRow = { ...row, key: "agent:main:private", incognito: true };
-  const captured = snapshotSessions(
+  const captured = sidebarSnapshotWithRows(
     [
       { ...row, children: [privateRow], sharingRole: "owner", activeRunIds: ["live-run"] },
       privateRow,
     ],
     () => ({ snapshotSubtitle: { subtitle: "Private child approval details" } }),
   );
-  expect(captured).toHaveLength(1);
-  expect(captured[0]?.children).toEqual([]);
-  expect(captured[0]?.snapshotSubtitle).toBeUndefined();
+  expect(captured.sessions).toHaveLength(1);
+  expect(captured.rows[row.key]?.children).toEqual([]);
+  expect(captured.rows[row.key]?.snapshotSubtitle).toBeUndefined();
   expect(JSON.stringify(captured)).not.toContain("Private child approval details");
-  const restored = restoreSnapshotSession(captured[0]!, row.key);
+  const restored = restoreSnapshotSession(captured, row.key, row.key);
   expect(restored).toMatchObject({ visuallyActive: true, pinnable: false });
   expect([restored.sharingRole, restored.activeRunIds]).toEqual([undefined, undefined]);
 });
@@ -193,8 +281,17 @@ it("omits incognito-only section metadata and counts while preserving existing e
       collapsedVisibleRowCount: 0,
     },
   ];
-  const captured = snapshotSections(sections, new Set([...sections.map(({ id }) => id), "online"]));
-  const admitted = parseSidebarSnapshot({ ...model, ...captured });
+  const snapshot = createSidebarSnapshotRows();
+  const captured = snapshotSections(
+    sections,
+    new Set([...sections.map(({ id }) => id), "online"]),
+    snapshot.capture,
+  );
+  const admitted = parseSidebarSnapshot({
+    ...model,
+    rows: snapshot.rows,
+    ...captured,
+  });
   expect(admitted?.sections.map((section) => section.id)).toEqual([
     "category:shared",
     "category:empty",
@@ -210,7 +307,11 @@ it("omits incognito-only section metadata and counts while preserving existing e
 });
 
 it("retains independently rendered Pinned collapse state through snapshot serialization", () => {
-  const captured = snapshotSections([], new Set(["pinned", "online", "category:gone"]));
+  const captured = snapshotSections(
+    [],
+    new Set(["pinned", "online", "category:gone"]),
+    createSidebarSnapshotRows().capture,
+  );
   const serialized = JSON.stringify({ ...model, ...captured });
   const saved = parseSidebarSnapshot(JSON.parse(serialized));
   expect(saved?.collapsedSections).toEqual(["pinned", "online"]);

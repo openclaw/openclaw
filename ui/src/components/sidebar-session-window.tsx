@@ -34,7 +34,11 @@ export function createSidebarSessionWindow(
   ): { height: number; signature: GeometrySignature } => {
     const preview =
       host().sessionsShowPreview &&
-      Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
+      Boolean(
+        row.snapshot?.snapshotSubtitle?.subtitle ||
+        row.lastMessagePreview ||
+        row.channelPresentation,
+      );
     const ownHeight = preview ? 50 : 30;
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };

@@ -64,7 +64,7 @@ export function resolveChannelSessionInfo(
 
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
-  repository?: { url: string; branch: string };
+  repository?: { url: string; branch?: string };
   placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;

@@ -32,6 +32,7 @@ const scope = {
 };
 const sessionKey = `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000agent:main:cedar`;
 const model: SidebarSnapshotModel = {
+  rows: {},
   routingDefaults: { mainKey: "main", scope: "per-sender" },
   roster: null,
   mode: "roster",

@@ -11,7 +11,7 @@ const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const IDENTITY_AVATAR_FAILURE_TTL_MS = 60_000;
 const IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES = 128 * 1024;
 
-export type IdentityAvatarSnapshot = { url: string; dataUrl: string | null; retryAt?: number };
+export type IdentityAvatarSnapshot = { url: string; blob: Blob | null; retryAt?: number };
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
@@ -26,14 +26,16 @@ type CachedIdentityAvatar = {
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
 let identityAvatarGeneration = 0;
 
-function clearIdentityAvatarCache(): void {
-  identityAvatarGeneration += 1;
-  for (const entry of identityAvatarCache.values()) {
+function clearIdentityAvatarCache(retainImages: boolean): void {
+  if (!retainImages) identityAvatarGeneration += 1;
+  for (const [url, entry] of identityAvatarCache) {
+    // Completed reads keep their presentation only under owner-proven continuity.
+    if (retainImages && (entry.blobUrl || entry.retryAt !== undefined)) continue;
+    identityAvatarCache.delete(url);
     if (entry.blobUrl) {
       URL.revokeObjectURL(entry.blobUrl);
     }
   }
-  identityAvatarCache.clear();
 }
 
 // The loader is lazy, but once loaded it must release blobs immediately when
@@ -136,6 +138,7 @@ export async function captureIdentityAvatarSnapshot(
   const images: IdentityAvatarSnapshot[] = [];
   let bytes = 0;
   for (const value of new Set(urls)) {
+    if (images.length === IDENTITY_AVATAR_CACHE_MAX_ENTRIES) break;
     const url = revisionedAvatarUrl(value);
     const entry = url ? identityAvatarCache.get(url) : undefined;
     if (entry && !entry.blobUrl && !entry.settled) {
@@ -147,34 +150,14 @@ export async function captureIdentityAvatarSnapshot(
     if (!url || !entry || identityAvatarCache.get(url) !== entry) {
       continue;
     }
-    if (!entry.blobUrl || !entry.blob) {
-      const size = url.length + String(entry.retryAt).length;
-      if (
-        entry.retryAt !== undefined &&
-        Date.now() < entry.retryAt &&
-        bytes + size <= IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES
-      ) {
-        images.push({ url, dataUrl: null, retryAt: entry.retryAt });
-        bytes += size;
-      }
+    const size = url.length + (entry.blob?.size ?? String(entry.retryAt).length);
+    if (
+      bytes + size > IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES ||
+      (!entry.blob && (entry.retryAt === undefined || Date.now() >= entry.retryAt))
+    ) {
       continue;
     }
-    const type = entry.blob.type.split(";")[0];
-    const prefix = `data:${type};base64,`;
-    const size = url.length + prefix.length + Math.ceil(entry.blob.size / 3) * 4;
-    if (bytes + size > IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES) {
-      continue;
-    }
-    const binary = Array.from(new Uint8Array(await entry.blob.arrayBuffer()), (byte) =>
-      String.fromCharCode(byte),
-    ).join("");
-    if (generation !== identityAvatarGeneration) {
-      return [];
-    }
-    if (identityAvatarCache.get(url) !== entry) {
-      continue;
-    }
-    images.push({ url, dataUrl: prefix + btoa(binary) });
+    images.push({ url, blob: entry.blob, ...(entry.blob ? {} : { retryAt: entry.retryAt }) });
     bytes += size;
   }
   return images;
@@ -189,52 +172,29 @@ export function restoreIdentityAvatarSnapshot(images: readonly IdentityAvatarSna
   let bytes = 0;
   for (const image of images) {
     const url = revisionedAvatarUrl(image.url);
-    const size = image.url.length + (image.dataUrl?.length ?? String(image.retryAt).length);
-    if (!url || identityAvatarCache.has(url) || bytes + size > IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES) {
+    const size = image.url.length + (image.blob?.size ?? String(image.retryAt).length);
+    if (
+      !url ||
+      identityAvatarCache.has(url) ||
+      bytes + size > IDENTITY_AVATAR_SNAPSHOT_MAX_BYTES ||
+      (image.blob
+        ? !image.blob.size || !isAvatarImageMimeType(image.blob.type)
+        : image.retryAt === undefined || Date.now() >= image.retryAt)
+    ) {
       continue;
     }
-    if (image.dataUrl === null) {
-      if (image.retryAt !== undefined && Date.now() < image.retryAt) {
-        const entry: CachedIdentityAvatar = {
-          blobUrl: null,
-          blob: null,
-          references: 0,
-          settled: true,
-          retryAt: image.retryAt,
-          promise: Promise.resolve(null),
-        };
-        identityAvatarCache.set(url, entry);
-        restored.set(url, entry);
-        bytes += size;
-      }
-      continue;
-    }
-    const data = /^data:([^;,]+);base64,([a-z\d+/]*={0,2})$/iu.exec(image.dataUrl);
-    if (!data?.[1] || data[2] === undefined || !isAvatarImageMimeType(data[1])) {
-      continue;
-    }
-    try {
-      const binary = atob(data[2]);
-      const blob = new Blob([Uint8Array.from(binary, (character) => character.charCodeAt(0))], {
-        type: data[1],
-      });
-      if (!blob.size) {
-        continue;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      const entry: CachedIdentityAvatar = {
-        blobUrl,
-        blob,
-        references: 0,
-        settled: true,
-        promise: Promise.resolve(blobUrl),
-      };
-      identityAvatarCache.set(url, entry);
-      restored.set(url, entry);
-      bytes += size;
-    } catch {
-      // Disposable cache corruption cannot replace an authenticated resource read.
-    }
+    const blobUrl = image.blob ? URL.createObjectURL(image.blob) : null;
+    const entry: CachedIdentityAvatar = {
+      blobUrl,
+      blob: image.blob,
+      references: 0,
+      settled: true,
+      ...(image.blob ? {} : { retryAt: image.retryAt }),
+      promise: Promise.resolve(blobUrl),
+    };
+    identityAvatarCache.set(url, entry);
+    restored.set(url, entry);
+    bytes += size;
   }
   trimIdentityAvatarCache();
   const ready =

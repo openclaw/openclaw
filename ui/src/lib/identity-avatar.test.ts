@@ -293,8 +293,11 @@ describe("authenticated profile avatar cache", () => {
       await resolveAvatarImageUrl(path);
       const images = await captureIdentityAvatarSnapshot([path, path, "/avatar/not-displayed?v=1"]);
       expect(images).toEqual([
-        { url: `https://gateway.example.test${path}`, dataUrl: "data:image/png;base64,AQID" },
+        { url: `https://gateway.example.test${path}`, blob: await avatarResponse().blob() },
       ]);
+      expect(new Uint8Array(await images[0]!.blob!.arrayBuffer())).toEqual(
+        new Uint8Array([1, 2, 3]),
+      );
       setAvatarGatewayOrigin(null);
       setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
       const retire = restoreIdentityAvatarSnapshot(images);
@@ -328,26 +331,30 @@ describe("authenticated profile avatar cache", () => {
     expect(images.map((image) => image.url)).toEqual([
       "https://gateway.example.test/avatar/one?v=1",
     ]);
-    expect(JSON.stringify(images).length).toBeLessThan(128 * 1024);
+    expect(
+      images.reduce((size, image) => size + image.url.length + (image.blob?.size ?? 0), 0),
+    ).toBeLessThan(128 * 1024);
     setAvatarGatewayOrigin("https://replacement.example.test", ["replacement-token"]);
     restoreIdentityAvatarSnapshot(images);
     expect(sequence).toBe(3);
   });
 
-  it("retires snapshot bytes if credentials change while encoding", async () => {
+  it("retires snapshot images if credentials change while a requested image is pending", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["first-token"]);
-    const bytes = createDeferred<ArrayBuffer>();
-    const response = avatarResponse();
-    const blob = await response.clone().blob();
-    vi.spyOn(blob, "arrayBuffer").mockReturnValue(bytes.promise);
-    vi.spyOn(response, "blob").mockResolvedValue(blob);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    const started = createDeferred<void>();
+    const response = createDeferred<Response>();
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      started.resolve();
+      return response.promise;
+    });
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:first-profile");
-    await resolveAvatarImageUrl("/api/users/ada/avatar?v=1");
+    const pending = resolveAvatarImageUrl("/api/users/ada/avatar?v=1");
+    await started.promise;
     const capture = captureIdentityAvatarSnapshot(["/api/users/ada/avatar?v=1"]);
     setAvatarGatewayOrigin("https://gateway.example.test", ["replacement-token"]);
-    bytes.resolve(new Uint8Array([1, 2, 3]).buffer);
+    response.resolve(avatarResponse());
     await expect(capture).resolves.toEqual([]);
+    await expect(pending).resolves.toBeNull();
   });
 
   it("waits only for requested in-flight images without starting resource reads", async () => {
@@ -367,7 +374,7 @@ describe("authenticated profile avatar cache", () => {
       await expect(capture).resolves.toEqual([
         {
           url: "https://gateway.example.test/avatar/requested?v=1",
-          dataUrl: "data:image/png;base64,AQID",
+          blob: await avatarResponse().blob(),
         },
       ]);
     } finally {
@@ -381,8 +388,8 @@ describe("authenticated profile avatar cache", () => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
     const createObjectURL = vi.spyOn(URL, "createObjectURL");
     restoreIdentityAvatarSnapshot([
-      { url: "/avatar/invalid?v=1", dataUrl: "data:text/html;base64,AQID" },
-      { url: "/api/users/ada/avatar?v=1", dataUrl: "data:image/png;base64,invalid!" },
+      { url: "/avatar/invalid?v=1", blob: new Blob(["invalid"], { type: "text/html" }) },
+      { url: "/api/users/ada/avatar?v=1", blob: new Blob([], { type: "image/png" }) },
     ]);
     expect(createObjectURL).not.toHaveBeenCalled();
   });
@@ -406,7 +413,7 @@ describe("authenticated profile avatar cache", () => {
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:cached-decode");
     const restored = restoreIdentityAvatarSnapshot([
-      { url: "/avatar/cedar?v=1", dataUrl: "data:image/png;base64,AQID" },
+      { url: "/avatar/cedar?v=1", blob: await avatarResponse().blob() },
     ]);
     expect(images.map((image) => image.src)).toEqual(["blob:cached-decode"]);
     const ready = vi.fn();
@@ -443,14 +450,14 @@ describe("authenticated profile avatar cache", () => {
       .mockReturnValueOnce("blob:current-image");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     const failed = restoreIdentityAvatarSnapshot([
-      { url: "/avatar/cedar?v=1", dataUrl: "data:image/png;base64,AQID" },
+      { url: "/avatar/cedar?v=1", blob: await avatarResponse().blob() },
     ]);
     await failed.ready;
     expect(resolveAvatarImageUrl("/avatar/cedar?v=1")).toBeNull();
     expect(fetchAvatar).not.toHaveBeenCalled();
     failed.release();
     const retired = restoreIdentityAvatarSnapshot([
-      { url: "/avatar/cedar?v=1", dataUrl: "data:image/png;base64,AQID" },
+      { url: "/avatar/cedar?v=1", blob: await avatarResponse().blob() },
     ]);
     setAvatarGatewayOrigin("https://gateway.example.test", ["replacement-token"]);
     await expect(resolveAvatarImageUrl("/avatar/cedar?v=1")).resolves.toBe("blob:current-image");
@@ -489,7 +496,7 @@ describe("authenticated profile avatar cache", () => {
       await expect(resolveAvatarImageUrl(path)).resolves.toBeNull();
       const images = await captureIdentityAvatarSnapshot([path]);
       expect(images).toEqual([
-        { url: `https://gateway.example.test${path}`, dataUrl: null, retryAt: 60_000 },
+        { url: `https://gateway.example.test${path}`, blob: null, retryAt: 60_000 },
       ]);
       setAvatarGatewayOrigin(null);
       setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);

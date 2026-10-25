@@ -19,7 +19,46 @@ import { projectSidebarSession } from "./app-sidebar-session-navigation.test-sup
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import { sidebarSnapshotWithRows } from "./sidebar-snapshot.test-support.ts";
 import { TeamSessionSlots } from "./solid/session-presentation.tsx";
+
+it("shows current higher-priority attention when retained cached pins join live rows", () => {
+  const cached = projectSidebarSession({ key: "agent:main:cached", label: "Cached" });
+  const snapshot = sidebarSnapshotWithRows([cached], () => ({
+    slotAttention: ["error", "alertTriangle"],
+  }));
+  const current = {
+    ...projectSidebarSession({ key: "agent:main:live" }),
+    attention: {
+      kind: "question" as const,
+      requests: [
+        {
+          kind: "question" as const,
+          id: "current",
+          preview: "Current question",
+          count: 1,
+          createdAtMs: 1,
+        },
+      ],
+    },
+  };
+  const container = document.createElement("div");
+  const view = mountSolid(
+    () =>
+      createComponent(TeamSessionSlots, {
+        rows: [restoreSnapshotSession(snapshot, cached.key, ""), current],
+        includeChildren: true,
+        childCount: 0,
+      }),
+    { container },
+  );
+  expect(
+    container.querySelector("[data-session-attention]")?.getAttribute("data-session-attention"),
+  ).toBe("question");
+  expect(container.textContent).toContain("Current question");
+  view.unmount();
+});
 
 it("does not manufacture personal pins from plugin defaults", () => {
   const pluginNavigation = [

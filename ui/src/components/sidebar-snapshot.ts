@@ -133,7 +133,6 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
                 return;
               }
               host.restoreSidebarSnapshot(model);
-              serialized = JSON.stringify(model);
               saved = true;
             }
             pending = false;

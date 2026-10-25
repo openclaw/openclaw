@@ -24,8 +24,14 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
   const dashboardRows = createMemo(() =>
     props.host.sidebarSnapshot
       ? props.host.sidebarSnapshot.pages
+          .map((key) =>
+            restoreSnapshotSession(
+              props.host.sidebarSnapshot!,
+              key,
+              props.host.getRouteSessionKey(),
+            ),
+          )
           .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, props.host.getRouteSessionKey()))
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           props.host.getSessionNavigationState().toSidebarSession(row),
         ),

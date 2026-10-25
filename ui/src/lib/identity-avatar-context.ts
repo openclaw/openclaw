@@ -1,4 +1,4 @@
-import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { fetchWithControlUiAuth } from "../app/control-ui-auth.ts";
 import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
@@ -7,13 +7,15 @@ import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthTokens: readonly string[] = [];
+let appGatewayScope: string | null = null;
 let gatewayRequests = new AbortController();
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
 // would silently drop whichever registered first.
-const gatewayContextResets = createChangeListeners();
+const gatewayContextResets = new Set<(retainImages: boolean) => void>();
 
-export const registerAvatarGatewayReset = gatewayContextResets.subscribe;
+export const registerAvatarGatewayReset = (listener: (retainImages: boolean) => void) =>
+  registerListener(gatewayContextResets, listener);
 
 export function readAvatarGatewayContext() {
   return {
@@ -66,6 +68,7 @@ export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authTokens: readonly string[] = [],
   resourceBasePath = "",
+  scope: string | null = null,
 ): void {
   const nextOrigin =
     gatewayUrl && isConfiguredUiDevGateway(gatewayUrl)
@@ -74,19 +77,27 @@ export function setAvatarGatewayOrigin(
   const documentOrigin = globalThis.location?.origin;
   const nextResourceBasePath =
     nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
-  if (
+  const changed =
     appGatewayOrigin !== nextOrigin ||
     appGatewayResourceBasePath !== nextResourceBasePath ||
+    appGatewayScope !== scope ||
     appGatewayAuthTokens.length !== authTokens.length ||
-    appGatewayAuthTokens.some((token, index) => token !== authTokens[index])
-  ) {
+    appGatewayAuthTokens.some((token, index) => token !== authTokens[index]);
+  const retainImages = Boolean(
+    scope &&
+    scope === appGatewayScope &&
+    appGatewayOrigin === nextOrigin &&
+    appGatewayResourceBasePath === nextResourceBasePath,
+  );
+  appGatewayOrigin = nextOrigin;
+  appGatewayResourceBasePath = nextResourceBasePath;
+  appGatewayAuthTokens = [...authTokens];
+  appGatewayScope = scope;
+  if (changed) {
     // A replaced credential context must not finish an old fetch or advance
     // its rejected credential to another saved secret.
     gatewayRequests.abort();
     gatewayRequests = new AbortController();
-    gatewayContextResets.publish();
+    for (const reset of gatewayContextResets) reset(retainImages);
   }
-  appGatewayOrigin = nextOrigin;
-  appGatewayResourceBasePath = nextResourceBasePath;
-  appGatewayAuthTokens = [...authTokens];
 }

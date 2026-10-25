@@ -11,7 +11,8 @@ import {
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
-import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
+import { sidebarSnapshotWithRows } from "./sidebar-snapshot.test-support.ts";
 
 async function pinLookup() {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -46,7 +47,7 @@ async function pinLookup() {
 }
 
 function cachedPin(key: string) {
-  return { key, label: "Saved title", pinned: true, isChild: false, children: [] };
+  return projectSidebarSession({ key, label: "Saved title", pinned: true });
 }
 
 type Sidebar = Awaited<ReturnType<typeof mountSidebar>>["sidebar"];
@@ -66,36 +67,41 @@ it.each(["avatars", "artwork"] as const)(
     vi.stubGlobal("cancelIdleCallback", vi.fn());
     const entry = `session:${key}`;
     const artwork = presentation === "artwork";
-    const cached: SidebarSnapshotModel["pinnedSessions"][number] = {
+    const cached = {
       ...cachedPin(key),
       worktreeId: "cached-worktree",
       icon: artwork ? "📝" : undefined,
       unread: !artwork,
       hasActiveRun: artwork,
-      status: artwork ? "queued" : "done",
+      isRunVisuallyActive: artwork,
+      status: artwork ? ("queued" as const) : ("done" as const),
       participants: [
-        { identity: { type: "profile", id: "cached-participant" }, label: "Cached Participant" },
+        {
+          identity: { type: "profile" as const, id: "cached-participant" },
+          label: "Cached Participant",
+        },
       ],
       participantCount: 1,
-      snapshotPresentation: {
-        owner: {
-          type: "human",
-          id: "cached-owner",
-          identity: { type: "profile", id: "cached-owner" },
-          label: "Cached Owner",
-        },
-        attribution: "owned",
-        viewers: [],
-        pullRequest: { numbers: [42], state: "open" },
-        pullRequestCount: 3,
-      },
     };
+    const saved = sidebarSnapshotWithRows([cached], () => ({
+      owner: {
+        type: "human" as const,
+        id: "cached-owner",
+        identity: { type: "profile" as const, id: "cached-owner" },
+        label: "Cached Owner",
+      },
+      attribution: "owned" as const,
+      viewers: [],
+      pullRequest: { numbers: [42], state: "open" as const },
+      pullRequestCount: 3,
+    }));
     await update(sidebar, { sidebarEntries: [entry], sidebarAgentsMode: "chip" });
     sidebar.restoreSidebarSnapshot({
       ...sidebarBootSnapshot(captureBootRoster(context.sessions.state)),
       mode: "chip",
       entries: [entry],
-      pinnedSessions: [cached],
+      rows: saved.rows,
+      pinnedSessions: saved.sessions,
     });
     sidebar.invalidate();
     await sidebar.updateComplete;
