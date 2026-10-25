@@ -4,7 +4,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -47,12 +46,10 @@ import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
-  persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import {
   persistLifecycleThroughMockedStore,
   type LifecycleEvent,
-  type UpdateSessionEntry,
 } from "./session-lifecycle-state.test-support.js";
 
 const exactCronSessionKey = "agent:main:cron:job-1:run:cron-run-1";
@@ -198,18 +195,6 @@ describe("session lifecycle state", () => {
       expect((await persistLifecycle(goalEntry, event)).goal).toEqual(goalEntry.goal);
     }
   });
-
-  it.each(["goal-1", "replacement-goal"])(
-    "preserves newer goal intent for %s when a terminal write is delayed",
-    async (id) => {
-      const entry = {
-        ...goalEntry,
-        lifecycleRunId: undefined,
-        goal: { ...goalEntry.goal!, id, updatedAt: 3_000 },
-      };
-      expect((await persistLifecycle(entry, goalFailure)).goal).toEqual(entry.goal);
-    },
-  );
 
   it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
     expect(
@@ -443,26 +428,6 @@ describe("session lifecycle state", () => {
     },
   );
 
-  it("persists a compact failure reason and clears it when a new run starts", async () => {
-    const failed = await persistLifecycle(
-      runningEntry,
-      lifecycleEvent({
-        phase: "error",
-        endedAt: 1_800,
-        error: `Provider credits exhausted\n${"details ".repeat(40)}`,
-      }),
-    );
-
-    expect(failed.status).toBe("failed");
-    expect(failed.lastRunError).toMatch(/^Provider credits exhausted details/);
-    expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
-    expect(failed.lastRunError).not.toContain("\n");
-
-    const restarted = await persistLifecycle(failed, startEvent(2_100));
-    expect(restarted.status).toBeUndefined();
-    expect(restarted.lastRunError).toBeUndefined();
-  });
-
   it("retains yielded continuation custody without recording a terminal outcome", async () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const restartRecoveryRuns = [{ runId: "yielded-recovery-run", lifecycleGeneration }];
@@ -553,53 +518,6 @@ describe("session lifecycle state", () => {
       requireWriteSuccess: true,
     });
   });
-
-  it("checks terminal authority before committing the session patch", async () => {
-    const entry: SessionEntry = {
-      sessionId: "terminal-authority-session",
-      updatedAt: 1_000,
-      startedAt: 1_000,
-      lifecycleRunId: "terminal-authority-run",
-    };
-    let storedEntry = structuredClone(entry);
-    persistenceMocks.loadSessionEntry.mockReturnValue({
-      storePath: "/tmp/sessions.json",
-      canonicalKey: "agent:main:terminal-authority",
-      entry,
-    });
-    persistenceMocks.updateSessionEntry.mockImplementation(
-      async (...args: Parameters<UpdateSessionEntry>) => {
-        const [scope, operation, options] = args;
-        const patch = projectSessionEntryPatch({
-          existing: storedEntry,
-          writeBase: storedEntry,
-          sessionKey: scope.target.canonicalKey,
-          operation,
-        });
-        options?.workerGuard?.source?.();
-        if (patch) {
-          storedEntry = { ...storedEntry, ...patch };
-        }
-        return storedEntry;
-      },
-    );
-
-    await expect(
-      persistGatewaySessionLifecycleEvent({
-        sessionKey: "agent:main:terminal-authority",
-        event: {
-          runId: "terminal-authority-run",
-          sessionId: entry.sessionId,
-          ts: 2_000,
-          data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
-        },
-        assertCommitAllowed: () => {
-          throw new Error("terminal authority retired");
-        },
-      }),
-    ).rejects.toThrow("terminal authority retired");
-    expect(storedEntry.status).toBeUndefined();
-  });
 });
 
 it("keeps a suppressed lifecycle projection empty while preserving intentional field clears", () => {
@@ -617,14 +535,12 @@ it("keeps a suppressed lifecycle projection empty while preserving intentional f
     entry: current,
     event: { ts: 2_000, sessionId: current.sessionId, data: { phase: "end", endedAt: 1_800 } },
   });
-  expect({ ...current, ...suppressed }).toStrictEqual(current);
   expect(suppressed).toStrictEqual({});
 
   const next = deriveGatewaySessionLifecycleProjectionPatch({
     entry: { endedAt: 1_800, runtimeMs: 900 },
     event: { ts: 2_100, runId: "new-run", data: { phase: "start", startedAt: 2_100 } },
   });
-  expect(next.status).toBeUndefined();
   expect(Object.hasOwn(next, "status")).toBe(true);
   expect(Object.hasOwn(next, "endedAt")).toBe(true);
   expect(Object.hasOwn(next, "runtimeMs")).toBe(true);

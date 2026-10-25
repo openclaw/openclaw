@@ -22,7 +22,10 @@ import { createAgentTurnIo } from "./agent-turn/io.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { startExactAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import {
+  dispatchAuthorizationRequest,
+  startExactAuthorizationRequest,
+} from "./server-methods.authorization.test-support.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
@@ -276,7 +279,7 @@ describe("invocation-owned session mutations", () => {
             }
             rpcSourceTesting.set(runId, run);
             const before = [...context.dedupe];
-            const { request, respond } = startExactAuthorizationRequest(
+            const respond = await dispatchAuthorizationRequest(
               method,
               {
                 ...(method === "chat.abort" ? { sessionKey: requestKey } : { key: requestKey }),
@@ -285,7 +288,6 @@ describe("invocation-owned session mutations", () => {
               { client, context, extraHandlers: stopHandlers },
               runId,
             );
-            await request;
             const allowed = mismatch === "none";
             expect(run.input.abortSignal.aborted).toBe(allowed);
             if (!allowed) {
@@ -372,13 +374,12 @@ describe("invocation-owned session mutations", () => {
           },
           { once: true },
         );
-        const { request, respond } = startExactAuthorizationRequest(
+        const respond = await dispatchAuthorizationRequest(
           method,
           method === "chat.abort" ? { sessionKey: key } : { key },
           { client, context, extraHandlers: stopHandlers },
           changed,
         );
-        await request;
         expect(first.input.abortSignal.aborted).toBe(true);
         if (kind === "queued") {
           expect(expectDefined(second, "queued narrow Stop source").input.abortSignal.aborted).toBe(
@@ -411,13 +412,12 @@ describe("invocation-owned session mutations", () => {
             owner: { connId: client.connId },
           });
           rpcSourceTesting.set("different-run", run);
-          const { request, respond } = startExactAuthorizationRequest(
+          const respond = await dispatchAuthorizationRequest(
             "chat.abort",
             { sessionKey: key, runId: "different-run" },
             { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
             grant,
           );
-          await request;
           expect(run.input.abortSignal.aborted).toBe(grant === "operator.write");
           expect(respond.mock.calls[0]?.[0]).toBe(grant === "operator.write");
           abortSessionControllerInput(run.input, "Fixture case finished");
@@ -475,7 +475,7 @@ describe("invocation-owned session mutations", () => {
           options.sessionMutationAuthorization?.assertCurrent();
           options.respond(true, { allowed: true });
         });
-        const { request, respond } = startExactAuthorizationRequest(method, params, {
+        const respond = await dispatchAuthorizationRequest(method, params, {
           client,
           context,
           methodRegistry: createGatewayMethodRegistry([
@@ -487,7 +487,6 @@ describe("invocation-owned session mutations", () => {
             },
           ]),
         });
-        await request;
         expect(handler).toHaveBeenCalledOnce();
         expect(respond).toHaveBeenCalledWith(true, { allowed: true });
       }
@@ -643,13 +642,12 @@ describe("pending Stop admission", () => {
     const entry = ownedEntry(client, "original");
     await upsertSessionEntryCore(pendingScope, entry);
     const stop = async (runId: string) => {
-      const { request, respond } = startExactAuthorizationRequest(
+      const respond = await dispatchAuthorizationRequest(
         "chat.abort",
         { sessionKey: pendingKey, runId },
         { client, context, extraHandlers: { "chat.abort": handleChatAbortRequest } },
         "stop",
       );
-      await request;
       return respond.mock.calls[0]?.[1];
     };
     return { client, cfg, context, entry, stop };
