@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { standaloneSourceContextIdentity } from "./bun-standalone-source-identity.mjs";
 import { pluginRuntimeExtension } from "./bundled-plugin-build-entries.mjs";
 import { bundledDistPluginFile } from "./bundled-plugin-paths.mjs";
 import { readStandaloneSourceModuleIdentities } from "./standalone-source-module-urls.mjs";
@@ -22,7 +23,7 @@ function stableValue(value) {
   return value;
 }
 
-function semanticContext(config, format) {
+function semanticContext(config, format, sourceRoot) {
   if (!config) {
     return { semanticInputsKnown: false };
   }
@@ -39,8 +40,9 @@ function semanticContext(config, format) {
       .filter(Boolean)
       .map((plugin) => plugin.name),
   };
+  const identity = standaloneSourceContextIdentity(sourceRoot, inputs);
   const hash = createHash("sha256")
-    .update(JSON.stringify(stableValue(inputs)))
+    .update(JSON.stringify(stableValue(identity)))
     .digest("hex");
   return {
     semanticInputsKnown: true,
@@ -209,7 +211,7 @@ export function createStandaloneSourceEntries({
       format,
       config,
       configIndex: config && configs.includes(config) ? configs.indexOf(config) : undefined,
-      ...semanticContext(config, format),
+      ...semanticContext(config, format, sourceRoot),
       ...extra,
     });
   };

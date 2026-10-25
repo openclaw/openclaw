@@ -42,6 +42,47 @@ function requireFilename(filename: string | undefined) {
 }
 
 describe("standalone original-source graph", () => {
+  it("keeps checkout-owned context paths stable without changing compiler aliases", () => {
+    const capture = (target: string) => {
+      const fixtureRoot = fixture();
+      const { sourceRoot, write } = fixtureRoot;
+      write(sourceRoot, "src/index.ts", "export const value: number = 42;\n");
+      write(sourceRoot, "src/helper.ts", "export const value: number = 7;\n");
+      write(sourceRoot, "src/other.ts", "export const value: number = 7;\n");
+      write(sourceRoot, "tsconfig.json", '{"compilerOptions":{"strict":true}}\n');
+      const alias = path.isAbsolute(target) ? target : path.join(sourceRoot, target);
+      const config = {
+        entry: { entry: "src/index.ts" },
+        alias: { "@fixture/helper": alias },
+        cwd: sourceRoot,
+        tsconfig: path.join(sourceRoot, "tsconfig.json"),
+      };
+      const original = JSON.stringify(config);
+      const sourceEntries = createStandaloneSourceEntries({ sourceRoot, configs: [config] });
+      const embeddedPaths: Record<string, string> = {};
+      const graph = createStandaloneSourceGraph({ ...fixtureRoot, sourceEntries, embeddedPaths });
+      graph.addEntry("dist/entry.mjs");
+      const context = graph.manifest().contexts[0];
+      const entry = sourceEntries.resolve("dist/entry.mjs");
+      if (!context || !entry) {
+        throw new Error("Missing source context");
+      }
+      expect(JSON.stringify(config)).toBe(original);
+      expect(context.alias["@fixture/helper"]).toBe(alias);
+      expect(entry.semanticInputs.alias["@fixture/helper"]).toBe(alias);
+      return {
+        context: context.id,
+        semantic: entry.semanticHash,
+        embedded: embeddedPaths["dist/entry.mjs"],
+      };
+    };
+    expect(capture("src/helper.ts")).toEqual(capture("src/helper.ts"));
+    expect(capture("src/other.ts")).not.toEqual(capture("src/helper.ts"));
+    expect(capture("src/helper.ts?other")).not.toEqual(capture("src/helper.ts?optional-native"));
+    expect(capture("/external/shared/helper.ts")).toEqual(capture("/external/shared/helper.ts"));
+    expect(capture("/external/other/helper.ts")).not.toEqual(capture("/external/shared/helper.ts"));
+  });
+
   it("shares the application package across synthetic contexts and preserves real child packages", () => {
     const fixtureRoot = fixture();
     const { sourceRoot, runtimeRoot, write } = fixtureRoot;

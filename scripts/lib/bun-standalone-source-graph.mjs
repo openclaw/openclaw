@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { standaloneSourceContextIdentity } from "./bun-standalone-source-identity.mjs";
 import { LOCAL_PLUGIN_ROOT } from "./extension-boundary-inputs.mts";
 
 const slash = (value) => value.split(path.sep).join("/");
@@ -333,7 +334,8 @@ export function createStandaloneSourceGraph({
     };
     // A plugin name does not identify its captured closure (e.g. a plugin root).
     // Keep exact configuration objects separate, even when their scalar options match.
-    const id = `${contexts.size}-${createHash("sha256").update(serialized(description)).digest("hex").slice(0, 12)}`;
+    const identity = standaloneSourceContextIdentity(sourceRoot, description);
+    const id = `${contexts.size}-${createHash("sha256").update(serialized(identity)).digest("hex").slice(0, 12)}`;
     let context = contexts.get(id);
     if (!context) {
       const inputOptions = { external: config.deps?.neverBundle ?? config.external };
