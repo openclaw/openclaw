@@ -85,11 +85,11 @@ export function createGitHubPublicationRuntime(params: {
       for (const [key, pending] of updates) {
         updatePending(key, pending);
       }
+      // This invocation can skip empty recovery only until a receipt changes the loaded facts.
+      return () => repository.length === 0 && updates.size === 0 && pendingKnown;
     } catch (error) {
       pendingKnown = false;
       throw error;
-    } finally {
-      loadingUpdates = undefined;
     }
   };
   const coordinator = createGitHubPublicationCoordinator({
@@ -160,42 +160,44 @@ export function createGitHubPublicationRuntime(params: {
     if (isStopping?.()) {
       return;
     }
-    if (!pendingKnown) {
-      await loadPendingRequests();
-    }
-    if (isStopping?.()) {
-      return;
-    }
-    if (!reconcileNeeded && pendingRequests.size === 0) {
-      return;
-    }
-    reconcileNeeded = false;
     try {
-      await coordinator.deferOrphanedRequestsAsync();
-      if (!isStopping?.()) {
-        await coordinator.resumeSessionRequests(isStopping);
+      const isRepositoryPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
+      if (isStopping?.()) {
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
-    }
-    if (isStopping?.()) {
-      reconcileNeeded = true;
-      return;
-    }
-    try {
-      for (const publication of await coordinator.listUnreportedResultsAsync()) {
-        if (isStopping?.()) {
-          reconcileNeeded = true;
-          break;
-        }
-        if (!(await reportDeferred(publication))) {
-          reconcileNeeded = true;
-        }
+      if (!reconcileNeeded && pendingRequests.size === 0) {
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      throw error;
+      reconcileNeeded = false;
+      try {
+        await coordinator.deferOrphanedRequestsAsync(isRepositoryPendingEmpty);
+        if (!isStopping?.()) {
+          await coordinator.resumeSessionRequests(isStopping, isRepositoryPendingEmpty);
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
+      }
+      if (isStopping?.()) {
+        reconcileNeeded = true;
+        return;
+      }
+      try {
+        for (const publication of await coordinator.listUnreportedResultsAsync()) {
+          if (isStopping?.()) {
+            reconcileNeeded = true;
+            break;
+          }
+          if (!(await reportDeferred(publication))) {
+            reconcileNeeded = true;
+          }
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        throw error;
+      }
+    } finally {
+      loadingUpdates = undefined;
     }
   };
   return {

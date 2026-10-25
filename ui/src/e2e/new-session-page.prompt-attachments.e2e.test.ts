@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -358,10 +359,7 @@ suite.define(() => {
       const message = "testing if dual prompts show";
       const source = "media://inbound/initial-prompt.png";
       const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      let releaseMedia!: () => void;
-      const mediaGate = new Promise<void>((resolve) => {
-        releaseMedia = resolve;
-      });
+      const { promise: mediaGate, resolve: releaseMedia } = createDeferred();
       let metadataRequested = false;
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const url = new URL(route.request().url());

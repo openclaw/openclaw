@@ -2099,7 +2099,7 @@ try {
           await page.waitForFunction(
             (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
             Math.floor((streamingReply.deltas.length * quartile) / 4),
-            { timeout: 60_000 },
+            { timeout: 60_000, polling: 50 },
           );
           await page.evaluate(
             () =>

@@ -111,6 +111,31 @@ function hoistedCopies() {
 }
 
 describe("standalone native sidecar", () => {
+  it("keeps native routing bytes stable across graph discovery order", () => {
+    const { root, pkg } = fixture();
+    const entries = ["@fixture/alpha", "@fixture/bravo"].map((name) =>
+      path.join(
+        pkg(
+          name,
+          { type: "module", main: "index.js" },
+          { "index.js": "export const value = 1;", "runtime.wasm": "synthetic resource" },
+        ),
+        "index.js",
+      ),
+    );
+    const capture = (filenames: string[]) =>
+      createStandaloneNativeAdapter({ runtimeRoot: root, parse }).finalize({
+        metafile: { inputs: Object.fromEntries(filenames.map((filename) => [filename, {}])) },
+      });
+    const first = capture(entries);
+    const reversed = capture(entries.toReversed());
+    expect(first.files.filter((file) => file.source.endsWith("runtime.wasm"))).toHaveLength(2);
+    expect(
+      reversed.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(first.files.map((file) => file.source).toSorted((a, b) => a.localeCompare(b)));
+    expect(reversed.bootstrapReplacement.replacement).toBe(first.bootstrapReplacement.replacement);
+  });
+
   it("loads admitted addons through the native boundary and preserves the module cache", () => {
     const { root, write, pkg } = fixture();
     const addon = pkg("addon", { main: "binding.node" }, { "binding.node": "native fixture" });

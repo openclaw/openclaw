@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { isChatHistoryState } from "../lib/protocol-validators.generated/history-state.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -53,30 +55,20 @@ suite.define(() => {
             ...createControlUiSessionRow(sessionKey, title, 1),
             boardFace: "dashboard",
           };
-          const board = {
-            sessionKey,
-            revision: 1,
-            tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-            widgets: [
-              {
-                name: "mission",
-                tabId: "main",
-                title,
-                contentKind: "html",
-                sizeW: 12,
-                sizeH: 8,
-                position: 0,
-                grantState: "none",
-                revision: 1,
-                frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
-                viewTicket: "synthetic-ticket",
-                viewTicketTtlMs: 1_200_000,
-                viewGeneration: "0123456789abcdef0123456789abcdef",
-                sandboxUrl: sandbox(widgetHtml).sandboxUrl,
-                sandboxPort: sandbox(widgetHtml).sandboxPort,
-              },
-            ],
-          };
+          const board = createBoardSnapshot(sessionKey, [
+            createBoardWidget({
+              name: "mission",
+              title,
+              sizeW: 12,
+              sizeH: 8,
+              frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
+              viewTicket: "synthetic-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "0123456789abcdef0123456789abcdef",
+              sandboxUrl: sandbox(widgetHtml).sandboxUrl,
+              sandboxPort: sandbox(widgetHtml).sandboxPort,
+            }),
+          ]);
           const gateway = await installMockGateway(page, {
             sessionKey,
             authMethod: "trusted-proxy",

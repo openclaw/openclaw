@@ -793,6 +793,7 @@ do {
   result = await bundleStandaloneModules(
     { ...buildOptions, entrypoints: sourceEntrypoints() },
     Bun.build,
+    parse,
   );
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone bundle failed");
@@ -858,7 +859,7 @@ const compiledEntries = result.outputs
   .filter((output) => output.path.endsWith(".js"))
   .map((output) => output.path);
 const nativeResources = native.finalize({
-  metafile: result.metafile,
+  metafile: result.runtimeMetafile,
   embeddedPaths,
   resolveFilename: nativeFilename,
 });
@@ -983,12 +984,7 @@ fs.writeFileSync(
 const mainEntry = path.join(outputRoot, "modules/standalone-entry.js");
 const compileRoot = path.join(outputRoot, "modules");
 // Shared chunks remain reachable imports; only public entries and pinned CJS targets need roots.
-const compileEntries = new Set(
-  Object.entries(result.metafile.outputs)
-    .filter(([, output]) => output.entryPoint)
-    .map(([entry]) => path.resolve(compileRoot, entry))
-    .filter((entry) => compiledEntrySet.has(entry)),
-);
+const compileEntries = new Set(result.entryOutputs.filter((entry) => compiledEntrySet.has(entry)));
 for (const { to } of splitRequireEdges) {
   compileEntries.add(path.resolve(compileRoot, to));
 }
@@ -1002,7 +998,6 @@ fs.writeFileSync(
     2,
   ),
 );
-// Shorter relative names keep the full graph below macOS's exec argument limit.
 const compileCwd = path.join(compileRoot, "runtime/dist");
 const bunIdentity = {
   version: Bun.version,

@@ -2216,7 +2216,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-accessor.sqlite-transcript-suffix.test.ts",
   "src/config/sessions/session-accessor.sqlite-transcript-watermark.test.ts",
   "src/config/sessions/session-accessor.sqlite-worker-coordination.test.ts",
-  "src/config/sessions/session-accessor.sqlite-writer-owners.test.ts",
   "src/config/sessions/session-accessor.test.ts",
   "src/config/sessions/session-accessor.transcript-identity.test.ts",
   "src/config/sessions/session-accessor.transcript-owner.test.ts",

@@ -138,6 +138,14 @@ export function renderRateLimitRetryExhaustion(
     : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
 }
 
+/** A watchdog stop mid-backoff interrupted recovery; zero retries never means it was disabled. */
+export function renderRateLimitRecoveryStopped(retries: number): string {
+  return (
+    (retries > 0 && renderRateLimitRetryExhaustion(retries)) ||
+    "Rate-limit recovery stopped without a completed model response. Check completed work before trying again."
+  );
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;

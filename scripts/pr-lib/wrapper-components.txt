@@ -2732,6 +2732,7 @@ src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/state-lease-loss.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts
