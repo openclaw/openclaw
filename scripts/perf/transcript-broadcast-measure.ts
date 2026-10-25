@@ -4272,12 +4272,15 @@ async function runRound(
     await captureWork;
   }
 }
-async function drainEvents() {
+async function drainEvents(requireSubscriberQuiet = true) {
   const started = performance.now();
   const timeoutMs = values["stress-worktree-fanout"] ? 60_000 : 15_000;
   while (performance.now() - started < timeoutMs) {
     assertGatewayAlive();
-    if (activeStreams === 0 && performance.now() - lastSubscriberEventAt >= 1000) {
+    if (
+      activeStreams === 0 &&
+      (!requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+    ) {
       return;
     }
     await delay(50);
@@ -5534,7 +5537,8 @@ try {
     }
     const started = performance.now();
     await runScenario(undefined, warmupOperations);
-    await drainEvents();
+    // Stress background publications need not stop after the warmup turns settle.
+    await drainEvents(!values["team-stress"]);
     if (!soakScenario) {
       break;
     }
@@ -6261,7 +6265,7 @@ try {
       }
       try {
         if (turnScenario) {
-          await drainEvents();
+          await drainEvents(!values["team-stress"]);
         }
         measuring = true;
         await workload();

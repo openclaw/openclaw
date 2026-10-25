@@ -47,6 +47,10 @@ Active dashboard timestamps stay within the normal seven-day archive threshold;
 the fixture raises the existing session-count capacity to twice the seeded count.
 Normal maintenance remains enabled in both passes.
 
+Before stress rounds, completed mock turns and closed provider streams establish
+readiness; unrelated background sidebar publications need not become quiet.
+After each workload, subscriber events still drain before fanout counters settle.
+
 Clients subscribe to sidebar and transcript events while polling list/search,
 history, startup, diff, and reconnect paths. An independent writer commits
 `chat.inject` timestamp updates and a scraper reads the isolated Gateway's
