@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
-import {
-  readMigrationArtifactIdentity,
-  type MigrationArtifact,
-} from "../infra/session-sqlite-migration-artifact.js";
+import type { MigrationArtifact } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMoves,
@@ -39,6 +36,7 @@ import {
   reconcileDoctorSessionSqlitePublication,
   runDoctorSessionSqlite,
 } from "./doctor-session-sqlite.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 
 function hasSettledDuplicate(manifest: ActiveSessionSqliteMigrationRun["manifest"] | undefined) {
   return manifest?.targets.some((target) =>
@@ -113,18 +111,7 @@ function createRetainedDuplicateArchives(state: OpenClawTestState) {
   const moves = [1, 2].map((copy) => {
     const archivePath = path.join(archiveDir, `duplicate.jsonl.imported-${copy}`);
     fs.writeFileSync(archivePath, bytes);
-    const move: SessionSqliteMigrationMove = {
-      kind: "unreferenced-jsonl",
-      sourcePath: path.join(sessions, "duplicate.jsonl"),
-      archivePath,
-      artifact: {
-        identity: readMigrationArtifactIdentity(archivePath),
-        classification: "protected",
-        reason: "unreferenced-history",
-        dependencies: [],
-        disposal: { state: "retained" },
-      },
-    };
+    const move = retainedHistoryMove(path.join(sessions, "duplicate.jsonl"), archivePath);
     recordRun([move]);
     return move;
   });

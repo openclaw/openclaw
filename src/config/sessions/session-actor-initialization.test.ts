@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 
 // mock-isolation: The fixture owns maintenance and retention for its database.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -165,5 +166,61 @@ it("prepares rebased actor message bytes only after choosing their final parent"
     } finally {
       sql.restore();
     }
+  });
+});
+
+it("preserves decoded lookup sibling snapshots when initializing a missing exact actor", async () => {
+  await withActor(async (f) => {
+    const scope = {
+      ...f.scope,
+      sessionKey: "agent:main:matrix:group:!Room:example.org",
+      sessionId: "new-room",
+    };
+    const siblingKey = "agent:main:matrix:group:!room:example.org";
+    const sibling = f.writeEntry(
+      {
+        sessionId: "sibling-room",
+        updatedAt: 1,
+        skillsSnapshot: { prompt: "sibling instructions", skills: [] },
+        systemPromptReport: promptReport(1, 100, 80),
+        sessionDiffBaseline: {
+          version: 1,
+          sessionId: "sibling-room",
+          root: "/synthetic",
+          files: [{ path: "README.md", fingerprint: "sibling" }],
+        },
+      },
+      siblingKey,
+    );
+    const target = { ...f.target, sessionKey: scope.sessionKey };
+    expect(f.read(target).entry).toBeUndefined();
+    const command: Mutation = {
+      type: "session.actor.appendTranscriptEvent",
+      input: {
+        target,
+        commandId: "initialize-with-sibling",
+        phaseId: "turn",
+        append: {
+          kind: "message",
+          input: {
+            scope,
+            cwd: "/synthetic",
+            messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
+          },
+          initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
+        },
+      },
+    };
+    await f.prepare(command);
+    const result = f.mutate(command);
+    assert(result.kind === "committed");
+    const identity = result.receipt.transcript.append?.initialEntry?.identity;
+    expect(identity?.previous.get(siblingKey)).toEqual(sibling);
+    expect(identity?.current.get(siblingKey)).toEqual(sibling);
+    expect(identity?.current.get(scope.sessionKey)).toMatchObject({ sessionId: scope.sessionId });
+    f.restartActor();
+    await f.reopenDatabase();
+    expect(f.read({ ...target, sessionKey: siblingKey }).entry).toEqual(sibling);
+    expect(f.read(target).entry?.sessionId).toBe(scope.sessionId);
   });
 });

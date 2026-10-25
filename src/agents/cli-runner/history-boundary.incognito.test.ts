@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
@@ -157,6 +158,7 @@ it("covers an incognito native-login turn only while its attested login holds", 
   const { target, binding } = await create("native-login");
   // The child's native Claude login; the stub profile endpoint names each token's own account.
   const configDir = fs.mkdtempSync(join(os.tmpdir(), "openclaw-incognito-claude-"));
+  mockClaudeManagedSettings(join(configDir, "managed"));
   const login = (account: string) =>
     fs.writeFileSync(
       join(configDir, ".credentials.json"),
@@ -214,6 +216,7 @@ it("covers an incognito native-login turn only while its attested login holds", 
   } finally {
     admission.close();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fs.rmSync(configDir, { recursive: true, force: true });
   }
 });

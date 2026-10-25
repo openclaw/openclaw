@@ -417,11 +417,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
     if (
-      state.connected &&
+      snapshot.client &&
+      (state.connected || snapshot.phase === "connecting" || snapshot.phase === "reconnecting") &&
       !catalogRouteKey &&
       (sourceChanged || this.connectedClient !== snapshot.client)
     ) {
-      void syncSelectedSessionMessageSubscription(state, { force: true, initialHistory: true });
+      void syncSelectedSessionMessageSubscription(state, {
+        force: true,
+        initialHistory: true,
+        beforeHello: !state.connected,
+      });
     }
     this.reconcileTaskSuggestionConnection(sourceChanged);
     this.synchronizeSessionObservation();
