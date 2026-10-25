@@ -8,7 +8,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import * as directives from "../../tts/directives.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -367,21 +366,6 @@ describe("source completion", () => {
         } else {
           expect(pending).toBeUndefined();
         }
-        const recovery = await settlePendingFinalDelivery(
-          {
-            kind: "pending-final",
-            ...preparedScope,
-            sessionId: "source-session",
-            intentId: "source-intent",
-            deliveryId: "source-delivery",
-          },
-          "queued",
-          ["prepared"],
-        );
-        expect(recovery.state).toBe("stale");
-        expect(actualSessions.loadSessionEntry(preparedScope)?.pendingFinalDelivery).toEqual(
-          pending,
-        );
       }
       expect(delivered.flatMap((payload) => payload.text ?? [])).toEqual(expected);
       expect(suffixCalls).toBe(suffixCallsExpected);

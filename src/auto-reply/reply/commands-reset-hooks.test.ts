@@ -351,14 +351,14 @@ describe("handleCommands reset hooks", () => {
     expectObjectFields(context.sessionEntry, { sessionId: "target-session" });
   });
 
-  it("marks soft reset turns and emits reset hooks", async () => {
+  it("soft-resets distinct direct, target and persisted entries and emits reset hooks", async () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const params = buildResetParams("/reset soft");
     const sessionEntry = {
       ...cliSession("session-1", 0),
       lifecycleRevision: "soft-reset-revision",
     };
-    params.sessionEntry = sessionEntry;
+    params.sessionEntry = cliSession("session-direct");
     params.sessionStore = { [params.sessionKey]: sessionEntry };
     params.storePath = storePath;
     await replaceSessionEntry({ sessionKey: params.sessionKey, storePath }, sessionEntry);
@@ -376,6 +376,7 @@ describe("handleCommands reset hooks", () => {
       softResetTail: "",
     });
     expectCliSessionCleared(params.sessionEntry);
+    expectCliSessionCleared(params.sessionStore[params.sessionKey]);
     expect(
       loadSessionEntry({ sessionKey: params.sessionKey, storePath })?.updatedAt,
     ).toBeGreaterThan(0);
@@ -468,16 +469,4 @@ describe("handleCommands reset hooks", () => {
       }
     },
   );
-
-  it("clears both sessionStore and sessionEntry when they are distinct objects", async () => {
-    const params = buildResetParams("/reset soft");
-    params.sessionEntry = cliSession("session-direct");
-    params.sessionStore = { [params.sessionKey]: cliSession("session-store", 2) };
-
-    const result = await maybeHandleResetCommand(params);
-
-    expect(result).toBeNull();
-    expectCliSessionCleared(params.sessionEntry);
-    expectCliSessionCleared(params.sessionStore?.[params.sessionKey]);
-  });
 });
