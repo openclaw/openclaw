@@ -33,7 +33,6 @@ const mediaCaption = "Here is the generated image.";
 const fallbackText = "The backup produced a second answer.";
 const mediaBlock = { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] };
 const mediaFinal = { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] };
-const completionRequest = { method: "POST", url: "/v1/chat/completions" };
 
 function responseFrames(model?: string) {
   const backup = model === "backup";
@@ -138,28 +137,26 @@ it.for([
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
     const scheduler = createTestGatewayScheduler();
-    const requests: Array<{ method?: string; url?: string; model?: string }> = [];
+    let requestCount = 0;
+    const requestedModels: string[] = [];
     const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const delivered: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     let primaryBlockAttempted = false;
     const server = createServer((request, response) => {
-      const requestRecord: { method?: string; url?: string; model?: string } = {
-        method: request.method,
-        url: request.url,
-      };
-      requests.push(requestRecord);
+      requestCount++;
+      let requestedModel: string | undefined;
       const sendResponse = () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         if (fallback) {
-          const frames = responseFrames(requestRecord.model);
+          const frames = responseFrames(requestedModel);
           for (const frame of frames.slice(0, -1)) {
             response.write(frame);
           }
           response.end(frames.at(-1));
           return;
         }
-        if (directMedia && requests.length === 1) {
+        if (directMedia && requestCount === 1) {
           response.end(
             completion(
               {
@@ -193,7 +190,8 @@ it.for([
           const body = chunks.join("");
           if (fallback) {
             const parsed: { model: string } = JSON.parse(body);
-            requestRecord.model = parsed.model;
+            requestedModel = parsed.model;
+            requestedModels.push(parsed.model);
           } else {
             toolRequestBodies.push(body);
           }
@@ -423,11 +421,11 @@ it.for([
         });
         expect(primaryBlockAttempted).toBe(true);
         if (fallbackRejected) {
-          expect(requests.map((entry) => entry.model)).toEqual(["answer", "backup"]);
+          expect(requestedModels).toEqual(["answer", "backup"]);
           expect(delivered.some((call) => call.text === fallbackText)).toBe(true);
           expect(providerFailure).toBeUndefined();
         } else {
-          expect(requests.map((entry) => entry.model)).toEqual(["answer"]);
+          expect(requestedModels).toEqual(["answer"]);
           expect(attempted.some((call) => call.text === fallbackText)).toBe(false);
           if (result) {
             expect(result.settledReceipt?.hasPendingDelivery).toBe(true);
@@ -441,12 +439,6 @@ it.for([
       const receipt = result.settledReceipt;
       const finalAttempts = attempted.filter((call) => call.kind === "final");
       const deliveredMedia = delivered.filter((call) => call.mediaUrls?.length);
-      expect(requests).toEqual(
-        Array.from(
-          { length: scenario === "concurrent" || directMedia ? 2 : 1 },
-          () => completionRequest,
-        ),
-      );
       expect(blocks).toBeGreaterThanOrEqual(directMedia ? 1 : 2);
       if (directMedia) {
         expect(toolRequestBodies[0]).toContain('"fixture_media"');

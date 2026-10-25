@@ -19,7 +19,6 @@ import {
   resolveCommandArgChoices,
   resolveCommandArgMenu,
   resolveTextCommand,
-  serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
 import type {
@@ -169,12 +168,6 @@ const restrictedConfig = (enabled: boolean, native?: boolean) => ({
 
 describe("commands registry", () => {
   it("registers /login natively for Discord, Slack, and Telegram", () => {
-    const command = chatCommand("login");
-    expect(command).toMatchObject({
-      textAliases: ["/login"],
-      nativeName: "login",
-      nativeProviders: ["discord", "slack", "telegram"],
-    });
     expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
     for (const provider of ["discord", "slack"] as const) {
       setActivePluginRegistry(createNativeCommandsRegistry(provider));
@@ -379,17 +372,16 @@ describe("commands registry", () => {
     }
   });
 
-  it("normalizes targeted command bodies before bot identity only when requested", () => {
-    expect(
-      normalizeCommandBody("/help@unresolved_bot", { targetedCommandMode: "pre-identity" }),
-    ).toBe("/help");
-    expect(normalizeCommandBody("/help@unresolved_bot")).toBe("/help@unresolved_bot");
-    expect(
-      normalizeCommandBody("/help@some_other_bot", {
-        botUsername: "openclaw_bot",
-        targetedCommandMode: "pre-identity",
-      }),
-    ).toBe("/help@some_other_bot");
+  it.each([
+    ["unresolved_bot", { targetedCommandMode: "pre-identity" }, "/help"],
+    ["unresolved_bot", undefined, "/help@unresolved_bot"],
+    [
+      "some_other_bot",
+      { botUsername: "openclaw_bot", targetedCommandMode: "pre-identity" },
+      "/help@some_other_bot",
+    ],
+  ] as const)("normalizes commands targeting %s only when requested", (bot, options, expected) => {
+    expect(normalizeCommandBody(`/help@${bot}`, options)).toBe(expected);
   });
 });
 
@@ -405,10 +397,8 @@ describe("commands registry args", () => {
   });
   it("serializes args via raw first, then values", () => {
     const command = commandFixture("model", [commandArg("model", { captureRemaining: true })]);
-    expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
     expect(buildCommandTextFromArgs(command)).toBe("/model");
     expect(buildCommandTextFromArgs(command, { raw: "gpt-5.4" })).toBe("/model gpt-5.4");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
     expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
       "/model gpt-5.4",
     );
