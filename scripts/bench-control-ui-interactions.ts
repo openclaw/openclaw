@@ -127,10 +127,17 @@ async function settle(page: Page) {
   );
 }
 
-async function metrics(cdp: CDPSession) {
+async function metrics(
+  cdp: CDPSession,
+): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const heapUsed = measured.JSHeapUsedSize;
+  if (heapUsed === undefined) {
+    throw new Error("Chromium did not report the required JS heap metric");
+  }
+  return { ...measured, JSHeapUsedSize: heapUsed };
 }
 
 function distribution(numbers: number[]) {
@@ -271,6 +278,9 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  heapBeforeBytes?: number;
+  heapAfterBytes?: number;
+  heapDeltaBytes?: number;
   durationBreakdownMs?: Record<string, number>;
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
@@ -335,8 +345,9 @@ if (values["process-wakeups"]) {
     }
   }
 }
+const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+  executablePath: browserExecutable,
   headless: !values.headed,
 });
 
@@ -489,6 +500,7 @@ try {
       {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         browser: browser.version(),
+        browserExecutable,
         host: {
           platform: os.platform(),
           arch: os.arch(),
@@ -917,6 +929,9 @@ try {
               result.projectionCoverageArtifact = artifact;
             }
             const after = await metrics(cdp);
+            result.heapBeforeBytes = before.JSHeapUsedSize;
+            result.heapAfterBytes = after.JSHeapUsedSize;
+            result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
             result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
               durations.push(...observer.takeRecords().map((entry) => entry.duration));
               observer.disconnect();

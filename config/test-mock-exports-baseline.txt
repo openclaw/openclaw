@@ -1024,7 +1024,6 @@
 ["extensions/tts-local-cli/speech-provider-stream-error.test.ts","openclaw/plugin-sdk/process-runtime","2d8e5d7a2fea5b49cfab1b7f7ec30f377adae0a0be3b0138a81c2a9eab5774ab",1]
 ["extensions/tts-local-cli/speech-provider.test.ts","openclaw/plugin-sdk/media-runtime","66e3647d30b80559fac02332e276729fa1c174fbedd6397508816525691213bf",1]
 ["extensions/tts-local-cli/speech-provider.test.ts","openclaw/plugin-sdk/runtime-env","f0c9576a03056f05b1dab416f0733347f9dd1420cae75e3bce3e77c522b463ca",1]
-["extensions/twitch/src/monitor.test.ts","./client-manager-registry.js","364808679617254dbce28a17179551e0ab1d4df75559a5bea5b37a842258365c",1]
 ["extensions/twitch/src/outbound.test.ts","./config.js","19348a0e53d02bf31ac27e7b036c2847c1d3d9753a0140f74c257ac45c4b774f",1]
 ["extensions/typesafe/src/local.transport.test.ts","openclaw/plugin-sdk/secret-input-runtime","6068d85a7c77e4ea1002a64baced1facc68327f3937585faa8e4a2a27eb13965",1]
 ["extensions/typesafe/src/registration.lazy.test.ts","./client.js","d06f52188e763d8d65ed6e0015c031c60d19a503771a09bd01f3f930034708b9",1]

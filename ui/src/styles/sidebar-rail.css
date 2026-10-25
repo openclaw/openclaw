@@ -243,6 +243,10 @@
   stroke-width: 2px;
 }
 
+.sidebar-rail__create .sidebar-new-session > svg {
+  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
+}
+
 .sidebar-rail .nav-item__text,
 .sidebar-rail .sidebar-identity-card__text {
   position: absolute;
