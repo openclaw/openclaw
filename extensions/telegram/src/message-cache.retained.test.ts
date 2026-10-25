@@ -400,4 +400,55 @@ describe("Telegram retained message history", () => {
     expect(await get(cache, 22)).toBeNull();
     expect(await historyIds(cache)).toEqual(["23"]);
   });
+
+  it("retires a precisely identified message from retained history", async () => {
+    const cache = createCache();
+    await record(cache, message(1));
+    await record(cache, message(2));
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(true);
+    expect(await get(cache, 1)).toBeNull();
+    expect((await get(cache, 2))?.messageId).toBe("2");
+    expect(await historyIds(cache)).toEqual(["2"]);
+
+    // A reopened bucket must not resurrect the retired entry from the store.
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    const reopened = createCache();
+    expect(await get(reopened, 1)).toBeNull();
+    expect((await get(reopened, 2))?.messageId).toBe("2");
+
+    expect(await cache.retireMessage({ accountId, chatId, messageId: 1 })).toBe(false);
+    expect(await cache.retireMessage({ accountId, chatId, messageId: "not-a-native-id" })).toBe(
+      false,
+    );
+  });
+
+  it("keeps a preview retired while its own observation was still in flight", async () => {
+    const cache = createCache();
+    let retirePromise: Promise<boolean> | undefined;
+    fixture.beforeCompare = async () => {
+      // The record already passed the fence and is about to commit; the
+      // retirement queues on the same per-key writer and settles the order.
+      retirePromise = cache.retireMessage({ accountId, chatId, messageId: 60 });
+    };
+    await record(cache, message(60));
+    await retirePromise;
+    expect(await get(cache, 60)).toBeNull();
+    expect(await historyIds(cache)).toEqual([]);
+  });
+
+  it("keeps a bounded-cache preview retired while its observation was in flight", async () => {
+    const cache = createCache();
+    const dmChat = { id: 7, type: "private" as const, first_name: "Ada" };
+    const dmMessage = (messageId: number): Message => message(messageId, { chat: dmChat });
+    let retirePromise: Promise<boolean> | undefined;
+    fixture.beforeRegister = async () => {
+      retirePromise = cache.retireMessage({ accountId, chatId: 7, messageId: 70 });
+    };
+    // Positive chat id: the bounded map path, no retained CAS involved.
+    await cache.record({ accountId, chatId: 7, msg: dmMessage(70) });
+    await retirePromise;
+    expect(await cache.get({ accountId, chatId: 7, messageId: "70" })).toBeNull();
+  });
 });
