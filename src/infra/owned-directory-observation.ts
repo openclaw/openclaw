@@ -12,7 +12,7 @@ type Directory = {
   watchRoot: string;
   recursive: boolean;
   reconcileIntervalMs: number;
-  listeners: Set<Listener>;
+  listeners: readonly Listener[];
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
 };
@@ -108,8 +108,7 @@ function detach(directory: Directory) {
 }
 
 function notify(directory: Directory, filename?: string, event?: string) {
-  const listeners = Array.from(directory.listeners);
-  for (const listener of listeners) {
+  for (const listener of directory.listeners) {
     listener(filename, event);
   }
 }
@@ -240,19 +239,20 @@ export function observeOwnedDirectory(
       watchRoot,
       recursive,
       reconcileIntervalMs,
-      listeners: new Set(),
+      listeners: [],
       nextFallback: { atMs: Infinity, elapsedAtMs: Infinity },
     };
     directories.set(key, selected);
     attach(selected);
   }
   const listener: Listener = (filename, event) => onChange(filename, event);
-  selected.listeners.add(listener);
+  selected.listeners = [...selected.listeners, listener];
   retainEarlierFallback(selected, nextFallback(reconcileIntervalMs));
   scheduleFallback(selected);
   return {
     close() {
-      if (!selected.listeners.delete(listener) || selected.listeners.size) {
+      selected.listeners = selected.listeners.filter((entry) => entry !== listener);
+      if (selected.listeners.length || directories.get(key) !== selected) {
         return;
       }
       directories.delete(key);
