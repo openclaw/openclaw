@@ -9,9 +9,9 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
 import { withSessionRowDatabaseFacts } from "./session-row-database-facts.js";
 import type { SessionRowSelectionPreparationOptions } from "./session-row-prepared-read.js";
-import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
 import * as records from "./session-row-projection-record.js";
+import { isColdSessionRow as isCold } from "./session-row-projection-residency.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 
 type MaterializationOwner = Parameters<typeof createSessionRowMaterializer>[0];
@@ -37,6 +37,7 @@ export function createSessionRowRefresh(
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
     metadataReady: () => boolean;
+    trim: () => void;
   },
 ) {
   const materializer = createSessionRowMaterializer({
@@ -493,10 +494,29 @@ export function createSessionRowRefresh(
       );
     },
     refresh: materializer.refresh,
+    refreshPresentation(
+      rows: readonly records.Row[],
+      agentId: string | undefined,
+      onlyFacts: boolean,
+    ) {
+      for (const row of rows) {
+        if (isCold(row) || (agentId && row.agentId !== agentId)) {
+          continue;
+        }
+        // Runtime summary state does not change the entry-derived materialization.
+        if (onlyFacts && row.facts) {
+          row.facts.refreshActivitySummary();
+        } else {
+          owner.dirty.add(records.identity(row));
+        }
+      }
+    },
     refreshBatch(this: void) {
-      return (refreshing ??= refreshBatch().finally(() => {
-        refreshing = undefined;
-      }));
+      return (refreshing ??= refreshBatch()
+        .then(owner.trim)
+        .finally(() => {
+          refreshing = undefined;
+        }));
     },
     prepareExactRows,
     prepareSelection,

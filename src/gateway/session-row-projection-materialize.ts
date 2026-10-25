@@ -16,9 +16,9 @@ import { readSessionRowFacts } from "./server-methods/session-placement-read-pro
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
-import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
+import { isColdSessionRow } from "./session-row-projection-residency.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -71,7 +71,7 @@ export function createSessionRowDescriptionReader(owner: {
   lookup: (query: records.Lookup) => records.Row | undefined;
   dirty: ReadonlySet<string>;
   refresh: (ids: string[]) => void;
-  describeArchived: (row: records.Row | undefined) => records.Row | undefined;
+  retainMaterialized: (row: records.Row | undefined) => records.Row | undefined;
   isCurrent: (row: records.Row) => boolean;
   materializePrivate: (
     row: records.Row,
@@ -106,7 +106,7 @@ export function createSessionRowDescriptionReader(owner: {
           owner.refresh([records.identity(row)]);
           row = owner.lookup(query);
         }
-        row = owner.describeArchived(row);
+        row = owner.retainMaterialized(row);
       }
       if (captured && !owner.isCurrent(captured)) {
         return undefined;
@@ -137,7 +137,7 @@ export function createSessionRowMaterializer(owner: {
     facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
-  retainArchived: (row: records.MaterializedRow) => void;
+  retainMaterialized: (row: records.MaterializedRow) => void;
 }) {
   function refresh(ids: readonly string[], accepted = false) {
     if (!owner.isActive()) {
@@ -169,19 +169,18 @@ export function createSessionRowMaterializer(owner: {
         }
         const row =
           current && (accepted ? current : owner.acquireEntry(current, databaseFacts.entry));
-        if (row && isColdArchivedSessionRow(row) && !accepted) {
+        if (row && isColdSessionRow(row) && !accepted) {
           owner.dirty.delete(id);
           owner.forgetBackfill(id);
           continue;
         }
         if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
+          row.cold = undefined;
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
-          // A bulk slice may finish an exact read's accepted archive row. Keep its
-          // residency under the archive owner's pins and bounded cache either way.
-          if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
-            owner.retainArchived(row);
+          if (records.ready(row)) {
+            owner.retainMaterialized(row);
           }
         }
       }
@@ -234,7 +233,7 @@ export function createSessionRowMaterializer(owner: {
           }
           if (row && !row.materialized && !options.materializeCold) {
             // Prepare selection facts for the roster, but enrich only requested rows.
-            if (!isColdArchivedSessionRow(row)) {
+            if (!isColdSessionRow(row)) {
               row.retainedDatabaseFacts = databaseFacts;
             }
             owner.dirty.delete(id);

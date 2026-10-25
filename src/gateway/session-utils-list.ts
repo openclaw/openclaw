@@ -597,7 +597,6 @@ export async function listProjectedSessions(params: {
         let syncCpu = diagnostics?.startSyncCpu();
         try {
           let materializedRowCount = 0;
-          projection.setArchivePageSize(selection.entries.length);
           const sessions: GatewaySessionRow[] = [];
           const rowOptions = [false, true].map((includeTranscriptFields) =>
             [false, true].map((isSentinel) => ({

@@ -1,6 +1,7 @@
 // Per-connection viewer presence declarations. Message subscriptions are transport state,
 // while this replace-set records only the sessions a client is actually rendering.
 import { upsertPresence } from "../infra/system-presence.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { recordClientPresenceActivity } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
@@ -15,6 +16,7 @@ export function createSessionViewerPresenceDeclarations(
   deps: SessionViewerPresenceDeclarationsDeps,
 ) {
   const declarations = new Map<string, readonly string[]>();
+  const listeners = new Set<() => void>();
   let stopped = false;
 
   const replace = (connId: string, sessionKeys: readonly string[]): readonly string[] => {
@@ -36,6 +38,7 @@ export function createSessionViewerPresenceDeclarations(
     } else {
       declarations.set(normalizedConnId, next);
     }
+    notifyListeners(listeners, undefined);
     if (client.presenceKey) {
       upsertPresence(client.presenceKey, {
         watchedSessions: next.length > 0 ? [...next] : undefined,
@@ -53,14 +56,26 @@ export function createSessionViewerPresenceDeclarations(
     if (normalizedConnId) {
       // The websocket close boundary publishes reason=disconnect and clears watchedSessions.
       // Delete here first so a recycled connection id can never inherit an old declaration.
-      declarations.delete(normalizedConnId);
+      if (declarations.delete(normalizedConnId)) {
+        notifyListeners(listeners, undefined);
+      }
     }
   };
 
   const stop = () => {
     stopped = true;
     declarations.clear();
+    listeners.clear();
   };
 
-  return { replace, unsubscribe, stop };
+  return {
+    replace,
+    unsubscribe,
+    stop,
+    has: (key: string) => [...declarations.values()].some((keys) => keys.includes(key)),
+    onChange(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 }

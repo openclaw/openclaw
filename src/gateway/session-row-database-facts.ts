@@ -14,7 +14,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import {
   canRetainSessionRowRuntimeOwnership,
   identity,
@@ -24,6 +23,7 @@ import {
   type PreparedSessionRowDatabaseFacts,
   type Row,
 } from "./session-row-projection-record.js";
+import { isColdSessionRow } from "./session-row-projection-residency.js";
 import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 
 /** Worker read owners retain each physical source through current row-facts installation. */
@@ -215,7 +215,7 @@ export async function withSessionRowDatabaseFacts(
               (row) =>
                 (owner.dirty.has(identity(row)) ||
                   (owner.selected?.has(identity(row)) &&
-                    isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
+                    isColdSessionRow(owner.rows.get(identity(row)) ?? row))) &&
                 isCurrentGeneration(row, owner.rows.get(identity(row))) &&
                 owner.rows.get(identity(row))?.databaseFactsRevision ===
                   rowRevisions.get(identity(row)) &&

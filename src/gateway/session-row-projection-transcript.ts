@@ -11,6 +11,7 @@ import {
   type Row,
   type SessionRowStore,
 } from "./session-row-projection-record.js";
+import { isColdSessionRow } from "./session-row-projection-residency.js";
 
 const TRANSCRIPT_REFRESH_WINDOW_MS = 1_000;
 
@@ -79,7 +80,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       if (pending) {
         params.refresh(id, retained);
       }
-      if (row.entry?.archivedAt !== undefined && !row.materialized) {
+      if (isColdSessionRow(row)) {
         continue;
       }
       const window = windows.get(id);

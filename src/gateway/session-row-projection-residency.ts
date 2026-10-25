@@ -1,17 +1,31 @@
 import { isDeepStrictEqual } from "node:util";
+import { shouldPreserveSubagentForMaintenance } from "../agents/subagents/registry/subagent-delivery-state.js";
+import { getSubagentRunsForChildSession } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { hasPendingFollowupQueueWork } from "../auto-reply/reply/queue/state.js";
+import { isTerminalSessionStatus } from "../config/sessions/types.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  listAgentRunsForSession,
+} from "../infra/agent-run-registry.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
+import { isSessionRunActive } from "../sessions/session-controller.queries.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import * as records from "./session-row-projection-record.js";
 
-// Exact reads retain a small cache; larger list pages need their whole backfill window.
-const DEFAULT_ARCHIVED_MATERIALIZED_ROWS = 100;
+// One normal list page stays warm; larger pages retain their window only while reading it.
+const DEFAULT_MATERIALIZED_ROWS = 100;
 
-export function isColdArchivedSessionRow(row: records.Row) {
-  return row.entry?.archivedAt !== undefined && !row.materialized;
+export function isColdSessionRow(row: records.Row) {
+  return row.cold === true && !row.materialized;
 }
 
-/** Archived metadata outlives its bounded, reader-populated materialization cache. */
-export function createSessionRowProjectionArchive(params: {
+function eligible(row: records.Row) {
+  return row.entry?.archivedAt !== undefined || isTerminalSessionStatus(row.entry?.status);
+}
+
+/** Selection and sharing metadata outlive bounded, post-use display residency. */
+export function createSessionRowProjectionResidency(params: {
   rows: ReadonlyMap<string, records.Row>;
   dirty: Set<string>;
   invalidateTranscript: (id: string) => void;
@@ -21,10 +35,78 @@ export function createSessionRowProjectionArchive(params: {
   config: () => records.Inputs["cfg"];
   context: () => Parameters<typeof records.readSessionRowLineage>[3];
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
+  contextPrepared: () => boolean;
+  placementFacts: Pick<
+    ReturnType<typeof createSessionRowPlacementProjection>,
+    "getProjectionFacts" | "isPrepared"
+  >;
+  observers?: records.ProjectionOptions["observers"];
 }) {
   const materialized = new Set<string>();
   const readPins = new Set<ReadonlySet<string>>();
-  let limit = DEFAULT_ARCHIVED_MATERIALIZED_ROWS;
+  let limit = DEFAULT_MATERIALIZED_ROWS;
+  function isProtected(row: records.Row) {
+    const entry = row.storedEntry;
+    if (!entry || !params.contextPrepared()) {
+      return true;
+    }
+    const placement = params.placementFacts.getProjectionFacts(entry.sessionId);
+    if (
+      !params.placementFacts.isPrepared(entry.sessionId) ||
+      placement?.move ||
+      placement?.workspaceRecoveryPending ||
+      placement?.workspaceResultReconciling ||
+      (placement?.placement &&
+        placement.placement.state !== "local" &&
+        placement.placement.state !== "reclaimed") ||
+      params.observers?.has(row) ||
+      entry.initializationPending ||
+      entry.pendingFinalDelivery ||
+      (entry.pendingDeliveryNotice && entry.pendingDeliveryNotice.state !== "acknowledged") ||
+      entry.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
+      entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
+      entry.restartRecoveryBeforeAgentReplyState === "pending" ||
+      entry.restartRecoveryBeforeAgentReplyState === "continue" ||
+      (entry.mainRestartRecovery && !entry.mainRestartRecovery.tombstone) ||
+      entry.quotaSuspension ||
+      Object.keys(entry.pendingExecNotifications ?? {}).length > 0 ||
+      isSessionRunActive(entry.sessionId) ||
+      listAgentRunsForSession({ sessionKey: row.key, sessionId: entry.sessionId }).some(
+        ({ runId }) => hasAgentRunContextExecutionOwner(runId),
+      ) ||
+      hasPendingFollowupQueueWork([row.key, entry.sessionId], {
+        storeScope: row.storeTarget.storePath,
+        agentId: row.agentId,
+      })
+    ) {
+      return true;
+    }
+    // Compact committed runs retain cleanup and delivery; live owners also carry recovery custody.
+    for (const run of params.context().subagentRunsByChildSessionKey.get(row.key) ?? []) {
+      if (
+        run.cleanupCompletedAt === undefined ||
+        run.execution.endedAt === undefined ||
+        shouldPreserveSubagentForMaintenance(run) ||
+        run.delivery?.status === "pending" ||
+        run.delivery?.status === "in_progress" ||
+        run.delivery?.status === "suspended"
+      ) {
+        return true;
+      }
+    }
+    for (const run of getSubagentRunsForChildSession(row.key, row.agentId)) {
+      if (
+        shouldPreserveSubagentForMaintenance(run) ||
+        run.terminalOwner ||
+        run.execution.restartRecovery ||
+        run.collectorLaunchCleanupPending ||
+        run.requesterSettleWake
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
   function demote(row: records.Row): records.Row {
     const id = records.identity(row);
     materialized.delete(id);
@@ -42,8 +124,16 @@ export function createSessionRowProjectionArchive(params: {
       if (materialized.size <= limit) {
         break;
       }
-      if (![...readPins].some((pins) => pins.has(id))) {
-        demote(params.rows.get(id)!);
+      const row = params.rows.get(id)!;
+      if (
+        ![...readPins].some((pins) => pins.has(id)) &&
+        (row.entry?.archivedAt !== undefined ||
+          (!params.dirty.has(id) &&
+            !row.pendingDatabaseFacts &&
+            !row.unresolvedDatabaseFacts &&
+            !isProtected(row)))
+      ) {
+        demote(row);
       }
     }
   }
@@ -56,7 +146,7 @@ export function createSessionRowProjectionArchive(params: {
     records.markRelated(row, indexes, related, includeChildren, params.config());
     for (const id of related) {
       const current = params.rows.get(id);
-      if (current && isColdArchivedSessionRow(current)) {
+      if (current && isColdSessionRow(current)) {
         if (!current.storedEntry) {
           continue;
         }
@@ -89,8 +179,19 @@ export function createSessionRowProjectionArchive(params: {
       }
     }
   }
+  const stopObserving = params.observers?.onChange(trim);
   return {
-    demote,
+    trim,
+    acquire(row: records.Row, previous: records.Row) {
+      if (!eligible(row)) {
+        materialized.delete(records.identity(row));
+        row.cold = undefined;
+      } else if (row.entry?.archivedAt !== undefined && previous.entry?.archivedAt === undefined) {
+        // Archives start as metadata; terminal rows join the same budget after use.
+        return demote(row);
+      }
+      return row;
+    },
     markRelated,
     deferAcquisition(row: records.Row) {
       const id = records.identity(row);
@@ -130,7 +231,7 @@ export function createSessionRowProjectionArchive(params: {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = undefined;
         }
-        if (row.entry?.archivedAt !== undefined) {
+        if (isColdSessionRow(row) || row.entry?.archivedAt !== undefined) {
           const current = row.materialized ? demote(row) : row;
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
@@ -155,10 +256,6 @@ export function createSessionRowProjectionArchive(params: {
         }
       }
     },
-    setPageSize: (size: number) => {
-      limit = Math.max(DEFAULT_ARCHIVED_MATERIALIZED_ROWS, size);
-      trim();
-    },
     // Disjoint prepared pages retain their own rows across worker and placement yields.
     retainRows(this: void) {
       let pins: ReadonlySet<string> = new Set();
@@ -174,7 +271,7 @@ export function createSessionRowProjectionArchive(params: {
         release() {
           readPins.delete(pins);
           limit = Math.max(
-            DEFAULT_ARCHIVED_MATERIALIZED_ROWS,
+            DEFAULT_MATERIALIZED_ROWS,
             ...Array.from(readPins, (heldPins) => heldPins.size),
           );
           trim();
@@ -183,11 +280,12 @@ export function createSessionRowProjectionArchive(params: {
     },
     forget: (id: string) => materialized.delete(id),
     clear() {
+      stopObserving?.();
       materialized.clear();
       readPins.clear();
     },
     describe(row: records.Row | undefined) {
-      if (row?.entry?.archivedAt === undefined) {
+      if (!row || !eligible(row)) {
         return row;
       }
       if (records.ready(row)) {

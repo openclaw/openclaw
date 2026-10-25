@@ -37,6 +37,10 @@ export type ProjectionOptions = {
   getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
   context?: Parameters<typeof readSessionRowFacts>[0]["context"];
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
+  observers?: {
+    has: (row: Pick<Row, "key" | "agentId">) => boolean;
+    onChange: (listener: () => void) => () => void;
+  };
 };
 
 export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
@@ -109,6 +113,8 @@ export type Row = {
   entry?: SessionEntry;
   selection: ReturnType<typeof readSessionListSelectionFacts>;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
+  /** Explicit eviction is distinct from a new row awaiting its first materialization. */
+  cold?: true;
   materializedSequence?: number;
   profileRevision?: number;
   subagentRevision?: number;
@@ -361,6 +367,7 @@ export function renewGeneration(row: Row): Row {
     publishedSource: undefined,
     sharingEntry: undefined,
     materialized: undefined,
+    cold: undefined,
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
@@ -567,13 +574,13 @@ function selectSessionRowParent(
 export function dematerialize(row: Row): Row {
   return {
     ...row,
+    cold: true,
     materialized: undefined,
     materializedSequence: undefined,
     facts: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
-    membership: new Set<string>(),
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
@@ -636,9 +643,9 @@ export function acquireSessionRowEntry(params: {
   remove: (id: string) => void;
   put: (row: Row) => void;
   markRelated: (row: Row, includeChildren: boolean) => void;
-  archive: { demote: (row: Row) => Row; forget: (id: string) => void };
+  residency: { acquire: (row: Row, previous: Row) => Row };
 }) {
-  const { row, storedEntry, cfg, context, remove, put, archive } = params;
+  const { row, storedEntry, cfg, context, remove, put, residency } = params;
   if (!storedEntry || storedEntry.incognito) {
     remove(identity(row));
     return undefined;
@@ -698,11 +705,7 @@ export function acquireSessionRowEntry(params: {
       : {}),
   };
   put(next);
-  if (entry.archivedAt !== undefined && row.entry?.archivedAt === undefined) {
-    next = archive.demote(next);
-  } else if (entry.archivedAt === undefined) {
-    archive.forget(identity(next));
-  }
+  next = residency.acquire(next, row);
   if (changed) {
     params.markRelated(next, includeChildren);
   }

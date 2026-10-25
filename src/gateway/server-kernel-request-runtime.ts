@@ -13,6 +13,8 @@ import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
 import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayHostLifecycle } from "./server-public.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -76,6 +78,21 @@ export async function prepareGatewayKernelRequestRuntime(params: {
             ),
           context: gatewayRequestContext,
           placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
+          observers: {
+            has: ({ key, agentId }) =>
+              runtime.sessionMessageSubscribers.get(resolveSessionSubscriptionKey(key, agentId))
+                .size > 0 ||
+              runtimeState.sessionViewerPresence?.has(sessionObserverScopeKey(key, agentId)) ===
+                true,
+            onChange(listener) {
+              const unsubscribe = runtime.sessionMessageSubscribers.onChange(listener);
+              const unwatch = runtimeState.sessionViewerPresence?.onChange(listener);
+              return () => {
+                unsubscribe();
+                unwatch?.();
+              };
+            },
+          },
         });
       });
   // Startup and teardown retain this work even if transport setup fails first.
