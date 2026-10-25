@@ -289,8 +289,9 @@ suite.define(() => {
                         event.source !== frame.contentWindow ||
                         event.data?.type !== "openclaw:widget-size" ||
                         typeof event.data.height !== "number"
-                      )
+                      ) {
                         return;
+                      }
                       window.removeEventListener("message", receive);
                       resolve(event.data.height);
                     };

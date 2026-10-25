@@ -35,7 +35,10 @@ it("confirms current widget height on each parent chat-host notification", () =>
   receive({ source: parent, data });
   receive({ source: parent, data });
   expect(postMessage.mock.calls).toEqual(
-    [120, 80, 80].map((height) => [{ type: "openclaw:widget-size", height }, "*"]),
+    [120, 80, 80].map((reportedHeight) => [
+      { type: "openclaw:widget-size", height: reportedHeight },
+      "*",
+    ]),
   );
 });
 
