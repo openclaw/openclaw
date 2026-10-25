@@ -146,6 +146,17 @@ export class TooltipOwner {
   }
   refresh() {
     this.#attachTrigger();
+    // Only caller-owned description resolvers can change targets inside a stable trigger.
+    if (this.#triggerElement && this.options.props().descriptionTarget) {
+      this.#stopTriggerContent ??= observeTooltipContent(
+        this.host.ownerDocument,
+        [this.#triggerElement],
+        () => this.#syncDescription(),
+      );
+    } else {
+      this.#stopTriggerContent?.();
+      this.#stopTriggerContent = undefined;
+    }
     this.contentChanged();
     if ((this.options.props().disabled ?? false) || !this.#tooltipText) {
       this.options.retire();
@@ -183,9 +194,6 @@ export class TooltipOwner {
       const root = owner.getRootNode();
       owner = root instanceof ShadowRoot ? root.host : null;
     }
-    this.#stopTriggerContent = observeTooltipContent(this.host.ownerDocument, [trigger], () =>
-      this.#syncDescription(),
-    );
     this.#triggerListeners = [
       listen(trigger, "pointerenter", this.#handlePointerEnter),
       listen(trigger, "pointerleave", this.#handlePointerLeave),

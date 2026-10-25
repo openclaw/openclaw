@@ -50,32 +50,47 @@ it("shares provider observation and preserves retained records during a removal 
   expect(notify[99]).toHaveBeenCalledOnce();
 });
 
-it("routes nested and shadow-island changes without observing unrelated attributes", async () => {
+it("keeps nested and shadow-island routing current between delivery batches", async () => {
   const outer = document.body.appendChild(document.createElement("section"));
-  const inner = outer.appendChild(document.createElement("section"));
+  const other = document.body.appendChild(document.createElement("section"));
+  const gap = outer.appendChild(document.createElement("div"));
+  const inner = gap.appendChild(document.createElement("section"));
+  const sibling = gap.appendChild(document.createElement("section"));
   const shadow = outer.appendChild(document.createElement("div")).attachShadow({ mode: "open" });
   const shadowHost = shadow.appendChild(document.createElement("section"));
-  const changedOuter = vi.fn();
-  const changedInner = vi.fn();
-  const changedShadow = vi.fn();
-  onTestFinished(observeLinkReaderInline(outer, changedOuter));
-  onTestFinished(observeLinkReaderInline(inner, changedInner));
-  onTestFinished(observeLinkReaderInline(shadowHost, changedShadow));
-  inner.append(document.createElement("a"));
+  const calls: string[] = [];
+  for (const [host, label] of [
+    [outer, "outer"],
+    [other, "other"],
+    [inner, "inner"],
+    [sibling, "sibling"],
+    [shadowHost, "shadow"],
+  ] as const) {
+    onTestFinished(observeLinkReaderInline(host, () => calls.push(label)));
+  }
+  const firstLink = inner.appendChild(document.createElement("a"));
+  const secondLink = sibling.appendChild(document.createElement("a"));
+  await Promise.resolve();
+  expect(calls).toEqual(["inner", "outer", "sibling"]);
+
+  calls.length = 0;
   shadowHost.append(document.createElement("a"));
   await Promise.resolve();
-  expect(changedOuter).toHaveBeenCalledOnce();
-  expect(changedInner).toHaveBeenCalledOnce();
-  expect(changedShadow).toHaveBeenCalledOnce();
-  changedOuter.mockClear();
-  changedInner.mockClear();
-  changedShadow.mockClear();
+  expect(calls).toEqual(["shadow"]);
+
+  other.append(gap);
+  await Promise.resolve();
+  calls.length = 0;
+  firstLink.textContent = "Moved first";
+  secondLink.textContent = "Moved second";
+  await Promise.resolve();
+  expect(calls).toEqual(["inner", "other", "sibling"]);
+
+  calls.length = 0;
   inner.className = "unrelated";
   shadowHost.setAttribute("aria-description", "unrelated");
   await Promise.resolve();
-  expect(changedOuter).not.toHaveBeenCalled();
-  expect(changedInner).not.toHaveBeenCalled();
-  expect(changedShadow).not.toHaveBeenCalled();
+  expect(calls).toEqual([]);
 });
 
 it("isolates callbacks and keeps duplicate registrations independently disposable", async () => {

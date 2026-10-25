@@ -5,9 +5,28 @@ function createInlineObserver(document: Document) {
   const targets = new Map<Node, Set<Registration>>();
   let rebuildQueued = false;
   const deliver = (records: MutationRecord[]) => {
+    const nearest = new Map<Node, Node | null>();
+    const trail: Node[] = [];
+    const findTarget = (start: Node | null): Node | null => {
+      let node = start;
+      trail.length = 0;
+      while (node && !targets.has(node)) {
+        const cached = nearest.get(node);
+        if (cached !== undefined) {
+          node = cached;
+          break;
+        }
+        trail.push(node);
+        node = node.parentNode;
+      }
+      for (const skipped of trail) {
+        nearest.set(skipped, node);
+      }
+      return node;
+    };
     const pending = new Set<Registration>();
     for (const record of records) {
-      for (let node: Node | null = record.target; node; node = node.parentNode) {
+      for (let node = findTarget(record.target); node; node = findTarget(node.parentNode)) {
         for (const registration of targets.get(node) ?? []) {
           pending.add(registration);
         }
