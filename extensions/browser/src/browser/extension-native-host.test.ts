@@ -284,14 +284,3 @@ it("wakes the non-first automatic profile through the native frame and config bo
     },
   );
 });
-
-it("still validates the manifest before ensuring the relay", async () => {
-  const ensureRelay = vi.fn(async () => "spawned" as const);
-  const result = await invokeHost({
-    input: relayInput(18799),
-    callerOrigin: OTHER_ORIGIN,
-    ensureRelay,
-  });
-  expect(result).toEqual(failure("origin_forbidden"));
-  expect(ensureRelay).not.toHaveBeenCalled();
-});

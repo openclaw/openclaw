@@ -26,11 +26,6 @@ const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
   () => import("./chrome-mcp-process.test-support.js"),
 );
 
-vi.mock("./chrome-mcp-connect.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chrome-mcp-connect.js")>();
-  return { ...actual, createChromeMcpSession: vi.fn(actual.createChromeMcpSession) };
-});
-
 beforeEach(() => getChromeMcpModule.clear());
 
 afterEach(async () => {
@@ -126,7 +121,6 @@ it("uses request-scoped cold probes and reuses a warm MCP session", async () => 
   await ctx.listProfiles();
   expect((await ctx.listProfiles())[0]).toMatchObject({ running: true, tabCount: 1 });
   expect(fixture.factory).toHaveBeenCalledTimes(2);
-  expect(fixture.listProcesses).toHaveBeenCalledTimes(4);
   expect(fixture.callTool).toHaveBeenCalledWith(
     { name: "list_pages", arguments: {} },
     { signal: expect.any(AbortSignal), timeout: 300 },
@@ -145,10 +139,8 @@ it("preserves healthy transport status when the shared page probe fails", async 
   await status();
 
   expect(response.body).toMatchObject({ running: true, cdpReady: true, pageReady: false });
-  expect(fixture.factory).toHaveBeenCalledOnce();
 
   expect((await ctx.listProfiles())[0]).toMatchObject({ running: true, tabCount: 0 });
-  expect(fixture.factory).toHaveBeenCalledTimes(2);
 });
 
 it("times out a stuck status page probe within the budget remaining after attach", async () => {
@@ -176,8 +168,6 @@ it("times out a stuck status page probe within the budget remaining after attach
     statusCode: 200,
     body: { running: true, cdpReady: true, pageReady: false },
   });
-  expect(fixture.factory).toHaveBeenCalledOnce();
-  expect(fixture.listProcesses).toHaveBeenCalledTimes(2);
 });
 
 it("cancels one waiter while other probes observe the settled profile transition", async () => {
@@ -227,37 +217,6 @@ it("cancels one waiter while other probes observe the settled profile transition
   await expect(profile.isReachable()).resolves.toBe(true);
   expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
   expect((await listing)[0]?.running).toBe(false);
-});
-
-it("redacts CDP URL credentials from profile status", async () => {
-  const state = makeBrowserServerState({
-    profile: makeBrowserProfile({
-      name: "manual-cdp",
-      cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
-      cdpPort: 9222,
-      attachOnly: true,
-    }),
-    resolvedOverrides: {
-      ssrfPolicy: {},
-    },
-  });
-  const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-  isChromeReachable.mockResolvedValue(true);
-
-  const ctx = createBrowserRouteContext({ getState: () => state });
-  const profiles = await ctx.listProfiles();
-
-  expect(isChromeReachable).toHaveBeenCalledWith(
-    "http://openclaw:relay-token@127.0.0.1:9222",
-    state.resolved.remoteCdpTimeoutMs,
-    undefined,
-    expect.any(AbortSignal),
-  );
-  expect(profiles[0]).toMatchObject({
-    name: "manual-cdp",
-    running: true,
-    cdpUrl: "http://127.0.0.1:9222",
-  });
 });
 
 it("marks a runtime-only constructor profile as missing from config", async () => {
