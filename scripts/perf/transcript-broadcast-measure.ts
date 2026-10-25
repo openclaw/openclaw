@@ -38,6 +38,8 @@
 // Usage polling adds usage.cost and sessions.usage overview reads to the
 // mixed rotation; each round reports response cache statuses, including partials.
 // Use separate matching --allocations passes; their traced GC timing is diagnostic.
+// --worker-heap-done-file/--worker-heap-peer-done-file also gate paired timing soaks
+// before post-window collection or teardown; give each arm fresh, distinct paths.
 // --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
 // use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -930,14 +932,12 @@ const workerHeapPeerDoneFile = values["worker-heap-peer-done-file"];
 if (
   Boolean(workerHeapDoneFile) !== Boolean(workerHeapPeerDoneFile) ||
   (workerHeapDoneFile &&
-    (!values["worker-retained-heap"] ||
-      scenario !== "memory-soak" ||
-      values["mixed-rpc"] ||
+    (scenario !== "memory-soak" ||
       values["fingerprint-retention"] ||
       !workerHeapEvidence.acceptanceTiming))
 ) {
   throw new Error(
-    "Worker heap pair markers require both paths and an unprofiled memory soak without mixed RPCs or fingerprint retention",
+    "Measurement pair markers require both paths and a timing-compatible memory soak without fingerprint retention",
   );
 }
 if (
@@ -5411,6 +5411,7 @@ try {
     ? await readGatewayResources(gateway, { includeWorkers: true })
     : undefined;
   const measurementStartedAt = Date.now();
+  const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
   const wholeChatDiagnosticsEnabled =
     scenario === "chat.send" &&
@@ -6449,13 +6450,16 @@ try {
     ? await readGatewayResources(gateway, { includeWorkers: true })
     : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  const wholeSoakCpu = wholeSoakCpuBefore
+    ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
+    : undefined;
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
     // Long captures need room for a slower peer before either side forces GC.
     const deadline = Date.now() + Math.max(120_000, Date.now() - measurementStartedAt);
     while (!existsSync(workerHeapPeerDoneFile)) {
       if (Date.now() >= deadline) {
-        throw new Error("Worker heap peer did not finish its timing window");
+        throw new Error("Measurement peer did not finish its timing window");
       }
       await delay(100);
     }
@@ -6842,6 +6846,7 @@ try {
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
     listFilterChurn: values["list-filter-churn"],
+    pollBetweenRounds,
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
@@ -6983,6 +6988,7 @@ try {
           retainedProfile,
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,
+          wholeSoakCpu,
           wholeSoakGc,
         }
       : {}),
