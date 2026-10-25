@@ -86,10 +86,9 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     const reads = async () =>
       await Promise.all(
         ["models.list", "chat.metadata"].map(async (method) => {
-          const start = performance.now();
           const response = await rpcReq(connected, method, { agentId: "main" }, 120_000);
           expect(response.ok, `${method}: ${JSON.stringify(response)}`).toBe(true);
-          return { method, durationMs: performance.now() - start, payload: response.payload };
+          return response.payload;
         }),
       );
     const readReloadStatus = async () => {
@@ -200,7 +199,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
     expect(getActivePluginRegistry()).toBe(registry);
-    expect(during.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
+    expect(during).toEqual(before);
     expect(deadlineObservations).toBe(1);
     deadline.resolve(false);
     expect(await reloading).toMatchObject({
@@ -211,15 +210,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     expect(instance.acceptingCalls).toBe(true);
     expect(await readReloadStatus()).toBeUndefined();
     const after = await reads();
-    expect(after.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
-    console.info(
-      "PLUGIN_DRAIN_READER_LATENCY " +
-        JSON.stringify({
-          before: before.map(({ method, durationMs }) => ({ method, durationMs })),
-          during: during.map(({ method, durationMs }) => ({ method, durationMs })),
-          after: after.map(({ method, durationMs }) => ({ method, durationMs })),
-        }),
-    );
+    expect(after).toEqual(before);
     release.resolve();
     expect((await held).ok).toBe(true);
   } finally {

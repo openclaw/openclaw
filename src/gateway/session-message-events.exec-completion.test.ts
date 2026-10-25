@@ -4,7 +4,6 @@ import path from "node:path";
 import { text } from "node:stream/consumers";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import type { RawData } from "ws";
 import {
@@ -42,7 +41,6 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
-const requireRecord = createRequireRecord("object", "expected-label-object");
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let provider: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>>;
 let completionText: string;
@@ -86,6 +84,14 @@ async function createSessionStoreFile(): Promise<string> {
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
   return storePath;
+}
+
+async function disconnect(ws: Awaited<ReturnType<typeof harness.openWs>>) {
+  const closed = new Promise<void>((resolve) => {
+    ws.once("close", () => resolve());
+  });
+  ws.close();
+  await closed;
 }
 
 describe("exec completion WebChat publication", () => {
@@ -173,11 +179,7 @@ describe("exec completion WebChat publication", () => {
       ws.on("message", collect);
       try {
         if (disconnected) {
-          const closed = new Promise<void>((resolve) => {
-            ws.once("close", () => resolve());
-          });
-          ws.close();
-          await closed;
+          await disconnect(ws);
         }
         await prepareGatewayReplyRuntimeForTest({ force: true, config: cfg });
         gatewayReplyMock.mockImplementation((ctx, options, config) =>
@@ -201,10 +203,7 @@ describe("exec completion WebChat publication", () => {
         });
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
         if (!disconnected) {
-          const event = requireRecord(
-            await withinTest(live.promise, signal),
-            "exec completion event",
-          );
+          const event = await withinTest(live.promise, signal);
           expect(event.message).toMatchObject({
             role: "assistant",
             content: [{ type: "text", text: marker }],
@@ -212,11 +211,7 @@ describe("exec completion WebChat publication", () => {
         }
         expect(providerRequests.filter((request) => request.includes(marker))).toHaveLength(1);
         if (!disconnected) {
-          const closed = new Promise<void>((resolve) => {
-            ws.once("close", () => resolve());
-          });
-          ws.close();
-          await closed;
+          await disconnect(ws);
         }
         reconnected = await connect();
         const history = await rpcReq<{ messages?: unknown[] }>(reconnected, "chat.history", {

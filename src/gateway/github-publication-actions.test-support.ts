@@ -6,7 +6,7 @@ import {
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
-import { expect, vi } from "vitest";
+import { assert, expect, vi } from "vitest";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
@@ -56,10 +56,7 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
   const publication = await f.coordinator.requestForSessionV2(
     f.request(randomUUID(), f.guest, "Publish session work"),
   );
-  expect(publication.status).toBe("published");
-  if (publication.status !== "published") {
-    throw new Error("Publication fixture did not publish");
-  }
+  assert(publication.status === "published", "Publication fixture did not publish");
   const writerSource =
     backend === "repository"
       ? await createGitHubPublicationRequesterFixture({
