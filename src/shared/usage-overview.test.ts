@@ -9,7 +9,6 @@ import type { SessionUsageEntry, UsageOverviewOptions } from "./usage-types.js";
 const utc: UsageDailyBucket = { mode: "utc-offset", utcOffsetMinutes: 0 };
 const zeroMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
 const unavailable = { state: "unavailable" as const };
-const [d1, d2, d3] = ["2026-02-01", "2026-02-02", "2026-02-03"] as const;
 const usage = (...parts: Partial<SessionCostSummary>[]): SessionCostSummary =>
   Object.assign(createEmptyCostUsageTotals(), ...parts);
 function overview(rows: SessionUsageEntry[], options: UsageOverviewOptions = {}, compact = true) {
@@ -28,7 +27,7 @@ function report(
   options: UsageOverviewOptions = {},
 ) {
   const rows = [{ key: "session", agentId: "main", usage: usage(summary) }];
-  return buildUsageOverview({ rows, options, dayBucket }).overview;
+  return buildUsageOverview({ rows, options, dayBucket });
 }
 
 it("matches wildcard filters without exponential backtracking", () => {
@@ -95,7 +94,7 @@ it.each([
     const expected = Array<number>(24).fill(0);
     expected[firstHour] = firstMinutes;
     expected[secondHour] = secondMinutes;
-    expect(result).toMatchObject({
+    expect(result.overview).toMatchObject({
       hourlyMessages: expected,
       hourlyErrors: expected,
       hourTokens: expected,
@@ -105,7 +104,7 @@ it.each([
 
 it("prefers valid positive token quarters for selection and ignores malformed coordinates", () => {
   const quarter = {
-    date: d1,
+    date: "2026-02-01",
     quarterIndex: 40,
     ...usage({ totalTokens: 100, output: 100 }),
   };
@@ -120,14 +119,14 @@ it("prefers valid positive token quarters for selection and ignores malformed co
       { ...quarter, quarterIndex: 96 },
     ],
   };
-  expect(report(summary, undefined, { selectedHours: [10] }).total).toBe(1);
-  expect(report(summary, undefined, { selectedHours: [11] }).total).toBe(0);
-  expect(report(summary).hourTokens[10]).toBe(100);
-  expect(report(summary, { mode: "time-zone", timeZone: "Asia/Singapore" }).hourTokens[18]).toBe(
-    100,
-  );
+  expect(report(summary, undefined, { selectedHours: [10] }).overview.total).toBe(1);
+  expect(report(summary, undefined, { selectedHours: [11] }).overview.total).toBe(0);
+  expect(report(summary).overview.hourTokens[10]).toBe(100);
+  expect(
+    report(summary, { mode: "time-zone", timeZone: "Asia/Singapore" }).overview.hourTokens[18],
+  ).toBe(100);
   const fallback = { ...summary, utcQuarterHourTokenUsage: [{ ...quarter, totalTokens: 0 }] };
-  expect(report(fallback, undefined, { selectedHours: [12] }).total).toBe(1);
+  expect(report(fallback, undefined, { selectedHours: [12] }).overview.total).toBe(1);
 });
 
 it("places an instant fallback in one hour and sums precise message quarters", () => {
@@ -147,17 +146,19 @@ it("places an instant fallback in one hour and sums precise message quarters", (
     ),
   });
   expect([
-    result.hourTokens[10],
-    result.hourlyMessages[0],
-    result.hourlyErrors[0],
-    result.hourlyMessages[10],
+    result.overview.hourTokens[10],
+    result.overview.hourlyMessages[0],
+    result.overview.hourlyErrors[0],
+    result.overview.hourlyMessages[10],
   ]).toEqual([100, 15, 5, 0]);
 });
-function sources(secondDate: string = d1) {
+function sources(secondDate = "2026-02-01") {
   function makeUsage(tokens: number, date: string, provider: string, model: string) {
     const totals = usage({
       totalTokens: tokens,
       totalCost: tokens / 10,
+      missingCostEntries: 1,
+      missingCostByModel: { [provider + "/" + model]: 1 },
     });
     return {
       ...totals,
@@ -169,10 +170,11 @@ function sources(secondDate: string = d1) {
       modelUsage: [{ provider, model, count: 1, totals }],
       dailyModelUsage: [{ date, provider, model, tokens, cost: tokens / 10, count: 1 }],
       messageCounts: { ...zeroMessages, total: 1, assistant: 1, toolCalls: 1 },
+      toolUsage: { totalCalls: 1, uniqueTools: 1, tools: [{ name: "read", count: 1 }] },
     };
   }
-  const firstDay = makeUsage(10, d1, "provider::a", "model");
-  const secondDay = makeUsage(20, d2, "provider", "a::model");
+  const firstDay = makeUsage(10, "2026-02-01", "provider::a", "model");
+  const secondDay = makeUsage(20, "2026-02-02", "provider", "a::model");
   const common = { channel: "slack", creatorKey: "person" };
   return [
     {
@@ -181,14 +183,17 @@ function sources(secondDate: string = d1) {
       agentId: "first",
       updatedAt: 20,
       usage: {
-        ...makeUsage(30, d1, "provider::a", "model"),
+        ...makeUsage(30, "2026-02-01", "provider::a", "model"),
         lastActivity: secondDay.lastActivity,
-        activityDates: [d1, d2],
+        activityDates: ["2026-02-01", "2026-02-02"],
         dailyBreakdown: [...firstDay.dailyBreakdown!, ...secondDay.dailyBreakdown!],
         dailyMessageCounts: [...firstDay.dailyMessageCounts!, ...secondDay.dailyMessageCounts!],
         modelUsage: [...firstDay.modelUsage!, ...secondDay.modelUsage!],
         dailyModelUsage: [...firstDay.dailyModelUsage!, ...secondDay.dailyModelUsage!],
+        missingCostEntries: 2,
+        missingCostByModel: { "provider::a/model": 1, "provider/a::model": 1 },
         messageCounts: { ...zeroMessages, total: 2, assistant: 2, toolCalls: 2 },
+        toolUsage: { totalCalls: 2, uniqueTools: 1, tools: [{ name: "read", count: 2 }] },
       },
     },
     {
@@ -201,9 +206,39 @@ function sources(secondDate: string = d1) {
   ];
 }
 
+it("aggregates prepared family rows and all agents before selecting the page", () => {
+  const result = overview(sources(), { offset: 1, limit: 1, sort: "recent" });
+  expect(result.sessions).toMatchObject([{ key: "family", usage: { totalTokens: 30 } }]);
+  expect(result.totals).toMatchObject({
+    totalTokens: 60,
+    totalCost: 6,
+    missingCostEntries: 3,
+    missingCostByModel: { "provider::a/model": 2, "provider/a::model": 1 },
+  });
+  expect(
+    result.aggregates.byModel.map((row) => [row.provider, row.model, row.totals.totalTokens]),
+  ).toEqual([
+    ["provider::a", "model", 40],
+    ["provider", "a::model", 20],
+  ]);
+  expect(result.aggregates).toMatchObject({
+    byChannel: [{ channel: "slack", totals: { totalTokens: 60 } }],
+    byCreator: [{ key: "person", sessionCount: 2, totals: { totalTokens: 60 } }],
+    tools: { totalCalls: 3 },
+  });
+  expect(result.overview).toMatchObject({
+    total: 2,
+    selectedSessionCount: 2,
+    selectedRowCount: 2,
+    selectedRows: [],
+    unfilteredSessionCount: 2,
+    filterOptions: { agent: ["first", "second"] },
+  });
+});
+
 it("keeps excluded days' costs and providers in the calendar while summaries follow selection", () => {
-  const result = overview(sources(d3), {
-    selectedDays: [d1],
+  const result = overview(sources("2026-02-03"), {
+    selectedDays: ["2026-02-01"],
     recentKeys: [],
   });
   expect(result.sessions).toEqual([]);
@@ -214,22 +249,21 @@ it("keeps excluded days' costs and providers in the calendar while summaries fol
     unfilteredSessionCount: 2,
     tableSessionCount: 1,
     tableTotals: { tokens: 10, cost: 1, errors: 0 },
-    filterOptions: { agent: ["first", "second"] },
   });
   expect(result.totals.totalTokens).toBe(10);
   expect(result.aggregates.costDaily).toMatchObject([
-    { date: d1, totalTokens: 10 },
-    { date: d2, totalTokens: 20 },
-    { date: d3, totalTokens: 30 },
+    { date: "2026-02-01", totalTokens: 10 },
+    { date: "2026-02-02", totalTokens: 20 },
+    { date: "2026-02-03", totalTokens: 30 },
   ]);
   expect(result.aggregates.modelDaily).toEqual([
-    { date: d1, provider: "provider::a", model: "model", tokens: 10, cost: 1, count: 1 },
-    { date: d2, provider: "provider", model: "a::model", tokens: 20, cost: 2, count: 1 },
-    { date: d3, provider: "provider::a", model: "model", tokens: 30, cost: 3, count: 1 },
+    { date: "2026-02-01", provider: "provider::a", model: "model", tokens: 10, cost: 1, count: 1 },
+    { date: "2026-02-02", provider: "provider", model: "a::model", tokens: 20, cost: 2, count: 1 },
+    { date: "2026-02-03", provider: "provider::a", model: "model", tokens: 30, cost: 3, count: 1 },
   ]);
   expect(result.aggregates.daily).toEqual([
-    { date: d1, tokens: 10, cost: 1, messages: 1, toolCalls: 1, errors: 0 },
-    { date: d2, tokens: 20, cost: 2, messages: 1, toolCalls: 1, errors: 0 },
+    { date: "2026-02-01", tokens: 10, cost: 1, messages: 1, toolCalls: 1, errors: 0 },
+    { date: "2026-02-02", tokens: 20, cost: 2, messages: 1, toolCalls: 1, errors: 0 },
   ]);
   expect(result.aggregates.byModel.map((row) => row.totals.totalTokens)).toEqual([20, 10]);
   expect(result.aggregates).toMatchObject({
@@ -241,12 +275,18 @@ it("keeps excluded days' costs and providers in the calendar while summaries fol
 it.each([{ query: "agent:first" }, { selectedSessions: ["family"] }])(
   "keeps non-calendar filters on both calendar series: %j",
   (filter) => {
-    const result = overview(sources(d3), {
+    const result = overview(sources("2026-02-03"), {
       ...filter,
-      selectedDays: [d1],
+      selectedDays: ["2026-02-01"],
     });
-    expect(result.aggregates.costDaily?.map((entry) => entry.date)).toEqual([d1, d2]);
-    expect(result.aggregates.modelDaily?.map((entry) => entry.date)).toEqual([d1, d2]);
+    expect(result.aggregates.costDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+    expect(result.aggregates.modelDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
     expect(result.totals.totalTokens).toBe(10);
   },
 );
@@ -261,13 +301,7 @@ it("counts activity independently of recently modified empty comparison rows", (
     })),
   );
   expect(result).toMatchObject({
-    overview: {
-      total: 2,
-      selectedSessionCount: 1,
-      selectedRowCount: 2,
-      unfilteredSessionCount: 2,
-      selectedRows: [],
-    },
+    overview: { total: 2, selectedSessionCount: 1, selectedRowCount: 2, unfilteredSessionCount: 2 },
     aggregates: { sessionCount: 1 },
     totals: { totalTokens: 7 },
   });
@@ -290,12 +324,12 @@ it.each(["tokens", "cost"] as const)(
         totalTokens: total,
         totalCost: total / 10,
         firstActivity: 1,
-        activityDates: [d1, d2],
-        dailyBreakdown: [daily(d1, selected), daily(d2, total - selected)],
+        activityDates: ["2026-02-01", "2026-02-02"],
+        dailyBreakdown: [daily("2026-02-01", selected), daily("2026-02-02", total - selected)],
       }),
     }));
     const options = {
-      selectedDays: [d1],
+      selectedDays: ["2026-02-01"],
       selectedSessions: ["second", "first"],
       sort,
     };
@@ -355,6 +389,24 @@ function aggregate(...summaries: Partial<SessionCostSummary>[]) {
   return accumulator.finish();
 }
 
+it("retains incomplete daily and model subtotals after merging complete rows", () => {
+  const date = "2026-05-15";
+  const marker = { state: "unavailable" as const };
+  const result = aggregate(
+    ...[marker, undefined].map((usageReport) => ({
+      usageReport,
+      dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
+      dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
+    })),
+  );
+  expect(result.daily).toEqual([
+    { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
+  ]);
+  expect(result.modelDaily).toEqual([
+    { ...modelDay(date, "local", 20, 2, 2), usageReport: marker },
+  ]);
+});
+
 it("builds collision-free model identities with legacy unknown grouping", () => {
   expect(usageModelIdentity("fixture\0bedrock", "arn")).not.toBe(
     usageModelIdentity("fixture", "bedrock\0arn"),
@@ -380,7 +432,7 @@ it("accounts for every supplied row without conflating matching session IDs or m
     { output: 5, outputCost: 3 },
     { cacheWrite: 2, cacheWriteCost: 1 },
     { totalTokens: 7, totalCost: 4 },
-    { missingCostEntries: 3, missingCostByModel: { "fixture/unpriced": 2, "other/unpriced": 1 } },
+    { missingCostEntries: 2, missingCostByModel: { "fixture/unpriced": 2 } },
     {
       messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 2, toolResults: 1, errors: 0 },
       toolUsage: tools(2),
@@ -400,7 +452,7 @@ it("accounts for every supplied row without conflating matching session IDs or m
       { cacheRead: 3, cacheReadCost: 1 },
       { cacheWrite: 2, cacheWriteCost: 1 },
       { totalTokens: 50, totalCost: 6 },
-      { missingCostEntries: 4, missingCostByModel: { "fixture/unpriced": 3, "other/unpriced": 1 } },
+      { missingCostEntries: 3, missingCostByModel: { "fixture/unpriced": 3 } },
     ),
   );
   expect(aggregates).toMatchObject({
@@ -447,7 +499,7 @@ it("merges models and providers by identity and ranks equal costs by token usage
   ]);
 });
 
-it("merges daily buckets, retains incomplete subtotals and weights latency", () => {
+it("merges overlapping daily buckets and uses weighted latency summaries", () => {
   const earlier = "2026-03-11";
   const later = "2026-03-12";
   const quick = latency(2, 50, 20, 90, 80);
@@ -457,19 +509,10 @@ it("merges daily buckets, retains incomplete subtotals and weights latency", () 
       latency: quick,
       dailyLatency: [{ date: later, ...quick }],
       dailyBreakdown: [
-        day(later, {
-          input: 3,
-          totalTokens: 3,
-          totalCost: 4,
-          inputCost: 4,
-          usageReport: unavailable,
-        }),
+        day(later, { input: 3, totalTokens: 3, totalCost: 4, inputCost: 4 }),
         day(earlier, { totalTokens: 5, totalCost: 6 }),
       ],
-      dailyModelUsage: [
-        { ...modelDay(later, "one", 0, 0, 0, "fixture"), usageReport: unavailable },
-        modelDay(later, "one", 3, 4, 2, "fixture"),
-      ],
+      dailyModelUsage: [modelDay(later, "one", 3, 4, 2, "fixture")],
     },
     {
       latency: slow,
@@ -497,15 +540,7 @@ it("merges daily buckets, retains incomplete subtotals and weights latency", () 
   ]);
   expect(aggregates.daily).toEqual([
     { date: earlier, tokens: 5, cost: 6, messages: 0, toolCalls: 0, errors: 0 },
-    {
-      date: later,
-      tokens: 10,
-      cost: 12,
-      messages: 9,
-      toolCalls: 2,
-      errors: 1,
-      usageReport: unavailable,
-    },
+    { date: later, tokens: 10, cost: 12, messages: 9, toolCalls: 2, errors: 1 },
   ]);
   expect(aggregates.costDaily).toEqual([
     { date: earlier, ...usage({ totalTokens: 5, totalCost: 6 }) },
@@ -515,26 +550,33 @@ it("merges daily buckets, retains incomplete subtotals and weights latency", () 
         { input: 3, inputCost: 4 },
         { cacheRead: 7, cacheReadCost: 8 },
         { totalTokens: 10, totalCost: 12 },
-        { usageReport: unavailable },
       ),
     },
   ]);
-  expect(aggregates.modelDaily).toEqual([
-    modelDay(earlier, "one", 5, 6, 1, "fixture"),
-    modelDay(later, "two", 7, 8, 1, "fixture"),
-    { ...modelDay(later, "one", 3, 4, 2, "fixture"), usageReport: unavailable },
+  expect(aggregates.modelDaily?.map(({ date, model }) => [date, model])).toEqual([
+    [earlier, "one"],
+    [later, "two"],
+    [later, "one"],
   ]);
 });
 
 it("keeps empty reports and zero-count latency free of nonfinite values", () => {
   const accumulator = createUsageAggregateAccumulator();
   accumulator.add({ usage: null });
-  expect(accumulator.finish()).toMatchObject({
+  expect(accumulator.finish()).toEqual({
     sessionCount: 0,
     messages: zeroMessages,
     tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+    byModel: [],
+    byProvider: [],
+    byAgent: [],
+    byChannel: [],
+    byCreator: [],
+    costDaily: [],
     latency: undefined,
     dailyLatency: [],
+    modelDaily: [],
+    daily: [],
   });
   accumulator.add({
     usage: usage({

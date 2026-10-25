@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -60,15 +60,22 @@ export async function createNativeTalkCall(
 
 export function registerNativeConsultExactControlTests(harness: NativeControlHarness) {
   const cancel = { text: "cancel", mode: "cancel" };
-  it.each([
-    ["browser-rpc", "other call", true],
-    ["browser-provider", "other call", false],
-    ["browser-provider", "same call", true],
-    ["relay", "other call", false],
-    ["relay", "foreign global", true],
-  ] as const)(
-    "native %s keeps %s control within its declared scope",
-    async (surface, replacement, cancelsOriginal) => {
+  const success = async (
+    method: string,
+    params: Record<string, unknown>,
+    expected: unknown = expect.any(Object),
+  ) => {
+    const respond = await harness.dispatch(method, params);
+    expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+    return respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+  };
+  const commonReplacements = ["replaced run", "reused run ID", "other call"];
+  describe.each([
+    ["browser-rpc", commonReplacements],
+    ["browser-provider", [...commonReplacements, "same call"]],
+    ["relay", ["foreign global", ...commonReplacements]],
+  ] as const)("native %s exact control", (surface, replacements) => {
+    it.each(replacements)("keeps %s control within its declared scope", async (replacement) => {
       const answer = "Synthetic consult answer";
       harness.getConfig().session = { scope: "global" };
       const started = createDeferredCore<RunEmbeddedAgentParams>();
@@ -99,6 +106,10 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
       const result = await createNativeTalkCall(harness.dispatch, browser);
       const voiceId = result.voiceSessionId ?? result.sessionId!;
       let controlSessionId = result.sessionId;
+      const cancelsOriginal =
+        replacement === "foreign global" ||
+        replacement === "same call" ||
+        (replacement === "other call" && surface === "browser-rpc");
       const consult = harness.getCallback()({ prompt: "Keep working" });
       let foreignOperation: ReturnType<typeof createReplyOperation> | undefined;
       try {
@@ -123,26 +134,33 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           );
           controlSessionId = call.sessionId;
         } else {
-          foreignOperation = createReplyOperation({
-            sessionKey: "global",
-            sessionId: "other-agent-session",
-            agentId: "primary",
-            resetTriggered: false,
-            target: captureSessionTarget({
-              storeScope: (
-                await prepareTalkSessionTarget(harness.getConfig(), "agent:primary:main")
-              ).storePath,
+          if (replacement !== "replaced run") {
+            const foreignTarget = await prepareTalkSessionTarget(
+              harness.getConfig(),
+              "agent:primary:main",
+            );
+            foreignOperation = createReplyOperation({
               sessionKey: "global",
-              incarnation: "other-agent-session",
+              sessionId: "other-agent-session",
               agentId: "primary",
-            }),
-          });
+              resetTriggered: false,
+              target: captureSessionTarget({
+                storeScope: foreignTarget.storePath,
+                sessionKey: "global",
+                incarnation: "other-agent-session",
+                agentId: "primary",
+              }),
+            });
+          }
           setActiveEmbeddedRun(
-            "other-agent-session",
-            createEmbeddedRunHandle({ runId: "other-run", abort: abortOther }),
+            replacement === "replaced run" ? active.sessionId : "other-agent-session",
+            createEmbeddedRunHandle({
+              runId: replacement === "reused run ID" ? active.runId : "other-run",
+              abort: abortOther,
+            }),
             "global",
             undefined,
-            "primary",
+            foreignOperation ? "primary" : "voice",
             foreignOperation,
           );
         }
@@ -156,7 +174,6 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
           undefined,
           expect.objectContaining({ code: "INVALID_REQUEST" }),
         );
-        const controlResult = expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" });
         if (surface === "browser-provider") {
           harness.getBrowserControl().onToolCall?.({
             callId: "control",
@@ -165,18 +182,21 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
             args: { ...cancel },
           });
           await vi.waitFor(() =>
-            expect(harness.submitProviderResult).toHaveBeenCalledWith("control", controlResult),
+            expect(harness.submitProviderResult).toHaveBeenCalledWith(
+              "control",
+              expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
+            ),
           );
         } else {
-          const respond = await harness.dispatch(
+          await success(
             browser ? "talk.client.steer" : "talk.session.steer",
             {
               ...(browser ? {} : { sessionId: controlSessionId }),
               sessionKey: "main",
               ...cancel,
             },
+            expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
           );
-          expect(respond).toHaveBeenCalledWith(true, controlResult, undefined);
         }
         expect(abortOwned).toHaveBeenCalledTimes(cancelsOriginal ? 1 : 0);
         expect(abortOther).not.toHaveBeenCalled();
@@ -192,6 +212,6 @@ export function registerNativeConsultExactControlTests(harness: NativeControlHar
         await Promise.allSettled([consult]);
         foreignOperation?.complete();
       }
-    },
-  );
+    });
+  });
 }

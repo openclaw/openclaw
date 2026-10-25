@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ModelProviderConfig } from "../../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import {
@@ -13,6 +14,17 @@ import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./mater
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 const plan = createSubscriptionPlan();
+const routeModel = (
+  id: string,
+  api: NonNullable<ModelProviderConfig["api"]>,
+  baseUrl: string,
+  provider = "openai",
+) => ({
+  provider,
+  id,
+  api,
+  baseUrl,
+});
 
 type MaterializeParams<M extends RuntimeRouteModel> = Parameters<
   typeof materializePreparedRuntimeModel<M>
@@ -34,17 +46,21 @@ function apiPlan(
     ...plan,
     selectedAuthMode: "api-key",
     ...overrides,
-    modelRoute: { ...platformRoute, modelId, baseUrl },
+    modelRoute: {
+      ...platformRoute,
+      modelId,
+      baseUrl,
+    },
   };
 }
 
 describe("materializePreparedRuntimeModel", () => {
-  const retired = {
-    ...subscriptionModel,
-    id: "gpt-retirement-fixture",
-    baseUrl: "https://subscription.example/v1",
-  };
-  const apiSibling = { ...platformModel, id: retired.id, baseUrl: "https://api.example/v1" };
+  const retired = routeModel(
+    "gpt-retirement-fixture",
+    "openai-chatgpt-responses",
+    "https://subscription.example/v1",
+  );
+  const apiSibling = routeModel(retired.id, "openai-responses", "https://api.example/v1");
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
@@ -64,52 +80,64 @@ describe("materializePreparedRuntimeModel", () => {
       },
     ],
   });
-  const retiredPlan = createSubscriptionPlan({
-    modelRoute: { ...plan.modelRoute!, modelId: retired.id, baseUrl: retired.baseUrl },
-  });
-  it.each([
-    ["matching", retiredPlan, retired],
-    ["resolved", retiredPlan, undefined],
-    ["route-less", { providerForAuth: "openai", authProfileProviderForAuth: "openai" }, retired],
-    ["api-sibling", apiPlan(retired.id, {}, apiSibling.baseUrl), retired],
-  ] as const)("validates retirement on the final %s route", async (mode, authPlan, model) => {
-    const final = mode === "api-sibling" ? apiSibling : retired;
-    const result = expectModel({
-      plan: authPlan,
-      modelId: retired.id,
-      config: configFor("openai", retired.baseUrl, { api: retired.api }),
-      metadataSnapshot,
-      model,
-      resolveModel: async () => ({ model: final }),
-    });
-    if (mode === "api-sibling") {
-      await result.resolves.toBe(apiSibling);
-    } else {
-      await result.rejects.toMatchObject({
-        reason: "model_not_found",
-        message: expect.stringContaining("openclaw doctor --fix"),
+  it.each(["matching", "resolved", "route-less", "api-sibling"] as const)(
+    "validates retirement on the final %s route",
+    async (mode) => {
+      const final = mode === "api-sibling" ? apiSibling : retired;
+      const resolveModel = vi.fn(async () => ({ model: final }));
+      const configured = mode === "route-less" || mode === "api-sibling" ? retired : apiSibling;
+      const result = expectModel({
+        plan:
+          mode === "route-less"
+            ? { providerForAuth: "openai", authProfileProviderForAuth: "openai" }
+            : mode === "api-sibling"
+              ? apiPlan(retired.id, {}, apiSibling.baseUrl)
+              : {
+                  ...plan,
+                  modelRoute: {
+                    ...plan.modelRoute!,
+                    modelId: retired.id,
+                    baseUrl: retired.baseUrl,
+                  },
+                },
+        modelId: retired.id,
+        config: configFor("openai", configured.baseUrl, { api: configured.api }),
+        metadataSnapshot,
+        ...(mode === "resolved" ? {} : { model: retired }),
+        resolveModel,
       });
-    }
-  });
+      if (mode === "api-sibling") {
+        await result.resolves.toBe(apiSibling);
+      } else {
+        await result.rejects.toMatchObject({
+          reason: "model_not_found",
+          message: expect.stringContaining("openclaw doctor --fix"),
+        });
+      }
+      expect(resolveModel).toHaveBeenCalledTimes(
+        mode === "resolved" || mode === "api-sibling" ? 1 : 0,
+      );
+    },
+  );
 
   it.each([true, false])("re-resolves profile-scoped metadata (routed: %s)", async (routed) => {
     const model = routed
       ? subscriptionModel
+      : routeModel(
+          "private-model",
+          "anthropic-messages",
+          "https://router.example.test",
+          "clawrouter",
+        );
+    const authPlan: AgentRuntimeAuthPlan = routed
+      ? { ...plan, forwardedAuthProfileId: "openai:backup" }
       : {
-          ...platformModel,
-          id: "private-model",
-          api: "anthropic-messages" as const,
-          baseUrl: "https://router.example.test",
-          provider: "clawrouter",
+          providerForAuth: "clawrouter",
+          authProfileProviderForAuth: "clawrouter",
+          modelId: model.id,
+          forwardedAuthProfileId: "clawrouter:backup",
+          selectedAuthMode: "api-key",
         };
-    const authPlan = createSubscriptionPlan({
-      providerForAuth: model.provider,
-      authProfileProviderForAuth: model.provider,
-      modelId: model.id,
-      modelRoute: routed ? plan.modelRoute : undefined,
-      forwardedAuthProfileId: `${model.provider}:backup`,
-      selectedAuthMode: routed ? "token" : "api-key",
-    });
     const rematerialized = { ...model, name: "backup-profile-model" };
     const resolveModel = vi.fn(async () => ({ model: rematerialized }));
     await expectModel({
@@ -117,6 +145,7 @@ describe("materializePreparedRuntimeModel", () => {
       modelId: model.id,
       plan: authPlan,
       model,
+      ...(routed ? {} : { config: {} }),
       forceResolve: true,
       resolveModel,
     }).resolves.toBe(rematerialized);
@@ -137,7 +166,12 @@ describe("materializePreparedRuntimeModel", () => {
     const resolveModel = vi.fn<MaterializeParams<typeof subscriptionModel>["resolveModel"]>(
       async () => ({ model: subscriptionModel }),
     );
-    await expectModel({ config: {}, model, resolveModel }).resolves.toBe(subscriptionModel);
+    await expectModel({
+      config: { models: { providers: {} } },
+      model,
+      resolveModel,
+    }).resolves.toBe(subscriptionModel);
+    expect(resolveModel).toHaveBeenCalledOnce();
     const request = resolveModel.mock.calls[0]?.[0];
     expect(request).toMatchObject({
       authProfileId: "openai:subscription",
@@ -149,40 +183,41 @@ describe("materializePreparedRuntimeModel", () => {
     });
   });
 
-  it("rejects caller metadata on the wrong API transport", async () => {
-    const modelId = "gpt-5.4-nano";
-    const resolveModel = vi.fn();
-    await expectModel({
-      plan: apiPlan(modelId, { forwardedAuthProfileId: "openai:key", selectedAuthMode: "api_key" }),
-      modelId,
-      model: {
-        ...platformModel,
-        id: modelId,
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com",
-      },
-      resolveModel,
-      rejectMismatchedModel: true,
-    }).rejects.toThrow("does not match its prepared api-key route");
-    expect(resolveModel).not.toHaveBeenCalled();
-  });
-
-  it("accepts a canonical API model alias without rediscovery", async () => {
-    const model = { ...platformModel, id: "gpt-5.4" };
-    const resolveModel = vi.fn();
-    await expectModel({
-      plan: apiPlan("gpt-5.4-codex"),
-      modelId: "gpt-5.4-codex",
-      model,
-      resolveModel,
-    }).resolves.toBe(model);
-    expect(resolveModel).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      modelId: "gpt-5.4-nano",
+      model: routeModel("gpt-5.4-nano", "openai-completions", "https://api.openai.com"),
+      rejected: true,
+    },
+    { modelId: "gpt-5.4-codex", model: { ...platformModel, id: "gpt-5.4" }, rejected: false },
+  ])(
+    "validates the final API tuple for $modelId (rejected: $rejected)",
+    async ({ modelId, model, rejected }) => {
+      const resolveModel = vi.fn();
+      const result = expectModel({
+        plan: apiPlan(
+          modelId,
+          rejected ? { forwardedAuthProfileId: "openai:key", selectedAuthMode: "api_key" } : {},
+        ),
+        modelId,
+        model,
+        resolveModel,
+        rejectMismatchedModel: rejected,
+      });
+      if (rejected) {
+        await result.rejects.toThrow("does not match its prepared api-key route");
+      } else {
+        await result.resolves.toBe(model);
+      }
+      expect(resolveModel).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects mismatched targets and mismatched resolved tuples", async () => {
-    await expectModel({ modelId: "gpt-5.6", resolveModel: vi.fn() }).rejects.toThrow(
-      /does not match target/u,
-    );
+    await expectModel({
+      modelId: "gpt-5.6",
+      resolveModel: vi.fn(),
+    }).rejects.toThrow(/does not match target/u);
 
     await expectModel({
       resolveModel: vi.fn(async () => ({ model: platformModel })),
@@ -191,7 +226,11 @@ describe("materializePreparedRuntimeModel", () => {
 });
 
 describe("generation route-model memo", () => {
-  const routedModel = subscriptionModel;
+  const routedModel = routeModel(
+    "gpt-5.5",
+    "openai-chatgpt-responses",
+    "https://chatgpt.com/backend-api/codex",
+  );
   type Resolution = { model?: typeof routedModel | null; error?: string };
   let memo: Map<string, Promise<typeof routedModel>>;
   const resolveModel = vi.fn<() => Promise<Resolution>>();
@@ -270,20 +309,21 @@ describe("generation route-model memo", () => {
       if (nativeModelOwned) {
         await materialize();
       }
-      for (const base of [{ ...routedModel }, { ...routedModel }]) {
-        await expect(
-          materialize(
-            nativeModelOwned
-              ? {}
-              : { forwardedAuthProfileId: undefined, selectedAuthMode: undefined },
-            {
-              getModel: () => base,
-              nativeModelOwned,
-              providerUsesProfileScopedModelMetadata: nativeModelOwned,
-            },
-          ),
-        ).resolves.toBe(base);
-      }
+      const baseA = { ...routedModel };
+      const baseB = { ...routedModel };
+      const resolveBase = (base: typeof routedModel) =>
+        materialize(
+          nativeModelOwned
+            ? {}
+            : { forwardedAuthProfileId: undefined, selectedAuthMode: undefined },
+          {
+            getModel: () => base,
+            nativeModelOwned,
+            providerUsesProfileScopedModelMetadata: nativeModelOwned,
+          },
+        );
+      await expect(resolveBase(baseA)).resolves.toBe(baseA);
+      await expect(resolveBase(baseB)).resolves.toBe(baseB);
       expect(resolveModel).toHaveBeenCalledTimes(nativeModelOwned ? 1 : 0);
       expect(memo.size).toBe(nativeModelOwned ? 1 : 0);
     },

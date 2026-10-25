@@ -7,12 +7,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
@@ -45,7 +42,9 @@ import {
   browserSession,
   createDelegatedBrowserProviderFixture,
   type BrowserRequest,
+  observeTalkVoiceChangeRequest,
 } from "./client-fixtures.test-support.js";
+import { talkVoiceHandlers } from "./voice.js";
 
 export type EnsureHarness = {
   tempDir: () => string;
@@ -98,46 +97,83 @@ export function browserAuthority(
   };
 }
 
-function observeTargetSql(targetPath: string, pattern: RegExp) {
+export function createBrowserHarness(
+  harness: Pick<EnsureHarness, "configureProvider" | "invokeCreate">,
+  params: Record<string, unknown>,
+  provider: (request: BrowserRequest) => Promise<typeof browserSession> = async () =>
+    browserSession,
+) {
+  const createBrowserSession = vi.fn(provider);
+  const fixture = harness.configureProvider(createBrowserSession);
+  const respond = vi.fn();
+  return {
+    ...fixture,
+    respond,
+    createBrowserSession,
+    get reply() {
+      return respond.mock.lastCall;
+    },
+    create: (
+      overrides: Record<string, unknown> = {},
+      options: Partial<GatewayRequestHandlerOptions> = {},
+    ) =>
+      harness.invokeCreate({
+        params: { ...params, ...overrides },
+        respond,
+        context: fixture.context,
+        client: fixture.client,
+        ...options,
+      } as never),
+  };
+}
+
+function observeTargetSql(targetPath: string, pattern: RegExp, enabled = () => true) {
   const targets = new Set([targetPath, readDatabasePathIdentitySync(targetPath).canonicalPath]);
   const queries: string[] = [];
   const observed = observeHostDataSql((sql, database) => {
-    if (database && targets.has(database.location() ?? "") && pattern.test(sql)) {
+    if (database && targets.has(database.location() ?? "") && enabled() && pattern.test(sql)) {
       queries.push(sql);
     }
   });
   return { ...observed, allQueries: observed.queries, queries };
 }
 
+export function requestBrowserVoiceChange(
+  fixture: Pick<ReturnType<typeof createDelegatedBrowserProviderFixture>, "context" | "client">,
+  voiceSessionId: string | undefined,
+  prepare = (options: GatewayRequestHandlerOptions) => options,
+) {
+  const wait = observeTalkVoiceChangeRequest(fixture.context.broadcastToConnIds);
+  const change = Promise.resolve(
+    talkVoiceHandlers["talk.voice.set"]!(
+      prepare({
+        req: { type: "req", id: "voice-change", method: "talk.voice.set", params: {} },
+        params: { voiceSessionId, voice: "ember" },
+        respond: vi.fn(),
+        context: fixture.context,
+        client: fixture.client,
+        isWebchatConnect: () => false,
+      } as never),
+    ),
+  );
+  const requested = wait(change).then(() => {
+    const changeId = fixture.context.broadcastToConnIds.mock.calls.find(
+      ([event]) => event === "talk.voice.change",
+    )?.[1]?.changeId;
+    expect(changeId).toBeTypeOf("string");
+    return changeId;
+  });
+  return { change, requested };
+}
+
 export function registerClientCreateEnsureTests(harness: EnsureHarness) {
   const file = (name: string) => path.join(harness.tempDir(), name);
-  const browser = (sessionKey: string, voiceSessionId?: string) => {
-    const fixture = harness.configureProvider(vi.fn(async () => browserSession));
-    const respond = vi.fn();
-    return {
-      ...fixture,
-      respond,
-      get reply() {
-        return respond.mock.lastCall;
-      },
-      create: (
-        overrides: Record<string, unknown> = {},
-        options: Partial<GatewayRequestHandlerOptions> = {},
-      ) =>
-        harness.invokeCreate({
-          params: {
-            sessionKey,
-            provider: "openai",
-            ...(voiceSessionId ? { voiceSessionId } : {}),
-            ...overrides,
-          },
-          respond,
-          context: fixture.context,
-          client: fixture.client,
-          ...options,
-        } as never),
-    };
-  };
+  const browser = (key: string, voiceSessionId?: string) =>
+    createBrowserHarness(harness, {
+      sessionKey: key,
+      provider: "openai",
+      ...(voiceSessionId ? { voiceSessionId } : {}),
+    });
   const setStore = (fixture: ReturnType<typeof browser>, storePath: string) => {
     const cfg = fixture.context.getRuntimeConfig();
     fixture.context.getRuntimeConfig = () => ({ ...cfg, session: { store: storePath } });
@@ -211,16 +247,6 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const resume = createDeferred();
       const prepare = sharingGrants.prepareSessionSharingWorkerGrant;
       const ensure = voiceWriters.ensureClientVoiceAgentSessionEntry;
-      const interceptGrant: typeof prepare = async (params) => {
-        const grant = await prepare(params);
-        if (!entryChange) {
-          mutate();
-        } else if (params.transactionSource) {
-          prepared.resolve();
-          await resume.promise;
-        }
-        return grant;
-      };
       const interception =
         phase === "publication"
           ? vi
@@ -237,18 +263,33 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           : (() => {
               const spy = vi.spyOn(sharingGrants, "prepareSessionSharingWorkerGrant");
               return spy[entryChange ? "mockImplementation" : "mockImplementationOnce"](
-                interceptGrant,
+                async (params) => {
+                  const grant = await prepare(params);
+                  if (entryChange) {
+                    if (params.transactionSource) {
+                      prepared.resolve();
+                      await resume.promise;
+                    }
+                  } else {
+                    mutate();
+                  }
+                  return grant;
+                },
               );
             })();
       const pending = fixture.create();
       try {
         if (entryChange) {
           await withinTest(
-            awaitGateBeforeSettlement(
+            Promise.race([
               prepared.promise,
-              pending,
-              "Creation finished before its authority wait",
-            ),
+              pending.then(() => {
+                throw new Error(
+                  "Creation finished before its authority wait: " +
+                    (fixture.reply?.[2]?.message ?? "no error response"),
+                );
+              }),
+            ]),
             signal,
           );
           mutate();
@@ -295,7 +336,11 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
       const creation = {
         createdVia: "internal" as const,
         createdAt: 7,
-        createdActor: { type: "human", source: "profile", id: "original-creator" } as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "original-creator",
+        },
         sandbox: "required" as const,
       };
       if (idless) {
@@ -309,6 +354,14 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
         expect(existsSync(storePath)).toBe(false);
         setStore(fixture, storePath);
       }
+      let entryTransactions = 0;
+      harness.observeAdmission((request, run) => {
+        const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+        if (isRecord(publication) && publication.kind === "session-entry-patch-validated") {
+          entryTransactions += 1;
+        }
+        run();
+      });
       const entryPath = storePath
         ? resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path
         : resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -329,6 +382,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           ),
         ).toEqual([]);
         expect(hostSql.queries).toEqual([]);
+        expect(entryTransactions).toBe(1);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
         expect(entry?.sessionId).toBeTruthy();
         if (idless) {
@@ -339,6 +393,7 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
           status: "open",
         });
       } finally {
+        harness.observeAdmission(undefined);
         hostSql.restore();
       }
     },
@@ -347,12 +402,18 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
   it("keeps the committed chat when the following voice admission refuses", async () => {
     const key = "agent:main:ensure-before-voice-refusal";
     const voiceSessionId = "closed-before-ensure";
-    const target = { agentId: "main", sessionKey: key, voiceSessionId };
     await voiceSessions.createOrResumeClientVoiceSession({
-      ...target,
+      agentId: "main",
+      sessionKey: key,
+      voiceSessionId,
       origin: "client",
     });
-    await voiceSessions.closeClientVoiceSession({ ...target, config: {} });
+    await voiceSessions.closeClientVoiceSession({
+      agentId: "main",
+      sessionKey: key,
+      voiceSessionId,
+      config: {},
+    });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toBeUndefined();
     const fixture = browser(key, voiceSessionId);
     await fixture.create();

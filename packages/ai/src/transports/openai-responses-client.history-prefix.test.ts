@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import type { Context } from "@openclaw/llm-core";
+import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import {
+  assertStableProviderPrefix,
+  snapshotProviderPrefix,
+} from "../../../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { sanitizeTranscriptMessage } from "../../../../src/agents/transcript-sanitize.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
-import {
-  createModel,
-  inputMessage,
-  outputMessage,
-  sseResponse,
-} from "./openai-responses-prompt-observer.test-support.js";
+import { createModel, outputMessage } from "./openai-responses-prompt-observer.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
@@ -37,54 +39,122 @@ function thinking(id: string, encrypted_content: string | null | undefined) {
   return { type: "thinking", thinking: "", thinkingSignature: JSON.stringify(signature) };
 }
 
-it("replays terminal reasoning bytes after warm continuation and a persisted restart", async () => {
+it("preserves terminal reasoning bytes from warm continuation through cold transcript replay", async () => {
   const sessionId = "reasoning-container-prefix";
-  const context: Context = { messages: [userMessage("First turn.", 1)] };
+  const context: Context = {
+    systemPrompt: "Stable instructions.",
+    messages: [userMessage("Synthetic runtime context.", 0)],
+    tools: [
+      { name: "cache_probe", description: "Synthetic probe", parameters: { type: "object" } },
+    ],
+  };
   const host = getAiTransportHost();
   const requests: Record<string, unknown>[] = [];
+  const prefixes: ReturnType<typeof snapshotProviderPrefix>[] = [];
+  const history = new Map<string, unknown[]>();
   configureAiTransportHost({
     ...host,
     buildModelFetch: () => async (input, init) => {
-      requests.push(await new Request(input, init).json());
-      const turn = requests.length;
-      const reasoning = reasoningItem(`rs_${turn}`, `encrypted_${turn}`);
-      return sseResponse([
-        outputItem("done", { ...reasoning, encrypted_content: "partial-ciphertext" }),
-        completedResponse(`response_${turn}`, [reasoning, outputMessage("Answer.", `msg_${turn}`)]),
-      ]);
+      const payload: unknown = await new Request(input, init).json();
+      assert(isRecord(payload) && Array.isArray(payload.input));
+      const inherited =
+        typeof payload.previous_response_id === "string"
+          ? history.get(payload.previous_response_id)
+          : [];
+      assert(inherited);
+      const effectiveInput = [...inherited, ...payload.input];
+      requests.push(payload);
+      // Match the release gate: ignore provider message/call envelopes, not reasoning fields.
+      const comparable = effectiveInput.map((item) => {
+        if (
+          !isRecord(item) ||
+          (item.type !== "function_call" && !(item.type === "message" && item.role === "assistant"))
+        ) {
+          return item;
+        }
+        const { id: _id, status: _status, ...rest } = item;
+        return rest;
+      });
+      prefixes.push(
+        snapshotProviderPrefix(
+          "openai-responses",
+          JSON.parse(stableStringify({ ...payload, input: comparable })),
+        ),
+      );
+      const id = `response_${requests.length}`;
+      const output = [
+        reasoningItem(`rs_${id}`, `encrypted_${id}`),
+        requests.length % 3 !== 0
+          ? wireCall(id, "cache_probe")
+          : outputMessage("Synthetic answer.", `msg_${id}`),
+      ];
+      history.set(id, [...effectiveInput, ...output]);
+      const events = [
+        ...output.flatMap((item, output_index) => [
+          outputItem("added", item, output_index),
+          outputItem(
+            "done",
+            item.type === "reasoning" ? { ...item, encrypted_content: `streamed_${id}_` } : item,
+            output_index,
+          ),
+        ]),
+        completedResponse(id, output, {
+          usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+        }),
+      ];
+      return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
     },
   });
   try {
     const stream = createOpenAIResponsesTransportStreamFn();
-    for (const turn of [1, 2, 3]) {
+    for (let turn = 1; turn <= 4; turn++) {
       if (turn === 3) {
+        context.messages.push(userMessage("Updated instructions.", 3));
+      }
+      if (turn === 4) {
         cleanupSessionResources(sessionId);
-        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise persisted JSON transcript replay.
-        context.messages = JSON.parse(
-          JSON.stringify(context.messages.map((message) => sanitizeTranscriptMessage(message))),
+        const persistedTranscript = JSON.stringify(
+          context.messages.map((message) => sanitizeTranscriptMessage(message)),
         );
+        context.messages = JSON.parse(persistedTranscript);
       }
-      if (turn > 1) {
-        context.messages.push(userMessage(`Turn ${turn}.`, turn));
+      context.messages.push(userMessage(`Before hook.\nVisible turn ${turn}.\nAfter hook.`, turn));
+      for (let step = 0; step < 3; step++) {
+        const response = await stream(model, context, {
+          apiKey: "synthetic-prefix-key",
+          sessionId,
+          transport: "sse",
+        });
+        const assistant = await response.result();
+        expect(assistant.errorMessage).toBeUndefined();
+        context.messages.push(assistant);
+        const call = assistant.content.find((block) => block.type === "toolCall");
+        expect(assistant.stopReason).toBe(step < 2 ? "toolUse" : "stop");
+        if (call) {
+          context.messages.push(
+            makeTextToolResult(call.id, call.name, "Synthetic record.", false, turn),
+          );
+        }
       }
-      const pending = stream(model, context, {
-        apiKey: "synthetic-prefix-key",
-        sessionId,
-        transport: "sse",
-      });
-      const result = await (await pending).result();
-      expect(result.stopReason).toBe("stop");
-      context.messages.push(result);
     }
-    expect(requests[1]?.previous_response_id).toBe("response_1");
-    expect(requests[1]?.input).toEqual([inputMessage("Turn 2.")]);
-    expect(requests[2]?.previous_response_id).toBeUndefined();
-    const coldInput = requests[2]?.input;
-    assert(Array.isArray(coldInput));
-    expect(coldInput.filter((item) => item.type === "reasoning")).toEqual([
-      reasoningItem("rs_1", "encrypted_1"),
-      reasoningItem("rs_2", "encrypted_2"),
-    ]);
+    expect(requests).toHaveLength(12);
+    expect(requests[8]?.previous_response_id).toBe("response_8");
+    expect(requests[9]?.previous_response_id).toBeUndefined();
+    for (let index = 1; index < prefixes.length; index++) {
+      const previous = prefixes[index - 1];
+      const next = prefixes[index];
+      assert(previous && next);
+      assertStableProviderPrefix(previous, next, {
+        label: `request ${index + 1}`,
+      });
+    }
+    const reopenedReasoning = prefixes[9]?.history[2];
+    assert(reopenedReasoning);
+    expect(JSON.parse(reopenedReasoning)).toEqual(
+      reasoningItem("rs_response_1", "encrypted_response_1"),
+    );
   } finally {
     configureAiTransportHost(host);
     cleanupSessionResources(sessionId);
@@ -146,9 +216,8 @@ it.each<{ ending: string; encryptedContent?: string | null }>([
             assert(transcript.role === "assistant");
             snapshots.push({
               terminalSeen,
-              id: event.toolCall.id,
-              async: event.toolCall.async,
-              content: transcript.content,
+              toolCall: structuredClone(event.toolCall),
+              transcript,
             });
           }
         },
@@ -172,12 +241,19 @@ it.each<{ ending: string; encryptedContent?: string | null }>([
     expect(snapshots).toEqual(
       ids.map((id) => ({
         terminalSeen: completed,
-        id: `call_${id}|fc_${id}`,
-        async: true,
-        content: [
-          thinking(reasoningId, completed ? encryptedContent : ciphertext),
-          ...ids.map((callId) => expect.objectContaining({ id: `call_${callId}|fc_${callId}` })),
-        ],
+        toolCall: {
+          type: "toolCall",
+          id: `call_${id}|fc_${id}`,
+          name: "cache_probe",
+          arguments: completed ? {} : { index: Number(id) },
+          async: true,
+        },
+        transcript: expect.objectContaining({
+          content: [
+            thinking(reasoningId, completed ? encryptedContent : ciphertext),
+            ...ids.map((callId) => expect.objectContaining({ id: `call_${callId}|fc_${callId}` })),
+          ],
+        }),
       })),
     );
   },

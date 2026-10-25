@@ -51,10 +51,9 @@ const adaptiveFields = (effort: string) => ({
   output_config: { effort },
 });
 
-function findToolUse(input: Awaited<ReturnType<typeof capturePayload>>) {
-  return input.messages?.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
+const findToolUse = (input: Awaited<ReturnType<typeof capturePayload>>) =>
+  input.messages?.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
     ?.toolUse;
-}
 
 const claudeModel = (id: string, overrides: Parameters<typeof bedrockModel>[0] = {}) =>
   bedrockModel({ id, name: id, contextWindow: 1_000_000, maxTokens: 128_000, ...overrides });
@@ -158,11 +157,13 @@ it("drops model-bound opaque reasoning when switching between Claude models", as
 it("coalesces tool results while replacing audio and dropping empty image husks", async () => {
   const input = await capturePayload(bedrockModel({ input: ["text", "image"] }), {
     messages: [
-      toolResult(
-        "call_audio",
-        [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
-        "listen",
-      ),
+      {
+        role: "toolResult",
+        toolCallId: "call_audio",
+        toolName: "listen",
+        isError: false,
+        content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
+      },
       toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
       toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
     ],

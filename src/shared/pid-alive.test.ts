@@ -98,7 +98,9 @@ it.each([
         throw new Error("no proc status");
       }),
   });
-  withMockedPlatform("linux", () => expect(liveness(42)).toEqual([alive, dead]));
+  withMockedPlatform("linux", () => {
+    expect(liveness(42)).toEqual([alive, dead]);
+  });
 });
 
 it("confirms exit when procfs disappears after the initial existence probe", () => {

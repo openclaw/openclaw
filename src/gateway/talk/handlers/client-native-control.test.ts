@@ -8,6 +8,7 @@ import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/ru
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
+import { getRpcSourceIdentity } from "../../../sessions/session-controller.rpc-sources.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -74,6 +75,30 @@ function holdWorkspacePreparation() {
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
 
+  it("dispatches each subscription delegation once and accepts fresh IDs", async () => {
+    upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Replay completed."));
+    await withNativePlugin(
+      async (fixture) => {
+        const { socket } = await connectNativeSession(fixture);
+        const complete = (id: string) =>
+          socket.waitForSent(
+            (frame) =>
+              frame.includes(`"delegation_item_id":"${id}"`) && frame.includes("Replay completed."),
+          );
+        socket.serverEvent(nativeDelegation("first", "Carry out the action."));
+        await complete("first");
+        await settleNativeBackend(() => {});
+        socket.serverEvent(nativeDelegation("first", "Carry out the action."));
+        await settleNativeBackend(() => {});
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        socket.serverEvent(nativeDelegation("fresh", "Carry out the action."));
+        await complete("fresh");
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      },
+      { model: "gpt-live-1-codex" },
+    );
+  });
+
   it("consults after the voice offer work scope closes while the session stays open", async () => {
     const observedSignal = createDeferredCore<AbortSignal | undefined>();
     upstream.runEmbeddedAgent.mockImplementation(async (params) => {
@@ -99,6 +124,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       await vi.waitFor(() =>
         expect(socket.sent.join("\n")).toContain("Consult completed after voice setup."),
       );
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });
   });
 
@@ -250,13 +276,12 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     async (control, eventOrder, settlement) => {
       const model = buildMockOpenAiResponsesProvider("https://native-model.example.invalid/v1");
       const requested = createDeferredCore();
-      const runnerFinished = createDeferredCore();
-      const waitFor = (ready: PromiseLike<unknown>) =>
-        awaitGateBeforeSettlement(
-          ready,
-          runnerFinished.promise,
-          "Native consultation settled before readiness",
-        );
+      const runnerFinished = createDeferredCore<{ error?: unknown }>();
+      const settledBeforeReadiness = runnerFinished.promise.then(({ error }) => {
+        throw new Error("Native consultation settled before the expected readiness phase", {
+          cause: error,
+        });
+      });
       const finishModel = createDeferredCore();
       const nativeFetch = upstream.fetch.getMockImplementation()!;
       let modelRequests = 0;
@@ -300,26 +325,34 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           let closed = false;
           const body = new ReadableStream<Uint8Array>({
             start(stream) {
-              const send = (event: unknown) => stream.enqueue(encode(event));
-              send(events[0]);
+              stream.enqueue(encode(events[0]));
               if (settlement === "partial") {
-                const part = { item_id: item.id, output_index: 0, content_index: 0 };
-                send({
-                  type: "response.content_part.added",
-                  ...part,
-                  part: { type: "output_text", text: "", annotations: [] },
-                });
-                send({
-                  type: "response.output_text.delta",
-                  ...part,
-                  delta: "Cancelled partial output.",
-                });
+                stream.enqueue(
+                  encode({
+                    type: "response.content_part.added",
+                    item_id: item.id,
+                    output_index: 0,
+                    content_index: 0,
+                    part: { type: "output_text", text: "", annotations: [] },
+                  }),
+                );
+                stream.enqueue(
+                  encode({
+                    type: "response.output_text.delta",
+                    item_id: item.id,
+                    output_index: 0,
+                    content_index: 0,
+                    delta: "Cancelled partial output.",
+                  }),
+                );
               }
               requested.resolve();
               void racePromiseWithAbortSignal(finishModel.promise, init?.signal ?? undefined).then(
                 () => {
                   if (!closed) {
-                    events.slice(1).forEach(send);
+                    for (const event of events.slice(1)) {
+                      stream.enqueue(encode(event));
+                    }
                     stream.close();
                   }
                 },
@@ -345,51 +378,70 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       const actualRunner = await vi.importActual<
         typeof import("../../../agents/embedded-agent.js")
       >("../../../agents/embedded-agent.js");
-      upstream.runEmbeddedAgent.mockImplementation((params) =>
-        actualRunner.runEmbeddedAgent(params).finally(runnerFinished.resolve),
-      );
+      upstream.runEmbeddedAgent.mockImplementation(async (params) => {
+        try {
+          const result = await actualRunner.runEmbeddedAgent(params);
+          runnerFinished.resolve({});
+          return result;
+        } catch (error) {
+          runnerFinished.resolve({ error });
+          throw error;
+        }
+      });
       const { preparing, releasePreparation } = holdWorkspacePreparation();
       await withNativePlugin(
-        async ({ create, offer, invoke, broadcast }) => {
+        async ({ create, offer, invoke, broadcast, rpcSourceTesting }) => {
           try {
             const { result, socket } = await connectNativeSession({ create, offer });
-            const voiceSessionId = requireString(result, "voiceSessionId");
             expect(
               talkEventTypes(broadcast).filter((type) => type === "session.ready"),
             ).toHaveLength(1);
             expect(
-              readOwnedVoiceSessionFacts({ ...nativeSessionScope, voiceSessionId }),
+              readOwnedVoiceSessionFacts({
+                agentId: AGENT_ID,
+                sessionKey: SESSION_KEY,
+                voiceSessionId: requireString(result, "voiceSessionId"),
+              }),
             ).toMatchObject({ origin: "client", status: "open", transcriptCapable: true });
             expect(talkEventTypes(broadcast)).not.toContain("turn.ended");
             socket.serverEvent(
               nativeDelegation("real-runner-request", "Complete a small voice consultation."),
             );
-            await waitFor(preparing.promise);
+            await Promise.race([preparing.promise, settledBeforeReadiness]);
             expect(modelRequests).toBe(0);
+            expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
             releasePreparation.resolve();
-            await waitFor(requested.promise);
+            await Promise.race([requested.promise, settledBeforeReadiness]);
             const activeRun = upstream.runEmbeddedAgent.mock.calls[0]![0];
+            expect(getRpcSourceIdentity(rpcSourceTesting.get(activeRun.runId)!)).toMatchObject({
+              agentId: AGENT_ID,
+              sessionKey: SESSION_KEY,
+              sessionId: SESSION_ID,
+            });
             expect(activeRun.abortSignal?.aborted).toBe(false);
-            const controlReply =
-              control === "cancel"
-                ? "Cancelled the active OpenClaw run."
-                : "OpenClaw is waiting on the model.";
-            const idleReply =
-              control === "cancel"
-                ? "There is no active OpenClaw run to cancel."
-                : "I'm not working on an active request right now.";
-            const sendControl = async (target: typeof socket, id: string, reply: string) => {
-              target.serverEvent(nativeDelegation(id, control));
-              await target.waitForSent((frame) => frame.includes(reply));
-            };
             const idle = await connectNativeSession({ create, offer });
-            await sendControl(idle.socket, "other-call-control", idleReply);
-            const transcript = nativeTranscript(control);
+            idle.socket.serverEvent(nativeDelegation("other-call-control", control));
+            await idle.socket.waitForSent((frame) =>
+              frame.includes(
+                control === "cancel"
+                  ? "There is no active OpenClaw run to cancel."
+                  : "I'm not working on an active request right now.",
+              ),
+            );
+            const transcript = { type: "turn.done", turn: { role: "user", transcript: control } };
             if (eventOrder === "transcript-first") {
               socket.serverEvent(transcript);
             }
-            await sendControl(socket, "real-runner-control", controlReply);
+            socket.serverEvent(nativeDelegation("real-runner-control", control));
+            await socket.waitForSent((frame) =>
+              frame.includes(
+                control === "cancel"
+                  ? "Cancelled the active OpenClaw run."
+                  : "OpenClaw is waiting on the model.",
+              ),
+            );
             expect(activeRun.abortSignal?.aborted).toBe(control === "cancel");
+            expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
             if (eventOrder === "delegation-first") {
               socket.serverEvent(transcript);
             }
@@ -405,9 +457,14 @@ describe("native Talk through the public OpenAI plugin registration", () => {
             } else {
               expect(frames).toContainEqual(nativeCompletion("real-runner-request"));
             }
+            expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
             expect(modelRequests).toBe(1);
             if (control === "cancel") {
-              await sendControl(socket, "late-cancel", idleReply);
+              socket.serverEvent(nativeDelegation("late-cancel", "cancel"));
+              await socket.waitForSent((frame) =>
+                frame.includes("There is no active OpenClaw run to cancel."),
+              );
+              expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
               socket.serverEvent(nativeDelegation("after-cancel", "Start a fresh small task."));
               await socket.waitForSent(
                 (frame) =>
@@ -417,11 +474,14 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
                 nativeCompletion("after-cancel"),
               );
+              expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
               expect(modelRequests).toBe(2);
             }
             expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
             expect(talkEventTypes(broadcast)).not.toContain("session.error");
-            await invoke("talk.client.close", { voiceSessionId });
+            await invoke("talk.client.close", {
+              voiceSessionId: requireString(result, "voiceSessionId"),
+            });
             expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED);
           } finally {
             releasePreparation.resolve();
@@ -517,6 +577,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       await vi.waitFor(() =>
         expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
       );
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });
   });
 });
