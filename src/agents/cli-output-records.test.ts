@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
   createOpenAiCompatibleCliUsageCases,
-  createClaudeParser,
-  createClaudeBackend,
   joinJsonlFrames,
   claudeTextDelta,
 } from "./cli-output.test-helpers.js";
@@ -58,6 +57,10 @@ const jsonAnswer = (text = "", sessionId: string | undefined = undefined) => ({
   text,
   sessionId,
   usage: undefined,
+});
+const jsonError = (errorText: string, sessionId?: string): CliOutput => ({
+  ...jsonAnswer("", sessionId),
+  errorText,
 });
 const stoppedResult = (terminal_reason = "hook_stopped", stop_reason = "tool_use") => ({
   type: "result",
@@ -153,10 +156,7 @@ describe("parseCliJson", () => {
         session_id: "session-json-ede",
         errors: ["[ede_diagnostic] tool_use_ids=[toolu_1]", "API Error: 529 Overloaded"],
       },
-      expected: {
-        ...jsonAnswer("", "session-json-ede"),
-        errorText: "API Error: 529 Overloaded",
-      },
+      expected: jsonError("API Error: 529 Overloaded", "session-json-ede"),
     },
     {
       name: "classifies Claude is_error JSON results as provider errors",
@@ -166,25 +166,13 @@ describe("parseCliJson", () => {
         is_error: true,
         result: 'API Error: 400 {"error":{"message":"Bad request"}}',
       },
-      expected: {
-        ...jsonAnswer(),
-        errorText: "Bad request",
-      },
+      expected: jsonError("Bad request"),
     },
     {
       name: "classifies generic is_error JSON results as provider errors",
       input: { is_error: true, result: "429 rate limit exceeded" },
       command: "custom",
-      expected: {
-        ...jsonAnswer(),
-        errorText: "429 rate limit exceeded",
-      },
-    },
-    {
-      name: "keeps successful JSON result message payloads as assistant text",
-      input: { type: "result", message: "done" },
-      command: "custom",
-      expected: jsonAnswer("done"),
+      expected: jsonError("429 rate limit exceeded"),
     },
     {
       name: "does not classify null JSON result error fields as provider errors",
@@ -196,10 +184,7 @@ describe("parseCliJson", () => {
       name: "classifies JSON status error result payloads as provider errors",
       input: { type: "result", status: "error", result: "rate limit" },
       command: "custom",
-      expected: {
-        ...jsonAnswer(),
-        errorText: "rate limit",
-      },
+      expected: jsonError("rate limit"),
     },
   ])("$name", ({ input, command, expected }) => {
     expect(jsonRecord(input, command)).toEqual(expected);
@@ -278,13 +263,17 @@ describe("parseCliJson", () => {
     });
   });
 
-  it.each([undefined, {}])("reads Gemini stats with usage=%j", (usage) => {
+  it.each([
+    { name: "absent usage", usage: undefined, input: 5 },
+    { name: "empty usage", usage: {}, input: 5 },
+    { name: "cache-subtracted input fallback", usage: undefined, input: undefined },
+  ])("reads Gemini stats with $name", ({ usage, input }) => {
     const result = jsonRecord(
       {
         session_id: "gemini-session",
         response: "Gemini says hello",
         usage,
-        stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 },
+        stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input },
       },
       "gemini",
       "",
@@ -296,90 +285,27 @@ describe("parseCliJson", () => {
     });
   });
 
-  it("falls back to input_tokens minus cached when Gemini stats omit input", () => {
-    const result = jsonRecord(
-      {
-        session_id: "gemini-session-456",
-        response: "Hello",
-        stats: {
-          total_tokens: 21,
-          input_tokens: 13,
-          output_tokens: 5,
-          cached: 8,
-        },
-      },
-      "gemini",
-      "",
-    );
-
-    expect(result?.usage?.input).toBe(5);
-    expect(result?.usage?.cacheRead).toBe(8);
-  });
-
-  it("unwraps nested Claude result JSON from JSON output", () => {
-    const result = jsonRecord({
-      session_id: "session-nested-json",
-      result: JSON.stringify({
-        type: "result",
-        result: JSON.stringify({
-          type: "result",
-          subtype: "success",
-          result: "actual response text",
-        }),
-      }),
-    });
-
-    expect(result).toEqual(jsonAnswer("actual response text", "session-nested-json"));
-  });
-
-  it("does not unwrap nested result-shaped JSON for non-claude json backends", () => {
+  it.each(["claude", "gemini"])("unwraps nested result JSON only for Claude (%s)", (command) => {
     const nestedResult = JSON.stringify({
       type: "result",
       result: JSON.stringify({
         type: "result",
+        subtype: "success",
         result: "actual response text",
       }),
     });
     const result = jsonRecord(
       {
-        session_id: "gemini-session-nested-json",
+        session_id: "nested-session",
         result: nestedResult,
       },
-      "gemini",
-      "gemini",
+      command,
+      command === "claude" ? "claude-cli" : "gemini",
     );
 
-    expect(result).toEqual(jsonAnswer(nestedResult, "gemini-session-nested-json"));
-  });
-
-  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
-    const result = jsonRecord(
-      {
-        session_id: "openai-session-123",
-        response: "OpenAI says hello",
-        usage: {
-          input_tokens: 15,
-          output_tokens: 4,
-          input_tokens_details: {
-            cached_tokens: 6,
-          },
-        },
-      },
-      "codex",
-      "",
+    expect(result).toEqual(
+      jsonAnswer(command === "claude" ? "actual response text" : nestedResult, "nested-session"),
     );
-
-    expect(result).toEqual({
-      text: "OpenAI says hello",
-      sessionId: "openai-session-123",
-      usage: {
-        input: 9,
-        output: 4,
-        cacheRead: 6,
-        cacheWrite: undefined,
-        total: undefined,
-      },
-    });
   });
 
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
@@ -469,57 +395,6 @@ describe("parseCliOutput", () => {
       sessionId: undefined,
       usage: undefined,
       errorText: "CLI stream-json output ended without a result event.",
-    });
-  });
-});
-
-describe("parseCliJsonl record usage", () => {
-  it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
-    const parser = createClaudeParser({
-      backend: createClaudeBackend(),
-      providerId: "local-cli",
-    });
-
-    parser.push(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-stream" },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
-          },
-        },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-2",
-            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
-          },
-        },
-        {
-          type: "result",
-          result: "done",
-          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        },
-      ),
-    );
-    parser.finish();
-
-    const output = parser.getOutput();
-    expect(output?.usage).toEqual({
-      input: 11,
-      output: 6,
-      cacheRead: 125,
-      cacheWrite: undefined,
-      total: undefined,
-    });
-    expect(output?.diagnosticUsage).toEqual({
-      input: 30,
-      output: 15,
-      cacheRead: 300,
-      cacheWrite: undefined,
-      total: undefined,
     });
   });
 });

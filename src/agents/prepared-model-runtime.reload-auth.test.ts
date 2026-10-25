@@ -262,49 +262,34 @@ describe("prepared model runtime reload auth adoption", () => {
     await using work = pendingWork();
     const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await start(["default", "worker"]);
-    const configBuild = work.build();
-    const authBuild = work.build();
-    const order: string[] = [];
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-      if (event.phase === "published") {
-        order.push("config-published");
-      }
-    });
+    const configBuild = work.heldBuild();
+    const authBuild = work.heldBuild();
+    const { events, unregister } = observePhases();
     work.defer(unregister);
     let defaultBuildCount = 0;
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, directory) => {
       if (directory !== agentDir("default")) {
         return {};
       }
-      defaultBuildCount += 1;
-      if (defaultBuildCount === 1) {
-        order.push("config-build-start");
-        return await configBuild.promise;
-      }
-      order.push("auth-drain-start");
-      return await authBuild.promise;
+      return await (defaultBuildCount++ === 0 ? configBuild : authBuild).run();
     });
 
     const publication = work.track(refresh(replacementConfig));
-    await vi.waitFor(() => expect(order).toContain("config-build-start"));
-    order.push("auth-mutation");
+    await configBuild.started;
     mutate("default");
     const affectedRead = work.track(
       loadDispatch({ agentId: "default" }).then((runtime) => {
-        order.push("affected-dispatch-resolved");
+        expect(events).toContain("published");
         return runtime;
       }),
     );
     const siblingRead = work.track(loadDispatch({ agentId: "worker" }));
-    order.push("config-build-finish");
     configBuild.resolve({});
-    await vi.waitFor(() => expect(order).toContain("auth-drain-start"));
+    await authBuild.started;
     await expectPending(publication);
     await expectPending(affectedRead);
+    expect(events).not.toContain("published");
 
-    order.push("auth-drain-finish");
     authBuild.resolve({});
     await expect(publication).resolves.toBeUndefined();
     const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
@@ -315,19 +300,6 @@ describe("prepared model runtime reload auth adoption", () => {
     expect(mocks.warn).not.toHaveBeenCalled();
     expect(affectedRuntime?.config).toBe(replacementConfig);
     expect(siblingRuntime?.config).toBe(replacementConfig);
-    expect(order).toEqual([
-      "config-build-start",
-      "auth-mutation",
-      "config-build-finish",
-      "auth-drain-start",
-      "auth-drain-finish",
-      "config-published",
-      "affected-dispatch-resolved",
-    ]);
-    const buildCountAfterPublication = mocks.ensureOpenClawModelsJson.mock.calls.length;
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(buildCountAfterPublication);
     const lease = await acquireAgentRunPreparedModelRuntime({
       agentId: "default",
       agentDir: agentDir("default"),

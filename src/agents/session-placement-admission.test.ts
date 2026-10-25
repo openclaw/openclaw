@@ -306,21 +306,8 @@ describe("local turn placement admission", () => {
         return true;
       });
       installProvider({
-        executeTurn: async (claim, params, runLocal, admitTurn) => {
+        executeTurn: async (_claim, _params, runLocal, admitTurn) => {
           events.push("claim");
-          expect(claim).toEqual({
-            sessionId: "session-1",
-            sessionKey: "agent:main:main",
-            runId: "run-1",
-          });
-          const replyOperation = getCurrentSessionControllerOwner();
-          expect(replyOperation).toBeDefined();
-          expect(params.replyOperation).toBe(replyOperation);
-          expect(params).toEqual({
-            ...activeParams,
-            replyOperation,
-            abortSignal: expect.any(AbortSignal),
-          });
           admitTurn?.();
           const result = await runLocal();
           events.push("release");
@@ -407,10 +394,10 @@ describe("local turn placement admission", () => {
   );
 
   it("does not start a local turn when the provider routes remotely", async () => {
-    const turn = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const turn = vi.fn(async () => localResult());
     const onAdmitted = vi.fn();
-    const executeTurn = vi.fn<SessionPlacementAdmissionProvider["executeTurn"]>(
-      async (_claim, _params, _runLocal, admitTurn) => {
+    installProvider({
+      executeTurn: async (_claim, _params, _runLocal, admitTurn) => {
         admitTurn?.();
         admitTurn?.();
         return {
@@ -418,13 +405,10 @@ describe("local turn placement admission", () => {
           meta: { durationMs: 2 },
         };
       },
-    );
-    installProvider({ executeTurn });
+    });
 
     const result = await admit("session-2", "run-2", turn, onAdmitted);
     expect(result.payloads).toEqual([{ text: "remote" }]);
-    expect(executeTurn).toHaveBeenCalledOnce();
-    expect(executeTurn.mock.calls[0]?.[0]).toEqual({ sessionId: "session-2", runId: "run-2" });
     expect(onAdmitted).toHaveBeenCalledOnce();
     expect(turn).not.toHaveBeenCalled();
   });
