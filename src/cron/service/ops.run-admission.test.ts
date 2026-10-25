@@ -19,7 +19,7 @@ import {
   createHeldCronRunner,
 } from "./ops.test-support.js";
 
-const { makeStorePath } = setupCronRegressionFixtures({ prefix: "cron-service-run-admission-" });
+const fixtures = setupCronRegressionFixtures({ prefix: "cron-service-run-admission-" });
 const dueAt = Date.parse("2026-02-06T10:05:05.250Z");
 
 type CronStateParams = Parameters<typeof createCronRegressionState>[0];
@@ -32,7 +32,7 @@ function blockedRun(
   job: ReturnType<typeof makeJob>,
   overrides: Partial<Omit<CronStateParams, "storePath">> = {},
 ) {
-  return createBlockedCronRun(makeStorePath().storePath, job, overrides);
+  return createBlockedCronRun(fixtures.makeStorePath().storePath, job, overrides);
 }
 
 describe("cron service run admission", () => {
@@ -190,7 +190,7 @@ describe("cron service run admission", () => {
   });
 
   it("commits invalid-run state before notifying a subscriber that edits the job", async () => {
-    const store = makeStorePath();
+    const store = fixtures.makeStorePath();
     const storeKey = cronStoreKey(store.storePath);
     const job = makeJob("invalid-manual-stale-notification", dueAt);
     job.sessionTarget = "main";
