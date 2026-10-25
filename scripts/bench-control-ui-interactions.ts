@@ -562,7 +562,10 @@ try {
           const events: unknown[] = [];
           const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
-            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+            ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               cdp = await context.newCDPSession(page);
               await cdp.send("Network.enable");

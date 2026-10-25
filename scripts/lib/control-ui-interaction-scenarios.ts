@@ -18,6 +18,10 @@ import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-nav
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
+import {
+  browserResourceMethodResponses,
+  createBrowserResourceScenarios,
+} from "./control-ui-browser-resource-scenarios.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
@@ -60,6 +64,7 @@ type InteractionFixtureOptions = {
   boardFrameResources?: boolean;
   canvasFrameRetention?: boolean;
   mcpAppResources?: boolean;
+  browserResources?: boolean;
 };
 
 type TranscriptPlatformSnapshot = {
@@ -290,7 +295,8 @@ export function createInteractionFixture(
     ...(options.nativeBoardResources ||
     options.progressCardClocks ||
     options.boardFrameResources ||
-    options.mcpAppResources
+    options.mcpAppResources ||
+    options.browserResources
       ? {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -301,11 +307,17 @@ export function createInteractionFixture(
               ? ["progressCard.get", "sessions.list"]
               : []),
             ...(options.mcpAppResources ? ["board.widget.appView", "mcp.app.view"] : []),
+            ...(options.browserResources ? ["browser.dashboard.request"] : []),
           ],
-          ...(options.nativeBoardResources || options.progressCardClocks
+          ...(options.nativeBoardResources || options.progressCardClocks || options.browserResources
             ? {
                 controlUiWidgetKinds: [
-                  { pluginId: "session", kind: "session:progress", label: "Session progress" },
+                  ...(options.nativeBoardResources || options.progressCardClocks
+                    ? [{ pluginId: "session", kind: "session:progress", label: "Session progress" }]
+                    : []),
+                  ...(options.browserResources
+                    ? [{ pluginId: "browser", kind: "browser:dashboard", label: "Browser" }]
+                    : []),
                 ],
               }
             : {}),
@@ -346,6 +358,7 @@ export function createInteractionFixture(
       contextWindow: 128_000,
     })),
     methodResponses: {
+      ...(options.browserResources ? browserResourceMethodResponses() : {}),
       ...(options.mcpAppResources
         ? {
             "board.get": {
@@ -601,8 +614,20 @@ async function prepareChat(page: Page) {
   await frames(page);
 }
 
-async function openInteractionDashboard(page: Page) {
-  await prepareChat(page);
+async function openInteractionPanel(
+  page: Page,
+  panel: "Dashboard" | "Browser" = "Dashboard",
+  sessionIndex: 0 | 1 = 0,
+) {
+  if (sessionIndex === 0) {
+    await prepareChat(page);
+  } else {
+    await page
+      .locator(activePane)
+      .getByText("Transcript 1 message 399.", { exact: false })
+      .waitFor();
+    await frames(page);
+  }
   const pane = page.locator(activePane);
   const mobileHeader = pane.locator(".agent-chat__header--mobile");
   const mobile = await mobileHeader.isVisible();
@@ -618,7 +643,7 @@ async function openInteractionDashboard(page: Page) {
     await host.getByRole("button", { name: "Panels", exact: true }).click();
     await host
       .locator(".chat-panel-launcher-mobile")
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: panel, exact: true })
       .click();
   } else {
     if ((await toggle.getAttribute("aria-expanded")) !== "true") {
@@ -629,7 +654,7 @@ async function openInteractionDashboard(page: Page) {
       .getByRole("button")
       .filter({
         has: page
-          .getByText("Dashboard", { exact: true })
+          .getByText(panel, { exact: true })
           .and(page.locator(".side-panel-type-option__label")),
       })
       .click();
@@ -676,7 +701,7 @@ async function waitForMcpResourceContexts(page: Page) {
 }
 
 async function prepareMcpResources(page: Page) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   for (let index = 0; index < mcpResourceCount; index++) {
     const inner = mcpResourceFrame(page, index).contentFrame().frameLocator("iframe");
     await clickBoardWidgetControl(page, inner.getByRole("button", { name: "Count", exact: true }));
@@ -727,7 +752,7 @@ async function resizeMcpResources(
 }
 
 async function prepareNativeBoard(page: Page, gateway: MockGatewayControls) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   await gateway.waitForRequest("board.get", { match: { sessionKey: sessionKeys[0] } });
   await page.waitForFunction((expected) => {
     const widgets = [
@@ -791,7 +816,7 @@ async function selectResourceBoardTab(page: Page, tab: "main" | "second") {
 }
 
 async function prepareResourceBoard(page: Page) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   await waitForResourceBoardTab(page, "main");
   const first = resourceBoardFrame(page, "main-0");
   await clickBoardWidgetControl(
@@ -1519,6 +1544,16 @@ async function searchModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...createBrowserResourceScenarios({
+    route: controlUiSessionPath(sessionKeys[0]),
+    openPanel: openInteractionPanel,
+    switchSession,
+    prepare: settleSidebarBackgroundWork,
+    settle: async (page) => {
+      await frames(page);
+      await settleSidebarCapture(page);
+    },
+  }),
   {
     id: "mcp-app-resize-resources",
     route: controlUiSessionPath(sessionKeys[0]),
@@ -1606,7 +1641,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await settleSidebarBackgroundWork(page);
     },
     run: async (page) => {
-      await openInteractionDashboard(page);
+      await openInteractionPanel(page);
       await waitForResourceBoardTab(page, "main");
       const count = await page.locator(boardFrameSelector).count();
       if (count !== 3) {
