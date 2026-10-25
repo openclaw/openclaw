@@ -120,24 +120,31 @@ it("keeps complete canonical user and tool-result images through the installed h
   }
 });
 
-it.each([false, true])("redacts nested codes only when registered (%s)", (registered) => {
+it.each(
+  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
+    [false, true].map((registered) => ({ code, registered })),
+  ),
+)("redacts nested $code only when registered ($registered)", ({ code, registered }) => {
   if (registered) {
-    registerSecretValueForRedaction("EAI_AGAIN");
+    registerSecretValueForRedaction(code);
   }
-  const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
-    code: "EAI_AGAIN",
-    authorization: "Bearer fixture-sensitive-authorization",
+  const cause = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("fixture transport failure"), {
+      code,
+      authorization: "Bearer fixture-sensitive-authorization",
+    }),
   });
   const projected = projectProviderError(new Error("Connection error.", { cause }));
   expect(projected).toEqual(
     registered
-      ? expect.not.objectContaining({ errorCode: "EAI_AGAIN" })
+      ? expect.not.objectContaining({ errorCode: code })
       : {
           stopReason: "error",
           errorMessage: "Connection error.",
-          errorCode: "EAI_AGAIN",
+          errorCode: code,
         },
   );
+  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
 });
 
 it("redacts registered opaque secrets from ordinary provider error messages", () => {
