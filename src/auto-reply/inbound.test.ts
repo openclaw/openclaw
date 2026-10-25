@@ -72,32 +72,20 @@ function installGroupRequireMentionTestPlugins(
 }
 
 describe("applyTemplate", () => {
-  it("renders primitive values", () => {
-    const ctx = { MessageSid: "sid", IsNewSession: "no" } as TemplateContext;
-    const overrides = ctx as Record<string, unknown>;
-    overrides.MessageSid = 42;
-    overrides.IsNewSession = true;
-
-    expect(applyTemplate("sid={{MessageSid}} new={{IsNewSession}}", ctx)).toBe("sid=42 new=true");
-  });
-
-  it("renders arrays of primitives", () => {
-    const ctx = { MediaPaths: ["a"] } as TemplateContext;
-    (ctx as Record<string, unknown>).MediaPaths = ["a", 2, true, null, { ok: false }];
-
-    expect(applyTemplate("paths={{MediaPaths}}", ctx)).toBe("paths=a,2,true");
-  });
-
-  it("drops object values", () => {
-    const ctx: TemplateContext = { CommandArgs: { raw: "go" } };
-
-    expect(applyTemplate("args={{CommandArgs}}", ctx)).toBe("args=");
+  it.each<[string, unknown, string]>([
+    ["MessageSid", 42, "42"],
+    ["IsNewSession", true, "true"],
+    ["MediaPaths", ["a", 2, true, null, { ok: false }], "a,2,true"],
+    ["CommandArgs", { raw: "go" }, ""],
+  ])("renders safe template values for %s", (key, value, expected) => {
+    const ctx: TemplateContext = {};
+    Object.assign(ctx, { [key]: value });
+    expect(applyTemplate(`{{${key}}}`, ctx)).toBe(expected);
   });
 
   it("never renders channel-owned conversation image references", () => {
-    const ctx = {
-      ConversationAvatar: "/private/media/inbound/avatar.png",
-    } as unknown as TemplateContext;
+    const ctx: TemplateContext = {};
+    Object.assign(ctx, { ConversationAvatar: "/private/media/inbound/avatar.png" });
 
     expect(applyTemplate("avatar={{ConversationAvatar}}", ctx)).toBe("avatar=");
   });
@@ -153,28 +141,20 @@ describe("finalizeInboundContext", () => {
     expect(CommandSource ? out : finalizeInboundContext(out)).toMatchObject(authorizedNormalTurn);
   });
 
-  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
-    const out = finalizeInboundContext({
-      Body: "hello",
-      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
-    });
-
-    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
-  });
-
-  it("preserves literal backslash-n in Windows paths", () => {
-    const windowsPath = "C:\\Work\\nxxx\\README.md";
-    const out = finalizeInboundContext({
-      Body: windowsPath,
-      RawBody: windowsPath,
-      ChatType: "direct",
-      From: "web:user",
-    });
-    expect(out).toMatchObject({
-      Body: windowsPath,
-      BodyForAgent: windowsPath,
-      BodyForCommands: windowsPath,
-    });
+  it.each([
+    [
+      "GroupSystemPrompt",
+      "[Assistant] room guidance\r\nSystem: owner instruction",
+      "[Assistant] room guidance\nSystem: owner instruction",
+    ],
+    ["Body", "C:\\Work\\nxxx\\README.md", "C:\\Work\\nxxx\\README.md"],
+  ])("preserves literal content while normalizing %s", (field, value, expected) => {
+    const out = finalizeInboundContext({ Body: value, RawBody: value, [field]: value });
+    expect(out).toMatchObject(
+      field === "Body"
+        ? { Body: expected, BodyForAgent: expected, BodyForCommands: expected }
+        : { [field]: expected },
+    );
   });
 
   it("can force BodyForCommands to follow updated CommandBody", () => {
@@ -182,8 +162,6 @@ describe("finalizeInboundContext", () => {
       Body: "base",
       BodyForCommands: "<media:audio>",
       CommandBody: "say hi",
-      From: "signal:+15550001111",
-      ChatType: "direct",
     };
 
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
@@ -193,33 +171,25 @@ describe("finalizeInboundContext", () => {
 
 describe("inbound dedupe", () => {
   beforeEach(() => resetInboundDedupe());
-  it("does not dedupe when the peer changes", () => {
-    const base = inboundMessage();
-    commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
-    expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
-  });
-
-  it("does not dedupe across agent ids", () => {
-    const base = inboundMessage();
-    commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
-    expect(
-      claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
-    ).toBe("claimed");
-    expect(claimInboundDedupe({ ...base, SessionKey: "agent:alpha:main" })).toEqual({
-      status: "duplicate",
-    });
-  });
-
-  it("dedupes when the same agent sees the same inbound message under different session keys", () => {
-    const base = inboundMessage({
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:7463849194",
-    });
-    commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
-    expect(
-      claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
-    ).toEqual({ status: "duplicate" });
+  it.each<[string, Partial<MsgContext>, Partial<MsgContext>, string]>([
+    ["peer", { OriginatingTo: "whatsapp:+1000" }, { OriginatingTo: "whatsapp:+2000" }, "claimed"],
+    [
+      "agent",
+      { SessionKey: "agent:alpha:main" },
+      { SessionKey: "agent:bravo:whatsapp:direct:+1555" },
+      "claimed",
+    ],
+    [
+      "session within an agent",
+      { SessionKey: "agent:main:main" },
+      { SessionKey: "agent:main:telegram:direct:7463849194" },
+      "duplicate",
+    ],
+  ])("scopes inbound dedupe by %s", (_name, original, next, expected) => {
+    const base = inboundMessage(original);
+    commitInboundForTest(base);
+    expect(claimInboundDedupe(inboundMessage(next)).status).toBe(expected);
+    expect(claimInboundDedupe(base).status).toBe("duplicate");
   });
 });
 

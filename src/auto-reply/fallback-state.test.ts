@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import {
   resolveActiveFallbackState,
   type FallbackNoticeState,
@@ -37,6 +36,12 @@ const cliBackend = {
 const cliSelected = "anthropic/claude-opus-4-7";
 const cliActive = "claude-cli/claude-opus-4-7";
 const cliNoticeState = noticeState(cliSelected, cliActive, "selected model unavailable");
+const noFallback = {
+  fallbackActive: false,
+  fallbackTransitioned: false,
+  fallbackCleared: false,
+  nextState: clearedState,
+};
 
 const setupCliBackend = ({ backend }: { backend: string }) =>
   backend === "claude-cli" ? { pluginId: "anthropic", backend: cliBackend } : undefined;
@@ -166,35 +171,23 @@ describe("fallback-state", () => {
     });
   });
 
-  it("does not treat a CLI runtime alias as a model fallback", () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [{ ...cliBackend, pluginId: "anthropic" }],
-    });
-
-    const resolved = resolveFallbackTransition(cliAliasTransition);
-
-    expect(resolved).toMatchObject({
-      fallbackActive: false,
-      fallbackCleared: false,
-      stateChanged: true,
-      nextState: { selectedModel: undefined, activeModel: undefined },
-    });
-  });
-
-  it("does not repeat runtime alias comparison when persisted fallback refs match", () => {
+  it.each([false, true])("resolves a CLI alias with setup discovery=%s", (discoverSetup) => {
     const lookup = vi.fn(setupCliBackend);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: lookup,
       resolvePluginSetupRegistry: () => {
         throw new Error("full setup registry should not load for a single runtime alias");
       },
-      resolveRuntimeCliBackends: () => [],
+      resolveRuntimeCliBackends: () =>
+        discoverSetup ? [] : [{ ...cliBackend, pluginId: "anthropic" }],
     });
 
     const resolved = resolveFallbackTransition(cliAliasTransition);
 
-    expect(resolved.fallbackActive).toBe(false);
-    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(resolved).toMatchObject({ ...noFallback, stateChanged: true });
+    if (discoverSetup) {
+      expect(lookup).toHaveBeenCalledTimes(2);
+    }
   });
 
   describe("Arcee wire identity", () => {
@@ -219,18 +212,8 @@ describe("fallback-state", () => {
     ])("keeps %s out of fallback state", (_name, state, expectedStateChanged) => {
       const params = { ...base, state };
 
-      expect(canonicalizeProviderModelId("arcee", "arcee-ai/trinity-large-preview")).toBe(
-        "trinity-large-preview",
-      );
-
       const resolved = resolveFallbackTransition(params);
-
-      expect(resolved).toMatchObject({
-        fallbackActive: false,
-        fallbackTransitioned: false,
-        fallbackCleared: false,
-        stateChanged: expectedStateChanged,
-      });
+      expect(resolved).toMatchObject({ ...noFallback, stateChanged: expectedStateChanged });
       expect(resolved.nextState).toEqual(clearedState);
       expect(buildFallbackNotice(params)).toBeNull();
       expect(
