@@ -217,6 +217,19 @@ the main Gateway port keeps its existing JSON check responses.
 - Per-room keys: `requireMention` (default true), `enabled` (false disables the room), `allowFrom` (per-room sender allowlist), `tools` (allow/deny tool overrides), `skills` (limit loaded skills), `systemPrompt`.
 - To allow no rooms, keep the allowlist empty or set `channels.nextcloud-talk.groupPolicy="disabled"`.
 
+## Quoted replies
+
+On Talk 21 and later, text-reply webhooks can include the quoted message's text
+and author. OpenClaw includes that immediate parent as untrusted reply context,
+subject to the existing context-visibility policy. The quote does not change the
+current sender, command text, mention requirements, session or outgoing reply
+target. No additional API credentials or history request are needed.
+
+Quoted files contribute only their caption or filename, not a new download or
+transcription. Older webhooks and malformed optional quotes keep normal message
+handling. Talk's file/voice Activity webhooks may omit the parent; OpenClaw does
+not fetch or infer missing quote context.
+
 ## Inbound file shares
 
 - Share the file into the Talk conversation to notify the bot. Uploading it only to Nextcloud Files, or creating a Files share without posting it in Talk, does not emit a supported Talk file-share webhook.
