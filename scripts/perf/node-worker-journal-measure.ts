@@ -138,7 +138,6 @@ if (values.prepare) {
             const claim = claimFor(index, prefix);
             const result = await launches.claim(claim, supervisor, count * 2, now + 100);
             assert.equal(result.action, name === "warm" ? "replay" : "start");
-            assert(result.action !== "at-capacity");
             assert.equal(result.receipt.state, "pending");
             assert.deepEqual(result.receipt.supervisor, supervisor);
             assert.equal(result.receipt.updatedAtMs, now + 100);
