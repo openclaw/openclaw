@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -8,52 +7,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { credentialFixture } from "./credential.test-support.mjs";
 import { restoreTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 function restoreCredential(root, directory) {
-  const source = path.join(root, "archive-source");
-  fs.mkdirSync(path.join(source, "db"), { recursive: true });
-  fs.chmodSync(path.join(source, "db"), 0o755);
-  fs.writeFileSync(
-    path.join(source, "config.local.json"),
-    JSON.stringify({
-      testDc: true,
-      testerUserId: 42,
-      apiId: 123,
-      apiHash: "api-hash",
-      databaseEncryptionKey: "database-key",
-    }),
-  );
-  fs.writeFileSync(path.join(source, "db", "td_test.binlog"), "tdlib-session");
-  const archivePath = path.join(root, "session.tgz");
-  const packed = spawnSync("tar", ["-czf", archivePath, "config.local.json", "db"], {
-    cwd: source,
-    encoding: "utf8",
-  });
-  assert.equal(packed.status, 0, packed.stderr);
-  const archive = fs.readFileSync(archivePath);
-  const emptyPath = path.join(root, "empty-path");
-  fs.mkdirSync(emptyPath);
-  // These layout cases skip discovery; telegram-runtime and the credential real-UV case cover it.
-  const hostEnv = { PATH: emptyPath };
+  const { payload, hostEnv } = credentialFixture(path.join(root, "archive-source"), "db");
   const previousUmask = process.umask(0o022);
   try {
-    return restoreTelegramTestCredential(
-      {
-        schemaVersion: 1,
-        environment: "test",
-        groupId: "-1001",
-        sutToken: "100:test-token",
-        sutUsername: "sut_bot",
-        sutBotId: "100",
-        testerUserId: "42",
-        tdlibArchiveBase64: archive.toString("base64"),
-        tdlibArchiveSha256: createHash("sha256").update(archive).digest("hex"),
-        tdlibVersion: "1.8.67",
-      },
-      path.join(directory, "state"),
-      hostEnv,
-    );
+    return restoreTelegramTestCredential(payload, path.join(directory, "state"), hostEnv);
   } finally {
     process.umask(previousUmask);
   }

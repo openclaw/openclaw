@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { credentialFixture, packCredential } from "./credential.test-support.mjs";
 import { resumeQaLease } from "./qa-credential-lease.mjs";
 import { runCommand, runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 import {
@@ -19,51 +19,10 @@ const brokerEnv = {
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-function packArchive(fixture, name = "session.tgz") {
-  const archivePath = path.join(fixture, name);
-  const packed = spawnSync("tar", ["-czf", archivePath, "config.local.json", "db/td_test.binlog"], {
-    cwd: fixture,
-  });
-  assert.equal(packed.status, 0);
-  const archive = fs.readFileSync(archivePath);
-  return {
-    tdlibArchiveBase64: archive.toString("base64"),
-    tdlibArchiveSha256: createHash("sha256").update(archive).digest("hex"),
-  };
-}
 function makeCredential(context) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "tg-test-credential-fixture-"));
   context.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(fixture, "db"));
-  fs.writeFileSync(
-    path.join(fixture, "config.local.json"),
-    JSON.stringify({
-      testDc: true,
-      testerUserId: 42,
-      apiId: 123,
-      apiHash: "api-hash",
-      databaseEncryptionKey: "database-key",
-    }),
-  );
-  fs.writeFileSync(path.join(fixture, "db", "td_test.binlog"), "tdlib-session");
-  const emptyPath = path.join(fixture, "empty-path");
-  fs.mkdirSync(emptyPath);
-  return {
-    fixture,
-    // Layout and lease lifecycle cases skip discovery; the real-UV launcher case keeps it.
-    hostEnv: { PATH: emptyPath },
-    payload: {
-      schemaVersion: 1,
-      environment: "test",
-      groupId: "-1001",
-      sutToken: "100:test-token",
-      sutUsername: "sut_bot",
-      sutBotId: "100",
-      testerUserId: "42",
-      ...packArchive(fixture),
-      tdlibVersion: "1.8.67",
-    },
-  };
+  return { fixture, ...credentialFixture(fixture) };
 }
 
 test("validates and restores one isolated Test Server credential", (context) => {
@@ -224,7 +183,7 @@ test(
     const { fixture, payload } = makeCredential(context);
     fs.rmSync(path.join(fixture, "db", "td_test.binlog"));
     fs.symlinkSync("../config.local.json", path.join(fixture, "db", "td_test.binlog"));
-    const archive = packArchive(fixture, "linked-session.tgz");
+    const archive = packCredential(fixture, "db/td_test.binlog", "linked-session.tgz");
     assert.throws(
       () =>
         restoreTelegramTestCredential(

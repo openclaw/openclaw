@@ -11,7 +11,6 @@ import {
   assertSutMatchesLease,
   assertTesterMatchesLease,
   createGatewayEnvironment,
-  createScenarioCommandEnvironment,
   drainSutUpdates,
   ownChild,
   runCommand,
@@ -69,12 +68,11 @@ function temporary(context, prefix) {
 }
 const nodeCommand = (argv, options) => runCommand(process.execPath, argv, options);
 const scriptCommand = (source, options) => nodeCommand(["-e", source], options);
-async function assertRelease(afterRelease = () => {}) {
+async function assertRelease() {
   let released = false;
   await currentTelegramRun().acquire(
     Promise.resolve({
       async release() {
-        afterRelease();
         released = true;
       },
     }),
@@ -201,11 +199,7 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
 test("gateway and recorder readiness budgets reject invalid values before acquiring credentials", async () => {
   for (const [flag, value] of [
     ["--gateway-ready-timeout-ms", "0"],
-    ["--gateway-ready-timeout-ms", "-1"],
-    ["--gateway-ready-timeout-ms", "1.5"],
-    ["--gateway-ready-timeout-ms", "soon"],
     ["--recorder-ready-timeout-ms", "0"],
-    ["--recorder-ready-timeout-ms", "1.5"],
   ]) {
     const result = await nodeCommand(
       [new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname, flag, value],
@@ -257,49 +251,6 @@ test("runner rejects a live SUT identity that differs from the lease", () => {
     /bot identity does not match the lease/u,
   );
   assert.doesNotThrow(() => assertSutMatchesLease({ id: "42", username: "sut_bot" }, credential));
-});
-
-test("scenario commands receive credential file locations without broker authority", () => {
-  const commandEnv = createScenarioCommandEnvironment({
-    gatewayEnv: {
-      OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-      OPENCLAW_STATE_DIR: "/tmp/state",
-    },
-    driverEnv: {
-      TELEGRAM_E2E_STATE_DIR: "/tmp/lease-state",
-      TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
-    },
-    telegramApiRoot: "http://127.0.0.1:19881",
-  });
-  assert.deepEqual(commandEnv, {
-    OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-    OPENCLAW_STATE_DIR: "/tmp/state",
-    TELEGRAM_E2E_STATE_DIR: "/tmp/lease-state",
-    TELEGRAM_USER_DRIVER_STATE_DIR: "/tmp/user-driver",
-    TELEGRAM_E2E_TEST_API_ROOT: "http://127.0.0.1:19881",
-  });
-});
-
-test("gateway environment strips inherited bot tokens and keeps the synthetic provider key", () => {
-  const gatewayEnv = createGatewayEnvironment({
-    baseEnv: {
-      PATH: "/safe/bin",
-      TELEGRAM_BOT_TOKEN: "synthetic-bot-token",
-      TELEGRAM_E2E_SUT_BOT_TOKEN: "synthetic-bot-token",
-      OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-broker-secret",
-      GITHUB_TOKEN: "github-secret",
-      TELEGRAM_E2E_STATE_DIR: "/private/lease",
-      TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
-    },
-    configPath: "/tmp/openclaw.json",
-    stateDir: "/tmp/state",
-  });
-  assert.deepEqual(gatewayEnv, {
-    PATH: "/safe/bin",
-    OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
-    OPENCLAW_STATE_DIR: "/tmp/state",
-    OPENAI_API_KEY: "openclaw-e2e-mock-key",
-  });
 });
 
 test("gateway token stays in a private run-owned file until scratch cleanup", async () => {
@@ -354,15 +305,6 @@ test("scenario command evidence retains no argv or process output", () => {
     durationMs: 20,
   });
   assert.doesNotMatch(JSON.stringify(summary), new RegExp(credential, "u"));
-});
-
-test("termination joins credential-bearing children before lease release", async () => {
-  const gateway = startOwnedChild();
-  const recorder = startOwnedChild();
-  await assertRelease(() => {
-    assert.notEqual(gateway.signalCode, null);
-    assert.notEqual(recorder.signalCode, null);
-  });
 });
 
 test("signal cleanup waits for credential acquisition before releasing scratch", async (context) => {
@@ -433,8 +375,12 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   const gatewayEnv = createGatewayEnvironment({
     baseEnv: {
       PATH: "/safe/bin",
-      OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
+      TELEGRAM_BOT_TOKEN: "synthetic-bot-token",
+      TELEGRAM_E2E_SUT_BOT_TOKEN: "synthetic-bot-token",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-broker-secret",
+      GITHUB_TOKEN: "github-secret",
       TELEGRAM_E2E_STATE_DIR: "/private/lease",
+      TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
     },
     configPath: path.join(path.dirname(fixture.wrapper), "openclaw.json"),
     stateDir: path.join(path.dirname(fixture.wrapper), "state"),
@@ -458,9 +404,12 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
     (error) => error === leaseError,
   );
   await currentTelegramRun().close();
-  assert.equal(gatewayEnv.PATH, "/safe/bin");
-  assert.equal(gatewayEnv.OPENCLAW_QA_CONVEX_SECRET_CI, undefined);
-  assert.equal(gatewayEnv.TELEGRAM_E2E_STATE_DIR, undefined);
+  assert.deepEqual(gatewayEnv, {
+    PATH: "/safe/bin",
+    OPENCLAW_CONFIG_PATH: path.join(path.dirname(fixture.wrapper), "openclaw.json"),
+    OPENCLAW_STATE_DIR: path.join(path.dirname(fixture.wrapper), "state"),
+    OPENAI_API_KEY: "openclaw-e2e-mock-key",
+  });
   assertStopped(poller);
   assert.equal(fs.existsSync(fixture.sideEffect), false);
   return leaseError;

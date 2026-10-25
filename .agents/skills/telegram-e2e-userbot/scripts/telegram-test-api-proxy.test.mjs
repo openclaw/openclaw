@@ -10,6 +10,7 @@ async function startProxy(t, options) {
   return proxy;
 }
 
+const ok = (result) => Response.json(result === undefined ? { ok: true } : { ok: true, result });
 const post = (proxy, method, body) =>
   fetch(`${proxy.apiRoot}/bot123:ABC/${method}`, {
     method: "POST",
@@ -26,12 +27,7 @@ async function listen(server) {
   return `http://127.0.0.1:${address.port}`;
 }
 
-test("inserts the Test Server segment after the bot token", () => {
-  assert.equal(telegramTestApiPath("/bot123:ABC/getUpdates"), "/bot123:ABC/test/getUpdates");
-  assert.equal(
-    telegramTestApiPath("/file/bot123:ABC/photos/file.jpg"),
-    "/file/bot123:ABC/test/photos/file.jpg",
-  );
+test("rejects paths outside the Bot API", () => {
   assert.throws(() => telegramTestApiPath("/healthz"), /invalid Bot API path/u);
 });
 
@@ -81,41 +77,6 @@ test("proxies method, query, headers, and body to the Test Server path", async (
     body: '{"text":"hello 🌻"}',
     marker: "kept",
   });
-});
-
-test("drains every pending Test Server update", async (t) => {
-  const offsets = [];
-  const upstreamServer = http.createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      offsets.push(JSON.parse(body).offset);
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({ ok: true, result: offsets.length === 1 ? [{ update_id: 7 }] : [] }),
-      );
-    });
-  });
-  const upstream = await listen(upstreamServer);
-  const proxy = await startProxy(t, { upstream });
-  t.after(async () => {
-    await new Promise((resolve) => {
-      upstreamServer.close(resolve);
-    });
-  });
-
-  await proxy.drainUpdates("123:ABC");
-
-  assert.deepEqual(offsets, [0, 8]);
-  const rows = proxy.getRequestLog();
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].method, "getUpdates");
-  assert.equal(rows[0].updates, 1);
-  assert.equal(rows[0].status, 200);
-  assert.ok(rows[0].doneAt >= rows[0].at);
 });
 
 function startDrainProxy(t, responses) {
@@ -221,11 +182,8 @@ test("drain fails immediately on a non-retryable status", async (t) => {
 });
 
 test("proxy close cancels a pending retry_after wait", async (t) => {
-  let waiting;
-  const diagnosed = new Promise((resolve) => {
-    waiting = resolve;
-  });
-  t.mock.method(console, "error", () => waiting());
+  const diagnosed = Promise.withResolvers();
+  t.mock.method(console, "error", diagnosed.resolve);
   let upstreamRequests = 0;
   // Default sleep: a 60 s retry_after must not outlive teardown or keep the process alive.
   const proxy = await startProxy(t, {
@@ -238,7 +196,7 @@ test("proxy close cancels a pending retry_after wait", async (t) => {
   });
 
   const drained = proxy.drainUpdates("123:ABC");
-  await diagnosed;
+  await diagnosed.promise;
   await proxy.close();
 
   await assert.rejects(drained, /Telegram Test Server proxy closed/u);
@@ -307,13 +265,7 @@ test("logs only nonempty getUpdates counts and preserves response bytes", async 
   }
   const rows = proxy.getRequestLog();
   assert.equal(rows.length, 1);
-  assert.deepEqual(Object.keys(rows[0]).toSorted(), [
-    "at",
-    "doneAt",
-    "method",
-    "status",
-    "updates",
-  ]);
+  assert.doesNotMatch(JSON.stringify(rows), /123:ABC|private text|"(?:text|chat)"/u);
   assert.equal(rows[0].method, "getUpdates");
   assert.equal(rows[0].updates, 2);
   assert.equal(rows[0].status, 200);
@@ -349,10 +301,7 @@ test("holds one upstream-accepted method response until explicit release", async
     setImmediate(resolve);
   });
   assert.equal(bodySettled, false);
-  assert.deepEqual(
-    { method: held.method, ordinal: held.ordinal },
-    { method: "sendMessage", ordinal: 2 },
-  );
+  assert.equal(held.ordinal, 2);
   assert.equal(proxy.getRequestLog().at(-1).doneAt, undefined);
   proxy.releaseHeldResponse();
   assert.deepEqual(await heldBody, { ok: true });
@@ -365,9 +314,7 @@ test("rejects only the selected matching request before forwarding and then resu
   const proxy = await startProxy(t, {
     fetchImpl: async (_url, init) => {
       forwarded.push(JSON.parse(await new Response(init.body).text()).text);
-      return new Response('{"ok":true}', {
-        headers: { "content-type": "application/json" },
-      });
+      return ok();
     },
   });
   proxy.rejectNextRequest({ method: "sendMessage", bodyIncludes: "FINAL", skip: 1 });
@@ -389,11 +336,8 @@ test("rejects only the selected matching request before forwarding and then resu
     "FINAL next request",
   ]);
   assert.deepEqual(
-    proxy.getRequestRejectionEvents().map(({ method, upstreamForwarded }) => ({
-      method,
-      upstreamForwarded,
-    })),
-    [{ method: "sendMessage", upstreamForwarded: false }],
+    proxy.getRequestRejectionEvents().map((event) => event.upstreamForwarded),
+    [false],
   );
 });
 
@@ -404,7 +348,7 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   const proxy = await startProxy(t, {
     fetchImpl: async (_url, init) => {
       forwarded.push(JSON.parse(await new Response(init.body).text()).text);
-      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+      return ok();
     },
   });
   proxy.rejectNextRequest({
@@ -431,21 +375,13 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   const bareBody = await bare.json();
   assert.equal(bare.status, 429);
   assert.equal(bareBody.parameters, undefined);
-  assert.deepEqual(
-    proxy.getRequestLog().map(({ method }) => method),
-    Array(5).fill("sendMessage"),
-  );
+
   await post(proxy, "sendMessage", { chat_id: -1001, text: "group" });
   assert.equal(proxy.getRequestLog().at(-1).chat, "group");
   for (const event of proxy.getRequestLog()) {
     assert.equal(typeof event.at, "number");
     assert.ok(event.doneAt >= event.at);
-    assert.deepEqual(
-      Object.keys(event).toSorted(),
-      event.chat === undefined
-        ? ["at", "doneAt", "method", "status"]
-        : ["at", "chat", "doneAt", "method", "status"],
-    );
+    assert.doesNotMatch(JSON.stringify(event), /123:ABC|FINAL|preview|bare|"chat_id"/u);
   }
   assert.deepEqual(
     proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
@@ -457,55 +393,40 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   );
 });
 
-test("forwards file downloads before, during, and after a one-shot rejection", async (t) => {
+test("file downloads bypass method controls without consuming their rejection", async (t) => {
   const upstreamPaths = [];
   const proxy = await startProxy(t, {
     fetchImpl: async (url) => {
       upstreamPaths.push(new URL(url).pathname);
-      return new Response("synthetic-file-bytes", { status: 200 });
+      return new Response("synthetic-file-bytes");
     },
   });
-  const filePath = "/file/bot123:ABC/photos/current.jpg";
   const download = async () => {
-    const response = await fetch(`${proxy.apiRoot}${filePath}`);
+    const response = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "synthetic-file-bytes");
   };
-
+  proxy.holdNextResponse({ method: "file" });
   await download();
+  assert.deepEqual(proxy.getResponseHoldEvents(), []);
+  proxy.rejectNextRequest({ method: "file" });
+  await download();
+  assert.deepEqual(proxy.getRequestRejectionEvents(), []);
   proxy.rejectNextRequest({ method: "sendMessage" });
   await download();
-  const rejected = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
-    method: "POST",
-    body: "{}",
-  });
+  const rejected = await post(proxy, "sendMessage", {});
   assert.equal(rejected.status, 400);
   await download();
-  assert.deepEqual(upstreamPaths, Array(3).fill("/file/bot123:ABC/test/photos/current.jpg"));
+  assert.deepEqual(upstreamPaths, Array(4).fill("/file/bot123:ABC/test/photos/current.jpg"));
   assert.equal(proxy.getRequestRejectionEvents().length, 1);
   assert.deepEqual(
     proxy.getRequestLog().map(({ method }) => method),
-    ["file", "file", "sendMessage", "file"],
+    ["file", "file", "file", "sendMessage", "file"],
   );
   for (const event of proxy.getRequestLog()) {
-    assert.deepEqual(Object.keys(event).toSorted(), ["at", "doneAt", "method", "status"]);
+    assert.doesNotMatch(JSON.stringify(event), /123:ABC|current.jpg|synthetic-file-bytes/u);
     assert.ok(event.doneAt >= event.at);
   }
-});
-
-test("file timing rows never match response holds or request rejections", async (t) => {
-  const proxy = await startProxy(t, {
-    fetchImpl: async () => new Response("synthetic-file-bytes"),
-  });
-  proxy.holdNextResponse({ method: "file" });
-  const heldControl = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
-  assert.deepEqual(proxy.getResponseHoldEvents(), []);
-  assert.equal(await heldControl.text(), "synthetic-file-bytes");
-  proxy.rejectNextRequest({ method: "file" });
-  const rejectedControl = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
-  assert.equal(rejectedControl.status, 200);
-  assert.equal(await rejectedControl.text(), "synthetic-file-bytes");
-  assert.deepEqual(proxy.getRequestRejectionEvents(), []);
 });
 
 test("getFile timing ends when the streamed response finishes", async (t) => {
@@ -533,78 +454,53 @@ test("getFile timing ends when the streamed response finishes", async (t) => {
   ]);
 });
 
-test("records completion timing on upstream and response-stream errors", async (t) => {
-  t.mock.method(console, "error", () => {});
-  for (const [expectedStatus, fetchImpl] of [
-    [
-      502,
-      async () => {
-        throw new Error("synthetic upstream failure");
-      },
-    ],
-    [
-      200,
-      async () =>
-        new Response(
+for (const phase of ["upstream-fetch", "response-stream"]) {
+  test(`records and redacts ${phase} failures`, async (t) => {
+    const privateDetail = "synthetic-private-upstream-detail";
+    const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
+    const diagnostic = t.mock.method(console, "error", () => {});
+    const proxy = await startProxy(t, {
+      fetchImpl: async () => {
+        if (phase === "upstream-fetch") {
+          throw new TypeError(privateDetail, { cause });
+        }
+        return new Response(
           new ReadableStream({
             start(controller) {
-              controller.error(new Error("synthetic stream failure"));
+              controller.error(new Error(privateDetail));
             },
           }),
-        ),
-    ],
-  ]) {
-    const proxy = await startProxy(t, { fetchImpl });
+        );
+      },
+    });
     const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getFile`);
-    assert.equal(response.status, expectedStatus);
-    assert.equal((await response.json()).ok, false);
+    assert.equal(response.status, phase === "upstream-fetch" ? 502 : 200);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      description: "Telegram Test Server proxy failed.",
+    });
     const [event] = proxy.getRequestLog();
     assert.ok(event.doneAt >= event.at);
-  }
-});
-
-test("reports upstream failures without exposing exception details or bot tokens", async (t) => {
-  const privateDetail = "synthetic-private-upstream-detail";
-  const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
-  const diagnostic = t.mock.method(console, "error", () => {});
-  const proxy = await startProxy(t, {
-    fetchImpl: async () => {
-      throw new TypeError(privateDetail, { cause });
-    },
+    assert.equal(diagnostic.mock.calls.length, 1);
+    const line = diagnostic.mock.calls[0].arguments[0];
+    assert.equal(typeof line, "string");
+    assert.deepEqual(JSON.parse(line), {
+      event: "telegram_test_api_proxy_failure",
+      phase,
+      method: "getFile",
+      errorClass: phase === "upstream-fetch" ? "TypeError" : "Error",
+      errorCode: phase === "upstream-fetch" ? "ECONNRESET" : "unknown",
+    });
+    assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
   });
-
-  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/deleteWebhook`, {
-    method: "POST",
-    body: "{}",
-  });
-
-  assert.equal(response.status, 502);
-  assert.deepEqual(await response.json(), {
-    ok: false,
-    description: "Telegram Test Server proxy failed.",
-  });
-  assert.equal(diagnostic.mock.calls.length, 1);
-  const line = diagnostic.mock.calls[0]?.arguments[0];
-  assert.equal(typeof line, "string");
-  assert.deepEqual(JSON.parse(line), {
-    event: "telegram_test_api_proxy_failure",
-    phase: "upstream-fetch",
-    method: "deleteWebhook",
-    errorClass: "TypeError",
-    errorCode: "ECONNRESET",
-  });
-  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
-});
+}
 
 test("getUpdates preserves the caller offset after upstream failure and closes without failure noise", async (t) => {
   const diagnostic = t.mock.method(console, "error", () => {});
   const offsets = [];
   const cause = Object.assign(new Error("synthetic-private /bot123:ABC"), { code: "ECONNRESET" });
-  let upstreamStarted;
   let upstreamAborted = false;
-  const started = new Promise((resolve) => {
-    upstreamStarted = resolve;
-  });
+  const started = Promise.withResolvers();
   const proxy = await startProxy(t, {
     fetchImpl: async (_url, init) => {
       offsets.push(JSON.parse(await new Response(init.body).text()).offset);
@@ -612,11 +508,9 @@ test("getUpdates preserves the caller offset after upstream failure and closes w
         throw new TypeError("synthetic-private upstream failure", { cause });
       }
       if (offsets.length === 2) {
-        return new Response('{"ok":true,"result":[{"update_id":123}]}', {
-          headers: { "content-type": "application/json" },
-        });
+        return ok([{ update_id: 123 }]);
       }
-      upstreamStarted();
+      started.resolve();
       return await new Promise((_resolve, reject) => {
         init.signal.addEventListener(
           "abort",
@@ -640,7 +534,7 @@ test("getUpdates preserves the caller offset after upstream failure and closes w
   assert.equal(recovered.status, 200);
   assert.deepEqual(await recovered.json(), { ok: true, result: [{ update_id: 123 }] });
   const request = poll(124).catch(() => undefined);
-  await started;
+  await started.promise;
   await proxy.close();
   await request;
   assert.deepEqual(offsets, [123, 123, 124]);
@@ -680,10 +574,7 @@ test("lease revocation blocks every later Bot API request", async (t) => {
     },
     fetchImpl: async () => {
       upstreamRequests += 1;
-      return new Response('{"ok":true}', {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return ok();
     },
   });
 

@@ -418,6 +418,13 @@ sys.exit(record.main())
       assert.equal(released, 0);
     },
     async release() {
+      for (const { child } of children) {
+        assert.notEqual(
+          child.exitCode ?? child.signalCode,
+          null,
+          "release must follow child termination",
+        );
+      }
       released += 1;
       observe("release");
     },
@@ -699,11 +706,6 @@ test("uninterrupted composition completes strict readiness and drive on one leas
     assert.equal(Object.hasOwn(options.env, "TELEGRAM_E2E_SUT_BOT_TOKEN"), false);
     assert.equal(JSON.stringify(options.env).includes("synthetic-token"), false);
     assert.equal(JSON.stringify(argv).includes("synthetic-token"), false);
-    assert.equal(
-      child.exitCode !== null || child.signalCode !== null,
-      true,
-      "every child must terminate before successful completion",
-    );
     assert.throws(() => process.kill(-child.pid, 0), { code: "ESRCH" });
   }
 });
@@ -744,7 +746,4 @@ test("uncertain recorder send fences later Node actions while recording incoming
   assert.equal(summary.scenario.actionFailure.actionIndex, 0);
   assert.deepEqual(summary.scenario.gatewayActions, []);
   assert.equal(f.releaseCount(), 1);
-  for (const { child } of f.children) {
-    assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-  }
 });
