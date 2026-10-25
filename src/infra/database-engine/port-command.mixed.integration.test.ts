@@ -1,5 +1,4 @@
 import "./database-suite-workers.test-support.js";
-import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -158,19 +157,12 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(readBackupEngine(workboard).engine, String(failure)).toBe("postgres");
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
         const active = databasePortManifestPath(state.stateDir);
-        const inputsFile = fixtures
-          .manifest(state)
-          .artifacts.find((file) => path.basename(file.path) === "inputs.json");
-        assert(inputsFile);
-        expect(JSON.parse(fs.readFileSync(inputsFile.path, "utf8"))).toMatchObject({
-          selection: {
-            path: ["database", "families", "workboard", "engine"],
-            originalValue: null,
-            effectiveSource: "sqlite",
-          },
-        });
         await port({ [action]: active });
         expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+        expect(config().database?.families).toEqual({
+          state: { engine: "postgres" },
+          ...(action === "resume" ? { workboard: { engine: "postgres" } } : {}),
+        });
         expect(hash(shared)).toBe(other);
         expect(readBackupEngine(workboard).engine).toBe(
           action === "resume" ? "postgres" : "sqlite",
