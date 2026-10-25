@@ -444,7 +444,6 @@
 ["extensions/file-transfer/src/tools/file-fetch-tool.test.ts","openclaw/plugin-sdk/media-store","e5d68122e4440d9805e664100170126e3fe05a2e72056c53973126f420d554f5",1]
 ["extensions/file-transfer/src/tools/file-write-tool.test.ts","openclaw/plugin-sdk/agent-harness-runtime","de05597c0988d25158a50d08efc10361e51a45bdf37422f8656b117ec1f1cec2",1]
 ["extensions/file-transfer/src/workspace-service.test.ts","./shared/audit.js","ed978cbc28dc1f347f4729829593f6e1a94b1eb28ef47d18cd199f06b170e6ee",1]
-["extensions/file-transfer/src/workspace-skill-lifecycle.test.ts","./shared/audit.js","ed978cbc28dc1f347f4729829593f6e1a94b1eb28ef47d18cd199f06b170e6ee",1]
 ["extensions/file-transfer/src/workspace-skills.windows.test.ts","./workspace-worker.js","c7faace9c85cddde2062182e39662519e9db46e694410aeb77a7b4694ee78550",1]
 ["extensions/firecrawl/src/firecrawl-tools.test.ts","./firecrawl-client.js","d58828dd57aae5f1ba2d01031644a8d81970c5464dfa07914e3988d772554500",1]
 ["extensions/geolocation/index.test.ts","./src/database-store.js","c7f83dbd65e30b949fbb29549da13fe0f7fc2d71f4e7f536af3aa0bbe8dfd595",1]
