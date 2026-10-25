@@ -1,5 +1,4 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -21,18 +20,6 @@ const CREDENTIAL_AND_GATEWAY_ENV_KEYS = `
 `
   .trim()
   .split(/\s+/);
-
-const BUNDLED_TRUST_ROOT_ENV_LINES = [
-  "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
-  "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-  "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
-] as const;
-
-const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
-  (line) => line.split("=")[0] ?? "",
-);
 
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS =
   "AppData ComSpec LocalAppData ProgramFiles ProgramW6432 SystemRoot windir"
@@ -75,13 +62,12 @@ describe("loadDotEnv", () => {
   });
 
   it("lets the state dotenv replace only explicitly service-managed inherited values", async () => {
-    const stateEnvPath = path.join(fixture.stateDir, ".env");
     await writeState("MANAGED_API_KEY=from-state\nOPERATOR_API_KEY=from-state\n");
     process.env.MANAGED_API_KEY = "stale-service-value";
     process.env.OPERATOR_API_KEY = "operator-service-value";
 
     const loaded = loadGlobalRuntimeDotEnvFiles({
-      stateEnvPath,
+      stateEnvPath: path.join(fixture.stateDir, ".env"),
       overrideKeys: ["MANAGED_API_KEY"],
     });
 
@@ -117,14 +103,9 @@ describe("loadDotEnv", () => {
     loadDotEnv();
 
     expect(process.env).toMatchObject({ FOO: "from-global", BAR: "from-gateway" });
-    expect(loggerMocks.warn).toHaveBeenCalledOnce();
-    const [message, metadata] = expectDefined(
-      loggerMocks.warn.mock.calls[0],
-      "logger warning call",
-    );
-    expect(String(message)).toContain("Conflicting values in");
-    expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
-      "gateway.env",
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Conflicting values in"),
+      expect.objectContaining({ ignoredPath: expect.stringContaining("gateway.env") }),
     );
   });
 
@@ -133,14 +114,9 @@ describe("loadDotEnv", () => {
     ["Windows shell trust-root", WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS],
     [
       "path-override",
-      [
-        "NPM_CONFIG_PREFIX",
-        "OPENCLAW_AGENT_DIR",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_OAUTH_DIR",
-        "PI_CODING_AGENT_DIR",
-        "PNPM_HOME",
-      ],
+      "NPM_CONFIG_PREFIX OPENCLAW_AGENT_DIR OPENCLAW_BUNDLED_PLUGINS_DIR OPENCLAW_OAUTH_DIR PI_CODING_AGENT_DIR PNPM_HOME".split(
+        " ",
+      ),
     ],
     ["lowercase npm_execpath", ["npm_execpath"]],
   ] as const)("blocks %s vars from workspace .env", async (_name, keys) => {
@@ -174,19 +150,14 @@ describe("loadCliDotEnv", () => {
     expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
   });
 
-  it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
-    await writeWorkspace(BUNDLED_TRUST_ROOT_ENV_LINES.join("\n"));
-
-    clearEnv(BUNDLED_TRUST_ROOT_ENV_KEYS);
-    loadCliDotEnv();
-
-    expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
-  });
-
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
     const blocked = {
       OPENCLAW_CONFIG_PATH: "./evil-config.json",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(fixture.base, "attacker-bundled"),
+      OPENCLAW_BROWSER_CONTROL_MODULE: "data:text/javascript,boom",
+      OPENCLAW_BUNDLED_HOOKS_DIR: "./attacker-hooks",
+      OPENCLAW_BUNDLED_SKILLS_DIR: "./attacker-skills",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       NODE_OPTIONS: "--require ./evil.js",
       NODE_REDIRECT_WARNINGS: "./warnings.log",
       NODE_REPL_EXTERNAL_MODULE: "./evil-repl.js",

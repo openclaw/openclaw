@@ -68,10 +68,7 @@ it.each([
         parentPid: launcher,
         startIdentity: "200",
       },
-      {
-        ...processRow(launcher, commandLine),
-        startIdentity: String(parentStart),
-      },
+      { ...processRow(launcher, commandLine), startIdentity: String(parentStart) },
       processRow(peer, 'node "C:\\Temp\\Retained Runtime\\tree\\worker.js"'),
       processRow(peer + 1, "node worker.js", "c:/temp/retained runtime/tree"),
       { pid: peer + 2 },
@@ -102,16 +99,17 @@ it.each([
 type ProcessRow = ReturnType<
   typeof import("./windows-process-census.js").readWindowsProcessCensus
 >[number];
+type HandoffOptions = {
+  sid?: string | null;
+  legacy?: boolean;
+  parents?: ProcessRow[];
+  familyExited?: boolean;
+};
 type HandoffCase = [
   name: string,
   facts: Omit<ProcessRow, "pid">,
   result?: "matching" | "unverified",
-  options?: {
-    sid?: string | null;
-    legacy?: boolean;
-    parents?: ProcessRow[];
-    familyExited?: boolean;
-  },
+  options?: HandoffOptions,
 ];
 const identity = (parentPid: number, startIdentity = "300") => ({ parentPid, startIdentity });
 const reusedParent = [{ pid: peer + 10, ...identity(0, "400") }];
@@ -123,6 +121,11 @@ const denied = { accessDenied: true };
 const differentAccount = { sid: "S-1-5-21-200" };
 const exited = { familyExited: true };
 const reused = { parents: reusedParent };
+const runtimeHolder = { ...identity(peer + 10), cwd: "/tmp/retained runtime/tree" };
+const otherOpenClaw = { ...identity(0), commandLine: "openclaw-gateway" };
+const readable = { ...identity(launcher), commandLine: "node worker.js", cwd: "C:\\app" };
+const deniedParent = { parents: [{ pid: peer + 10, ...denied }] };
+const reusedDriver = { parents: [{ pid: launcher, ...identity(0, "400") }] };
 it.each<HandoffCase>([
   ["denied unrelated process, same account", denied],
   ["denied process, different account", denied, "unverified", differentAccount],
@@ -133,45 +136,16 @@ it.each<HandoffCase>([
   ["pre-handoff process with reused parent PID", identity(launcher, "100")],
   ["later-born process, reused parent", opaqueWorker, "unverified", reused],
   ["unreadable after family exit", identity(peer + 10), undefined, exited],
-  [
-    "runtime holder, reused parent",
-    { ...identity(peer + 10), cwd: "/tmp/retained runtime/tree" },
-    "matching",
-    reused,
-  ],
-  [
-    "OpenClaw with unrelated ancestry",
-    { ...identity(0), commandLine: "openclaw-gateway" },
-    "matching",
-    exited,
-  ],
-  [
-    "readable unrelated, different account",
-    identity(peer + 10, "100"),
-    undefined,
-    differentAccount,
-  ],
+  ["runtime holder, reused parent", runtimeHolder, "matching", reused],
+  ["OpenClaw after family exit", otherOpenClaw, "matching", exited],
+  ["unrelated, different account", identity(peer + 10, "100"), undefined, differentAccount],
   ["descendant born in the same millisecond", identity(launcher, "200"), "matching"],
   ["unreadable descendant", identity(launcher), "matching"],
-  [
-    "descendant, reused driver PID",
-    identity(launcher),
-    "matching",
-    { parents: [{ pid: launcher, ...identity(0, "400") }] },
-  ],
+  ["descendant, reused driver PID", identity(launcher), "matching", reusedDriver],
   ["grandchild, reused intermediate PID", identity(peer + 10), "unverified", reused],
   ["surviving worker with an exited intermediate parent", opaqueWorker, "unverified"],
-  [
-    "worker, denied parent",
-    identity(peer + 10),
-    "unverified",
-    { parents: [{ pid: peer + 10, ...denied }] },
-  ],
-  [
-    "readable descendant",
-    { ...identity(launcher), commandLine: "node worker.js", cwd: "C:\\app" },
-    "matching",
-  ],
+  ["worker, denied parent", identity(peer + 10), "unverified", deniedParent],
+  ["readable descendant", readable, "matching"],
   [
     "positive artifact evidence on denied row",
     { accessDenied: true, commandLine: "node --id=update-run-123" },
@@ -183,7 +157,7 @@ it.each<HandoffCase>([
     _name,
     facts,
     result,
-    { sid = "S-1-5-21-100", legacy, parents, familyExited }: NonNullable<HandoffCase[3]> = {},
+    { sid = "S-1-5-21-100", legacy, parents, familyExited }: HandoffOptions = {},
   ) => {
     const matching = result === "matching";
     const unverified = result === "unverified";

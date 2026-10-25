@@ -47,15 +47,12 @@ function mint(context = captureContext(), assertCurrent?: () => void) {
   });
 }
 
-function afterCommand(
-  effect: (command: Parameters<Parameters<typeof probe.command>[1]>[0]) => void | Promise<void>,
-  once = false,
-) {
+function afterCommand(effect: () => void | Promise<void>, once = false) {
   return probe.command(
     stateWorker,
     async (command, options, scope) => {
       const result = await scope.execute(command, options);
-      await effect(command);
+      await effect();
       return result;
     },
     { once },
@@ -78,9 +75,7 @@ beforeAll(() => {
   database = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 test.each([
   { operation: "register", refusedStage: "commit" },
