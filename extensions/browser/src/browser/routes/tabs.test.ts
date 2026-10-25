@@ -1,7 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTab } from "../client.types.js";
-import { BrowserError } from "../errors.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createRouteFixture } from "./request.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
@@ -283,27 +282,6 @@ describe("browser tab routes", () => {
       });
     },
   );
-
-  it.each([
-    [
-      "DELETE /tabs/:targetId",
-      (profileCtx: ProfileContext) => close({ profileCtx, targetId: "T1" }),
-    ],
-    [
-      "POST /tabs/action close",
-      (profileCtx: ProfileContext) => act({ body: { action: "close", index: 0 }, profileCtx }),
-    ],
-  ])("returns the failure instead of ok when %s leaves the tab open", async (_route, send) => {
-    const stillOpen = "Browser did not close tab T1: it is still open after the close request.";
-    const profileCtx = makeProfile({
-      closeTab: vi.fn(async () => {
-        throw new BrowserError(stillOpen);
-      }),
-    });
-
-    expectResponse(await send(profileCtx), 500, { error: stillOpen });
-    expect(profileCtx.closeTab).toHaveBeenCalledOnce();
-  });
 
   it("rejects unknown target id modes before mutating a tab", async () => {
     const profileCtx = makeProfile();

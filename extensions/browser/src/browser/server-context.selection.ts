@@ -201,11 +201,16 @@ export function createProfileSelectionOps({
       let stillOpen: boolean;
       try {
         stillOpen = (await listTabs(options)).some((tab) => tab.targetId === targetId);
-      } catch {
+      } catch (error) {
         options?.signal?.throwIfAborted();
-        // Accepted edge: a browser that stops answering right after the close (for example
-        // one that exited with its last tab) has no tab left to observe, as before this check.
-        return;
+        // A failed listing (timeout, 429, policy) proves nothing about the tab. Accepted edge:
+        // a browser that exited with its last tab also lands here and reports this error.
+        throw new BrowserError(
+          `Close was requested but tab ${targetId} may still be open: ` +
+            `the tab list could not be read (${formatErrorMessage(error)}).`,
+          500,
+          { cause: error },
+        );
       }
       if (!stillOpen) {
         return;

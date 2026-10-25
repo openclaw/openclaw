@@ -692,7 +692,7 @@ describe("browser tab selection and ownership", () => {
     expect(runtime.lastTargetId).toBe("POPUP");
   });
 
-  it("treats a browser that stops answering after the close as closed", async () => {
+  it("rejects, and keeps the sticky target, when the tab list fails after the close request", async () => {
     let closeRequested = false;
     const { openclaw, runtime } = setup(async (url) => {
       if (url.includes("/json/close/")) {
@@ -702,11 +702,14 @@ describe("browser tab selection and ownership", () => {
       if (url.includes("/json/list") && !closeRequested) {
         return Response.json([page("POPUP")]);
       }
-      throw new TypeError("fetch failed");
+      return new Response("slow down", { status: 429 });
     });
     runtime.lastTargetId = "POPUP";
 
-    await expect(openclaw.closeTab("POPUP")).resolves.toBe("POPUP");
-    expect(runtime.lastTargetId).toBeNull();
+    await expect(openclaw.closeTab("POPUP")).rejects.toMatchObject({
+      name: "BrowserError",
+      message: expect.stringMatching(/tab POPUP may still be open.*rate limit/),
+    });
+    expect(runtime.lastTargetId).toBe("POPUP");
   });
 });
