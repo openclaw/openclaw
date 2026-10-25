@@ -956,6 +956,35 @@ describe("runtime config load subscriptions", () => {
     }
   });
 
+  it("retains schema admission when config loading publishes during editor activation", async () => {
+    const schema = deferred<unknown>();
+    const request = vi.fn(async (method: string) =>
+      method === "config.schema" ? schema.promise : makeSnapshot(),
+    );
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    const stop = runtimeConfig.subscribe(() => {
+      if (!runtimeConfig.schemaRead) {
+        void runtimeConfig.ensureSchemaLoaded();
+      }
+    });
+    const configRead = runtimeConfig.ensureLoaded();
+    const schemaRead = runtimeConfig.ensureSchemaLoaded();
+    try {
+      await configRead;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("config.schema", {}));
+      expect(state.configSchemaLoading).toBe(true);
+      schema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
+      await schemaRead;
+      expect(state.configSchemaLoading).toBe(false);
+      expect(state.configSchemaVersion).toBe("ready");
+      expect(request.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(1);
+    } finally {
+      stop();
+      schema.resolve({ schema: { type: "object" }, uiHints: {}, version: "ready" });
+      runtimeConfig.dispose();
+    }
+  });
+
   it("publishes schema loading immediately and leaves a failed read for explicit retry", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("temporarily unavailable"));
     request.mockResolvedValue({

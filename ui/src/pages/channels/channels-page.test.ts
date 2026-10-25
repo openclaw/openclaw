@@ -338,9 +338,9 @@ describe("ChannelsPage lifecycle", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const gateway = createGateway(["operator.pairing"]);
     const source = createContext(gateway);
-    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing");
     const page = mountPage(source.context);
-    await settle();
+    await waitForSolid(() => expect(source.channels.state.pairingSnapshot).not.toBeNull());
     refreshPairing.mockClear();
 
     await vi.advanceTimersByTimeAsync(30_000);

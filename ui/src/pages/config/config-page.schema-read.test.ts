@@ -80,6 +80,7 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
   const context = { gateway, runtimeConfig } as ApplicationContext;
   const view = mountConfigPage(context, { pageId: "infrastructure" });
   try {
+    await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(reads).toBe(1);
       expect(view.page.querySelector(".config-loading")).not.toBeNull();

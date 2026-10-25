@@ -216,6 +216,10 @@ export function createRuntimeConfigCapability(
             bootstrap,
             displayRead ? currentConfigRead(state)?.settled : undefined,
           );
+          // Hand schema admission to the editor before a load publication can reenter it.
+          if (pendingSchema) {
+            state.configSchemaLoading = false;
+          }
           editor.setWritesSuspended(...suspension);
           stopEditor = editor.subscribe(publish);
           if (state.configSnapshot) {
@@ -318,9 +322,6 @@ export function createRuntimeConfigCapability(
     }
     pendingSchema = invoke<Result<void, string>>(
       async (loaded) => {
-        // The module-loading claim hands off to the schema read without a
-        // false idle publication that could admit another observer's read.
-        state.configSchemaLoading = false;
         if (refresh) {
           return loaded.refreshSchema();
         }
