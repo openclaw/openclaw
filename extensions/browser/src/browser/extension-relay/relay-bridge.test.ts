@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
   FakeSocket,
@@ -25,8 +25,11 @@ function frames(socket: FakeSocket, type: string) {
 }
 
 const attached = (socket: FakeSocket) => events(socket, "Target.attachedToTarget");
-const attachedSession = (socket: FakeSocket) =>
-  asOptionalRecord(attached(socket).at(-1)?.params)?.sessionId;
+function attachedSession(socket: FakeSocket) {
+  const sessionId = asOptionalRecord(attached(socket).at(-1)?.params)?.sessionId;
+  assert(typeof sessionId === "string", "Expected attached session ID");
+  return sessionId;
+}
 
 function deliver(receiver: { onMessage(raw: string): void }, message: unknown) {
   receiver.onMessage(JSON.stringify(message));
