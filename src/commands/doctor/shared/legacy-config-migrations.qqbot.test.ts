@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRecord } from "../../../config/legacy.shared.js";
+import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
+import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
 import { LEGACY_CONFIG_MIGRATIONS_QQBOT } from "./legacy-config-migrations.qqbot.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./open-policy-allowfrom.js";
 
@@ -29,6 +31,17 @@ describe("Tencent QQBot 2.0 config migrations", () => {
     expect(JSON.stringify(config)).not.toContain("placeholder");
     const repaired = maybeRepairOpenPolicyAllowFrom(config);
     expect(repaired).toEqual({ config, changes: [] });
+    const schema = widenOfficialExternalChannelSecretSchema({
+      channelId: "qqbot",
+      schema: { type: "object", additionalProperties: true },
+    });
+    expect(
+      validateJsonSchemaValue({
+        cacheKey: "qqbot-doctor-order-regression",
+        schema: schema ?? {},
+        value: qqbot,
+      }).ok,
+    ).toBe(true);
   });
 
   it("allocates distinct file SecretRefs for root and colliding account aliases", () => {

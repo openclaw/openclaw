@@ -152,8 +152,12 @@ describe("pipeline", () => {
 
   it("accepts and deduplicates an authenticated inbound envelope", async () => {
     const text = `Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`;
+    const classify = vi.spyOn(guard, "classify");
     const options = inbound(text);
     const result = await composeInbound(options);
+    expect(classify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ direction: "inbound", text }),
+    );
     expect(result).toMatchObject({
       disposition: "accepted",
       body: { text },

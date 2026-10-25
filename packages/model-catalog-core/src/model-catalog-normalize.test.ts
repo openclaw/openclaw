@@ -295,6 +295,27 @@ const validBundle = {
   sourceCommit: "abc123",
   providers: { anthropic: cleanProvider },
 };
+
+it("accepts v1 metadata while deeply stripping transport overrides", () => {
+  const provider = {
+    defaultModel: "claude-test",
+    models: [{ id: "claude-test", compat: { nested: {} } }],
+  };
+  const pricing = { "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 } };
+  const parsed = sanitizeV1({
+    ...validBundle,
+    providers: {
+      anthropic: {
+        ...provider,
+        ...transport,
+        models: [{ id: "claude-test", ...transport, compat: { nested: transport } }],
+      },
+    },
+    pricing,
+  });
+  expect(parsed.providers.anthropic).toEqual(provider);
+  expect(parsed.pricing).toEqual(pricing);
+});
 const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
 const modelV2 = (id: string, provider = "first", pricing: unknown = { status: "unknown" }) => ({
   id,

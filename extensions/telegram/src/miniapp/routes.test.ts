@@ -152,6 +152,19 @@ function createPendingAuthRequest(ip: string): IncomingMessage {
   return prepareAuthRequest(new IncomingMessage(new Socket()), ip);
 }
 
+it("settles an early client close without leaking request-body listeners", async () => {
+  const req = createPendingAuthRequest("203.0.113.51");
+  const responsePromise = callRouteRequest(createRoute(), req);
+  req.emit("close");
+  const res = await responsePromise;
+  expect(res.statusCode).toBe(400);
+  expect(res.body).toBe("Connection closed");
+  for (const event of ["data", "end", "error", "close"] as const) {
+    expect(req.listenerCount(event), event).toBe(0);
+  }
+  expect(issueDeviceBootstrapToken).not.toHaveBeenCalled();
+});
+
 function prepareAuthRequest(req: IncomingMessage, ip: string, contentType = "application/json") {
   req.method = "POST";
   req.url = "/__openclaw_tg_miniapp/auth";

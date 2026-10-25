@@ -155,6 +155,9 @@ describe("bedrock mantle discovery", () => {
   it("rejects a private DNS destination before sending the bearer credential", async () => {
     catalogTransport.lookup.mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]);
     await expect(discover({ discoveryMode: "strict" })).rejects.toThrow(/private|internal/i);
+    expect(catalogTransport.lookup).toHaveBeenCalledWith(`bedrock-mantle.${testRegion}.api.aws`, {
+      all: true,
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -98,7 +98,11 @@ async function parseAction(action: string, opts: Record<string, unknown>) {
   if (!command) {
     throw new Error(`unknown message fixture action: ${action}`);
   }
-  const defaults = { pollQuestion: "Ship it?", pollOption: ["Yes", "No"], threadName: "ops" };
+  const defaults: Record<string, unknown> = {
+    pollQuestion: "Ship it?",
+    pollOption: ["Yes", "No"],
+    threadName: "ops",
+  };
   const argv = ["message", ...commandPath];
   for (const [key, value] of Object.entries({ ...defaults, ...opts })) {
     const option = command.options.find((candidate) => candidate.attributeName() === key);

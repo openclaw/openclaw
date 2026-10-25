@@ -10,6 +10,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
@@ -294,6 +295,15 @@ describe("opencode-go provider plugin", () => {
     const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenCode Go static provider");
+    }
+    const advertisedIds = manifest.modelCatalog.providers["opencode-go"].models
+      .filter((model) => !("status" in model))
+      .map((model) => model.id);
+    const modelIds = result.provider.models.map((model) => model.id);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+    expect(modelIds.toSorted()).toEqual(advertisedIds.toSorted());
+    for (const modelId of advertisedIds) {
+      expect(dynamicModel(modelId)).toMatchObject({ id: modelId, provider: "opencode-go" });
     }
     expect(result.provider.models).toContainEqual(
       expect.objectContaining({ id: "deepseek-v4-pro" }),
