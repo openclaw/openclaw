@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
-import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   replayChatDisplay,
   type ChatDisplayFrame,
@@ -14,7 +13,6 @@ import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   createGatewayConfigPath,
   removeGatewayTempHome,
@@ -22,6 +20,7 @@ import {
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const prefix = "The answer is";
@@ -33,7 +32,7 @@ const displayFrames: ChatDisplayFrame[] = [];
 const publishedMessages = new Map<string, unknown[]>();
 let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
-let provider: ReturnType<typeof createServer>;
+let provider: ReturnType<typeof createTrackedProvider>;
 
 function messageText(message: unknown): string {
   return isRecord(message) ? collectTextContentBlocks(message.content).join("\n") : "";
@@ -108,23 +107,21 @@ beforeAll(async () => {
   home = await setupGatewayTempHome({ prefix: "openclaw-recovered-output-" });
   setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
   setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
-  provider = createServer((request, response) => {
-    void (async () => {
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      const payload: Record<string, unknown> = JSON.parse(await readRequestText(request));
-      if (typeof payload.model !== "string") {
-        throw new Error("Responses request has no model");
-      }
-      const attempts = requests.get(payload.model) ?? [];
-      attempts.push(payload);
-      requests.set(payload.model, attempts);
-      writeResponse(response, payload.model, attempts.length);
-    })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
+  provider = createTrackedProvider((raw, response, request) => {
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    const payload: Record<string, unknown> = JSON.parse(raw);
+    if (typeof payload.model !== "string") {
+      throw new Error("Responses request has no model");
+    }
+    const attempts = requests.get(payload.model) ?? [];
+    attempts.push(payload);
+    requests.set(payload.model, attempts);
+    writeResponse(response, payload.model, attempts.length);
   });
-  const baseUrl = await listenProvider(provider);
+  const baseUrl = await provider.listen();
   const providerConfig = buildMockOpenAiResponsesProvider(baseUrl).config;
   const models = [...scenarios, "recovered", "terminal-fallback"].map((id) => {
     const model = buildMockOpenAiResponsesProvider(baseUrl, id).config.models[0];
@@ -207,7 +204,7 @@ afterAll(async () => {
     }
   } finally {
     if (provider) {
-      await closeProvider(provider);
+      await provider.close();
     }
     if (home) {
       home.envSnapshot.restore();

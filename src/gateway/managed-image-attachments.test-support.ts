@@ -4,6 +4,7 @@ import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { buffer as readResponseBuffer } from "node:stream/consumers";
 import { deserialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -157,11 +158,7 @@ export function requireBlock(
   blocks: readonly Record<string, unknown>[],
   index = 0,
 ): Record<string, unknown> {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block;
+  return expectDefined(blocks[index], `block ${index}`);
 }
 
 export function requireAttachmentIdFromUrl(url: unknown): string {
@@ -177,10 +174,7 @@ export async function requireManagedOriginalPath(
   stateDir: string,
   attachmentId: string,
 ): Promise<string> {
-  const record = await readManagedImageRecord(attachmentId, stateDir);
-  if (!record) {
-    throw new Error(`expected managed image record ${attachmentId}`);
-  }
+  const record = expectDefined(await readManagedImageRecord(attachmentId, stateDir), attachmentId);
   return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
 }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -22,7 +23,10 @@ import {
   waitForApprovalAccepted,
 } from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
-import { withRequestedExecApproval } from "./server-methods/exec-approval.test-support.js";
+import {
+  requestExecApproval,
+  withRequestedExecApproval,
+} from "./server-methods/exec-approval.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -94,7 +98,6 @@ async function expectHeldRegistration<T>(
 
 it("prepares the real approval worker before starting a requested request", async (testContext) => {
   const preparation = holdPoint<unknown>();
-  const attemptedCreate = deferred();
   const prepare = approvalFixtures.createPreparedTestApprovalManager;
   vi.spyOn(approvalFixtures, "createPreparedTestApprovalManager").mockImplementationOnce(
     async (...args) => {
@@ -104,7 +107,6 @@ it("prepares the real approval worker before starting a requested request", asyn
     },
   );
   const earlyCreate = vi.spyOn(ExecApprovalManager.prototype, "create").mockImplementation(() => {
-    attemptedCreate.resolve();
     throw new Error("Approval record created before worker preparation completed");
   });
   const request = withRequestedExecApproval(
@@ -118,13 +120,11 @@ it("prepares the real approval worker before starting a requested request", asyn
   );
   const settled = Promise.allSettled([request]);
   try {
-    expect(
-      await Promise.race([
-        preparation.reached.then(() => "prepared"),
-        attemptedCreate.promise.then(() => "record-created"),
-        request.then(() => "request-completed"),
-      ]),
-    ).toBe("prepared");
+    await awaitGateBeforeSettlement(
+      preparation.reached,
+      request,
+      "Request ended before preparation",
+    );
     expect(earlyCreate).not.toHaveBeenCalled();
     earlyCreate.mockRestore();
     preparation.release();
@@ -208,7 +208,7 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
   const fixture = createTestApprovalFixture(testContext);
   const { manager } = fixture;
   await fixture.run(async () => {
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const reviewer = makeGatewayClient({
       connId: "fixture-reviewer",
@@ -230,16 +230,7 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
       async () => {
         const { pending, response } = await waitForApprovalAccepted(respond, (observedRespond) =>
           fixture.track(
-            Promise.resolve(
-              handler({
-                req: { type: "req", method: "exec.approval.request", id: "fixture", params },
-                params,
-                client: null,
-                isWebchatConnect: () => false,
-                respond: observedRespond,
-                context,
-              }),
-            ),
+            requestExecApproval({ handlers, params, respond: observedRespond, context }),
           ),
         );
         const [record] = await manager.listPendingRecords();

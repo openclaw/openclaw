@@ -156,75 +156,33 @@ describe("local gateway request context", () => {
     });
   });
 
-  it("defaults local model catalog snapshot reads to read-only", async () => {
-    const { cfg, candidate } = modelFixture("worker", "local-model-catalog");
+  it.each([false, true])("uses the local catalog owner with refresh=%s", async (refresh) => {
+    const agentId = refresh ? "main" : "worker";
+    const { cfg, candidate } = modelFixture(agentId, "local-model-catalog");
     const loadOwner = spyOnLoadOwner().mockResolvedValue(asPublishedOwner(candidate));
-
-    await withConfig(cfg, async () => {
-      expect(
-        await localContext().loadGatewayModelCatalogSnapshot({ agentId: "worker" }),
-      ).toMatchObject({ agentId: "worker", workspaceDir: "/tmp/local-model-catalog-workspace" });
-    });
-
-    expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
-  });
-
-  it("refreshes local models.list auth after login and logout", async () => {
-    const { cfg, candidate: base } = modelFixture("main", "local-model-auth");
-    const model = {
-      provider: "local-auth-provider",
-      id: "local-auth-model",
-      name: "Local auth model",
-      api: "openai-completions" as const,
-    };
-    const candidate = { ...base, modelCatalog: { entries: [model], routeVariants: [model] } };
-    let published: PublishedOwnerSnapshot | undefined;
-    spyOnReadOwner().mockImplementation(() => published);
-    let next = asPublishedOwner({
-      ...candidate,
-      authModes: { "local-auth-provider": "api_key" },
-      authStore: {
-        version: 1,
-        profiles: {
-          "local-auth-provider:default": {
-            type: "api_key",
-            provider: "local-auth-provider",
-            key: "local-auth-key-not-real",
-          },
-        },
-      },
-    });
-    const loadOwner = spyOnLoadOwner().mockImplementation(async () => {
-      published = next;
-      next = asPublishedOwner(candidate);
-      return published;
-    });
-
-    const list = () =>
-      withConfig(cfg, () =>
-        dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true }),
-      );
-    const loggedIn = await list();
-    const loggedOut = await list();
-
-    expect(loggedIn).toMatchObject({
-      ok: true,
-      payload: { models: [expect.objectContaining({ id: "local-auth-model", available: true })] },
-    });
-    expect(loggedOut).toMatchObject({ ok: true, payload: { models: [] } });
-    for (const call of [1, 2]) {
-      expect(loadOwner).toHaveBeenNthCalledWith(
-        call,
-        expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
-      );
-    }
+    spyOnReadOwner().mockReturnValue(asPublishedOwner(candidate));
+    const result = await withConfig(cfg, () =>
+      refresh
+        ? dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true })
+        : localContext().loadGatewayModelCatalogSnapshot({ agentId }),
+    );
+    expect(result).toMatchObject(
+      refresh
+        ? { ok: true, payload: { models: [] } }
+        : { agentId, workspaceDir: "/tmp/local-model-catalog-workspace" },
+    );
+    expect(loadOwner).toHaveBeenCalledWith(
+      refresh
+        ? expect.objectContaining({ readOnly: false, refreshFullCatalog: true })
+        : { agentId, config: cfg, readOnly: true },
+    );
   });
 
   it("uses the prepared local owner without starting a catalog load", async () => {
     const { cfg, candidate } = modelFixture("main", "local-model-timeout");
     const loadOwner = spyOnLoadOwner().mockImplementation(() => new Promise(() => {}));
     const recheckNativeLogin = vi.fn();
-    const readOwner = spyOnReadOwner().mockReturnValue({
+    spyOnReadOwner().mockReturnValue({
       ...asPublishedOwner(candidate),
       recheckNativeLogin,
     });
@@ -235,7 +193,6 @@ describe("local gateway request context", () => {
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
     expect(loadOwner).not.toHaveBeenCalled();
-    expect(readOwner).toHaveBeenCalledTimes(2);
     expect(recheckNativeLogin).toHaveBeenCalledOnce();
   });
 

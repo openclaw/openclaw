@@ -142,44 +142,40 @@ describe("private worker launch wire", () => {
       "private runner proof",
     );
     const received = delta <= 0 ? once(client, "message") : undefined;
-    const sent = vi.spyOn(socket, "send");
+    using sent = vi.spyOn(socket, "send");
     const dispatched = vi.fn((id: string) => {
       settle(id, null);
     });
-    try {
-      const result = await nodeWorkerSupervisorTransport.invoke({
-        node,
-        ...launchParams(input),
-        isDispatchAuthorized: () => true,
-        onDispatchReady: dispatched,
+    const result = await nodeWorkerSupervisorTransport.invoke({
+      node,
+      ...launchParams(input),
+      isDispatchAuthorized: () => true,
+      onDispatchReady: dispatched,
+    });
+    if (received) {
+      expect(result.ok).toBe(true);
+      const [data] = await received;
+      const frame = Buffer.from(data);
+      expect(frame.byteLength).toBe(targetBytes);
+      const decoded = JSON.parse(frame.toString("utf8"));
+      const launch = parseNodeWorkerLaunchInput(decoded.payload.paramsJSON);
+      expect(launch.descriptor.assignment.systemPrompt?.length).toBe(
+        input.descriptor.assignment.systemPrompt.length,
+      );
+      expect(launch.descriptor.assignment.operationalRunInstance).toEqual(
+        input.descriptor.assignment.operationalRunInstance,
+      );
+      expect(dispatched).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "worker launch exceeds the node payload limit",
+        },
       });
-      if (received) {
-        expect(result.ok).toBe(true);
-        const [data] = await received;
-        const frame = Buffer.from(data);
-        expect(frame.byteLength).toBe(targetBytes);
-        const decoded = JSON.parse(frame.toString("utf8"));
-        const launch = parseNodeWorkerLaunchInput(decoded.payload.paramsJSON);
-        expect(launch.descriptor.assignment.systemPrompt?.length).toBe(
-          input.descriptor.assignment.systemPrompt.length,
-        );
-        expect(launch.descriptor.assignment.operationalRunInstance).toEqual(
-          input.descriptor.assignment.operationalRunInstance,
-        );
-        expect(dispatched).toHaveBeenCalledOnce();
-      } else {
-        expect(result).toEqual({
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message: "worker launch exceeds the node payload limit",
-          },
-        });
-        expect(sent).not.toHaveBeenCalled();
-        expect(dispatched).not.toHaveBeenCalled();
-      }
-    } finally {
-      sent.mockRestore();
+      expect(sent).not.toHaveBeenCalled();
+      expect(dispatched).not.toHaveBeenCalled();
     }
   });
 
@@ -195,7 +191,7 @@ describe("private worker launch wire", () => {
         transcriptNextSeq: 2,
       }),
     };
-    const sent = vi.spyOn(socket, "send");
+    using sent = vi.spyOn(socket, "send");
     const received = once(client, "message");
     const dispatched = vi.fn();
     const { controller, outcome } = startLaunch(input, 60_000, dispatched);
@@ -216,7 +212,6 @@ describe("private worker launch wire", () => {
       controller.abort();
       await vi.runAllTimersAsync();
       await outcome;
-      sent.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -232,14 +227,14 @@ describe("private worker launch wire", () => {
       const getCurrentNode = nodeWorkerSupervisorTransport.getCurrentNode.bind(
         nodeWorkerSupervisorTransport,
       );
-      const discovery = vi
+      using _ = vi
         .spyOn(nodeWorkerSupervisorTransport, "getCurrentNode")
         .mockImplementationOnce(async (requestedNodeId) => {
           const node = await getCurrentNode(requestedNodeId);
           vi.setSystemTime(startedAt + 10_000);
           return node;
         });
-      const sent = vi.spyOn(socket, "send");
+      using sent = vi.spyOn(socket, "send");
       const unhandledRejection = vi.fn();
       process.on("unhandledRejection", unhandledRejection);
       const { controller, outcome } = startLaunch(
@@ -259,8 +254,6 @@ describe("private worker launch wire", () => {
         await vi.runAllTimersAsync();
         await outcome;
         process.off("unhandledRejection", unhandledRejection);
-        discovery.mockRestore();
-        sent.mockRestore();
         vi.useRealTimers();
       }
     },
@@ -271,23 +264,19 @@ describe("private worker launch wire", () => {
     expect(socket.readyState).toBe(WebSocket.OPEN);
     expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "open" })).toBe(true);
     await received;
-    const sent = vi.spyOn(socket, "send");
-    try {
-      socket.close(1000, "runtime proof");
-      expect(socket.readyState).toBe(WebSocket.CLOSING);
-      expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
-      expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
-      const onDispatchReady = vi.fn();
-      await expect(
-        nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
-      ).resolves.toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-      });
-      expect(onDispatchReady).not.toHaveBeenCalled();
-      expect(sent).not.toHaveBeenCalled();
-    } finally {
-      sent.mockRestore();
-    }
+    using sent = vi.spyOn(socket, "send");
+    socket.close(1000, "runtime proof");
+    expect(socket.readyState).toBe(WebSocket.CLOSING);
+    expect(nodeRegistry.sendEvent(nodeId, "runtime.proof", { phase: "closing" })).toBe(false);
+    expect(nodeRegistry.sendEventRaw(nodeId, "runtime.raw", null)).toBe(false);
+    const onDispatchReady = vi.fn();
+    await expect(
+      nodeRegistry.invoke({ nodeId, command: "runtime.proof", timeoutMs: 0, onDispatchReady }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+    });
+    expect(onDispatchReady).not.toHaveBeenCalled();
+    expect(sent).not.toHaveBeenCalled();
   });
 });

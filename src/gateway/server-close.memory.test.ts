@@ -182,21 +182,16 @@ it("settles accepted Memory sync before closing its existing executor", async ({
     await closing;
     expect(requests()).not.toContainEqual(agentOpen);
     expect(shared.db.isOpen).toBe(false);
-    const stored = new DatabaseSync(agentPath, { readOnly: true });
-    const leases = new DatabaseSync(shared.path, { readOnly: true });
-    try {
-      const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
-      const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
-      const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
-      expect(chunks.all("memory/shutdown.md")).toEqual([
-        { text: expect.stringContaining("Keep the synthetic blue release preference.") },
-      ]);
-      expect(cached.get()).toMatchObject({ count: 1 });
-      expect(live.all(agentPath)).toEqual([]);
-    } finally {
-      stored.close();
-      leases.close();
-    }
+    using stored = new DatabaseSync(agentPath, { readOnly: true });
+    using leases = new DatabaseSync(shared.path, { readOnly: true });
+    const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
+    const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
+    const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
+    expect(chunks.all("memory/shutdown.md")).toEqual([
+      { text: expect.stringContaining("Keep the synthetic blue release preference.") },
+    ]);
+    expect(cached.get()).toMatchObject({ count: 1 });
+    expect(live.all(agentPath)).toEqual([]);
   } finally {
     releaseEmbedding.resolve();
     await Promise.allSettled([syncing, closing]);
