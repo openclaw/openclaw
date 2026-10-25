@@ -2361,7 +2361,6 @@
 ["src/agents/tools/sessions-send-followup.test.ts","./gateway-caller-context.js","5196957a8200969e15115b74d0115748dd73abfa4f48d0f839e5109d45428fd8",1]
 ["src/agents/tools/sessions-send-followup.test.ts","./sessions-send-reply-flow.js","9fbfbc87599db0d03bbf3fa44a6eeef05f8bddd6c284e6b29f4be4a17d3c9f71",1]
 ["src/agents/tools/sessions-send-owner-continuation.test.ts","../../config/config.js","e4084293a4d590e53af4c73d8132a2df411c72a4e8113581fe5b24e370965689",1]
-["src/agents/tools/sessions-send-owner-continuation.test.ts","../../config/sessions/transcript-write-context.js","24ad4a8e630ff3aec3d1c813b60167903f02cee5365e567a8440e82dc4599e30",1]
 ["src/agents/tools/sessions-send-owner-continuation.test.ts","../../gateway/session-sharing-policy.js","377c52e080105d4413dddd85c13aceecf1a1ceef5e9048ed1a7ad80fd23dd225",1]
 ["src/agents/tools/sessions-send-owner-continuation.test.ts","../../gateway/session-sharing-preparation.js","05b95370a9a033344436c50012f4f0efcdd71b9fe52c22fca5e018f09fee7468",1]
 ["src/agents/tools/sessions-send-owner-continuation.test.ts","../../logging/subsystem.js","d9232bf14487eaf281122a8760d6bcc8152ef1d19929939eeb812e7c26cc167e",1]
