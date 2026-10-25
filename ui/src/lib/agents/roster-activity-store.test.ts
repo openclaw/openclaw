@@ -1,30 +1,32 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
-import { createContext } from "../../test-helpers/app-sidebar.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
 import { filterSessionRows } from "../sessions/navigation.ts";
-import { createTestSessionCapability } from "../sessions/session-capability.test-support.ts";
+import {
+  createRosterFixture,
+  rosterResult as result,
+} from "./roster-activity-store.test-support.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
 
-function result(preview: string, hasMore = false): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { model: null, modelProvider: null, contextTokens: null },
-    sessions: [{ key: "agent:main:main", kind: "direct", lastMessagePreview: preview }],
-    hasMore,
-  };
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
+  vi.useRealTimers();
+});
+
+function observe(store: ReturnType<typeof rosterActivityStore>, listener = () => {}) {
+  const stop = store.subscribe(listener);
+  cleanups.push(stop);
+  return stop;
 }
 
 function createStore(
@@ -49,30 +51,9 @@ function createStore(
 }
 
 function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMock>) {
-  const source = createApplicationGateway(
-    createApplicationGatewaySnapshot({
-      client: createTestGatewayClient(request),
-      phase: "connected",
-      assistantAgentId: "main",
-      sessionKey: "agent:main:main",
-    }),
-  );
-  const sessions = createTestSessionCapability(source.gateway);
-  const context = createContext(
-    source.gateway,
-    sessions,
-    makeBootRoster({
-      agents: [{ id: "main" }, { id: "ember" }],
-    }),
-  );
-  return {
-    store: rosterActivityStore(context),
-    context,
-    request,
-    source,
-    sessions,
-    emit: source.publishEvent,
-  };
+  const fixture = createRosterFixture(createTestGatewayClient(request), ["main", "ember"]);
+  cleanups.push(() => fixture.sessions.dispose());
+  return { ...fixture, request };
 }
 
 describe("roster activity lifecycle", () => {
@@ -80,49 +61,45 @@ describe("roster activity lifecycle", () => {
     vi.useFakeTimers();
     const page = createDeferred<SessionsListResult>();
     const load = vi.fn(async () => page.promise);
-    const { store, context, sessions } = createStore(load);
+    const { store, context } = createStore(load);
     const agents = createDeferred<typeof context.agents.state.agentsList>();
     const identity = createDeferred();
     context.agents.ensureList = () => agents.promise;
     context.agentIdentity.ensure = () => identity.promise;
-    const stop = store.subscribe(() => {});
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(1);
-      expect(store.snapshot.membershipReady).toBe(false);
-      page.resolve(result("Membership before identity"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(store.snapshot.membershipReady).toBe(true);
-      expect(store.snapshot.loading).toBe(true);
-
-      agents.resolve(context.agents.state.agentsList);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(store.snapshot.membershipReady).toBe(true);
-      expect(load).toHaveBeenCalledTimes(1);
-
-      const filtered = createDeferred<SessionsListResult>();
-      load.mockImplementationOnce(() => filtered.promise);
-      store.setInvolvingMe(true);
-      expect(store.snapshot.membershipReady).toBe(false);
-      expect(store.snapshot.involvingMe).toBe(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(2);
-      filtered.resolve(result("Current filter"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(store.snapshot.membershipReady).toBe(true);
-      expect(store.snapshot.result?.sessions[0]?.lastMessagePreview).toBe("Current filter");
-      identity.resolve();
-      await store.refresh();
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(store.snapshot.loading).toBe(false);
-    } finally {
+    observe(store);
+    cleanups.push(() => {
       agents.resolve(context.agents.state.agentsList);
       identity.resolve();
       page.resolve(result(""));
-      stop();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(store.snapshot.membershipReady).toBe(false);
+    page.resolve(result("Membership before identity"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.membershipReady).toBe(true);
+    expect(store.snapshot.loading).toBe(true);
+
+    agents.resolve(context.agents.state.agentsList);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.membershipReady).toBe(true);
+    expect(load).toHaveBeenCalledTimes(1);
+
+    const filtered = createDeferred<SessionsListResult>();
+    load.mockImplementationOnce(() => filtered.promise);
+    store.setInvolvingMe(true);
+    expect(store.snapshot.membershipReady).toBe(false);
+    expect(store.snapshot.involvingMe).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(2);
+    filtered.resolve(result("Current filter"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.membershipReady).toBe(true);
+    expect(store.snapshot.result?.sessions[0]?.lastMessagePreview).toBe("Current filter");
+    identity.resolve();
+    await store.refresh();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(store.snapshot.loading).toBe(false);
   });
 
   it("publishes committed archive and restore receipts without events", async () => {
@@ -162,33 +139,27 @@ describe("roster activity lifecycle", () => {
       throw new Error(`Unexpected RPC: ${method}`);
     });
     const { store, sessions } = createStoreForRequest(request);
-    const detach = store.subscribe(() => {});
-    try {
-      await store.refresh();
-      expect(store.snapshot.result?.sessions[0]?.archived).toBe(false);
-      const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
-      for (const archived of [true, false]) {
-        await sessions.patch(
-          key,
-          { archived },
-          { agentId: "ember", expectedSessionId: row.sessionId, deferListRefresh: true },
-        );
-        // The second operation is Undo. No event or list read may supply either receipt.
-        expect(store.snapshot.result?.sessions[0]?.archived).toBe(archived);
-        expect(
-          filterSessionRows(store.snapshot.result!, { archivedFilter: "all" }).sessions,
-        ).toHaveLength(1);
-        expect(
-          filterSessionRows(store.snapshot.result!, { archivedFilter: "archived" }).sessions,
-        ).toHaveLength(archived ? 1 : 0);
-        expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
-          listReads,
-        );
-      }
-    } finally {
-      detach();
-      sessions.dispose();
-      vi.useRealTimers();
+    observe(store);
+    await store.refresh();
+    expect(store.snapshot.result?.sessions[0]?.archived).toBe(false);
+    const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
+    for (const archived of [true, false]) {
+      await sessions.patch(
+        key,
+        { archived },
+        { agentId: "ember", expectedSessionId: row.sessionId, deferListRefresh: true },
+      );
+      // The second operation is Undo. No event or list read may supply either receipt.
+      expect(store.snapshot.result?.sessions[0]?.archived).toBe(archived);
+      expect(
+        filterSessionRows(store.snapshot.result!, { archivedFilter: "all" }).sessions,
+      ).toHaveLength(1);
+      expect(
+        filterSessionRows(store.snapshot.result!, { archivedFilter: "archived" }).sessions,
+      ).toHaveLength(archived ? 1 : 0);
+      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+        listReads,
+      );
     }
   });
   it.each(["sessions.changed", "session.message"])(
@@ -225,56 +196,50 @@ describe("roster activity lifecycle", () => {
         };
       });
       const { store, emit } = createStore(load);
-      const detach = store.subscribe(() => {});
-      try {
-        await vi.advanceTimersByTimeAsync(0);
+      observe(store);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(3);
+      for (const terminal of [false, true]) {
+        const status = terminal ? "done" : "running";
+        const nextChild = {
+          ...child,
+          updatedAt: terminal ? 700 : 600,
+          hasActiveRun: !terminal,
+          status,
+        };
+        const nextParent = {
+          ...parent,
+          swarm: {
+            groups: [
+              {
+                groupId: "fixture-swarm",
+                createdAt: 1,
+                children: [{ sessionKey: child.key, status }],
+                queued: 0,
+                running: terminal ? 0 : 1,
+                done: terminal ? 1 : 0,
+                failed: 0,
+              },
+            ],
+            otherActiveGroups: 0,
+          },
+        };
+        emit(
+          {
+            sessionKey: child.key,
+            ...(event === "sessions.changed" ? { reason: "patch" } : {}),
+            session: nextChild,
+            ancestorSessions: [nextParent],
+          },
+          event,
+        );
+        expect(store.snapshot.result?.sessions[0]).toEqual(rows[0]);
+        expect(store.snapshot.result?.sessions[1]).toEqual(nextChild);
+        expect(store.snapshot.result?.sessions.find((row) => row.key === parent.key)).toEqual(
+          nextParent,
+        );
+        await vi.advanceTimersByTimeAsync(20_000);
         expect(load).toHaveBeenCalledTimes(3);
-        for (const terminal of [false, true]) {
-          const status = terminal ? "done" : "running";
-          const nextChild = {
-            ...child,
-            updatedAt: terminal ? 700 : 600,
-            hasActiveRun: !terminal,
-            status,
-          };
-          const nextParent = {
-            ...parent,
-            swarm: {
-              groups: [
-                {
-                  groupId: "fixture-swarm",
-                  createdAt: 1,
-                  children: [{ sessionKey: child.key, status }],
-                  queued: 0,
-                  running: terminal ? 0 : 1,
-                  done: terminal ? 1 : 0,
-                  failed: 0,
-                },
-              ],
-              otherActiveGroups: 0,
-            },
-          };
-          emit({
-            type: "event",
-            event,
-            payload: {
-              sessionKey: child.key,
-              ...(event === "sessions.changed" ? { reason: "patch" } : {}),
-              session: nextChild,
-              ancestorSessions: [nextParent],
-            },
-          });
-          expect(store.snapshot.result?.sessions[0]).toEqual(rows[0]);
-          expect(store.snapshot.result?.sessions[1]).toEqual(nextChild);
-          expect(store.snapshot.result?.sessions.find((row) => row.key === parent.key)).toEqual(
-            nextParent,
-          );
-          await vi.advanceTimersByTimeAsync(20_000);
-          expect(load).toHaveBeenCalledTimes(3);
-        }
-      } finally {
-        detach();
-        vi.useRealTimers();
       }
     },
   );
@@ -304,33 +269,28 @@ describe("roster activity lifecycle", () => {
         .mockResolvedValue({ ...result(""), sessions: [next] });
       const { store, emit } = createStore(load);
       store.setInvolvingMe(change === "involvingMe");
-      const stop = store.subscribe(() => {});
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(load).toHaveBeenCalledWith(
-          expect.objectContaining({
-            excludeDock: true,
-            ...(change === "involvingMe" ? { involvingMe: true } : {}),
-          }),
-        );
-        const payload = ["groups", "stores"].includes(change)
-          ? { reason: change }
-          : {
-              reason: "patch",
-              sessionKey: next.key,
-              session: next,
-              ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
-            };
-        for (let index = 0; index < 10; index += 1) {
-          emit({ type: "event", event: "sessions.changed", payload });
-        }
-        await vi.advanceTimersByTimeAsync(20_000);
-        expect(load).toHaveBeenCalledTimes(2);
-        expect(store.snapshot.result?.sessions).toEqual([next]);
-      } finally {
-        stop();
-        vi.useRealTimers();
+      observe(store);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          excludeDock: true,
+          ...(change === "involvingMe" ? { involvingMe: true } : {}),
+        }),
+      );
+      const payload = ["groups", "stores"].includes(change)
+        ? { reason: change }
+        : {
+            reason: "patch",
+            sessionKey: next.key,
+            session: next,
+            ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
+          };
+      for (let index = 0; index < 10; index += 1) {
+        emit(payload);
       }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.snapshot.result?.sessions).toEqual([next]);
     },
   );
 
@@ -349,35 +309,27 @@ describe("roster activity lifecycle", () => {
       .mockResolvedValueOnce({ ...result(""), sessions: [row] })
       .mockReturnValueOnce(stale.promise)
       .mockResolvedValue({ ...result(""), sessions: [updated] });
-    const { store, emit, sessions } = createStore(load);
-    const stop = store.subscribe(() => {});
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      const refresh = store.refresh();
-      await vi.advanceTimersByTimeAsync(0);
-      emit({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          reason: "patch",
-          sessionKey: row.key,
-          session: updated,
-        },
-      });
-      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
-      await vi.advanceTimersByTimeAsync(200);
-      stale.resolve({ ...result("Stale"), sessions: [row] });
-      await refresh;
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
-      expect(store.snapshot.loading).toBe(false);
-    } finally {
+    const { store, emit } = createStore(load);
+    observe(store);
+    cleanups.push(() => {
       stale.resolve(result(""));
-      stop();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const refresh = store.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    emit({
+      reason: "patch",
+      sessionKey: row.key,
+      session: updated,
+    });
+    expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+    await vi.advanceTimersByTimeAsync(200);
+    stale.resolve({ ...result("Stale"), sessions: [row] });
+    await refresh;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+    expect(store.snapshot.loading).toBe(false);
   });
 
   it.each([false, true])(
@@ -386,30 +338,25 @@ describe("roster activity lifecycle", () => {
       const load = vi.fn(async () => result("Listed session"));
       const { store, emit } = createStore(load);
       store.setInvolvingMe(involvingMe);
-      const detach = store.subscribe(() => {});
-      try {
-        await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
-        const window = store.snapshot.result;
-        emit({
-          type: "event",
-          event: "session.message",
-          payload: {
-            agentId: "ember",
-            session: {
-              key: "agent:ember:unlisted",
-              kind: "direct",
-              updatedAt: 10,
-              hasActiveRun: true,
-              status: "running",
-            },
+      observe(store);
+      await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
+      const window = store.snapshot.result;
+      emit(
+        {
+          agentId: "ember",
+          session: {
+            key: "agent:ember:unlisted",
+            kind: "direct",
+            updatedAt: 10,
+            hasActiveRun: true,
+            status: "running",
           },
-        });
-        expect(store.snapshot.result).toBe(window);
-        expect(store.snapshot.cards.find((card) => card.id === "ember")?.activeNow).toBe(false);
-        expect(load).toHaveBeenCalledTimes(1);
-      } finally {
-        detach();
-      }
+        },
+        "session.message",
+      );
+      expect(store.snapshot.result).toBe(window);
+      expect(store.snapshot.cards.find((card) => card.id === "ember")?.activeNow).toBe(false);
+      expect(load).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -420,22 +367,18 @@ describe("roster activity lifecycle", () => {
       .mockResolvedValueOnce(result("Recovered activity"))
       .mockRejectedValueOnce(new Error("Refresh failed"));
     const { store } = createStore(load);
-    const detach = store.subscribe(() => {});
-    try {
-      await vi.waitFor(() => expect(store.snapshot.error).toBe("Activity temporarily unavailable"));
-      expect(store.snapshot.cards.map((card) => card.id)).toEqual(["main", "ember"]);
-      expect(store.snapshot.result).toBeNull();
-      await store.refresh();
-      expect(store.snapshot.error).toBeNull();
-      expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
-      const previous = store.snapshot.result;
-      await store.refresh();
-      expect(store.snapshot.error).toBe("Refresh failed");
-      expect(store.snapshot.result).toBe(previous);
-      expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
-    } finally {
-      detach();
-    }
+    observe(store);
+    await vi.waitFor(() => expect(store.snapshot.error).toBe("Activity temporarily unavailable"));
+    expect(store.snapshot.cards.map((card) => card.id)).toEqual(["main", "ember"]);
+    expect(store.snapshot.result).toBeNull();
+    await store.refresh();
+    expect(store.snapshot.error).toBeNull();
+    expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
+    const previous = store.snapshot.result;
+    await store.refresh();
+    expect(store.snapshot.error).toBe("Refresh failed");
+    expect(store.snapshot.result).toBe(previous);
+    expect(store.snapshot.cards[0]?.preview).toBe("Recovered activity");
   });
 
   it("shows canonical observer failure and recovery independently of primary errors", async () => {
@@ -451,64 +394,60 @@ describe("roster activity lifecycle", () => {
       subscribe,
     );
     const notify = vi.fn();
-    const detach = store.subscribe(notify);
+    observe(store, notify);
     const operationError = "Another agent's primary list failed";
-    try {
-      source.publish(source.gateway.snapshot);
-      await vi.advanceTimersByTimeAsync(0);
-      const previous = store.snapshot.result;
-      expect(previous?.sessions[0]?.lastMessagePreview).toBe("Usable roster");
-      request.mockRejectedValueOnce(new Error(operationError));
-      await sessions.refresh({ agentId: "ember", force: true });
-      expect(sessions.state.error).toBe(operationError);
-      notify.mockClear();
-      firstSubscription.reject(
-        new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "Session updates unavailable",
-          retryable: true,
-          retryAfterMs: 100,
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBe(
-        "Session updates unavailable",
-      );
-      expect(notify).toHaveBeenCalled();
-      expect(store.snapshot.result).toBe(previous);
-      expect(subscribe).toHaveBeenCalledTimes(1);
-
-      // An unrelated failed read must neither replace nor hide the observer outage.
-      request.mockRejectedValueOnce(new Error(operationError));
-      await sessions.refresh({ agentId: "ember", force: true });
-      expect(sessions.state.error).toBe(operationError);
-      expect(store.snapshot.error).toBeNull();
-      expect(store.snapshot.subscriptionError).toBe("Session updates unavailable");
-      request.mockImplementationOnce(async (method) => {
-        expect(method).toBe("sessions.subscribe");
-        request.mockReturnValueOnce(recoveryList.promise);
-        return subscribe();
-      });
-      notify.mockClear();
-      await vi.advanceTimersByTimeAsync(100);
-      // Recovery is visible before any gap-closing list response can publish.
-      expect(subscribe).toHaveBeenCalledTimes(2);
-      expect(sessions.state.error).toBe(operationError);
-      expect(store.snapshot.subscriptionError).toBeNull();
-      expect(notify).toHaveBeenCalled();
-      expect(store.snapshot.result).toBe(previous);
-      recoveryList.resolve({ ...result(""), sessions: [], count: 0 });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBeNull();
-      expect(store.snapshot.cards[0]?.preview).toBe("Usable roster");
-      expect(subscribe).toHaveBeenCalledTimes(2);
-    } finally {
+    cleanups.push(() => {
       firstSubscription.resolve({ subscribed: true });
       recoveryList.resolve(result(""));
-      detach();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
+    });
+    source.publish(source.gateway.snapshot);
+    await vi.advanceTimersByTimeAsync(0);
+    const previous = store.snapshot.result;
+    expect(previous?.sessions[0]?.lastMessagePreview).toBe("Usable roster");
+    request.mockRejectedValueOnce(new Error(operationError));
+    await sessions.refresh({ agentId: "ember", force: true });
+    expect(sessions.state.error).toBe(operationError);
+    notify.mockClear();
+    firstSubscription.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Session updates unavailable",
+        retryable: true,
+        retryAfterMs: 100,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBe(
+      "Session updates unavailable",
+    );
+    expect(notify).toHaveBeenCalled();
+    expect(store.snapshot.result).toBe(previous);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+
+    // An unrelated failed read must neither replace nor hide the observer outage.
+    request.mockRejectedValueOnce(new Error(operationError));
+    await sessions.refresh({ agentId: "ember", force: true });
+    expect(sessions.state.error).toBe(operationError);
+    expect(store.snapshot.error).toBeNull();
+    expect(store.snapshot.subscriptionError).toBe("Session updates unavailable");
+    request.mockImplementationOnce(async (method) => {
+      expect(method).toBe("sessions.subscribe");
+      request.mockReturnValueOnce(recoveryList.promise);
+      return subscribe();
+    });
+    notify.mockClear();
+    await vi.advanceTimersByTimeAsync(100);
+    // Recovery is visible before any gap-closing list response can publish.
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(sessions.state.error).toBe(operationError);
+    expect(store.snapshot.subscriptionError).toBeNull();
+    expect(notify).toHaveBeenCalled();
+    expect(store.snapshot.result).toBe(previous);
+    recoveryList.resolve({ ...result(""), sessions: [], count: 0 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBeNull();
+    expect(store.snapshot.cards[0]?.preview).toBe("Usable roster");
+    expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
   it("follows agent and identity changes without a session event or a second activity load", async () => {
@@ -525,30 +464,27 @@ describe("roster activity lifecycle", () => {
       identityListeners.add(listener);
       return () => identityListeners.delete(listener);
     };
-    const detach = store.subscribe(() => {});
-    try {
-      await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
-      await vi.waitFor(() => expect(store.snapshot.cards).toHaveLength(2));
-      context.agents.state.agentsList = {
-        ...context.agents.state.agentsList!,
-        agents: [{ id: "main", name: "Renamed" }, { id: "new-agent" }],
-      };
-      agentListeners.forEach((notify) => notify());
-      expect(store.snapshot.cards.map(({ id, name }) => ({ id, name }))).toEqual([
-        { id: "main", name: "Renamed" },
-        { id: "new-agent", name: "new-agent" },
-      ]);
-      context.agentIdentity.get = (id) =>
-        id === "new-agent" ? { agentId: id, name: "New identity", emoji: "🌻", avatar: "" } : null;
-      identityListeners.forEach((notify) => notify());
-      expect(store.snapshot.cards.find(({ id }) => id === "new-agent")).toMatchObject({
-        name: "New identity",
-        textAvatar: "🌻",
-      });
-      expect(load).toHaveBeenCalledTimes(1);
-    } finally {
-      detach();
-    }
+    const detach = observe(store);
+    await vi.waitFor(() => expect(store.snapshot.loading).toBe(false));
+    await vi.waitFor(() => expect(store.snapshot.cards).toHaveLength(2));
+    context.agents.state.agentsList = {
+      ...context.agents.state.agentsList!,
+      agents: [{ id: "main", name: "Renamed" }, { id: "new-agent" }],
+    };
+    agentListeners.forEach((notify) => notify());
+    expect(store.snapshot.cards.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: "main", name: "Renamed" },
+      { id: "new-agent", name: "new-agent" },
+    ]);
+    context.agentIdentity.get = (id) =>
+      id === "new-agent" ? { agentId: id, name: "New identity", emoji: "🌻", avatar: "" } : null;
+    identityListeners.forEach((notify) => notify());
+    expect(store.snapshot.cards.find(({ id }) => id === "new-agent")).toMatchObject({
+      name: "New identity",
+      textAvatar: "🌻",
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+    detach();
     expect(agentListeners.size).toBe(0);
     expect(identityListeners.size).toBe(0);
   });
@@ -562,48 +498,38 @@ describe("roster activity lifecycle", () => {
     ];
     const load = vi.fn(async () => ({ ...result(""), sessions: rows, count: rows.length }));
     const { store, emit } = createStore(load);
-    const detach = store.subscribe(() => {});
-    const detachSecond = store.subscribe(() => {});
-    try {
-      await vi.waitFor(() => expect(store.snapshot.result?.sessions).toEqual(rows));
-      expect(load).toHaveBeenCalledTimes(1);
-      expect(store.snapshot.cards[1]?.id).toBe("ember");
-      expect(store.snapshot.cards[1]?.lastActiveAt).toBe(2);
-      emit({
-        type: "event",
-        event: "session.message",
-        payload: {
-          agentId: "ember",
-          session: { key: "agent:ember:task", updatedAt: 4, hasActiveRun: true },
-        },
-      });
-      expect(store.snapshot.cards[1]?.activeNow).toBe(true);
-      emit({
-        type: "event",
-        event: "session.message",
-        payload: {
-          agentId: "ember",
-          session: { key: "agent:ember:task", updatedAt: 5, hasActiveRun: false, unread: true },
-        },
-      });
-      expect(store.snapshot.result?.sessions.find((row) => row.key === rows[1]?.key)).toMatchObject(
-        {
-          unread: true,
-          hasActiveRun: false,
-        },
-      );
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(load).toHaveBeenCalledTimes(1);
-      rows = [...rows, { key: "agent:main:new", kind: "direct", updatedAt: 6 }];
-      emit({ type: "event", event: "sessions.changed", payload: { session: rows[3] } });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(store.snapshot.result?.sessions).toHaveLength(4);
-      expect(load).toHaveBeenCalledTimes(2);
-    } finally {
-      detach();
-      detachSecond();
-      vi.useRealTimers();
-    }
+    observe(store);
+    observe(store);
+    await vi.waitFor(() => expect(store.snapshot.result?.sessions).toEqual(rows));
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(store.snapshot.cards[1]?.id).toBe("ember");
+    expect(store.snapshot.cards[1]?.lastActiveAt).toBe(2);
+    emit(
+      {
+        agentId: "ember",
+        session: { key: "agent:ember:task", updatedAt: 4, hasActiveRun: true },
+      },
+      "session.message",
+    );
+    expect(store.snapshot.cards[1]?.activeNow).toBe(true);
+    emit(
+      {
+        agentId: "ember",
+        session: { key: "agent:ember:task", updatedAt: 5, hasActiveRun: false, unread: true },
+      },
+      "session.message",
+    );
+    expect(store.snapshot.result?.sessions.find((row) => row.key === rows[1]?.key)).toMatchObject({
+      unread: true,
+      hasActiveRun: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(load).toHaveBeenCalledTimes(1);
+    rows = [...rows, { key: "agent:main:new", kind: "direct", updatedAt: 6 }];
+    emit({ session: rows[3] });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(store.snapshot.result?.sessions).toHaveLength(4);
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("retires an old window when the client changes without publishing its late result", async () => {
@@ -615,28 +541,25 @@ describe("roster activity lifecycle", () => {
       .mockResolvedValue(result("Current activity"));
     const { store, source, request } = createStore(load);
     const notify = vi.fn();
-    const detach = store.subscribe(notify);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(1);
-      source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
-      const refreshed = store.refresh();
-      await vi.advanceTimersByTimeAsync(0);
-      await refreshed;
-      expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
-      const reads = load.mock.calls.length;
-      expect(reads).toBe(2);
-      notify.mockClear();
-      stale.resolve(result("Retired activity", true));
-      await stale.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(reads);
-      expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
-      expect(notify).not.toHaveBeenCalled();
-    } finally {
+    observe(store, notify);
+    cleanups.push(() => {
       stale.resolve(result("Retired activity"));
-      detach();
-      vi.useRealTimers();
-    }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(1);
+    source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
+    const refreshed = store.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    await refreshed;
+    expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
+    const reads = load.mock.calls.length;
+    expect(reads).toBe(2);
+    notify.mockClear();
+    stale.resolve(result("Retired activity", true));
+    await stale.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(reads);
+    expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
+    expect(notify).not.toHaveBeenCalled();
   });
 });
