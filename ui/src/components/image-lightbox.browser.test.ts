@@ -10,6 +10,17 @@ import "./image-lightbox.tsx";
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
 
+async function tabTo(target: HTMLElement, reverse = false) {
+  await userEvent.keyboard(reverse ? "{Shift>}{Tab}{/Shift}" : "{Tab}");
+  expect(document.activeElement).toBe(target);
+}
+
+function expectSameRect(actual: DOMRect, expected: DOMRect) {
+  for (const dimension of ["x", "y", "width", "height"] as const) {
+    expect(actual[dimension]).toBeCloseTo(expected[dimension], 1);
+  }
+}
+
 beforeEach(async () => {
   previousViewport = { width: window.innerWidth, height: window.innerHeight };
   await page.viewport(1440, 1000);
@@ -152,9 +163,7 @@ it.each([
     const after = image.getBoundingClientRect();
     expect(viewer.querySelector("img")).toBe(image);
     expect(zoom.textContent).toBe(zoomBefore);
-    for (const dimension of ["x", "y", "width", "height"] as const) {
-      expect(after[dimension]).toBeCloseTo(before[dimension], 1);
-    }
+    expectSameRect(after, before);
   },
 );
 
@@ -183,14 +192,10 @@ it.each([320, 390, 1440])("keeps download below media and clear of zoom at %ipx"
   expect(external.getAttribute("aria-label")).toBe("Open in new tab");
   expect(external.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(original);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
+  await tabTo(external, true);
+  await tabTo(original, true);
+  await tabTo(external);
+  await tabTo(close);
 });
 
 it("uses intrinsic dimensions for unsized neighbors", async () => {
@@ -246,12 +251,9 @@ it("skips the pending video original link without skipping native controls", asy
   expect(pendingLink.tabIndex).toBe(-1);
   expect(pendingLink.hasAttribute("href")).toBe(false);
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(next);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(video);
+  await tabTo(next, true);
+  await tabTo(close);
+  await tabTo(video);
   const beforeSeek = video.currentTime;
   let arrowPrevented: boolean | undefined;
   video.addEventListener("keydown", (event) => (arrowPrevented = event.defaultPrevented), {
@@ -276,10 +278,8 @@ it("skips the pending video original link without skipping native controls", asy
     .toBe(0);
   const link = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(link);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
+  await tabTo(link, true);
+  await tabTo(close);
   await userEvent.keyboard("{Escape}");
   expect(viewer.isConnected).toBe(false);
   expect(document.activeElement).toBe(trigger);
@@ -345,10 +345,7 @@ it.each(["no-preference", "reduce"] as const)(
         expect(outgoing).toBeDefined();
         expect(Number(getComputedStyle(outgoing).opacity)).toBeGreaterThan(0);
         expect(Number(getComputedStyle(outgoing).opacity)).toBeLessThan(1);
-        const outgoingBounds = outgoing.getBoundingClientRect();
-        for (const dimension of ["x", "y", "width", "height"] as const) {
-          expect(outgoingBounds[dimension]).toBeCloseTo(previousBounds[dimension], 1);
-        }
+        expectSameRect(outgoing.getBoundingClientRect(), previousBounds);
       }
     }
     for (const animation of viewer.getAnimations({ subtree: true })) {

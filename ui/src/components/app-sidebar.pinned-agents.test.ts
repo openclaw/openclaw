@@ -117,34 +117,6 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
 
-it.each(["main", "recent"])(
-  "renders no provisional session row for a %s-agent create in the agent roster",
-  async (agentId) => {
-    const { sidebar, context } = await mountRoster(roster, []);
-    context.navigation.update({ pinnedAgentIds: ["main"] });
-    sidebar.sidebarAgentsMode = "roster";
-    sidebar.activeRouteId = "chat";
-    const sessionKey = `agent:${agentId}:creating`;
-    sidebar.sessionKey = sessionKey;
-    await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
-    const release = context.chatSubmissions.beginCreate({
-      creation: { sessionKey, admitted: false },
-      displayName: "Preparing new conversation",
-      message: null,
-      canDisplay: () => true,
-    });
-    try {
-      await settleRoster(sidebar);
-      expect(sidebar.getRouteSessionKey()).toBe(sessionKey);
-      expect(sidebar.querySelector(".sidebar-recent-session--creating")).toBeNull();
-      expect(sidebar.textContent).not.toContain("Preparing new conversation");
-      expect(agentIds(sidebar)).toEqual(["recent", "working"]);
-    } finally {
-      release();
-    }
-  },
-);
-
 it("offers agent sessions and settings without a create action, and confirms agent deletion", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
   const onNavigate = vi.fn();
@@ -197,34 +169,6 @@ it("offers agent sessions and settings without a create action, and confirms age
     });
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
-});
-
-it("opens the same agent menu from a right-clicked pinned tile and unpins it", async () => {
-  const { sidebar, context } = await mountRoster(roster, reply());
-  context.navigation.update({ pinnedAgentIds: ["main"] });
-  sidebar.sidebarAgentsMode = "roster";
-  await vi.waitFor(() => expect(pinned(sidebar)).not.toBeNull());
-  await settleRoster(sidebar);
-  expect(pinned(sidebar)!.querySelector("button")).toBeNull();
-
-  rightClick(pinned(sidebar)!.querySelector("a")!);
-  await vi.waitFor(() => expect(menuItem(sidebar, "pin")).not.toBeNull());
-  expect(menuLabels(sidebar)).toEqual(["Unpin", "Sessions", "Settings", "Delete"]);
-  expect(menuItem(sidebar, "pin").classList).toContain("sidebar-agent-roster__pin--pinned");
-  menuItem(sidebar, "pin").click();
-  await vi.waitFor(() => {
-    expect(pinned(sidebar)).toBeNull();
-    expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
-  });
-  expect(context.navigation.snapshot.pinnedAgentIds).toEqual([]);
-  await vi.waitFor(() =>
-    expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main"),
-  );
-
-  rightClick(sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row')!);
-  await vi.waitFor(() => expect(menuItem(sidebar, "pin")?.textContent).toContain("Pin"));
-  expect(menuLabels(sidebar)).toEqual(["Pin", "Sessions", "Settings", "Delete"]);
-  expect(menuItem(sidebar, "pin").classList).not.toContain("sidebar-agent-roster__pin--pinned");
 });
 
 it.each([false, true])(

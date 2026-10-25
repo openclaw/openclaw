@@ -9,6 +9,9 @@ import { SettingsSaveIndicator } from "./settings-save-indicator.tsx";
 import { SettingsSegmented, SettingsToggleRow } from "./solid/settings-ui.tsx";
 import startupStyles from "../styles.css?inline";
 
+const optionsFor = (...values: string[]) =>
+  values.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }));
+
 function mountRadioGroups(onChange = vi.fn()) {
   const [state, setState] = createSignal({
     value: "first",
@@ -17,8 +20,7 @@ function mountRadioGroups(onChange = vi.fn()) {
     expanded: false,
   });
   const options = [
-    { value: "first", label: "First" },
-    { value: "second", label: "Second" },
+    ...optionsFor("first", "second"),
     { value: "locked", label: "Locked", disabled: true },
   ];
   const view = mountSolid(() => (
@@ -87,7 +89,6 @@ it("restores segmented controls after fieldset busy state while preserving disab
   };
   expect(disabledStates(false)).toEqual([false, false, true]);
   expect(disabledStates(true)).toEqual([true, true, true]);
-  expect(disabledStates(true)).toEqual([true, true, true]);
   container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
   expect(onChange).not.toHaveBeenCalled();
   expect(disabledStates(false)).toEqual([false, false, true]);
@@ -143,10 +144,7 @@ function mountBusyControls() {
         value={mode()}
         saving={busy()}
         disabled={disabled()}
-        options={[
-          { value: "first", label: "First" },
-          { value: "second", label: "Second" },
-        ]}
+        options={optionsFor("first", "second")}
         onChange={onMode}
       />
       <SettingsSegmented
@@ -155,10 +153,7 @@ function mountBusyControls() {
         value={size()}
         saving={busy()}
         disabled={disabled()}
-        options={[
-          { value: "small", label: "Small" },
-          { value: "large", label: "Large" },
-        ]}
+        options={optionsFor("small", "large")}
         onChange={onSize}
       />
     </>
@@ -183,47 +178,39 @@ async function expectFocusKeptWhileBusy(control: HTMLElement) {
 
 it("keeps a busy switch focused and ignores Space until the save settles", async () => {
   const view = mountBusyControls();
-  try {
-    const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
-    toggle.focus();
-    await userEvent.keyboard(" ");
-    await expectFocusKeptWhileBusy(toggle);
-    await userEvent.keyboard(" ");
-    view.container.querySelector<HTMLElement>(".settings-row__title")!.click();
-    toggle.click();
-    expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
-    expect(toggle.checked).toBe(true);
-    view.settle();
-    expect(document.activeElement).toBe(toggle);
-    expect(toggle.hasAttribute("aria-disabled")).toBe(false);
-    await userEvent.keyboard(" ");
-    expect(view.onToggle).toHaveBeenLastCalledWith(false);
-  } finally {
-    view.unmount();
-  }
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  toggle.focus();
+  await userEvent.keyboard(" ");
+  await expectFocusKeptWhileBusy(toggle);
+  await userEvent.keyboard(" ");
+  view.container.querySelector<HTMLElement>(".settings-row__title")!.click();
+  toggle.click();
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(toggle.checked).toBe(true);
+  view.settle();
+  expect(document.activeElement).toBe(toggle);
+  expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard(" ");
+  expect(view.onToggle).toHaveBeenLastCalledWith(false);
 });
 
 it("keeps a busy radio focused and ignores arrow keys until the save settles", async () => {
   const view = mountBusyControls();
   const radio = (value: string) =>
     view.container.querySelector<HTMLInputElement>(`input[type=radio][value="${value}"]`)!;
-  try {
-    radio("first").focus();
-    await userEvent.keyboard("{ArrowRight}");
-    await expectFocusKeptWhileBusy(radio("second"));
-    await userEvent.keyboard("{ArrowRight}");
-    radio("first").click();
-    expect(view.onMode).toHaveBeenCalledExactlyOnceWith("second", expect.any(HTMLElement));
-    expect(document.activeElement).toBe(radio("second"));
-    expect(radio("second").checked).toBe(true);
-    view.settle();
-    expect(radio("second").hasAttribute("aria-disabled")).toBe(false);
-    await userEvent.keyboard("{ArrowRight}");
-    expect(view.onMode).toHaveBeenLastCalledWith("first", expect.any(HTMLElement));
-    expect(document.activeElement).toBe(radio("first"));
-  } finally {
-    view.unmount();
-  }
+  radio("first").focus();
+  await userEvent.keyboard("{ArrowRight}");
+  await expectFocusKeptWhileBusy(radio("second"));
+  await userEvent.keyboard("{ArrowRight}");
+  radio("first").click();
+  expect(view.onMode).toHaveBeenCalledExactlyOnceWith("second", expect.any(HTMLElement));
+  expect(document.activeElement).toBe(radio("second"));
+  expect(radio("second").checked).toBe(true);
+  view.settle();
+  expect(radio("second").hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard("{ArrowRight}");
+  expect(view.onMode).toHaveBeenLastCalledWith("first", expect.any(HTMLElement));
+  expect(document.activeElement).toBe(radio("first"));
 });
 
 it("keeps a busy segmented button focused and ignores Enter until the save settles", async () => {
@@ -232,55 +219,47 @@ it("keeps a busy segmented button focused and ignores Enter until the save settl
     [...view.container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent === name,
     )!;
-  try {
-    button("Large").focus();
-    await userEvent.keyboard("{Enter}");
-    await expectFocusKeptWhileBusy(button("Large"));
-    await userEvent.keyboard("{Enter}");
-    button("Small").click();
-    expect(view.onSize).toHaveBeenCalledExactlyOnceWith("large");
-    expect(button("Large").getAttribute("aria-pressed")).toBe("true");
-    view.settle();
-    expect(document.activeElement).toBe(button("Large"));
-    expect(button("Large").hasAttribute("aria-disabled")).toBe(false);
-    await userEvent.keyboard("{Shift>}{Tab}{/Shift}{Enter}");
-    expect(view.onSize).toHaveBeenLastCalledWith("small");
-  } finally {
-    view.unmount();
-  }
+  button("Large").focus();
+  await userEvent.keyboard("{Enter}");
+  await expectFocusKeptWhileBusy(button("Large"));
+  await userEvent.keyboard("{Enter}");
+  button("Small").click();
+  expect(view.onSize).toHaveBeenCalledExactlyOnceWith("large");
+  expect(button("Large").getAttribute("aria-pressed")).toBe("true");
+  view.settle();
+  expect(document.activeElement).toBe(button("Large"));
+  expect(button("Large").hasAttribute("aria-disabled")).toBe(false);
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}{Enter}");
+  expect(view.onSize).toHaveBeenLastCalledWith("small");
 });
 
 it("keeps non-saving restrictions native when they arrive during a save", async () => {
   const view = mountBusyControls();
-  try {
-    const controls = [
-      ...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button"),
-    ];
-    const toggle = controls[0]!;
-    toggle.focus();
-    await userEvent.keyboard(" ");
-    await expectFocusKeptWhileBusy(toggle);
-    view.setDisabled(true);
-    flush();
-    await nextFrame();
-    await nextFrame();
-    for (const control of controls) {
-      expect(control.disabled).toBe(true);
-      control.focus();
-      expect(document.activeElement).not.toBe(control);
-      control.click();
-    }
-    expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
-    expect(view.onMode).not.toHaveBeenCalled();
-    expect(view.onSize).not.toHaveBeenCalled();
-    view.settle();
-    expect(controls.every((control) => control.disabled)).toBe(true);
-    view.setDisabled(false);
-    flush();
-    expect(controls.every((control) => !control.disabled)).toBe(true);
-  } finally {
-    view.unmount();
+  const controls = [
+    ...view.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button"),
+  ];
+  const toggle = controls[0]!;
+  toggle.focus();
+  await userEvent.keyboard(" ");
+  await expectFocusKeptWhileBusy(toggle);
+  view.setDisabled(true);
+  flush();
+  await nextFrame();
+  await nextFrame();
+  for (const control of controls) {
+    expect(control.disabled).toBe(true);
+    control.focus();
+    expect(document.activeElement).not.toBe(control);
+    control.click();
   }
+  expect(view.onToggle).toHaveBeenCalledExactlyOnceWith(true);
+  expect(view.onMode).not.toHaveBeenCalled();
+  expect(view.onSize).not.toHaveBeenCalled();
+  view.settle();
+  expect(controls.every((control) => control.disabled)).toBe(true);
+  view.setDisabled(false);
+  flush();
+  expect(controls.every((control) => !control.disabled)).toBe(true);
 });
 
 it("keeps a non-saving disabled switch out of keyboard navigation", async () => {
@@ -288,15 +267,11 @@ it("keeps a non-saving disabled switch out of keyboard navigation", async () => 
   const view = mountSolid(() => (
     <SettingsToggleRow title="Audit log" checked={false} disabled onChange={onChange} />
   ));
-  try {
-    const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
-    await userEvent.tab();
-    expect(toggle.disabled).toBe(true);
-    expect(document.activeElement).not.toBe(toggle);
-    await userEvent.keyboard(" ");
-    expect(onChange).not.toHaveBeenCalled();
-    expect(toggle.checked).toBe(false);
-  } finally {
-    view.unmount();
-  }
+  const toggle = view.container.querySelector<HTMLInputElement>('input[role="switch"]')!;
+  await userEvent.tab();
+  expect(toggle.disabled).toBe(true);
+  expect(document.activeElement).not.toBe(toggle);
+  await userEvent.keyboard(" ");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(toggle.checked).toBe(false);
 });
