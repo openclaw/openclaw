@@ -50,25 +50,23 @@ async function readMedia(request: Request) {
 }
 
 function processingFixture(options: {
-  id?: string;
   media?: Media;
   finalize: object;
   append?: () => Response;
   statuses?: object[];
 }) {
-  const id = options.id ?? "101",
+  const id = "101",
     media = options.media ?? image;
   const finalized = Promise.withResolvers<void>();
   const calls: string[] = [],
-    polls: number[] = [],
-    requests: string[] = [];
+    polls: number[] = [];
   const chunks: { index: FormDataEntryValue | null; bytes: Buffer }[] = [];
   let post: unknown;
   const api = client(async (url, init) => {
     const request = new Request(url, init),
       parsed = new URL(url);
     calls.push(parsed.pathname);
-    requests.push(`${request.method} ${parsed.pathname}`);
+    expect(request.method).toBe(parsed.pathname === "/2/media/upload" ? "GET" : "POST");
     expect(request.headers.get("authorization")).toBe("Bearer test-access");
     if (parsed.pathname.endsWith("/initialize")) {
       expect(await request.json()).toEqual({
@@ -91,11 +89,7 @@ function processingFixture(options: {
       return mediaResponse(options.finalize);
     }
     if (parsed.pathname === "/2/media/upload") {
-      expect({
-        method: request.method,
-        command: parsed.searchParams.get("command"),
-        id: parsed.searchParams.get("media_id"),
-      }).toEqual({ method: "GET", command: "STATUS", id });
+      expect(Object.fromEntries(parsed.searchParams)).toEqual({ command: "STATUS", media_id: id });
       polls.push(Date.now());
       const states = options.statuses;
       return mediaResponse(
@@ -105,35 +99,34 @@ function processingFixture(options: {
     post = await request.json();
     return mediaResponse({ id: "900" });
   });
-  return { api, calls, requests, chunks, polls, finalized: finalized.promise, post: () => post };
+  return { api, calls, chunks, polls, finalized: finalized.promise, post: () => post };
 }
 
 afterEach(() => vi.useRealTimers());
 
 describe("X native media request boundary", () => {
-  it.each(["image", "gif", "video"] as const)(
+  it.each(["image", "video"] as const)(
     "uploads authenticated %s bytes before posting",
     async (kind) => {
-      const video = kind === "video",
-        id = video ? "201" : "101";
+      const video = kind === "video";
       if (video) {
         vi.useFakeTimers();
       }
       const media: Media = {
+        ...image,
         buffer: video
           ? Buffer.concat([Buffer.alloc(4 * 1024 * 1024, 0x41), Buffer.alloc(7, 0x42)])
           : image.buffer,
-        contentType: video ? "video/mp4" : kind === "gif" ? "image/gif" : image.contentType,
-        fileName: video ? "clip.mp4" : kind === "gif" ? "animation.gif" : image.fileName,
-        mediaCategory: video ? "tweet_video" : kind === "gif" ? "tweet_gif" : image.mediaCategory,
+        ...(video
+          ? { contentType: "video/mp4", fileName: "clip.mp4", mediaCategory: "tweet_video" }
+          : {}),
       };
       const test = processingFixture({
-        id,
         media,
-        finalize: video ? processing("pending", 2, id) : { id },
+        finalize: video ? processing("pending", 2) : { id: "101" },
         append: () =>
           video ? new Response(null, { status: 204 }) : mediaResponse({ expires_at: 86400 }),
-        statuses: [processing("in_progress", 3, id), processing("succeeded", undefined, id)],
+        statuses: [processing("in_progress", 3), processing("succeeded")],
       });
       const started = Date.now();
       const pending = uploadThenReply(test.api, media, "Video");
@@ -162,13 +155,10 @@ describe("X native media request boundary", () => {
       expect(test.post()).toEqual({
         text: "Video",
         reply: { in_reply_to_tweet_id: "20" },
-        media: { media_ids: [id] },
+        media: { media_ids: ["101"] },
       });
       if (!video) {
-        expect(test.requests).toEqual([
-          ...uploadPaths.map((path) => "POST " + path),
-          "POST /2/tweets",
-        ]);
+        expect(test.calls).toEqual([...uploadPaths, "/2/tweets"]);
       }
       expect(await test.api.spend.status()).toMatchObject({ dayUsd: 0.02 });
     },

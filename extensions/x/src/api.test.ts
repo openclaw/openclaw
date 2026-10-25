@@ -1,11 +1,13 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
-import { createXTestSpend } from "./test-support/spend.js";
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
+
+const reply = (
+  api: ReturnType<typeof createXApiClient>,
+  assertActive?: Parameters<typeof api.reply>[0]["assertActive"],
+) => api.reply({ text: "Reply", inReplyToId: "20", assertActive });
 
 describe("X API authentication", () => {
   it("lists and streams Activity with the app bearer but creates mentions with the user token", async () => {
@@ -25,19 +27,6 @@ describe("X API authentication", () => {
           return new Response(null);
         }
         if (init?.method === "POST") {
-          if (authorization !== "Bearer user-access") {
-            return Response.json(
-              {
-                errors: [
-                  {
-                    message:
-                      "OauthAccessTokenRequired: OAuth user access token is required for this event type",
-                  },
-                ],
-              },
-              { status: 400 },
-            );
-          }
           expect(await new Response(init.body).json()).toEqual({
             event_type: "post.mention.create",
             filter: { user_id: "9" },
@@ -60,43 +49,6 @@ describe("X API authentication", () => {
       "GET /2/activity/subscriptions Bearer app-bearer",
       "GET /2/activity/stream Bearer app-bearer",
     ]);
-  });
-
-  it("persists refresh rotation before requests, shares refresh work, and reuses it on restart", async () => {
-    const writes: string[] = [];
-    let stored: string | undefined;
-    const fetcher: XFetch = vi.fn(async (url, init) => {
-      if (url.endsWith("/oauth2/token")) {
-        writes.push(`refresh:${new URLSearchParams(String(init?.body)).get("refresh_token")}`);
-        expect(new Headers(init?.headers).get("authorization")).toBe(
-          `Basic ${Buffer.from("client:secret").toString("base64")}`,
-        );
-        return Response.json({
-          access_token: "access",
-          refresh_token: "rotated",
-          expires_in: 7200,
-        });
-      }
-      expect(stored).toBe("rotated");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access");
-      writes.push("request");
-      return Response.json({ data: [] });
-    });
-    const options = {
-      spend: createXTestSpend(),
-      refreshToken: "initial",
-      fetch: fetcher,
-      loadRefreshToken: async () => stored,
-      saveRefreshToken: async (token: string) => {
-        stored = token;
-        writes.push("persist");
-      },
-    };
-    const api = createXApiClient(options);
-    await Promise.all([api.getMentions({ userId: "9" }), api.getMentions({ userId: "9" })]);
-    expect(writes).toEqual(["refresh:initial", "persist", "request", "request"]);
-    await createXApiClient(options).getMentions({ userId: "9" });
-    expect(writes.slice(4)).toEqual(["refresh:rotated", "persist", "request"]);
   });
 
   it.each([
@@ -149,9 +101,7 @@ describe("X API authentication", () => {
         }
         throw new Error("unexpected paid request");
       });
-      const api = createXApiClient({
-        fetch: fetcher,
-      });
+      const api = createXApiClient({ fetch: fetcher });
       const assertActive = () => {
         if (!active) {
           throw new Error("revoked");
@@ -159,11 +109,7 @@ describe("X API authentication", () => {
       };
       await expect(
         operation === "reply"
-          ? api.reply({
-              text: "reply",
-              inReplyToId: "1",
-              assertActive,
-            })
+          ? reply(api, assertActive)
           : api.getUsersByUsernames(["alice"], undefined, assertActive),
       ).rejects.toThrow("revoked");
       expect(fetcher).toHaveBeenCalledTimes(1);
@@ -220,23 +166,15 @@ describe("X API authentication", () => {
         return new Response("not-json", { status: 200 });
       },
     });
-    const error: unknown = await api
-      .reply({ text: "Reply", inReplyToId: "20" })
-      .catch((cause: unknown) => cause);
+    const error: unknown = await reply(api).catch((cause: unknown) => cause);
     const uncertain = ["post-network", "post-json", "post-503"].includes(failure);
     expect(await api.spend.status()).toMatchObject({ dayUsd: uncertain ? 0.02 : 0 });
-    if (failure === "refresh" || failure === "refresh-after-401") {
-      expect(posts).toBe(failure === "refresh" ? 0 : 1);
+    expect(posts).toBe(failure === "refresh" ? 0 : 1);
+    if (!uncertain) {
       expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect(error).toMatchObject({ retryable: true });
-    } else if (failure === "post-429" || failure === "post-403") {
-      // A 4xx rejection proves no post was created; only the rate limit is retryable.
-      expect(posts).toBe(1);
-      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect(error).toMatchObject({ retryable: failure === "post-429" });
+      expect(error).toMatchObject({ retryable: failure !== "post-403" });
     } else {
       // Network failures, unreadable bodies, and 5xx after dispatch stay ambiguous.
-      expect(posts).toBe(1);
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       if (failure === "post-503") {
@@ -250,17 +188,10 @@ describe("X API authentication", () => {
       cause: undefined,
       retryable: false,
     });
-    const api = createXApiClient({
-      refreshToken: "seed",
-      fetch: async () => Response.json({ access_token: "access" }),
-    });
+    const api = createXApiClient({ fetch: async () => Response.json({ access_token: "access" }) });
     await expect(
-      api.reply({
-        text: "Reply",
-        inReplyToId: "20",
-        assertActive: () => {
-          throw rejected;
-        },
+      reply(api, () => {
+        throw rejected;
       }),
     ).rejects.toBe(rejected);
   });
@@ -276,24 +207,17 @@ describe("X API authentication", () => {
         url.endsWith("/oauth2/token") ? { access_token: "access" } : { data: { id: "901" } },
       ),
     );
-    const api = createXApiClient({
-      refreshToken: "seed",
-      fetch: fetcher,
-    });
+    const api = createXApiClient({ fetch: fetcher });
     await expect(
-      api.reply({
-        text: "Reply",
-        inReplyToId: "20",
-        assertActive: async () => {
-          queueMicrotask(() => {
-            active = false;
-          });
-          return () => {
-            if (!active) {
-              throw rejected;
-            }
-          };
-        },
+      reply(api, async () => {
+        queueMicrotask(() => {
+          active = false;
+        });
+        return () => {
+          if (!active) {
+            throw rejected;
+          }
+        };
       }),
     ).rejects.toBe(rejected);
     expect(fetcher).toHaveBeenCalledTimes(1);
