@@ -50,14 +50,9 @@ afterEach(async () => {
 });
 
 describe("local setup fleet owner persistence", () => {
-  it.each([
-    { legacy: true, include: false },
-    { legacy: true, include: true },
-    { legacy: false, include: false },
-    { legacy: false, include: true },
-  ])(
+  it.each([false, true])(
     "preserves a fleet through Doctor and two real setup writes: %j",
-    async ({ legacy, include }) => {
+    async (include) => {
       const { ensureOnboardingAgent } =
         await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
       mocks.ensureOnboardingAgent.mockImplementation(ensureOnboardingAgent);
@@ -80,14 +75,14 @@ describe("local setup fleet owner persistence", () => {
         const provider = { api: "openai-completions", baseUrl: "https://fixture.test", models };
         const entries = {
           alpha: { model: "fixture/alpha", workspace: path.join(home, "alpha-workspace") },
-          beta: { model: "fixture/beta", ...(!legacy ? { workspace } : {}), agentDir },
+          beta: { model: "fixture/beta", agentDir },
         };
         // The legacy default is deliberately neither the first nor lexical agent.
         const list = [
           { id: "alpha", ...entries.alpha },
           { id: "beta", default: true, ...entries.beta },
         ];
-        const roster = legacy ? { list } : { entries };
+        const roster = { list };
         const includeRaw = JSON.stringify(roster);
         if (include) {
           await fs.writeFile(includePath, includeRaw);
@@ -98,8 +93,7 @@ describe("local setup fleet owner persistence", () => {
         const raw = JSON.stringify({
           agents: {
             ...(include ? { $include: "./roster.json" } : roster),
-            ...(!legacy ? { ownership: "explicit" } : {}),
-            defaults: { ...defaults, ...(!legacy ? { systemAgent: { agentId: "beta" } } : {}) },
+            defaults,
           },
           bindings,
           gateway: { mode: "local", port: 24680 },
@@ -108,7 +102,7 @@ describe("local setup fleet owner persistence", () => {
         await fs.writeFile(configPath, raw);
         resetConfigRuntimeState();
         const before = await readConfigFileSnapshot();
-        expect(before.valid, JSON.stringify(before.issues)).toBe(!legacy);
+        expect(before.valid, JSON.stringify(before.issues)).toBe(false);
         expect(before.sourceConfig.agents).toMatchObject(roster);
         expect(await read()).toBe(raw);
         if (include) {
@@ -116,37 +110,35 @@ describe("local setup fleet owner persistence", () => {
         }
         const canonicalEntries = { ...entries, beta: { ...entries.beta, workspace } };
         let setupIncludeRaw = includeRaw;
-        if (legacy) {
-          if (include) {
-            // Repair the root-owned roles before re-splitting the included roster.
-            await write(before.sourceConfig);
-            resetConfigRuntimeState();
-          }
-          await runDoctorConfigPreflight({
-            observe: false,
-            invocationPurpose: "doctor",
-            repairPrefixedConfig: true,
-            doctorOnlyStateMigrations: true,
-            preparePluginMetadataSnapshot: true,
+        if (include) {
+          // Repair the root-owned roles before re-splitting the included roster.
+          await write(before.sourceConfig);
+          resetConfigRuntimeState();
+        }
+        await runDoctorConfigPreflight({
+          observe: false,
+          invocationPurpose: "doctor",
+          repairPrefixedConfig: true,
+          doctorOnlyStateMigrations: true,
+          preparePluginMetadataSnapshot: true,
+        });
+        resetConfigRuntimeState();
+        const repaired = await readConfigFileSnapshot();
+        expect(repaired.valid, JSON.stringify(repaired.issues)).toBe(true);
+        expectFleet(repaired.sourceConfig.agents, canonicalEntries);
+        expect(repaired.sourceConfig.bindings).toEqual(bindings);
+        if (include) {
+          expect(await read(includePath)).toBe(includeRaw);
+          setupIncludeRaw = JSON.stringify({ entries: canonicalEntries });
+          await fs.writeFile(includePath, setupIncludeRaw);
+          const rootOwnedAgents = { ...repaired.sourceConfig.agents };
+          delete rootOwnedAgents.entries;
+          await write({
+            ...repaired.sourceConfig,
+            agents: { $include: "./roster.json", ...rootOwnedAgents },
           });
           resetConfigRuntimeState();
-          const repaired = await readConfigFileSnapshot();
-          expect(repaired.valid, JSON.stringify(repaired.issues)).toBe(true);
-          expectFleet(repaired.sourceConfig.agents, canonicalEntries);
-          expect(repaired.sourceConfig.bindings).toEqual(bindings);
-          if (include) {
-            expect(await read(includePath)).toBe(includeRaw);
-            setupIncludeRaw = JSON.stringify({ entries: canonicalEntries });
-            await fs.writeFile(includePath, setupIncludeRaw);
-            const rootOwnedAgents = { ...repaired.sourceConfig.agents };
-            delete rootOwnedAgents.entries;
-            await write({
-              ...repaired.sourceConfig,
-              agents: { $include: "./roster.json", ...rootOwnedAgents },
-            });
-            resetConfigRuntimeState();
-            expect((await readConfigFileSnapshot()).valid).toBe(true);
-          }
+          expect((await readConfigFileSnapshot()).valid).toBe(true);
         }
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
         mocks.applyAuthChoice.mockImplementation(

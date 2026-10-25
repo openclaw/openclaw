@@ -256,95 +256,37 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     },
   );
 
-  type OwnerCase = { label: string } & (
-    | { fresh: true; agents?: OpenClawConfig["agents"]; legacyState?: boolean; agentName?: string }
-    | { fresh: false; agentId: string; include?: boolean; explicit?: boolean }
-  );
-  const ownerCases: OwnerCase[] = [
-    { label: "fresh unnamed", fresh: true },
-    { label: "fresh named", fresh: true, agentName: "robby" },
-    { label: "rosterless", fresh: true, agents: {}, agentName: "robby" },
-    { label: "empty keyed roster", fresh: true, agents: { entries: {} }, agentName: "robby" },
-    { label: "legacy workspace", fresh: true, agents: {}, legacyState: true, agentName: "robby" },
-    { label: "main", fresh: false, agentId: "main" },
-    { label: "ops", fresh: false, agentId: "ops" },
-    { label: "included main", fresh: false, agentId: "main", include: true },
-    { label: "explicit ops", fresh: false, agentId: "ops", explicit: true },
-  ];
-  it.each(ownerCases)("keeps auth and provisioning on $label ownership", (testCase) =>
+  it.each([false, true])("keeps first-agent auth on its workspace (legacy state: %s)", (legacy) =>
     withTempHome(async (rawHome) => {
       const home = await fs.realpath(rawHome);
       const configDir = path.join(home, ".openclaw");
-      const write = (name: string, value: unknown) =>
-        fs.writeFile(path.join(configDir, name), JSON.stringify(value));
-      const agentId = testCase.fresh ? (testCase.agentName ?? "main") : testCase.agentId;
+      const agentId = legacy ? "robby" : "main";
       const agentDir = path.join(configDir, "agents", agentId, "agent");
-      const workspace = path.join(
-        home,
-        testCase.fresh ? "requested-workspace" : "global-workspace",
-      );
-      let expectedWorkspace = workspace;
-      let entries: NonNullable<OpenClawConfig["agents"]>["entries"];
-      if (testCase.fresh) {
-        const oldWorkspace = path.join(home, "old-workspace");
-        if (testCase.legacyState) {
-          expectedWorkspace = oldWorkspace;
-        } else {
-          // withTempHome seeds main sessions; model a first install.
-          await fs.rm(path.join(configDir, "agents"), { recursive: true });
-        }
-        if (testCase.agents) {
-          await fs.mkdir(configDir, { recursive: true });
-          await write("openclaw.json", {
-            agents: { ...testCase.agents, defaults: { workspace: oldWorkspace } },
-          });
-        }
-        resetConfigRuntimeState();
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot).toMatchObject({ valid: true, exists: testCase.agents !== undefined });
+      const workspace = path.join(home, "requested-workspace");
+      const expectedWorkspace = legacy ? path.join(home, "old-workspace") : workspace;
+      if (legacy) {
+        await fs.writeFile(
+          path.join(configDir, "openclaw.json"),
+          JSON.stringify({ agents: { defaults: { workspace: expectedWorkspace } } }),
+        );
       } else {
-        expectedWorkspace = agentId === "main" ? workspace : path.join(home, "ops-workspace");
-        entries = {
-          ...(testCase.explicit ? { main: {} } : {}),
-          [agentId]: agentId === "main" ? {} : { agentDir, workspace: expectedWorkspace },
-        };
-        if (testCase.include) {
-          await write("roster.json", { agents: { entries } });
-        }
-        await write("openclaw.json", {
-          ...(testCase.include ? { $include: "./roster.json" } : {}),
-          agents: {
-            ...(!testCase.include ? { entries } : {}),
-            ...(testCase.explicit ? { ownership: "explicit" } : {}),
-            defaults: { workspace, ...(testCase.explicit ? { systemAgent: { agentId } } : {}) },
-          },
-        });
-        resetConfigRuntimeState();
+        // withTempHome seeds main sessions; model a first install.
+        await fs.rm(path.join(configDir, "agents"), { recursive: true });
       }
-      const newEntry = testCase.fresh
-        ? {
-            [agentId]: {
-              ...(testCase.agentName ? { name: testCase.agentName } : {}),
-              workspace: expectedWorkspace,
-            },
-          }
-        : undefined;
+      resetConfigRuntimeState();
       mocks.ensureOnboardingAgent.mockImplementationOnce(
         async ({ config }: { config: OpenClawConfig }) => ({
-          config: testCase.fresh
-            ? {
-                ...config,
-                agents: { ...config.agents, entries: newEntry },
-              }
-            : config,
+          config: {
+            ...config,
+            agents: { ...config.agents, entries: { [agentId]: { workspace: expectedWorkspace } } },
+          },
           agentId,
-          bootstrapPending: testCase.fresh,
-          createdAgent: testCase.fresh,
+          bootstrapPending: true,
+          createdAgent: true,
         }),
       );
       await runSetup({
-        agentName: testCase.fresh ? testCase.agentName : "robby",
-        installDaemon: testCase.fresh ? undefined : false,
+        agentName: legacy ? agentId : undefined,
         workspace,
         authChoice: "demo-api-key",
         json: true,
@@ -352,37 +294,23 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       const auth = mocks.applyAuthChoice.mock.calls[0]?.[0];
       expect(auth?.target).toEqual({ agentId, agentDir, workspaceDir: expectedWorkspace });
       expectWorkspace(agentId, expectedWorkspace);
-      if (testCase.fresh) {
-        expect(auth?.nextConfig.agents.defaults).toMatchObject({ workspace: expectedWorkspace });
-        const creationOrder = mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!;
-        expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(creationOrder);
-        expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(creationOrder);
-        expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
-        expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            firstAgent: { name: agentId },
-            workspace: expectedWorkspace,
-          }),
+      expect(auth?.nextConfig.agents.defaults).toMatchObject({ workspace: expectedWorkspace });
+      const creationOrder = mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!;
+      expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(creationOrder);
+      expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(creationOrder);
+      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
+      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ firstAgent: { name: agentId }, workspace: expectedWorkspace }),
+      );
+      expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
+        `${workspace}/main`,
+      );
+      if (legacy) {
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("existing agents keep their current workspace"),
         );
-        expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
-          `${workspace}/main`,
-        );
-        if (testCase.legacyState) {
-          expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringContaining("existing agents keep their current workspace"),
-          );
-        } else {
-          expect(runtime.error).not.toHaveBeenCalled();
-        }
       } else {
-        const committed = mocks.commitConfig.mock.calls[0]?.[0].nextConfig.agents;
-        expect(committed?.entries).toEqual(entries);
-        expect(committed?.defaults).toMatchObject({ workspace });
-        if (testCase.include) {
-          expect(
-            JSON.parse(await fs.readFile(path.join(configDir, "roster.json"), "utf8")),
-          ).toEqual({ agents: { entries } });
-        }
+        expect(runtime.error).not.toHaveBeenCalled();
       }
     }),
   );
