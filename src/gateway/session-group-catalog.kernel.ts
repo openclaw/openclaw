@@ -126,6 +126,7 @@ export function mutateSessionGroupCatalogInDatabase(
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
           return false;
         }
+        // PG READ COMMITTED + the store advisory lock (SQLite BEGIN IMMEDIATE) serialize allocation.
         executeSqliteQuerySync(
           db,
           kysely.insertInto("session_groups").values((eb) => ({
