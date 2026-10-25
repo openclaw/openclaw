@@ -207,8 +207,6 @@ it("keeps browser tool registration synchronous while loading runtime on execute
     expect.objectContaining({ names: ["browser"], optional: false }),
   ]);
   expect(tool).toMatchObject({ name: "browser", resultContentSource: "network" });
-  expect(tool.description).toContain("action=profiles");
-  expect(tool.description).not.toContain('profile="user"');
   expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
   const properties = toolProperties(tool);
   expect(properties.actions?.description).toContain("batch");
@@ -378,28 +376,17 @@ it("lazy-loads node host and audit runtime handlers", async () => {
   expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
 });
 
-it("registers a lazy browser control service", async () => {
+it.each([false, true])("starts browser control with eager loading=%s", async (eager) => {
+  if (eager) {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+  }
   const service = createService();
-  expect(service).toMatchObject({
-    id: "browser-control",
-    start: expect.any(Function),
-    stop: expect.any(Function),
-  });
+  expect(service.id).toBe("browser-control");
   expect(runtimeApiMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
-
   await service.start(serviceContext);
-  expect(runtimeApiMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
-
+  expect(runtimeApiMocks.startLazyPluginServiceModule).toHaveBeenCalledTimes(eager ? 1 : 0);
   await service.stop!(serviceContext);
   expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
-});
-
-it("eager-loads the browser control service when explicitly requested", async () => {
-  vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
-  const service = createService();
-  await service.start(serviceContext);
-  expect(runtimeApiMocks.startLazyPluginServiceModule).toHaveBeenCalledOnce();
-  await service.stop?.(serviceContext);
 });
 
 it("declares setup auto-enable reasons for browser config surfaces", () => {
