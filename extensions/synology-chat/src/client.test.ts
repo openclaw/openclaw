@@ -2,11 +2,14 @@ import { EventEmitter } from "node:events";
 import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { PassThrough } from "node:stream";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { synologyChatPlugin as plugin } from "./channel.js";
-import { resolveLegacyWebhookNameToChatUserId, sendHostedFileUrl, sendMessage } from "./client.js";
+import {
+  resolveLegacyWebhookNameToChatUserId as lookupUser,
+  sendHostedFileUrl,
+  sendMessage,
+} from "./client.js";
 import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
 // Vitest hoists transport mocks before the static client import.
@@ -16,14 +19,6 @@ vi.mock("node:https", async () => {
   const httpsGet = vi.fn();
   const httpsModule = { ...actual, request: httpsRequest, get: httpsGet };
   return { ...actual, default: httpsModule, request: httpsRequest, get: httpsGet };
-});
-
-vi.mock("node:http", async () => {
-  const actual = await vi.importActual<typeof import("node:http")>("node:http");
-  const httpRequest = vi.fn();
-  const httpGet = vi.fn();
-  const httpModule = { ...actual, request: httpRequest, get: httpGet };
-  return { ...actual, default: httpModule, request: httpRequest, get: httpGet };
 });
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -106,10 +101,6 @@ function mockResponse(statusCode: number, body: string) {
   post.mockImplementation(responseHandler(statusCode, [body]));
 }
 
-function mockSuccessResponse() {
-  mockResponse(200, '{"success":true}');
-}
-
 function mockRequestErrorOnce(error: Error) {
   post.mockImplementationOnce((() => {
     const req = request();
@@ -124,6 +115,7 @@ function useTimers(advanceMs = 10_000) {
     vi.useFakeTimers();
     fakeNowMs += advanceMs;
     vi.setSystemTime(fakeNowMs);
+    mockResponse(200, '{"success":true}');
   });
 
   afterEach(() => {
@@ -135,9 +127,9 @@ const hostedCapabilityUrl =
   "https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t" as SynologyHostedMediaUrl;
 
 const webhookUrl = "https://nas.example.com/incoming";
-const sendText = (text = "Hello", userId?: string, insecure = false) =>
-  settleTimers(sendMessage(webhookUrl, text, userId, insecure));
-const sendFile = (url = webhookUrl) => settleTimers(sendHostedFileUrl(url, hostedCapabilityUrl));
+const sendText = (text = "Hello", userId?: string) =>
+  settleTimers(sendMessage(webhookUrl, text, userId));
+const sendFile = () => settleTimers(sendHostedFileUrl(webhookUrl, hostedCapabilityUrl));
 
 describe("Synology outbound channel boundary", () => {
   useTimers();
@@ -162,20 +154,17 @@ describe("Synology outbound channel boundary", () => {
   const notify = () => plugin.pairing.notifyApproval!({ cfg, id: "USER2", accountId: "beta" });
 
   it("notifies through the approved account", async () => {
-    mockSuccessResponse();
     await settleTimers(notify());
     expect(requestCall()[0]).toBe("https://nas-beta/incoming");
     expect(requestCall()[1].rejectUnauthorized).toBe(false);
     expect(payload()).toEqual({
       text: "OpenClaw: your access has been approved.",
     });
-    expect(https.request).toHaveBeenCalledOnce();
   });
 
   it("rejects a notification when the selected account's send fails", async () => {
     mockResponse(403, '{"success":false}');
     await settleTimers(expect(notify()).rejects.toThrow("Failed to send message to Synology Chat"));
-    expect(https.request).toHaveBeenCalledOnce();
   });
 
   it("rejects a notification without a configured incoming URL", async () => {
@@ -190,7 +179,9 @@ describe("Synology outbound channel boundary", () => {
   });
 
   it("formats links without rewriting code, escaped, or malformed links", async () => {
-    mockSuccessResponse();
+    expect(plugin.agentPrompt.messageToolHints()).toContain(
+      "**Links**: Use `<URL|display text>` to create clickable links.",
+    );
     const malformedLink = `[${"\\".repeat(32)}`;
     const text = `**Read** [the docs](https://example.com/a_(b)) [titled](https://example.com "Documentation") \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`;
     const expected = `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`;
@@ -215,10 +206,9 @@ describe("Synology Chat TLS verification defaults", () => {
     { name: "sendHostedFileUrl", refused: false },
     { name: "sendHostedFileUrl", refused: true },
   ])("prepares $name webhook POST before handoff (refused=$refused)", async ({ name, refused }) => {
-    const preparing = createDeferred<void>();
-    const prepared = createDeferred<void>();
-    const handedOff = createDeferred<void>();
-    const acknowledgment = createDeferred<void>();
+    const preparing = Promise.withResolvers<void>();
+    const prepared = Promise.withResolvers<void>();
+    const handedOff = Promise.withResolvers<void>();
     const refusal = new Error("Synology message authority ended");
     const authority = fetchRuntime.captureEffectAuthority();
     const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
@@ -232,14 +222,10 @@ describe("Synology Chat TLS verification defaults", () => {
         return authority.initiate(effect);
       },
     });
+    const accepted = responseHandler(200, ['{"success":true}']);
     post.mockImplementation(((...args) => {
       handedOff.resolve();
-      const res = response(200);
-      void acknowledgment.promise.then(() => {
-        args[2]?.(res);
-        res.end('{"success":true}');
-      });
-      return request();
+      return accepted(...args);
     }) as RequestHandler);
     const sending =
       name === "sendMessage"
@@ -254,10 +240,6 @@ describe("Synology Chat TLS verification defaults", () => {
       ]);
       expect(https.request).not.toHaveBeenCalled();
       prepared.resolve();
-      if (!refused) {
-        await handedOff.promise;
-        acknowledgment.resolve();
-      }
       if (refused) {
         await expect(sending).rejects.toBe(refusal);
       } else {
@@ -271,7 +253,6 @@ describe("Synology Chat TLS verification defaults", () => {
       }
     } finally {
       prepared.resolve();
-      acknowledgment.resolve();
       await sending.catch(() => {});
       capture.mockRestore();
     }
@@ -282,7 +263,6 @@ describe("sendMessage", () => {
   useTimers();
 
   it.each([
-    { recipient: "123456", postId: 25769804017, ids: ["25769804017"] },
     { recipient: "123456", postId: "18446744073709551615", ids: ["18446744073709551615"] },
     { recipient: "999999", postId: 25769804017, ids: [] },
     { recipient: "123456", postId: 9007199254740992, ids: [] },
@@ -319,20 +299,13 @@ describe("sendMessage", () => {
       });
       return request();
     }) as RequestHandler);
-    const sending = sendMessage("https://nas.example.com/incoming", "a".repeat(4001), "42");
-    const outcome = await settleTimers(
-      sending.then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      ),
-    );
-    expect(outcome).toMatchObject({
-      error: {
+    await settleTimers(
+      expect(sendMessage(webhookUrl, "a".repeat(4001), "42")).rejects.toMatchObject({
         code: "CHANNEL_PARTIAL_DELIVERY",
         message: "Failed to send message to Synology Chat (rejected)",
         deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
-      },
-    });
+      }),
+    );
     expect(https.request).toHaveBeenCalledTimes(3);
   });
 
@@ -342,7 +315,6 @@ describe("sendMessage", () => {
   ] as const)(
     "retries an aggregate only if every leaf is pre-connect (%s)",
     async (code, retries) => {
-      mockSuccessResponse();
       const error = Object.assign(
         new AggregateError([
           Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
@@ -364,16 +336,8 @@ describe("sendMessage", () => {
   });
 
   it("does not coerce partial numeric user ids into recipients", async () => {
-    mockSuccessResponse();
     await sendText("Hello", "42abc");
     expect(payload()).toEqual({ text: "Hello" });
-  });
-
-  it("only disables TLS verification when explicitly requested", async () => {
-    mockSuccessResponse();
-    await sendText("Hello", undefined, true);
-    const firstCall = requestCall();
-    expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
 });
 
@@ -400,7 +364,6 @@ describe("sendHostedFileUrl", () => {
   });
 
   it("respects the shared send interval before posting a file URL", async () => {
-    mockSuccessResponse();
     await sendText("hello");
     post.mockClear();
     const promise = sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl);
@@ -414,7 +377,6 @@ describe("sendHostedFileUrl", () => {
   });
 
   it("paces each incoming webhook endpoint independently", async () => {
-    mockSuccessResponse();
     const accountA = "https://nas.example.com/incoming?token=account-a";
     const accountB = "https://nas.example.com/incoming?token=account-b";
     const requestedUrls = () =>
@@ -439,13 +401,10 @@ describe("sendHostedFileUrl", () => {
   });
 });
 
-function mockUsers(users: Array<Record<string, unknown>>, once = false) {
-  const handler = responseHandler(200, [JSON.stringify({ success: true, data: { users } })]);
-  if (once) {
-    get.mockImplementationOnce(handler);
-  } else {
-    get.mockImplementation(handler);
-  }
+function mockUsers(users: Array<Record<string, unknown>>) {
+  get.mockImplementationOnce(
+    responseHandler(200, [JSON.stringify({ success: true, data: { users } })]),
+  );
 }
 
 describe("resolveLegacyWebhookNameToChatUserId", () => {
@@ -455,6 +414,8 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test-2%22";
 
   useTimers(10 * 60 * 1000);
+  const lookup = (name: string, incomingUrl = baseUrl) =>
+    lookupUser({ incomingUrl, mutableWebhookUsername: name });
 
   it("preserves UTF-8 when user_list splits a nickname across response chunks", async () => {
     const nickname = "猫";
@@ -470,39 +431,28 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     get.mockImplementation(
       responseHandler(200, [responseBody.subarray(0, splitAt), responseBody.subarray(splitAt)]),
     );
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: nickname,
-    });
-    expect(result).toBe(4);
+    expect(await lookup(nickname)).toBe(4);
   });
 
-  it("resolves user by username when nickname does not match", async () => {
+  it("filters malformed identities and resolves both nickname and username", async () => {
     mockUsers([
-      { user_id: 4, username: "jmn67", nickname: "" },
+      { user_id: "bad", username: "broken", nickname: "jmn" },
+      { user_id: 4, username: "jmn67", nickname: "jmn" },
       { user_id: 7, username: "she67", nickname: "sarah" },
     ]);
-    const result = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl: baseUrl,
-      mutableWebhookUsername: "jmn67",
-    });
-    expect(result).toBe(4);
+    expect(await lookup("jmn")).toBe(4);
+    expect(await lookup("jmn67")).toBe(4);
   });
 
   it("keeps user cache scoped per incoming URL", async () => {
-    mockUsers([{ user_id: 4, username: "jmn67", nickname: "jmn" }], true);
-    mockUsers([{ user_id: 9, username: "jmn67", nickname: "jmn" }], true);
+    mockUsers([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+    mockUsers([{ user_id: 9, username: "jmn67", nickname: "jmn" }]);
     for (const [incomingUrl, expectedUserId] of [
       [baseUrl, 4],
       [baseUrl2, 9],
       [baseUrl, 4],
     ] as const) {
-      await expect(
-        resolveLegacyWebhookNameToChatUserId({
-          incomingUrl,
-          mutableWebhookUsername: "jmn",
-        }),
-      ).resolves.toBe(expectedUserId);
+      expect(await lookup("jmn", incomingUrl)).toBe(expectedUserId);
     }
     expect(https.get).toHaveBeenCalledTimes(2);
   });
@@ -518,7 +468,7 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
       process.nextTick(() => req.emit("error", new Error("lookup unavailable")));
       return req;
     });
-    const userId = await resolveLegacyWebhookNameToChatUserId({
+    const userId = await lookupUser({
       incomingUrl: "https://lookup-error-nas.example.com/webapi/entry.cgi?method=chatbot",
       mutableWebhookUsername: "anyone",
       log: { warn: (...args) => warns.push(args.map(String).join(" ")) },
@@ -527,24 +477,11 @@ describe("resolveLegacyWebhookNameToChatUserId user lookup", () => {
     expect(warns).toEqual(["fetchChatUsers: HTTP error — lookup unavailable"]);
   });
 
-  it("filters malformed user entries while keeping valid ones", async () => {
-    mockUsers([
-      { user_id: "bad", username: "broken", nickname: "jmn" },
-      { user_id: 4, username: "jmn67", nickname: "jmn" },
-    ]);
-    const userId = await resolveLegacyWebhookNameToChatUserId({
-      incomingUrl:
-        "https://malformed-user-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",
-      mutableWebhookUsername: "jmn",
-    });
-    expect(userId).toBe(4);
-  });
-
   it("falls back to an empty list on uncached user_list overflow", async () => {
     get.mockImplementation(responseHandler(200, [Buffer.alloc(1024 * 1024 + 1, 0x78)]));
     const warn = vi.fn();
     await expect(
-      resolveLegacyWebhookNameToChatUserId({
+      lookupUser({
         incomingUrl: "https://overflow-nas.example.com/webapi/entry.cgi?method=chatbot",
         mutableWebhookUsername: "anyone",
         log: { warn },

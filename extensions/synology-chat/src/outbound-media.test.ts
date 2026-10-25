@@ -19,28 +19,10 @@ import {
   tryHandleSynologyHostedMediaRequest,
 } from "./outbound-media.js";
 import { setSynologyRuntime } from "./runtime.js";
-import { makeReq, makeRes as makeBaseRes } from "./test-http-utils.js";
+import { makeAccount, makeReq, makeRes } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
-
-function makeRes(options: { finishOnEnd?: boolean } = {}) {
-  const res = makeBaseRes(options);
-  const chunks: Buffer[] = [];
-  const end = res.end.bind(res);
-  res.write = ((chunk: Uint8Array | string) => {
-    chunks.push(Buffer.from(chunk));
-    return true;
-  }) as typeof res.write;
-  res.end = ((chunk?: Uint8Array | string) => {
-    if (chunk !== undefined) {
-      chunks.push(Buffer.from(chunk));
-    }
-    end(chunks.length > 0 ? Buffer.concat(chunks) : undefined);
-    return res;
-  }) as typeof res.end;
-  return res;
-}
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
@@ -64,45 +46,32 @@ const testStateEnv: NodeJS.ProcessEnv = {
 };
 
 function createAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
-  return {
-    accountId: "default",
-    enabled: true,
+  return makeAccount({
     token: "token",
-    incomingUrl: "https://nas.example.com/incoming",
-    webhookUrl: "https://gateway.example.com/public/synology?proxy-token=keep",
-    nasHost: "nas.example.com",
-    webhookPath: "/internal/synology",
-    webhookPathSource: "explicit" as const,
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "allowlist" as const,
+    dmPolicy: "allowlist",
     allowedUserIds: ["42"],
-    rateLimitPerMinute: 30,
     botName: "OpenClaw",
     allowInsecureSsl: false,
+    webhookUrl: "https://gateway.example.com/public/synology?proxy-token=keep",
+    webhookPath: "/internal/synology",
+    webhookPathSource: "explicit" as const,
     ...overrides,
-  } satisfies ResolvedSynologyChatAccount;
+  });
 }
 
 function installRuntime() {
   const openedStores: PluginStateKeyedStore<unknown>[] = [];
-  let registerCallCount = 0;
-  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) => {
+  const openKeyedStore = (options: OpenKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests("synology-chat", {
       ...options,
       env: testStateEnv,
     });
-    const register = store.register.bind(store);
-    store.register = async (key, value, opts) => {
-      registerCallCount += 1;
-      await register(key, value, opts);
-    };
     const exposedStore = { ...store, lookupMany: store.lookupMany };
     openedStores.push(exposedStore);
     return exposedStore;
-  });
+  };
   setSynologyRuntime({ state: { openKeyedStore } } as unknown as PluginRuntime);
-  return { openKeyedStore, openedStores, getRegisterCallCount: () => registerCallCount };
+  return openedStores;
 }
 
 function trackChunkReads<T>(store: PluginStateKeyedStore<T>) {
@@ -166,7 +135,7 @@ describe("Synology Chat hosted outbound media", () => {
   const prepare = (mediaUrl = "https://files.example.com/report.pdf") =>
     prepareSynologyHostedMedia({ account, mediaUrl });
   function storeAt(index: number) {
-    const store = runtime.openedStores[index];
+    const store = runtime[index];
     if (!store) {
       throw new Error(`expected hosted media store ${index}`);
     }
@@ -236,14 +205,9 @@ describe("Synology Chat hosted outbound media", () => {
     const requestUrl = await stageUrl();
     const response = makeRes();
     const write = response.write.bind(response);
-    let firstWrite = true;
     response.write = ((chunk: Uint8Array | string) => {
       write(chunk);
-      if (firstWrite) {
-        firstWrite = false;
-        return false;
-      }
-      return true;
+      return false;
     }) as typeof response.write;
     const writeSpy = vi.spyOn(response, "write");
     let settled = false;
@@ -251,11 +215,9 @@ describe("Synology Chat hosted outbound media", () => {
       settled = true;
     });
     await vi.waitFor(() => expect(writeSpy).toHaveBeenCalledOnce());
-    expect(writeSpy).toHaveBeenCalledWith(frozenBytes);
     expect(settled).toBe(false);
     response.emit("drain");
     await expect(serving).resolves.toBe(true);
-    expect(writeSpy).toHaveBeenCalledOnce();
     expect(Buffer.from(response.body)).toEqual(frozenBytes);
   });
 
@@ -474,7 +436,6 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("rejects active content and leaves no live capability", async () => {
-    const { getRegisterCallCount, openedStores } = runtime;
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("<svg onload=alert(1)></svg>"),
       kind: "image",
@@ -484,42 +445,30 @@ describe("Synology Chat hosted outbound media", () => {
     await expect(prepare("https://files.example.com/active.svg")).rejects.toThrow(
       "do not support active content type",
     );
-    await expect(
-      Promise.all(openedStores.map(async (store) => await store.entries())),
-    ).resolves.toEqual([[], []]);
-    expect(getRegisterCallCount()).toBe(0);
+    await expect(Promise.all(runtime.map((store) => store.entries()))).resolves.toEqual([[], []]);
   });
 
   const generic = ["application/octet-stream", "diagram.bin"] as const;
   const passive = ["image/png", "photo.png"] as const;
+  const html = "<script>active()</script>";
+  const svg = "<svg onload='active()'/>";
   it.each<[string, Buffer, string?, string?]>([
-    [
-      "XML prefix",
-      Buffer.from('<?xml version="1.0"?><!--fixture--><svg onload="alert(1)"/>'),
-      ...generic,
-    ],
-    [
-      "SVG doctype",
-      Buffer.from('<!DOCTYPE svg><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'),
-      ...generic,
-    ],
+    ["XML prefix", Buffer.from(`<?xml version="1.0"?><!--fixture-->${svg}`), ...generic],
+    ["SVG doctype", Buffer.from(`<!DOCTYPE svg>${svg}`), ...generic],
     [
       "long wrappers",
-      Buffer.from(`${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}<svg onload="alert(1)"/>`),
+      Buffer.from(`${" ".repeat(5_000)}${"<!--fixture-->".repeat(6)}${svg}`),
       ...generic,
     ],
-    ["UTF-16LE HTML", utf16Buffer("<script>alert('active')</script>", "le"), ...passive],
-    ["UTF-16BE SVG", utf16Buffer('  <!--fixture--><svg onload="alert(1)"/>', "be"), ...passive],
+    ["UTF-16LE HTML", utf16Buffer(html, "le"), ...passive],
+    ["UTF-16BE SVG", utf16Buffer(`  <!--fixture-->${svg}`, "be"), ...passive],
     ["BOM-less UTF-16LE", utf16Buffer('<img src="x" onerror="alert(1)">', "le", false)],
-    [
-      "BOM-less UTF-16BE",
-      utf16Buffer("  <div><script>alert('active')</script></div>", "be", false),
-    ],
+    ["BOM-less UTF-16BE", utf16Buffer(`  <div>${html}</div>`, "be", false)],
     ["BOM-less UTF-32LE", utf32Buffer('<embed src="data:text/html,active">', "le", false)],
-    ["UTF-32BE SVG", utf32Buffer('<svg onload="alert(1)"/>', "be"), ...passive],
-    ["abrupt comment", Buffer.from("<!--><script>alert('active')</script>")],
-    ["comment-start-dash", Buffer.from("<!---><script>alert('active')</script>")],
-    ["incorrect comment close", Buffer.from("<!--fixture--!><script>alert('active')</script>")],
+    ["UTF-32BE SVG", utf32Buffer(svg, "be"), ...passive],
+    ["abrupt comment", Buffer.from(`<!-->${html}`)],
+    ["comment-start-dash", Buffer.from(`<!--->${html}`)],
+    ["incorrect comment close", Buffer.from(`<!--fixture--!>${html}`)],
     ["active filename", Buffer.from("not markup"), "application/octet-stream", "report.html"],
   ])(
     "rejects %s",

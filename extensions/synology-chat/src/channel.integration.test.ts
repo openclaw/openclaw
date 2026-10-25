@@ -202,18 +202,14 @@ describe("Synology channel wiring integration", () => {
   it("re-enables a configured named account without replacing root or sibling credentials", async () => {
     const { synologyChatSetupAdapter } = await import("./setup-surface.js");
     const configured = synologyChatSetupAdapter.applyAccountConfig({
-      cfg: {
-        channels: {
-          "synology-chat": {
-            enabled: false,
-            token: "root-token",
-            accounts: {
-              alerts: { enabled: false, token: "old-alerts", webhookPath: "/alerts" },
-              sibling: { enabled: false, token: "sibling-token" },
-            },
-          },
+      cfg: config({
+        enabled: false,
+        token: "root-token",
+        accounts: {
+          alerts: { enabled: false, token: "old-alerts", webhookPath: "/alerts" },
+          sibling: { enabled: false, token: "sibling-token" },
         },
-      },
+      }),
       accountId: "alerts",
       input: { token: "replacement", url: "https://nas.example.com/alerts" },
     });
@@ -301,34 +297,22 @@ describe("Synology channel wiring integration", () => {
       },
       ...config(account({ dmPolicy: "open", allowedUserIds: ["*"], rateLimitPerMinute: 1 })),
     };
-    const { ctx: startContext, stop } = startAccount(cfg);
-    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
+    const { stop } = startAccount(cfg);
     const registered = routeAt();
     for (let i = 0; i < 2; i += 1) {
-      const req = request(
-        {
-          token: "wrong-token",
-          username: "attacker",
-        },
+      const res = await post(
+        registered,
+        { token: "wrong-token" },
         { headers: { "x-forwarded-for": "198.51.100.9" } },
       );
-      (req.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
-      const res = makeRes();
-      await registered.handler(req, res);
       expect(res.status).toBe(i === 0 ? 401 : 429);
     }
-    const validReq = request(
-      {
-        token: "valid-token",
-        username: "legitimate-user",
-        post_id: "post-proxy-accepted",
-      },
+    const validRes = await post(
+      registered,
+      { token: "valid-token", post_id: "post-proxy-accepted" },
       { headers: { "x-forwarded-for": "203.0.113.11" } },
     );
-    (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
-    const validRes = makeRes();
-    await registered.handler(validReq, validRes);
-    expect(validRes.status, JSON.stringify(startContext.log.error.mock.calls)).toBe(204);
+    expect(validRes.status).toBe(204);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(channelInboundRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -338,23 +322,9 @@ describe("Synology channel wiring integration", () => {
     await stop();
   });
 
-  it.each([
-    ["main", "main"],
-    ["agent-alpha", "agent-beta"],
-  ])(
-    "isolates direct-message sessions by account and user for agents %s/%s",
-    async (alphaAgent, betaAgent) => {
-      for (const [accountId, agentId] of [
-        ["alpha", alphaAgent],
-        ["beta", betaAgent],
-        ["alpha", alphaAgent],
-      ] as const) {
-        resolveAgentRouteMock.mockReturnValueOnce({
-          agentId,
-          sessionKey: `agent:${agentId}:main`,
-          accountId,
-        });
-      }
+  it.each([false, true])(
+    "isolates accounts and users with different agents=%s",
+    async (different) => {
       const namedAccount = (id: string) =>
         account({
           token: `token-${id}`,
@@ -370,43 +340,33 @@ describe("Synology channel wiring integration", () => {
         }),
         session: { dmScope: "main" as const },
       };
-      const alpha = startAccount(cfg, "alpha");
-      const beta = startAccount(cfg, "beta");
+      const accounts = [startAccount(cfg, "alpha"), startAccount(cfg, "beta")];
       expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
-      const alphaRoute = routeAt();
-      const betaRoute = routeAt(1);
-      const alphaRes = await post(alphaRoute, {
-        token: "token-alpha",
-        username: "alice",
-        text: "alpha secret",
-        post_id: "post-alpha",
-      });
-      const betaRes = await post(betaRoute, {
-        token: "token-beta",
-        username: "bob",
-        text: "beta secret",
-        post_id: "post-beta",
-      });
-      const otherAlphaRes = await post(alphaRoute, {
-        token: "token-alpha",
-        user_id: "456",
-        username: "carol",
-        post_id: "post-alpha-other-user",
-      });
-      expect([alphaRes.status, betaRes.status, otherAlphaRes.status]).toEqual([204, 204, 204]);
+      for (const [index, accountId, userId] of [
+        [0, "alpha", "123"],
+        [1, "beta", "123"],
+        [0, "alpha", "456"],
+      ] as const) {
+        const agentId = different ? `agent-${accountId}` : "main";
+        resolveAgentRouteMock.mockReturnValueOnce({
+          agentId,
+          accountId,
+          sessionKey: `agent:${agentId}:main`,
+        });
+        const res = await post(routeAt(index), {
+          token: `token-${accountId}`,
+          user_id: userId,
+          post_id: `${accountId}-${userId}`,
+        });
+        expect(res.status).toBe(204);
+        expect(finalizeInboundContextMock.mock.lastCall?.[0]).toMatchObject({
+          AccountId: accountId,
+          SessionKey: `agent:${agentId}:synology-chat:${accountId}:direct:${userId}`,
+        });
+      }
       expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(3);
       expect(finalizeInboundContextMock).toHaveBeenCalledTimes(3);
-      expect(
-        finalizeInboundContextMock.mock.calls.map(([context]) => ({
-          AccountId: context.AccountId,
-          SessionKey: context.SessionKey,
-        })),
-      ).toEqual([
-        { AccountId: "alpha", SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:123` },
-        { AccountId: "beta", SessionKey: `agent:${betaAgent}:synology-chat:beta:direct:123` },
-        { AccountId: "alpha", SessionKey: `agent:${alphaAgent}:synology-chat:alpha:direct:456` },
-      ]);
-      await Promise.all([alpha.stop(), beta.stop()]);
+      await Promise.all(accounts.map((active) => active.stop()));
     },
   );
 });

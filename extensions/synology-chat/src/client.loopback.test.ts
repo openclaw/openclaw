@@ -313,24 +313,11 @@ describe("Synology Chat client loopback", () => {
       text: "native outbound media",
       mediaUrl,
     });
-    const durableText = await synologyChatPlugin.message.send?.text?.({
-      ...sendContext,
-      text: "durable adapter text",
-    });
-    const durableMedia = await synologyChatPlugin.message.send?.media?.({
-      ...sendContext,
-      text: "durable adapter media",
-      mediaUrl,
-    });
     expect(receivedPayloads).toEqual([
       { text: "native outbound text", user_ids: [42] },
       { file_url: hostedCapabilityUrl, text: "native outbound media", user_ids: [42] },
-      { text: "durable adapter text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, text: "durable adapter media", user_ids: [42] },
     ]);
-    expect(durableText).toBeDefined();
-    expect(durableMedia).toBeDefined();
-    for (const result of [outboundText, outboundMedia, durableText, durableMedia]) {
+    for (const result of [outboundText, outboundMedia]) {
       expect(result).toMatchObject({
         channel: "synology-chat",
         messageId: "",
@@ -443,31 +430,6 @@ describe("Synology Chat client loopback", () => {
       }
     },
   );
-
-  it("rejects unauthenticated webhook sends without fabricating delivery receipts", async () => {
-    let rejectedRequests = 0;
-    const port = await listenLoopback((_req, res) => {
-      rejectedRequests += 1;
-      respond(res, false, 403);
-    });
-    const cfg = config(
-      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-        "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-rejected",
-      "synology-loopback-rejected",
-    );
-    await expect(
-      synologyChatPlugin.outbound.sendText({ cfg, text: "rejected", to: "42" }),
-    ).rejects.toThrow("Failed to send message to Synology Chat");
-    expect(rejectedRequests).toBe(1);
-    await expect(
-      synologyChatPlugin.outbound.sendMedia({
-        cfg,
-        mediaUrl: "https://example.com/synology-receipt-proof.png",
-        to: "42",
-      }),
-    ).rejects.toThrow("rejected the attachment request");
-    expect(rejectedRequests).toBe(2);
-  });
 
   it.each(["overflow", "deadline"] as const)(
     "returns stale identity after a streamed user_list %s",

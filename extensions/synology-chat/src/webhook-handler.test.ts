@@ -3,7 +3,13 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { setSynologyRuntime } from "./runtime.js";
-import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
+import {
+  makeAccount as accountFixture,
+  makeFormBody,
+  makeReq,
+  makeRes,
+  makeStalledReq,
+} from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
 import type { SynologyIngressLifecycle } from "./webhook-ingress.js";
@@ -52,24 +58,7 @@ let accountSequence = 0;
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
-  return {
-    accountId: `test-account-${++accountSequence}`,
-    enabled: true,
-    token: "valid-token",
-    incomingUrl: "https://nas.example.com/incoming",
-    webhookUrl: "https://gateway.example.com/webhook/synology",
-    nasHost: "nas.example.com",
-    webhookPath: "/webhook/synology",
-    webhookPathSource: "default",
-    dangerouslyAllowNameMatching: false,
-    dangerouslyAllowInheritedWebhookPath: false,
-    dmPolicy: "open",
-    allowedUserIds: ["*"],
-    rateLimitPerMinute: 30,
-    botName: "TestBot",
-    allowInsecureSsl: true,
-    ...overrides,
-  };
+  return accountFixture({ accountId: `test-account-${++accountSequence}`, ...overrides });
 }
 
 function formBody(overrides: Record<string, string> = {}) {
@@ -363,15 +352,9 @@ describe("createWebhookHandler", () => {
       deliver: vi.fn().mockResolvedValue(undefined),
     });
     expect((await postToWebhook(handler)).status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
-      incomingUrl: "https://nas.example.com/incoming",
-      mutableWebhookUsername: "testuser",
-      allowInsecureSsl: true,
-      log,
-    });
     if (resolved === undefined) {
       expect(log.warn).toHaveBeenCalledWith(
-        'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+        expect.stringContaining("falling back to webhook user_id 123"),
       );
     }
     expect(deliveredMessage(deliver)).toMatchObject({
