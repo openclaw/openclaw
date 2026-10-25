@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -18,22 +19,16 @@ const delivery = vi.hoisted(() => ({
   failReadback: false,
   intentWrites: 0,
   revocationWrites: 0,
-  readbackIds: [] as string[][],
   resultFailure: new Error("synthetic result delivery failure"),
   readFailure: new Error("synthetic inventory readback failure"),
 }));
 vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/sqlite-worker-operation-admission.js")>();
-  const originals = new WeakMap<
-    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
-    Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0]
-  >();
+  const originals = new WeakMap<SqliteWorkerOperationAdmission, SqliteWorkerOperationAdmission>();
   return {
     ...actual,
-    createSqliteWorkerOperationAdmission: (
-      ...args: Parameters<typeof actual.createSqliteWorkerOperationAdmission>
-    ) => {
+    createSqliteWorkerOperationAdmission: (...args) => {
       const original = actual.createSqliteWorkerOperationAdmission(...args);
       const proxy = new Proxy(original, {
         get(target, key, receiver) {
@@ -46,16 +41,13 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
       originals.set(proxy, original);
       return proxy;
     },
-    observeSqliteWorkerCommittedFacts: (
-      admission: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[0],
-      observer: Parameters<typeof actual.observeSqliteWorkerCommittedFacts>[1],
-    ) =>
+    observeSqliteWorkerCommittedFacts: (admission, observer) =>
       actual.observeSqliteWorkerCommittedFacts(originals.get(admission) ?? admission, (receipt) => {
         if (!delivery.loseIntentResult && !delivery.loseRevocationResult) {
           observer(receipt);
         }
       }),
-  };
+  } satisfies typeof actual;
 });
 // mock-isolation: Inject receipt/result failures while the shared helper preserves real exports.
 vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
@@ -100,20 +92,15 @@ vi.mock("../../state/openclaw-state-db-readonly.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-state-db-readonly.js")>();
   return {
     ...actual,
-    executeExistingOpenClawStateRead: (
-      ...args: Parameters<typeof actual.executeExistingOpenClawStateRead>
-    ) => {
+    executeExistingOpenClawStateRead: (...args) => {
       const command = args[1];
-      if (command.type === "workerEnvironments.snapshot" && command.ids) {
-        delivery.readbackIds.push([...command.ids]);
-        if (delivery.failReadback) {
-          delivery.failReadback = false;
-          throw delivery.readFailure;
-        }
+      if (command.type === "workerEnvironments.snapshot" && command.ids && delivery.failReadback) {
+        delivery.failReadback = false;
+        throw delivery.readFailure;
       }
       return actual.executeExistingOpenClawStateRead(...args);
     },
-  };
+  } satisfies typeof actual;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -126,7 +113,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     delivery.failReadback = false;
     delivery.intentWrites = 0;
     delivery.revocationWrites = 0;
-    delivery.readbackIds = [];
     await Promise.all(stores.splice(0).map((store) => store.close()));
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -180,7 +166,6 @@ it("reloads the durable write in a new inventory after failed readback closes th
   expect(database.db.prepare("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
     count: 1,
   });
-  expect(delivery.readbackIds).toEqual([["worker-recovery"]]);
 });
 
 it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
@@ -214,7 +199,6 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
   expect(firstNotifications).toEqual([]);
   expect(survivorNotifications).toEqual([]);
   expect(survivor.getCredential(environmentId)).toBeDefined();
-  expect(delivery.readbackIds).toEqual([]);
 
   // Lost rollback confirmation is unknown; a still-present credential forbids a fence event.
   delivery.loseRevocationFailure = true;

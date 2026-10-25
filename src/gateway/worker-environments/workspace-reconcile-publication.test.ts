@@ -173,14 +173,13 @@ it.each([
     hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef });
   const candidateRef = preparedWorkerWorkspaceResultRef(ref);
   const record = vi.fn();
-  const commit = vi.fn(async () => {});
-  const abort = vi.fn(async () => {});
+  const { journal } = journalFixture();
   const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
     request: {
       localPath: f.root,
       remoteWorkspaceDir: "/worker/workspace",
       baseManifestRef: f.baseManifestRef,
-      journal: { load: async () => undefined, begin: async () => {}, commit, abort },
+      journal,
       stagedResult: { ref, record },
     },
     stagingRoot: f.stagingRoot,
@@ -195,8 +194,8 @@ it.each([
   });
   const remove = fs.rm;
   const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
-  const makeScratch = vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
-  const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+  vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
+  vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
     if (target === scratch) {
       if (cleanupFails) {
         throw cleanupError;
@@ -218,10 +217,10 @@ it.each([
     );
     if (publicationFails) {
       await expect(finalized).rejects.toBe(publicationError);
-      expect(abort).toHaveBeenCalledOnce();
+      expect(journal.abort).toHaveBeenCalledOnce();
     } else {
       await expect(finalized).resolves.toMatchObject({ manifestRef: f.currentManifestRef });
-      expect(commit).toHaveBeenCalledOnce();
+      expect(journal.commit).toHaveBeenCalledOnce();
     }
     await expect(read(f.root)).resolves.toEqual(publicationFails ? f.baseBytes : f.workerBytes);
     await expect(hasRef(ref)).resolves.toBe(!publicationFails);
@@ -236,8 +235,6 @@ it.each([
       await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });
     }
   } finally {
-    makeScratch.mockRestore();
-    removeSpy.mockRestore();
-    await remove(scratch, { recursive: true, force: true });
+    vi.restoreAllMocks();
   }
 });

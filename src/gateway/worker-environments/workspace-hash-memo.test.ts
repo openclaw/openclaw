@@ -32,8 +32,10 @@ const remoteWorkspaceManifestScript = REMOTE_WORKSPACE_MANIFEST_JS;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
-function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
-  return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
+async function remoteFixture(script = remoteWorkspaceManifestScript) {
+  const home = tempDirs.make("openclaw-remote-home-");
+  const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
+  const capture = async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", script, workspace, "", "memo-v1"],
       { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
@@ -41,11 +43,16 @@ function remoteCapture(workspace: string, home: string, script = remoteWorkspace
     expect(result).toMatchObject({ code: 0, stderr: "" });
     return JSON.parse(result.stdout) as RemoteWorkspaceManifestEnvelope;
   };
+  return { workspace, capture };
 }
-async function remoteFixture(script = remoteWorkspaceManifestScript) {
-  const home = tempDirs.make("openclaw-remote-home-");
-  const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
-  return { workspace, capture: remoteCapture(workspace, home, script) };
+async function rewrite(target: string) {
+  await fs.writeFile(target, "bravo");
+  await fs.utimes(target, new Date(), new Date(Date.now() + 1_000));
+}
+async function replace(target: string) {
+  const replacement = `${target}.replacement`;
+  await fs.writeFile(replacement, "cider");
+  await fs.rename(replacement, target);
 }
 
 it("reuses content hashes only within one reconcile stat identity", async () => {
@@ -63,19 +70,15 @@ it("reuses content hashes only within one reconcile stat identity", async () => 
       expect(unchanged.manifestRef).toBe(first.manifestRef);
       expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
 
-      await fs.writeFile(target, "bravo");
-      await fs.utimes(target, new Date(), new Date(Date.now() + 1_000));
-      const changed = await capture();
-      expect(changed.manifestRef).not.toBe(first.manifestRef);
-      expect(metrics.contentHashCount).toBe(2);
-
-      const replacement = path.join(root, "replacement.txt");
-      await fs.writeFile(replacement, "cider");
-      await fs.rename(replacement, target);
-      const replaced = await capture();
-      expect(replaced.manifestRef).not.toBe(changed.manifestRef);
-      expect(metrics.contentHashCount).toBe(3);
-      return replaced.manifestRef;
+      let previous = first;
+      for (const [index, mutate] of [rewrite, replace].entries()) {
+        await mutate(target);
+        const changed = await capture();
+        expect(changed.manifestRef).not.toBe(previous.manifestRef);
+        expect(metrics.contentHashCount).toBe(index + 2);
+        previous = changed;
+      }
+      return previous.manifestRef;
     },
     metrics,
   );
@@ -116,14 +119,12 @@ it("reuses local workspace nodes within one preflight but not across fences", as
 
 it("bounds a maximum-entry memo envelope", () => {
   const uint64 = "18446744073709551615";
-  const memo = new Map<string, string>();
-  for (let index = 0; index < MAX_WORKSPACE_HASH_MEMO_ENTRIES; index += 1) {
-    const inode = String(index).padStart(20, "0");
-    memo.set(
-      `worker:${uint64}:${inode}:${uint64}:${uint64}:${uint64}`,
+  const memo = new Map(
+    Array.from({ length: MAX_WORKSPACE_HASH_MEMO_ENTRIES }, (_, index): [string, string] => [
+      `worker:${uint64}:${String(index).padStart(20, "0")}:${uint64}:${uint64}:${uint64}`,
       index.toString(16).padStart(64, "0"),
-    );
-  }
+    ]),
+  );
   const envelopeBytes = Buffer.byteLength(
     `${JSON.stringify({
       version: 1,
@@ -136,7 +137,6 @@ it("bounds a maximum-entry memo envelope", () => {
       },
     })}\n`,
   );
-  expect(envelopeBytes).toBeLessThan(MAX_WORKSPACE_HASH_MEMO_BYTES);
   expect(MAX_WORKSPACE_HASH_MEMO_BYTES - envelopeBytes).toBeGreaterThan(3 * 1024 * 1024);
   const smallFile = "worker:0:0:1:0:0";
   memo.set(smallFile, "c".repeat(64));
@@ -162,19 +162,14 @@ it("reuses hashes only for matching stat identities in one remote reconcile", as
   const unchanged = await capture(first.memo);
   expect(unchanged.manifestRef).toBe(first.manifestRef);
   expect(unchanged.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
-
-  await fs.writeFile(target, "bravo");
-  await fs.utimes(target, new Date(), new Date(Date.now() + 1_000));
-  const changed = await capture(unchanged.memo);
-  expect(changed.manifestRef).not.toBe(first.manifestRef);
-  expect(changed.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
-
-  const replacement = path.join(workspace, "replacement.txt");
-  await fs.writeFile(replacement, "cider");
-  await fs.rename(replacement, target);
-  const replaced = await capture(changed.memo);
-  expect(replaced.manifestRef).not.toBe(changed.manifestRef);
-  expect(replaced.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+  let replaced = unchanged;
+  for (const mutate of [rewrite, replace]) {
+    await mutate(target);
+    const changed = await capture(replaced.memo);
+    expect(changed.manifestRef).not.toBe(replaced.manifestRef);
+    expect(changed.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+    replaced = changed;
+  }
 
   const nextReconcile = await capture([]);
   expect(nextReconcile.manifestRef).toBe(replaced.manifestRef);
@@ -199,11 +194,11 @@ it("bounds the remote memo to the largest files and reports truncation", async (
   );
   expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
   const { workspace, capture } = await remoteFixture(limitedScript);
-  await Promise.all([
-    fs.writeFile(path.join(workspace, "small.txt"), "1"),
-    fs.writeFile(path.join(workspace, "medium.txt"), "22"),
-    fs.writeFile(path.join(workspace, "large.txt"), "333"),
-  ]);
+  await Promise.all(
+    ["1", "22", "333"].map((content, index) =>
+      fs.writeFile(path.join(workspace, `${index}.txt`), content),
+    ),
+  );
 
   const first = await capture([]);
   expect(

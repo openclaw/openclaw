@@ -13,15 +13,10 @@ import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js
 const toolSuccess = { ok: true, result: { details: { ok: true } } };
 const toolError = { ok: true, result: { details: { status: "error" } } };
 const toolResult = { content: [], details: { ok: true } };
-const schema = ({
-  name,
-  description,
-  parameters,
-}: Pick<AnyAgentTool, "name" | "description" | "parameters">) => ({
-  name,
-  description,
-  parameters,
-});
+type ToolSchema = Pick<AnyAgentTool, "name" | "description" | "parameters">;
+function schema({ name, description, parameters }: ToolSchema) {
+  return { name, description, parameters };
+}
 
 async function toolHarness(name: string, codeMode = false) {
   const fixture = await support.placementHarness(`worker-${name}`, `session-${name}`);
@@ -30,10 +25,7 @@ async function toolHarness(name: string, codeMode = false) {
     name: "portal",
     label: "Portal",
     description: "Open a portal",
-    parameters: Type.Object(
-      { action: Type.Literal("open"), port: Type.Optional(Type.Integer()) },
-      { additionalProperties: false },
-    ),
+    parameters: Type.Object({ action: Type.Literal("open") }, { additionalProperties: false }),
     execute: async (...args) => {
       fixture.source.receiptAuthority();
       const result = await execute(...args);
@@ -70,7 +62,7 @@ async function toolHarness(name: string, codeMode = false) {
     generation: surface.result.generation,
     toolId: surface.result.tools[0]!.id,
     toolCallId: "call",
-    arguments: { action: "open", port: 3000 },
+    arguments: { action: "open" },
   };
   const invoke = (input = request) =>
     fixture.workerService.invokeGatewayTool(fixture.identity, input, { send: vi.fn() });
@@ -117,19 +109,18 @@ it("admits the worker's code-mode schemas while rejecting raw or altered schemas
     const request = support.inferenceRequest(h.identity);
     const infer = (
       tools: typeof projected,
-      connectionId: string,
       send: Parameters<typeof h.workerService.startInference>[2]["send"] = vi.fn(),
     ) =>
       h.workerService.startInference(
         h.identity,
         { ...request, context: { ...request.context, tools } },
-        { connectionId, send },
+        { connectionId: "schema-test", send },
       );
     for (const tools of [
       h.surface.tools.map(({ definition }) => schema(definition)),
       projected.map((tool) => ({ ...tool, description: "unadmitted description" })),
     ]) {
-      await expect(infer(tools, "schema-mismatch")).resolves.toEqual({
+      await expect(infer(tools)).resolves.toEqual({
         ok: false,
         reason: "invalid-context",
       });
@@ -137,7 +128,6 @@ it("admits the worker's code-mode schemas while rejecting raw or altered schemas
     const finished = createDeferred();
     const started = await infer(
       projected,
-      "projected-tools",
       vi.fn(() => finished.resolve()),
     );
     assert(started.ok, "Projected worker tools were not admitted");
@@ -156,7 +146,7 @@ it("accepts only issued handles and canonical arguments before dispatch", async 
   for (const request of [
     { ...h.request, generation: "old-generation" },
     { ...h.request, toolId: "unissued" },
-    { ...h.request, arguments: { action: "delete", port: 3000 } },
+    { ...h.request, arguments: { action: "delete" } },
   ]) {
     await expect(h.invoke(request)).resolves.toMatchObject(toolError);
   }
