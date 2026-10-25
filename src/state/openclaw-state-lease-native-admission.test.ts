@@ -27,8 +27,8 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   createOpenClawStateLeaseWorkerStorage: fixture.forbiddenSqlite,
 }));
-// mock-isolation: control persisted expiry and renewal outcomes without opening SQLite.
-vi.mock("./openclaw-state-lease-storage.js", () => ({
+vi.mock("./openclaw-state-lease-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-lease-storage.js")>()),
   prepareLeaseDatabase: fixture.forbiddenSqlite,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   verifyOpenClawStateLeaseOwnership: () => {
