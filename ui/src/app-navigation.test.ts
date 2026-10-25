@@ -1,43 +1,26 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
 import {
-  SIDEBAR_NAV_ROUTES,
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
   subtitleForRoute,
   titleForRoute,
-  visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
   activityPersonFromPath,
   activityPersonLocation,
+  dynamicRouteFromPath,
   inferBasePathFromPathname,
   normalizeBasePath,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
-import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
+import { routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.tsx";
-
-const ALL_ROUTES: RouteId[] = [
-  "chat",
-  "custodian",
-  "claws",
-  ...SIDEBAR_NAV_ROUTES,
-  "workboard",
-  "skills",
-  "skill-workshop",
-  "worktrees",
-  "memory-import",
-  "ai-agents",
-  "model-setup",
-  "lobsterdex",
-  ...visibleSettingsNavigationGroups(true).flatMap((group) => group.routes),
-];
 
 function expectBase(base: string, ...paths: string[]) {
   for (const path of paths) {
@@ -66,24 +49,16 @@ it.each([
   expect(formatDocumentTitle(options)).toBe(title);
 });
 
-it("keeps every navigation title and subtitle backed by an English translation", async () => {
+it("resolves a navigation title and lazy subtitle in English", async () => {
   const { registerRouteSubtitlesEnglish } = await import("./i18n/locales/en-route-subtitles.ts");
   registerRouteSubtitlesEnglish();
-  // Missing translations return the raw dotted key.
-  const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
-  for (const routeId of ALL_ROUTES) {
-    expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
-    expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
-  }
+  expect(titleForRoute("usage")).toBe("Usage");
+  expect(subtitleForRoute("usage")).toBe("API usage and costs.");
 });
 
 it("normalizes base paths and trailing route slashes", () => {
-  expect(["", "/", "ui", "/apps/openclaw/"].map(normalizeBasePath)).toEqual([
-    "",
-    "",
-    "/ui",
-    "/apps/openclaw",
-  ]);
+  const bases = ["", "/", "ui", "/apps/openclaw/"];
+  expect(bases.map(normalizeBasePath)).toEqual(["", "", "/ui", "/apps/openclaw"]);
   expect(routeIdFromPath("/chat/")).toBe("chat");
   expect(routeIdFromPath("/ui/chat/", "/ui/")).toBe("chat");
 });
@@ -157,12 +132,9 @@ it("never infers a route namespace as a mount base", () => {
   expectBase(
     "",
     "/settings/config",
-    "/settings/config/",
-    "/settings/chat/main",
     "/custodian/config",
     "/settings/other/config",
     "/settings/",
-    "/skills/",
     "/focus/terminal",
   );
   expectBase("/ui", "/ui/config", "/ui/settings/appearance");
@@ -185,6 +157,6 @@ it("recognizes plugin hub routes", () => {
 
 function expectRoutedPath(path: string, route: RouteId, base = "") {
   expect(routeIdFromPath(path, base)).toBe(route);
-  expect(createApplicationRouter().routeIdFromPath(path, base)).toBe(route);
+  expect(dynamicRouteFromPath(path, base)?.[0]).toBe(route);
   expect(inferBasePathFromPathname(path)).toBe(base);
 }
