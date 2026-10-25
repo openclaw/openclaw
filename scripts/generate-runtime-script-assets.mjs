@@ -87,6 +87,8 @@ async function generateRuntimeScriptAssets(rootDir = ROOT) {
       format: asset.program ? "esm" : "iife",
       globalName: asset.program ? undefined : "__openclawRuntimeScript",
       legalComments: "none",
+      // Drop esbuild's source-path comments so dependency store locations cannot enter assets.
+      minifyWhitespace: true,
       logLevel: "silent",
       metafile: true,
       platform: asset.platform,
@@ -147,6 +149,7 @@ export function createRuntimeProcessScriptFile(name, options) {
     bundle: true,
     format: "esm",
     legalComments: "none",
+    minifyWhitespace: true,
     logLevel: "silent",
     metafile: true,
     platform: "node",

@@ -11,6 +11,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { controllerGate } from "./controller-core.test-support.js";
 import type {
   ReplyBackendHandle,
   ReplyMessageInjectionOptions,
@@ -467,30 +468,26 @@ describe("submitSessionControllerSteer", () => {
   it.each(["cancelled", "revoked"] as const)(
     "does not inject a %s source after asynchronous policy preparation",
     async (disposition) => {
-      const preparing = createDeferredCore();
-      const resume = createDeferredCore();
+      const preparationGate = controllerGate();
       const authority = revocableAuthority("source revoked");
       const { input, operation, injected } = startTurn({
         adapter: { authority },
       });
       const result = steer(input, {
         toolAuthorityPreparation: preparation({
-          async prepareCurrent() {
-            preparing.resolve();
-            await resume.promise;
-          },
+          prepareCurrent: preparationGate.run,
         }),
       });
       const rejected = expect(result).rejects.toThrow(
         disposition === "cancelled" ? "source cancelled" : "source revoked",
       );
-      await preparing.promise;
+      await preparationGate.entered;
       if (disposition === "cancelled") {
         abortSessionControllerInput(input, new Error("source cancelled"));
       } else {
         authority.revoke();
       }
-      resume.resolve();
+      preparationGate.release();
 
       await rejected;
       await input.settlement.promise;
@@ -630,8 +627,7 @@ describe("steerSessionControllerOperation", () => {
   });
 
   it("fences an async injection when the same backend is attached again before its effect", async () => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const gate = controllerGate();
     let injected = false;
     const { operation } = startTurn({ direct: true });
     const backend = makeBackend("reattached-steer", {
@@ -639,8 +635,7 @@ describe("steerSessionControllerOperation", () => {
         throw new Error("Expected asynchronous prepared injection");
       },
       async queueMessageAsync(_text, options, authority) {
-        entered.resolve();
-        await resume.promise;
+        await gate.run();
         authority.assertCurrent();
         injected = true;
         options?.onQueueAccepted?.(true);
@@ -656,10 +651,10 @@ describe("steerSessionControllerOperation", () => {
       "Message injection authority is no longer current",
     );
     try {
-      await entered.promise;
+      await gate.entered;
       operation.attachBackend(backend);
     } finally {
-      resume.resolve();
+      gate.release();
     }
     await rejected;
     expect(injected).toBe(false);

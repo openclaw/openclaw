@@ -19,6 +19,7 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
@@ -280,21 +281,7 @@ describe("widget-card", () => {
     },
   );
   it("retains video playback through title changes after the player loads", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        private readonly targets = new Set<Element>();
-        observe(target: Element) {
-          this.targets.add(target);
-        }
-        unobserve(target: Element) {
-          this.targets.delete(target);
-        }
-        disconnect() {
-          this.targets.clear();
-        }
-      },
-    );
+    stubTargetRetainingObserver("ResizeObserver");
     onTestFinished(() => {
       vi.unstubAllGlobals();
     });
