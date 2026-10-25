@@ -28,7 +28,7 @@ import {
 import { resolveCronDeliveryPreview, resolveCronDeliveryPreviews } from "./delivery-preview.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
-import type { CronDelivery, CronJob, CronStoredJob } from "./types.js";
+import type { CronDelivery, CronDeliveryPreview, CronJob, CronStoredJob } from "./types.js";
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
@@ -75,6 +75,7 @@ async function withCurrentOrigin(
     delivery?: CronDelivery;
     source?: DeliveryContext;
     sessionTarget?: "current" | "isolated";
+    payload?: CronStoredJob["payload"];
   },
   check: (fixture: {
     cfg: OpenClawConfig;
@@ -113,6 +114,7 @@ async function withCurrentOrigin(
       sessionTarget: options.sessionTarget ?? "current",
       sessionKey,
       delivery: options.delivery ?? { mode: "announce" },
+      ...(options.payload ? { payload: options.payload } : {}),
     });
     if (options.sessionTarget === "isolated") {
       job.sourceConversation = { sessionKey, sessionId: "source-session" };
@@ -309,49 +311,30 @@ it("shares alias reads across a preview batch and refreshes routes on the next r
     await checkBatch("announce -> telegram:recipient");
   }));
 
-it.each([
-  { surface: "dashboard", channelCount: 2, sessionTarget: "current" as const },
-  { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
-  { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
-  { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
-])(
-  "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
-  (options) =>
-    withCurrentOrigin(options, async ({ preview }) => {
-      expect(await preview()).toEqual(
-        conversationPreview(
-          options.sessionTarget === "current" ? "current session" : "creating conversation",
-        ),
-      );
-    }),
-);
-
-it.each([
-  [{ to: "recipient" }, 0],
-  [{ accountId: "work" }, 0],
-  [{ threadId: 0 }, 2],
-] as const)(
-  "retains explicit delivery coordinates %j with %i channels",
-  (coordinates, channelCount) =>
-    withCurrentOrigin(
-      { channelCount, delivery: { mode: "announce", ...coordinates } },
-      async ({ preview }) => {
-        expect(await preview()).toMatchObject(
-          blockedPreview("will be blocked", "to" in coordinates ? "last:recipient" : "last"),
-        );
-      },
-    ),
-);
-
-it.each(["current", "isolated"] as const)(
-  "retains an unavailable external source route for %s",
-  (sessionTarget) =>
-    withCurrentOrigin(
-      { sessionTarget, source: { channel: "unavailable-plugin", to: "recipient" } },
-      async ({ preview }) => {
-        expect((await preview()).detail).toContain("will be blocked");
-      },
-    ),
+const unavailableRoute = { channel: "unavailable-plugin", to: "recipient" };
+const commandPayload: CronStoredJob["payload"] = { kind: "command", argv: ["echo", "report"] };
+it.each<[Parameters<typeof withCurrentOrigin>[0], CronDeliveryPreview]>([
+  [{ surface: "dashboard", channelCount: 2, sessionTarget: "current" }, conversationPreview()],
+  [{ surface: "webchat", sessionTarget: "current" }, conversationPreview()],
+  [
+    { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" },
+    conversationPreview("creating conversation"),
+  ],
+  [{ surface: "webchat", sessionTarget: "isolated" }, conversationPreview("creating conversation")],
+  [
+    { channelCount: 0, delivery: { mode: "announce", to: "recipient" } },
+    blockedPreview("will be blocked", "last:recipient"),
+  ],
+  [{ channelCount: 0, delivery: { mode: "announce", accountId: "work" } }, blockedPreview()],
+  [{ channelCount: 2, delivery: { mode: "announce", threadId: 0 } }, blockedPreview()],
+  [{ sessionTarget: "current", source: unavailableRoute }, blockedPreview()],
+  [{ sessionTarget: "isolated", source: unavailableRoute }, blockedPreview()],
+  [{ channelCount: 0, payload: commandPayload }, blockedPreview()],
+  [{ channelCount: 1, payload: commandPayload }, blockedPreview()],
+])("previews conversation delivery %j", (options, expected) =>
+  withCurrentOrigin(options, async ({ preview }) => {
+    expect(await preview()).toEqual(expected);
+  }),
 );
 
 it("uses the creating conversation route without a public session key", () =>
@@ -391,14 +374,5 @@ it.each(["replacement-session", "source-session"])(
         }),
       });
       expect(await preview()).toMatchObject(blockedPreview("original session generation"));
-    }),
-);
-
-it.each([0, 1])(
-  "keeps command announcements on their channel path with %i channels",
-  (channelCount) =>
-    withCurrentOrigin({ channelCount }, async ({ job, preview }) => {
-      job.payload = { kind: "command", argv: ["echo", "report"] };
-      expect(await preview()).toMatchObject(blockedPreview());
     }),
 );

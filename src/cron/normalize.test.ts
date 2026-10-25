@@ -137,54 +137,45 @@ it.each([
   expect(Object.hasOwn(input, key)).toBe(false);
   expect(child(normalized, field)).not.toHaveProperty(key);
 });
-const ignoredGetter = vi.fn(() => true);
-it.each([
+const requesterGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
+it.each<[UnknownRecord, UnknownRecord | undefined]>([
   [
-    "authenticated-requester",
-    withAccessor(
-      {
-        ...CHANNEL_REQUESTER,
-        channel: " Discord ",
-        accountId: " Work ",
-        senderId: " 123456789012345678 ",
-        roles: ["administrator"],
-      },
-      "senderIsOwner",
-      ignoredGetter,
+    provenance(
+      "authenticated-requester",
+      withAccessor(
+        {
+          ...CHANNEL_REQUESTER,
+          channel: " Discord ",
+          accountId: " Work ",
+          senderId: " 123456789012345678 ",
+          roles: ["administrator"],
+        },
+        "senderIsOwner",
+        requesterGetter,
+      ),
     ),
-    CHANNEL_REQUESTER,
+    provenance("authenticated-requester", CHANNEL_REQUESTER),
   ],
-  ["final-executable-surface", { ...CHANNEL_REQUESTER, senderId: 123 }, undefined],
-] as const)(
-  "preserves only authored requester facts for %s",
-  (source, channelRequester, expected) => {
-    const normalized = createAgent({
-      toolsAllowProvenance: provenance(source, channelRequester),
-    });
-    expect(normalized.toolsAllowProvenance).toEqual({
-      version: 1,
-      source,
-      callerOrigin: { kind: "local" },
-      ...(expected ? { channelRequester: expected } : {}),
-    });
-    expect(ignoredGetter).not.toHaveBeenCalled();
-  },
-);
-it("rejects accessor and inherited requester identities without invoking getters", () => {
-  const senderGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
-  const accessorRequester = withAccessor({ ...CHANNEL_REQUESTER }, "senderId", senderGetter);
-  const inheritedRequester = Object.create(CHANNEL_REQUESTER) as UnknownRecord;
-  for (const channelRequester of [accessorRequester, inheritedRequester, undefined]) {
-    const normalized = createAgent({
-      toolsAllowProvenance: {
-        version: 1,
-        source: "authenticated-requester",
-        channelRequester,
-      },
-    });
+  [
+    provenance("final-executable-surface", { ...CHANNEL_REQUESTER, senderId: 123 }),
+    provenance("final-executable-surface", undefined),
+  ],
+  ...[
+    withAccessor({ ...CHANNEL_REQUESTER }, "senderId", requesterGetter),
+    Object.create(CHANNEL_REQUESTER) as UnknownRecord,
+    undefined,
+  ].map((channelRequester): [UnknownRecord, undefined] => [
+    { version: 1, source: "authenticated-requester", channelRequester },
+    undefined,
+  ]),
+])("preserves only authored requester facts without invoking getters: %j", (input, expected) => {
+  const normalized = createAgent({ toolsAllowProvenance: input });
+  if (expected) {
+    expect(normalized.toolsAllowProvenance).toEqual(expected);
+  } else {
     expect(normalized).not.toHaveProperty("toolsAllowProvenance");
   }
-  expect(senderGetter).not.toHaveBeenCalled();
+  expect(requesterGetter).not.toHaveBeenCalled();
 });
 it.each<[UnknownRecord, UnknownRecord]>([
   [CRON_SCHEDULE, { tz: " " }],
@@ -204,10 +195,9 @@ it.each<[UnknownRecord, UnknownRecord]>([
     },
   ],
   [
-    { kind: "on-exit", command: "make build", cwd: "/repo" },
+    { kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo/job " },
     { ...STALE_SCHEDULE, kind: "on-exit" },
   ],
-  [{ kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo/job " }, {}],
 ])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
   const input = { ...structuredClone(expected), ...overrides };
   const created = createMain({ schedule: input });
@@ -279,7 +269,6 @@ it("preserves custom session separators but rejects null bytes", () => {
 });
 
 it.each([
-  [{ mode: "none" }, { mode: "none" }],
   [
     { mode: "none", ...undefinedFields("channel", "to", "threadId", "accountId") },
     { mode: "none" },

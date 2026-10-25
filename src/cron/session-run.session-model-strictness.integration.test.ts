@@ -118,7 +118,7 @@ describe("stored session model selections in scheduled session turns", () => {
     expect(result?.error).toContain("Couldn't sign in to the AI service");
   }
   async function runWithFailingPinnedModel(params: {
-    storedSelection: Pick<SessionEntry, "modelOverrideSource">;
+    storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
     payloadKind?: "systemEvent";
@@ -233,7 +233,7 @@ describe("stored session model selections in scheduled session turns", () => {
               ...conversation,
               providerOverride: params.storedPin?.provider ?? "pinned",
               modelOverride: params.storedPin?.model ?? "model-x",
-              ...params.storedSelection,
+              ...(params.storedSelection ?? userSelection),
             },
       );
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
@@ -327,45 +327,33 @@ describe("stored session model selections in scheduled session turns", () => {
     {
       name: "an automatic session selection",
       storedSelection: { modelOverrideSource: "auto" as const },
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
-      // The session has no pin, so the failing default keeps the configured chain.
       name: "an unpinned session in a main system-event turn",
-      storedSelection: {},
       storedPin: null,
       defaultPrimary: "pinned/model-x",
       target: "main" as const,
       payloadKind: "systemEvent" as const,
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
-      // Distinct from the configured fallback, so the job's own list is what answers.
       name: "a user selection with explicit job fallbacks",
-      storedSelection: { modelOverrideSource: "user" as const },
       payload: { fallbacks: ["jobfallback/model-c"] },
-      expected: ["pinned/model-x", "jobfallback/model-c"],
+      expectedFallback: "jobfallback/model-c",
     },
     {
       name: "a user selection when the job sets its own model",
-      storedSelection: { modelOverrideSource: "user" as const },
       payload: { model: "pinned/model-x" },
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
     {
-      // Only the session-selection gate separates this from a strict run: the stored user pin
-      // is disallowed, so the configured default (the failing stub here) runs instead.
       name: "a disallowed user selection that falls through to the default",
-      storedSelection: { modelOverrideSource: "user" as const },
-      storedPin: { provider: "primary", model: "model-a" },
+      storedPin: primary,
       defaultPrimary: "pinned/model-x",
       modelAllow: ["pinned/*", "fallback/*"],
-      expected: ["pinned/model-x", "fallback/model-b"],
     },
-  ])("keeps falling back for $name", async ({ expected, ...selection }) => {
+  ])("keeps falling back for $name", async ({ expectedFallback, ...selection }) => {
     const { result, requests } = await runWithFailingPinnedModel(selection);
 
-    expect(requests).toEqual(expected);
+    expect(requests).toEqual(["pinned/model-x", expectedFallback ?? "fallback/model-b"]);
     expect(result.status, result.error).toBe("ok");
   });
 
@@ -373,7 +361,6 @@ describe("stored session model selections in scheduled session turns", () => {
     it("falls back once the user pin is cleared", async () => {
       // The answering pin is cleared, so the failing default runs with its configured fallback.
       const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: userSelection,
         storedPin: primary,
         defaultPrimary: "pinned/model-x",
         retargetWhileAdmitting: { pin: null },

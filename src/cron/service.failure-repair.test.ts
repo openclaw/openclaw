@@ -22,9 +22,7 @@ const owned = {
   failureAlert: { after: 2, cooldownMs: 0 },
 };
 
-function withRepair(run: AlertParams[1], failureAlert?: AlertParams[0]["failureAlert"]) {
-  return withFailureAlertCron({ failureAlert }, run);
-}
+const withRepair = (run: AlertParams[1]) => withFailureAlertCron({}, run);
 
 function expectNotifications(f: RepairFixture, repairs: number, alerts: number, notices?: number) {
   expect(f.runCronFailureRepair).toHaveBeenCalledTimes(repairs);
@@ -150,8 +148,8 @@ describe("CronService failure repair", () => {
 
   it.each(["before", "at"] as const)(
     "does not alert for a failed run started %s repair settlement",
-    async (ordering) => {
-      await withRepair(async (f) => {
+    (ordering) =>
+      withRepair(async (f) => {
         const { job, repair } = await pendingRepair(f);
 
         const started = Promise.withResolvers<void>();
@@ -179,8 +177,7 @@ describe("CronService failure repair", () => {
         expect(await f.cron.readJob(job.id)).toMatchObject({
           state: { consecutiveErrors: 3, failureAlertIncident: { repair: { settledAtMs } } },
         });
-      });
-    },
+      }),
   );
 
   it(
@@ -290,8 +287,8 @@ describe("CronService failure repair", () => {
 
   it.each(["operator cancellation", "restart retirement"] as const)(
     "keeps an owned one-shot quiet after %s",
-    async (interruption) => {
-      await withRepair(async (f) => {
+    (interruption) =>
+      withRepair(async (f) => {
         const started = Promise.withResolvers<void>();
         const result = Promise.withResolvers<{ status: "ok" }>();
         f.runScriptJob.mockImplementationOnce(async () => {
@@ -318,8 +315,7 @@ describe("CronService failure repair", () => {
         expect(f.cron.getJob(job.id)?.state.lastStatus).toBe("error");
         expectNotifications(f, 0, 0, 0);
         expect(f.cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
-      });
-    },
+      }),
   );
 
   it(
@@ -364,8 +360,8 @@ describe("CronService failure repair", () => {
     ["alerts disabled", { failureAlert: false }, [0, 0, 1]],
   ])(
     "notifies a terminal one-shot script failure: %s",
-    async (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) => {
-      await withRepair(async (f) => {
+    (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) =>
+      withRepair(async (f) => {
         const alertSettled = Promise.withResolvers<void>();
         if (rejectRepair) {
           f.runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
@@ -433,8 +429,7 @@ describe("CronService failure repair", () => {
         }
         await f.cron.run(job.id, "due");
         expectTerminalNotifications();
-      });
-    },
+      }),
   );
 
   describe("provider outage quick retries", () => {
@@ -450,8 +445,8 @@ describe("CronService failure repair", () => {
       ["owned every-minute", true, 60_000, 1, 0],
     ])(
       "holds the %s notification until the quick retries are exhausted",
-      async (_name, isOwned, everyMs, repairs, alerts) => {
-        await withRepair(async (f) => {
+      (_name, isOwned, everyMs, repairs, alerts) =>
+        withRepair(async (f) => {
           f.runIsolatedAgentJob.mockResolvedValue({
             status: "error",
             error: "fetch failed: getaddrinfo EAI_AGAIN api.example.com",
@@ -473,8 +468,7 @@ describe("CronService failure repair", () => {
           if (repairs) {
             expect(f.runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain("failed 4");
           }
-        });
-      },
+        }),
     );
 
     it(
