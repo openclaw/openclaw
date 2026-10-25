@@ -9,6 +9,7 @@ import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
@@ -57,10 +58,7 @@ function configurePanelShell(kind: "terminal" | "browser" = "terminal", mounted 
         snapshot: {
           phase: "connected",
           client: {},
-          hello: {
-            auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["terminal.open"] },
-          },
+          hello: gatewayHelloForMethods(["terminal.open"], ["operator.admin"]),
         },
       },
       config: { current: { terminalEnabled: true } },
@@ -118,11 +116,10 @@ describe("OpenClaw shell panel toggles", () => {
     expect(homeToggle).not.toHaveBeenCalled();
     expect(denied.defaultPrevented).toBe(false);
 
-    gateway.snapshot.hello!.features!.methods = ["chat.history", "chat.send"];
-    gateway.snapshot.hello!.auth = {
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    };
+    gateway.snapshot.hello = gatewayHelloForMethods(
+      ["chat.history", "chat.send"],
+      ["operator.read", "operator.write"],
+    );
     const allowed = chord();
     owner.handleDocumentKeydown(allowed);
     expect(homeToggle).toHaveBeenCalledOnce();
