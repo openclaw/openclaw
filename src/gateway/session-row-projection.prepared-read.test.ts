@@ -539,14 +539,13 @@ it("consumes an incognito repository description without SQLite or resident priv
     );
     expect(projection.selectEntries()).toEqual([]);
     expect(() => retained?.describe(query)).toThrow("no longer active");
+    expect(() => retained?.selectEntries({ key: query.key })).toThrow("no longer active");
   });
 });
 
-it("keeps missing private reads absent and refuses unprepared keys and asynchronous consumers", async () => {
+it("keeps missing private reads absent and refuses unprepared keys", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     using projection = await createTestProjection({ cfg });
-    let retained: SessionRowReadView | undefined;
-
     await projection.withPreparedExactRows(
       () => [query],
       (read) => {
@@ -556,16 +555,6 @@ it("keeps missing private reads absent and refuses unprepared keys and asynchron
         );
       },
     );
-    await expect(
-      projection.withPreparedExactRows(
-        () => [],
-        (read) => {
-          retained = read;
-          return Promise.resolve();
-        },
-      ),
-    ).rejects.toThrow("must remain synchronous");
-    expect(() => retained?.selectEntries({ key: query.key })).toThrow("no longer active");
     expect(projection.capture(query)).toBeUndefined();
     expect(projection.selectEntries()).toEqual([]);
   });

@@ -50,6 +50,7 @@ import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
+import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -112,12 +113,10 @@ for (const scenario of [
           let synthesisIndex = 0;
           if (synthesis && (scenario === "effect" || scenario === "send") && effectCalls === 0) {
             effectCalls++;
-            const item = {
-              type: "function_call",
-              id: "private-write",
-              call_id: "private-write",
-              name: scenario === "send" ? "message" : "write",
-              arguments: JSON.stringify(
+            writeOpenAiResponsesSse(
+              res,
+              subagentToolCallEvents(
+                scenario === "send" ? "message" : "write",
                 scenario === "send"
                   ? {
                       action: "send",
@@ -129,30 +128,9 @@ for (const scenario of [
                       path: path.join(state.workspaceDir, "effect.txt"),
                       content: "One committed private effect.",
                     },
+                1,
               ),
-            };
-            writeOpenAiResponsesSse(res, [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...item, arguments: "" },
-              },
-              {
-                type: "response.function_call_arguments.delta",
-                output_index: 0,
-                delta: item.arguments,
-              },
-              { type: "response.output_item.done", output_index: 0, item },
-              {
-                type: "response.completed",
-                response: {
-                  id: "private-write-response",
-                  status: "completed",
-                  output: [item],
-                  usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-                },
-              },
-            ]);
+            );
             return;
           }
           if (synthesis) {

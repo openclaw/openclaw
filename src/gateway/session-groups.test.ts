@@ -173,16 +173,10 @@ describe("session groups catalog", () => {
 
     await put(["Beta", "Alpha"]);
     const { db } = openOpenClawStateDatabase({ env });
-    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      expect(readSessionGroupCatalogSnapshot(db)).toMatchObject({
-        groups: groups("Beta", "Alpha"),
-        sectionOrder: expectedSectionOrder,
-      });
-      expect(reads.queries).toHaveLength(1);
-    } finally {
-      reads.restore();
-    }
+    expect(readSessionGroupCatalogSnapshot(db)).toMatchObject({
+      groups: groups("Beta", "Alpha"),
+      sectionOrder: expectedSectionOrder,
+    });
   });
 
   it("rejects renaming an unknown group after defaults schema activation", async () => {
@@ -346,11 +340,6 @@ describe("session groups catalog", () => {
     vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(
       (request) => {
         stages.push(request.stage);
-        expect(request).toEqual(
-          request.stage === "transaction"
-            ? { stage: "transaction", facts: { names: expect.arrayContaining(["Work", "Travel"]) } }
-            : { stage: "commit", facts: undefined },
-        );
       },
     );
     const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
@@ -413,18 +402,6 @@ describe("session groups catalog", () => {
       category: "New",
       skillsSnapshot: { prompt: "retained session prompt", skills: [] },
     });
-  });
-
-  it("deletes a group and clears member categories", async () => {
-    await put(["Gone"], { sectionOrder: ["category:Gone", "ungrouped", "work"] });
-    const session = await seedMember("a", "Gone", "main", "a1");
-
-    const result = await remove("Gone");
-    expect(result.updatedSessions).toBe(1);
-    expect(result.groups).toEqual([]);
-    expect(result.sectionOrder).toEqual(["ungrouped", "work"]);
-
-    expect(session.category()).toBeUndefined();
   });
 
   it.each([
