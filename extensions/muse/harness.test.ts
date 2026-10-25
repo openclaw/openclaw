@@ -205,6 +205,12 @@ describe("Muse native MSP harness", () => {
     writes,
     terminal,
     createHarness: createMuseAgentHarness,
+    createNativeHarness: (options) => {
+      const harness = createMuseAgentHarnessImpl(options);
+      harnesses.add(harness);
+      return harness;
+    },
+    readRequests,
   });
 
   it.each([

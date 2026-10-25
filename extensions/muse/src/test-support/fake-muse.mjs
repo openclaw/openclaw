@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { EXPECTED_SCHEMA_FINGERPRINT } from "@muse-code/sdk";
@@ -163,7 +163,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ? randomUUID()
         : `session-${++sessionCount}`;
     sessions.set(sessionId, resumed);
-    if (sessionId === "resumed-native-approval") {
+    if (sessionId === "resumed-native-approval" || pendingNativeApproval) {
       outboundBatch = [];
     }
     reply(id, {
@@ -173,7 +173,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     });
     if (resumed && ["resumed-native-work", "resumed-native-approval"].includes(sessionId)) {
       active = { sessionId, turnId: "native-background-turn", prompt: "wait", resumed: true };
-      if (sessionId === "resumed-native-approval") {
+      if (sessionId === "resumed-native-approval" || pendingNativeApproval) {
         event("turn/started", { commandId: active.turnId, sourceRange });
         item("toolCall", "inProgress", {
           tool: "bash",
@@ -216,6 +216,28 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       if (params.input[0].text.trim() === "approval-native-work") {
         nativeApproval();
+        return;
+      }
+      if (params.input[0].text.trim() === "hold-after-answer") {
+        item("agentMessage", "completed", { itemId: "earlier-answer", text: "Earlier answer" });
+        return;
+      }
+      if (params.input[0].text.trim() === "fresh-after-answer") {
+        setImmediate(() => {
+          item("agentMessage", "completed", { itemId: "current-answer", text: "Current answer" });
+          complete("completed");
+        });
+        return;
+      }
+      if (params.input[0].text.trim() === "hold-then-approval") {
+        item("agentMessage", "completed", {
+          itemId: "answer-before-detach",
+          text: "Answer before detach",
+        });
+        setTimeout(() => {
+          nativeApproval();
+          log({ event: "late-approval-requested" });
+        }, 80);
         return;
       }
       if (params.input[0].text.trim() === "hold-native-work") {
@@ -314,6 +336,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         });
         fail("approvalDenied", "Approval denied");
       } else {
+        if (process.env.MUSE_FIXTURE_EFFECT_PATH) {
+          writeFileSync(process.env.MUSE_FIXTURE_EFFECT_PATH, "approved native effect");
+        }
         setImmediate(answer);
       }
       return;

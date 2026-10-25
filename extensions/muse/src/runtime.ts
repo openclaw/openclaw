@@ -31,6 +31,7 @@ export type MuseRuntime = {
   host: SpawnedMspConnection;
   credentialIdentity: string;
   sessions: Map<string, Session>;
+  detachedSessions: Set<Session>;
   dead: boolean;
   closing: boolean;
   users: number;
@@ -113,6 +114,40 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
     runtime.sessions.delete(resumedSession.sessionId);
   }
   return prepareSession(result.session.sessionId);
+}
+
+// Approval handler failures permanently latch their SDK stage. A later owner
+// resumes the same native session with a fresh router, while this retired fold
+// still observes settlement without retaining caller projections or authority.
+export function retainMuseSession(
+  runtime: MuseRuntime,
+  session: Session,
+  settled: Promise<unknown>,
+  release: () => void,
+  approvalFailed: boolean,
+) {
+  const retire = () => {
+    if (runtime.sessions.get(session.sessionId) === session) {
+      runtime.sessions.delete(session.sessionId);
+    }
+  };
+  runtime.detachedSessions.add(session);
+  session.onApproval(async () => {
+    retire();
+    throw new Error("Muse observation is no longer active.");
+  });
+  session.onApprovalError(retire);
+  if (approvalFailed) {
+    retire();
+  }
+  const finish = () => {
+    runtime.detachedSessions.delete(session);
+    release();
+  };
+  void Promise.race([settled, runtime.host.child.exit, runtime.host.connection.closed]).then(
+    finish,
+    finish,
+  );
 }
 
 export class MusePool {
@@ -276,6 +311,7 @@ export class MusePool {
         host,
         credentialIdentity,
         sessions: new Map(),
+        detachedSessions: new Set(),
         users: 0,
         dead: false,
         closing: false,
@@ -288,7 +324,13 @@ export class MusePool {
       host.connection.onNotification((event) => {
         const sessionId = event.params?.sessionId;
         if (typeof sessionId === "string") {
-          runtime.sessions.get(sessionId)?.apply(event);
+          const current = runtime.sessions.get(sessionId);
+          current?.apply(event);
+          for (const detached of runtime.detachedSessions) {
+            if (detached !== current && detached.sessionId === sessionId) {
+              detached.apply(event);
+            }
+          }
         }
       });
       host.connection.onProtocolError(() => {
@@ -296,13 +338,19 @@ export class MusePool {
       });
       void host.child.exit.then((exit) => {
         runtime.dead = true;
-        for (const session of runtime.sessions.values()) {
+        for (const session of new Set([
+          ...runtime.sessions.values(),
+          ...runtime.detachedSessions,
+        ])) {
           session.hostExited(exit);
         }
       });
       void host.connection.closed.then(() => {
         runtime.dead = true;
-        for (const session of runtime.sessions.values()) {
+        for (const session of new Set([
+          ...runtime.sessions.values(),
+          ...runtime.detachedSessions,
+        ])) {
           session.hostExited({ kind: "transportEof" });
         }
       });
