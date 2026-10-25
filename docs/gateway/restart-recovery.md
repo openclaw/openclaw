@@ -549,6 +549,14 @@ shutdown still joins its subprocess settlement and records the interruption. An
 unconfirmed stop retains the lease and cleanup intent so the next startup retries
 the same environment. Pending replies and terminal persistence keep their normal
 drain obligations.
+Rejected background environment reconciliation waits one minute before retrying,
+then doubles the delay up to fifteen minutes. The warning records the attempt
+count and next retry time. This delay applies before placement and workspace
+recovery, independently for each environment; healthy environments continue normally.
+Explicit recovery stays immediate. Successful recovery, changed lease ownership,
+state or destruction intent, and a new Gateway process reset the delay. Suspension
+and shutdown interruptions do not count as failed attempts. Durable cleanup intent
+and the separate session-attachment cleanup retry owner are unchanged.
 Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
 publishing a late lookup result or changing the saved cleanup intent. Reconciliation
 waiting for an environment lock releases its observer on cancellation; any admitted
