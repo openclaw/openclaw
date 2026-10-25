@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -531,6 +530,11 @@ export function advanceTranscriptMutationAtInTransaction(
         indexedSeq: projection?.indexedSeq ?? null,
         activeMessageCount: projection?.activeMessageCount ?? null,
         needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
+        ...(!projection?.needsRebuild &&
+        !projection?.hasUnclassifiedEvents &&
+        projection?.indexedSeq === actor.hot.transcript.version.rawSeq
+          ? { projectionReady: true as const }
+          : {}),
         ...publicationProjection,
       });
       return;
@@ -595,6 +599,7 @@ export function advanceTranscriptMutationAtInTransaction(
       );
       publishSessionTranscriptAuthority(database, {
         ...context,
+        ...(options.projectionReady ? { projectionReady: true as const } : {}),
         ...publicationProjection,
       });
     }
@@ -604,12 +609,7 @@ export function advanceTranscriptMutationAtInTransaction(
 export function touchTranscriptMutationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
-  windowUpdatedAt?: number,
-  rowTranscript?: SessionRowTranscriptProjection,
-  persistActorMutation = true,
-  writeActorMutation?: (
-    update: import("./session-transcript-index-postgres.js").TranscriptWindowUpdate,
-  ) => void,
+  options: Omit<TranscriptMutationOptions, "strictly" | "steps" | "publicationAssistant"> = {},
   logicalAdvance?: TranscriptMutationAdvance,
 ): void {
   advanceTranscriptMutationAtInTransaction(
@@ -617,13 +617,10 @@ export function touchTranscriptMutationInTransaction(
     sessionId,
     logicalAdvance?.adjustedTime ?? Date.now(),
     {
+      ...options,
       strictly: true,
       steps: logicalAdvance?.steps,
       publicationAssistant: logicalAdvance?.publicationAssistant,
-      windowUpdatedAt,
-      rowTranscript,
-      persistActorMutation,
-      writeActorMutation,
     },
   );
 }
@@ -709,14 +706,16 @@ export function recordTranscriptReplacementMutation(
   database: OpenClawAgentDatabase,
   sessionId: string,
   preservedUpdatedAt: number | null | undefined,
+  projectionReady = false,
 ): void {
   if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
-    touchTranscriptMutationInTransaction(database, sessionId);
+    touchTranscriptMutationInTransaction(database, sessionId, { projectionReady });
     return;
   }
   // Maintenance rewrites must invalidate in-flight projections without making an old session
   // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
   advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
     strictly: true,
+    projectionReady,
   });
 }
