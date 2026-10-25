@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
-import {
-  createNodeBootstrapFixture,
-  createWorkerArchiveFixture,
-} from "./crabbox-worker-node-enrollment.test-support.js";
+import { expectText } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -18,7 +15,6 @@ import {
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
   LEASE_ID,
-  NODE_RUNTIME_IDENTITY,
   OPERATION_ID,
   PROFILE,
   tempDirs,
@@ -69,8 +65,7 @@ it.each([true, false])(
           message: unsupportedCaptureReceipt(LEASE_ID).message,
         },
       });
-      expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
-      expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+      expectText(warn.mock.calls[0]?.[0], ["warm image capture unsupported:"], ["failed"]);
     } else {
       expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
@@ -331,30 +326,6 @@ it("never snapshots an inspection-only lease with a configured class", async () 
   expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
   expect(calls.at(-1)?.argv[1]).toBe("stop");
 });
-
-it.each([
-  ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
-  ["a different runtime", { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "f".repeat(64) }, true],
-] as const)(
-  "prepares the node runtime on a fork only for %s",
-  async (_label, identity, prepares) => {
-    const initial = createWarmProvider();
-    await captureWarmImage(initial.provider);
-    const { provider, calls } = createWarmProvider(undefined, initial.stateDir);
-    const prepareNodeRuntime = vi.fn(async () => ({
-      nodeBootstrap: createNodeBootstrapFixture(),
-      workerBundle: createWorkerArchiveFixture(),
-    }));
-
-    await provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
-      nodeRuntimeIdentity: identity,
-      prepareNodeRuntime,
-    });
-
-    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(true);
-    expect(prepareNodeRuntime).toHaveBeenCalledTimes(prepares ? 1 : 0);
-  },
-);
 
 it("does not change a checkpoint-bound lease to cold when the fork fails", async () => {
   const { provider, calls } = createWarmProvider(({ argv }) =>

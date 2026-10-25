@@ -26,6 +26,20 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SELECTOR = "capture-fixture";
 const SETTINGS = { provider: "aws", class: "standard", ttl: "8h", idleTimeout: "45m" };
+const PROFILE_METADATA = {
+  profileId: "linux",
+  backend: "aws",
+  machineClass: "standard",
+  os: "linux",
+  projectLabel: "git.example.test/team/project",
+  projectRoot: "/projects/example",
+};
+const invalidRequest = (respond: ReturnType<typeof vi.fn>) =>
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    expect.any(Object),
+    expect.objectContaining({ code: "INVALID_REQUEST" }),
+  );
 
 beforeEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -118,11 +132,7 @@ describe("Crabbox snapshot mutations", () => {
       ]) {
         const respond = vi.fn();
         await mutateCrabboxImage(createApi(), actions, action, { params, respond });
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          expect.any(Object),
-          expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
+        invalidRequest(respond);
       }
       expect(actions[action]).not.toHaveBeenCalled();
     },
@@ -190,15 +200,7 @@ describe("Crabbox snapshots Gateway methods", () => {
 
   it("bounds list and mutation summaries without losing held status or changing ownership", async () => {
     const current = record();
-    Object.assign(current, {
-      profileId: "linux",
-      backend: "aws",
-      machineClass: "standard",
-      os: "linux",
-      projectKey: "project-key",
-      projectLabel: "git.example.test/team/project",
-      projectRoot: "/projects/example",
-    });
+    Object.assign(current, PROFILE_METADATA, { projectKey: "project-key" });
     const allocation = warmAllocation(undefined, { phase: "enrolled" });
     for (let index = 0; index < 21; index++) {
       current.allocations[`cbx_${String(index).padStart(2, "0")}`] = allocation;
@@ -224,12 +226,7 @@ describe("Crabbox snapshots Gateway methods", () => {
       images: expect.arrayContaining([
         expect.objectContaining({
           profileKey: "current",
-          profileId: "linux",
-          backend: "aws",
-          machineClass: "standard",
-          os: "linux",
-          projectLabel: "git.example.test/team/project",
-          projectRoot: "/projects/example",
+          ...PROFILE_METADATA,
           held: true,
           allocationCount: 21,
           capture: expect.objectContaining({ phase: "uncertain", stale: true }),
@@ -249,12 +246,10 @@ describe("Crabbox snapshots Gateway methods", () => {
       profiles: expect.any(Array),
     });
     const payload = respond.mock.calls[0]![1];
-    expect(
-      Object.keys(
-        payload.images.find((image: { profileKey: string }) => image.profileKey === "current")
-          .allocations,
-      ),
-    ).toHaveLength(20);
+    const summary = payload.images.find(
+      (image: { profileKey: string }) => image.profileKey === "current",
+    );
+    expect(Object.keys(summary.allocations)).toHaveLength(20);
     expect(store.lookup("current")).toEqual(current);
     const image = (await listCrabboxWarmImages(crabboxState)).find(
       (entry) => entry.profileKey === "current",
@@ -270,10 +265,7 @@ describe("Crabbox snapshots Gateway methods", () => {
         params: { checkpointId: "chk_fixture", ...(action === "pin" ? { pinned: true } : {}) },
         respond: mutationResponse,
       });
-      expect(mutationResponse).toHaveBeenCalledWith(
-        true,
-        payload.images.find((entry: { profileKey: string }) => entry.profileKey === "current"),
-      );
+      expect(mutationResponse).toHaveBeenCalledWith(true, summary);
     }
     expect(Object.keys(image.allocations)).toHaveLength(21);
   });
@@ -316,11 +308,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     openWarmImageStore().register("profile", current);
     const respond = vi.fn();
     await recoverCrabboxImage(crabboxState, { params, respond });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.any(Object),
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    invalidRequest(respond);
     expect(openWarmImageStore().lookup("profile")).toEqual(current);
   });
 
@@ -383,10 +371,6 @@ describe("Crabbox snapshots Gateway methods", () => {
   it("rejects list parameters before accessing state", async () => {
     const respond = vi.fn();
     await listCrabboxImages(createApi(), { params: { selector: SELECTOR }, respond });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.any(Object),
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    invalidRequest(respond);
   });
 });

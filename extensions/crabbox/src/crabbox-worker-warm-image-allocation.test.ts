@@ -72,12 +72,7 @@ function fixture(
     return commandResult();
   });
   const manager = () =>
-    createCrabboxWarmImageManager({
-      state: crabboxState,
-      warn,
-      policy,
-      prepareCapture,
-    });
+    createCrabboxWarmImageManager({ state: crabboxState, warn, policy, prepareCapture });
   const context = (id: string, projectKey?: string) => ({
     binary: "crabbox",
     id,
@@ -296,28 +291,20 @@ it("reports cold preparation before warmup and snapshot reuse before fork, retai
     statuses.push(status);
     expect(calls.some((argv) => argv[1] === "warmup" || argv[2] === "fork")).toBe(false);
   };
-  await owner.allocate({ ...source, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "no-snapshot-yet", phase: "preparing" }]);
+  const expectStart = async (active: Owner, allocation: Allocation, status: unknown) => {
+    calls.length = statuses.length = 0;
+    await active.allocate({ ...allocation, prepareProject: true, reportStartStatus });
+    expect(statuses).toEqual([status]);
+  };
+  const cold = (reason: string) => ({ mode: "cold", reason, phase: "preparing" });
+  await expectStart(owner, source, cold("no-snapshot-yet"));
   await owner.markPrepared(source.id, "a".repeat(40));
   await owner.capture(source);
-  calls.length = 0;
-  statuses.length = 0;
-  await owner.allocate({
-    ...projectContext("cbx_status_fork"),
-    prepareProject: true,
-    reportStartStatus,
-  });
-  expect(statuses).toEqual([{ mode: "snapshot" }]);
-  calls.length = 0;
-  statuses.length = 0;
+  await expectStart(owner, projectContext("cbx_status_fork"), { mode: "snapshot" });
   const changed = projectContext("cbx_status_changed", "c".repeat(64));
-  await owner.allocate({ ...changed, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+  await expectStart(owner, changed, cold("setup-changed"));
   expect(record()?.latestColdReason).toBe("setup-changed");
-  calls.length = 0;
-  statuses.length = 0;
-  await manager().allocate({ ...changed, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+  await expectStart(manager(), changed, cold("setup-changed"));
 });
 
 it.each([
