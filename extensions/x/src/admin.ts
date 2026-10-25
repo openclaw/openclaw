@@ -116,10 +116,10 @@ export function registerXAllowlistMethods(
     assertAdmin(request);
     return {
       accountId: account.accountId,
-      accounts: listXAccountIds(cfg).map((id) => {
-        const { accountId, username } = resolveXAccount(cfg, id);
-        return { accountId, username };
-      }),
+      accounts: [...new Set(listXAccountIds(cfg).map(normalizeAccountId))].map((accountId) => ({
+        accountId,
+        username: resolveXAccount(cfg, accountId).username,
+      })),
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
       guests,
       spend,
