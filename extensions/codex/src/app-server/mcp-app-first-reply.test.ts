@@ -38,6 +38,7 @@ it.each([true, false])(
     registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
     const wire = await createLeasedCodexLifecycleHarness({
       agentDir: params.agentDir,
+      codexHome: path.join(params.agentDir, "codex-home"),
       respond: createLifecycleRequest(async (method, requestParams) => {
         if (method === "thread/start") {
           return threadStartResult(++nextThread === 1 ? "app-thread" : "reply-thread");

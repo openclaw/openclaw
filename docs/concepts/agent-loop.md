@@ -374,8 +374,14 @@ The controller watchdog runs even when diagnostics are disabled. Its semantic-st
 Pending Code Mode `exec` and `wait` calls remain active tool work until they
 settle, including `awaitResults: true` calls waiting for nested work. Nested tool
 completion does not retire the outer call. The normal blocked-tool recovery
-allowance and enforced run/tool deadlines still apply; after the outer call
-settles, an embedded run that stops making progress remains recoverable.
+allowance and enforced run/tool deadlines still apply, except while a nested
+collector wait has verified an owned, pending collector. That wait registers
+with the current controller attempt and stays protected until a registry change,
+cancellation, or an execution deadline. A registry change revokes protection
+before rereading; a stalled read remains recoverable. A collector that never
+settles can retain its parent until Stop or a configured execution deadline.
+After the outer call settles, an embedded run that stops making progress remains
+recoverable.
 
 Attention and recovery log lines read optional session context only when their
 log level is enabled. Transcript enrichment runs in the background read worker

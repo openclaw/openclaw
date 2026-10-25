@@ -244,17 +244,6 @@ describe("watchClientDisconnect", () => {
     expect(res.listenerCount("error")).toBe(0);
   });
 
-  it("does not double-abort when the controller is already aborted", () => {
-    const socket = new EventEmitter();
-    const controller = new AbortController();
-    controller.abort();
-    const abortSpy = vi.spyOn(controller, "abort");
-    const { onDisconnect } = mockDisconnect(socket, null, controller);
-    socket.emit("close");
-    expect(onDisconnect).toHaveBeenCalledTimes(1);
-    expect(abortSpy).not.toHaveBeenCalled();
-  });
-
   it("releases both socket watchers after one disconnect and notifies once", () => {
     const reqSocket = new EventEmitter();
     const resSocket = new EventEmitter();

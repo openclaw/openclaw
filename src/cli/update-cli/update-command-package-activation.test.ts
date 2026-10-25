@@ -8,6 +8,7 @@ import { waitForDead } from "../../../test/helpers/process-wait.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolvePackageActivationHelper } from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
@@ -69,8 +70,8 @@ afterEach(async () => {
 });
 
 function snapshot(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .map(String)
     .toSorted()
     .map((name) => {

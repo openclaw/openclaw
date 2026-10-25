@@ -322,11 +322,7 @@ export async function persistCallRecord(
 export async function loadActiveCallsFromStore(
   storePath: string,
   stateRuntime?: VoiceCallStateRuntime["state"],
-): Promise<{
-  activeCalls: Map<CallId, CallRecord>;
-  interruptedDeliveries: CallRecord[];
-  processedEventIds: Set<string>;
-}> {
+) {
   const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
   let calls: CallRecord[] = [];
   try {

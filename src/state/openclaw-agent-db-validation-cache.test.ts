@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it as baseIt, vi } from "vitest";
@@ -53,7 +54,12 @@ import { runOpenClawAgentWriteAdmission as admitWrite } from "./openclaw-agent-w
 import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const observedValidationDirectories = vi.hoisted(
-  () => [] as Array<{ directory: string; notify: (filename?: string) => void; active: boolean }>,
+  () =>
+    [] as Array<{
+      directory: string;
+      notify: (filename?: string, event?: string) => void;
+      active: boolean;
+    }>,
 );
 type ReceiptRun = Parameters<typeof withReceiptFixture>[1];
 type ReceiptOptions = Parameters<ReceiptRun>[1];
@@ -105,7 +111,7 @@ function liveCell() {
 }
 // mock-isolation: Drive identity invalidation deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observer = { directory, notify, active: true };
     observedValidationDirectories.push(observer);
     return {
@@ -161,6 +167,19 @@ describe("canonical proof on physical database validation", () => {
       captured!.assertCurrent();
       closePath(database.path);
       expect(activeObservers(database.path)).not.toHaveLength(0);
+      if (invalidation === "observation") {
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          for (const observer of activeObservers(database.path)) {
+            observer.notify(path.basename(database.path), "change");
+          }
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+      }
       replaceFile(database.path);
       expectFlag(captured!.validation.valid, 1);
       expect(captureReadValidation(database)?.validation.receiptId).toBe(
@@ -170,7 +189,7 @@ describe("canonical proof on physical database validation", () => {
         expect(captureReadValidation(database, "admission")).toBeUndefined();
       } else {
         for (const observer of activeObservers(database.path)) {
-          observer.notify(path.basename(database.path));
+          observer.notify(path.basename(database.path), "rename");
         }
       }
       expect(() => captured!.assertCurrent()).toThrow(

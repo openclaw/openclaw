@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -51,7 +52,9 @@ const create = (
 ) => createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: value }), options);
 function expectEmpty(...states: OpenClawTestState[]) {
   for (const state of states) {
-    expect.soft(fs.readdirSync(state.stateDir, { recursive: true })).toEqual([]);
+    expect
+      .soft(listDirectoryTreeStrictSync(state.stateDir).map((walkEntry) => walkEntry.relativePath))
+      .toEqual([]);
   }
 }
 const expectHeader = (scope: SessionAccessScope, sessionId: string, extra = {}) =>

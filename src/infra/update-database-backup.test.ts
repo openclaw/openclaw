@@ -13,6 +13,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import * as durability from "./directory-durability.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
@@ -892,7 +893,11 @@ it.each(["insufficient", "unknown"] as const)(
       expect(backup.warnings).toContain(
         `Available disk space could not be measured near ${externalDirectories[0]}; database backup will be attempted.`,
       );
-      const retainedAgentFiles = (await fs.readdir(backup.directory, { recursive: true }))
+      const retainedAgentFiles = (
+        await listDirectoryTreeStrict(backup.directory).then((inventory) =>
+          inventory.map((entry) => entry.relativePath),
+        )
+      )
         .filter((file) => file.endsWith("agent.sqlite"))
         .toSorted();
       expect(retainedAgentFiles).toEqual([

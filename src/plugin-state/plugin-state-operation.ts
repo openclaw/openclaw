@@ -127,15 +127,14 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
       return binding.options;
     });
   assertActive();
+  let preparedEmptyShortcut = false;
   return {
     async execute(command, options) {
       assertActive();
       const writes = select(options.writeStores);
-      if (options.ifEmpty) {
-        select([options.ifEmpty.store]);
-        if (writes.length) {
-          throw invalidInput("Plugin state empty shortcuts require a read-only operation.");
-        }
+      const emptyStores = options.ifEmpty ? select([options.ifEmpty.store]) : [];
+      if (options.ifEmpty && writes.length) {
+        throw invalidInput("Plugin state empty shortcuts require a read-only operation.");
       }
       const watches = select(options.watchStores ?? bindings.map((_, index) => index));
       const receiptId = randomUUID();
@@ -147,7 +146,7 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         : undefined;
       const prior = capturePluginStateMutationSettlement(
         context.admission.coordinationKey,
-        [...watches, ...writes],
+        [...watches, ...writes, ...emptyStores],
         mutation?.token,
       );
       let validUntil: number | undefined;
@@ -187,6 +186,7 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
           },
           {
             missing: missing ? () => missing : undefined,
+            preparedEmptyShortcut,
             onCommitted(facts) {
               if (facts.receiptId !== receiptId) {
                 throw new Error("Plugin state operation received another operation's receipt");
@@ -198,6 +198,7 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         if (!committed) {
           throw new Error("Plugin state operation has no committed receipt");
         }
+        preparedEmptyShortcut ||= result.emptyShortcut === true;
         validUntil = result.validUntil;
         if (writes.length === 0) {
           assertActive();
