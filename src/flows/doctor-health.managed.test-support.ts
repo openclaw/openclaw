@@ -8,11 +8,9 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/up
 import * as doctorConfigFlow from "../commands/doctor-config-flow.js";
 import { mockDoctorServicePlatform } from "../commands/doctor-maintenance.state-owner.test-support.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
-import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
-import { sha256Hex } from "../infra/crypto-digest.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
@@ -27,6 +25,10 @@ import {
 } from "../infra/state-migrations.exec-approvals.js";
 import * as mediaArchiveTransform from "../infra/state-migrations.media-persistence-transform.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
+import {
+  insertArchive,
+  writeArchiveCopy,
+} from "../infra/state-migrations.transcript-directives.test-support.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
@@ -140,20 +142,12 @@ async function runManagedRepair(
       );
       const archiveName = "retained.jsonl.deleted.1234";
       ensureSessionTranscriptArchiveSchema(initial.db);
-      initial.db
-        .prepare(
-          `INSERT INTO session_transcript_archives
-           (session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-            archive_name,created_at,published_at)
-           VALUES('retained','retained-generation','agent:main:retained','deleted','identity',?,?,?,1234,1234)`,
-        )
-        .run(bytes, sha256Hex(bytes), archiveName);
-      const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
-        agentId: "main",
-        path: initial.path,
+      insertArchive(initial.db, bytes, archiveName, "retained", {
+        generation: "retained-generation",
+        createdAt: 1234,
+        publishedAt: 1234,
       });
-      fs.mkdirSync(archiveDirectory, { recursive: true });
-      fs.writeFileSync(path.join(archiveDirectory, archiveName), bytes);
+      writeArchiveCopy(initial.path, archiveName, bytes);
     }
     if (!current) {
       secondary.db.close();

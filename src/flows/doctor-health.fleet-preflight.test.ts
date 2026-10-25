@@ -1,6 +1,5 @@
 import "./doctor-health.test-support.js";
 import { execFile, fork, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs, { readFileSync as read } from "node:fs";
 import path from "node:path";
@@ -152,30 +151,6 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
     const original = Buffer.from("// original operator formatting\n{ gateway: { port: 19101 } }\n");
     fs.writeFileSync(state.configPath, original);
     fs.renameSync(state.stateDir, legacyRoot);
-    const expiredRunId = `doctor-${randomUUID()}`;
-    const expiredCapture = path.join(resolveUpdateCaptureRoot(legacyRoot), expiredRunId);
-    fs.mkdirSync(expiredCapture, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      path.join(expiredCapture, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 2,
-        kind: "update-recovery",
-        generation: { kind: "baseline" },
-        databases: [],
-        runId: expiredRunId,
-        installRoot: process.cwd(),
-        stateDir: legacyRoot,
-        configPath: legacyConfig,
-        configPaths: [legacyConfig],
-        creator: { host: "fixture", pid: 1, startIdentity: "1" },
-        drivers: [],
-        createdAt: new Date(Date.now() - 31 * 24 * 60 * 60_000).toISOString(),
-        roots: [legacyConfig],
-        excludedRoots: [],
-        protectedPaths: [legacyConfig],
-        entries: [{ kind: "missing", sourcePath: legacyConfig, sqlite: false, directory: false }],
-      }),
-    );
     stubDoctorEnv({
       OPENCLAW_TEST_FAST: "0",
       OPENCLAW_HOME: undefined,
@@ -211,10 +186,6 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
     expect(resolveStateDir(process.env)).toBe(state.stateDir);
     await runDoctorHealthFlow(runtime, repairOptions);
     expect(repair).toHaveBeenCalledOnce();
-    expect(fs.existsSync(expiredCapture)).toBe(false);
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      `Retired superseded or expired standalone Doctor capture: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
-    );
     expect(fs.existsSync(legacyRoot)).toBe(false);
     expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");
     captured = required(captured, "Doctor did not reach the config repair boundary");

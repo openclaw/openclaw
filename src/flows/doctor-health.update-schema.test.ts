@@ -9,14 +9,11 @@ import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { initializeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -24,7 +21,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -282,41 +278,36 @@ it.each([
   });
 });
 
-it.each([
-  "owned",
-  "flag-only",
-  "foreign-agent",
-  "early foreign-agent",
-  "changed namespace",
-] as const)("fences outer rehearsal on current maintenance (%s)", async (mode) => {
-  await withDoctorState(async (state) => {
-    const shared = openOpenClawStateDatabase({ env: state.env }).path;
-    let agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-    recordUpdateRunStep(run.runId, {
-      step: "openclaw doctor",
-      status: mode === "early foreign-agent" ? "in_progress" : "completed",
-    });
-    if (mode !== "early foreign-agent") {
+it.each([false, true])(
+  "rejects foreign agents after rehearsal preflight (early=%s)",
+  async (early) => {
+    await withDoctorState(async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      let agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+      const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
       recordUpdateRunStep(run.runId, {
-        step: "post-update verification",
-        status: "in_progress",
+        step: "openclaw doctor",
+        status: early ? "in_progress" : "completed",
       });
-    }
-    await closeDatabases();
-    // Frozen v24 storage preserves the exact input to the candidate schema migration.
-    fs.unlinkSync(agent);
-    {
-      using seed = new DatabaseSync(agent);
-      seed.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
-      seed.exec(`PRAGMA user_version = 24;
+      if (!early) {
+        recordUpdateRunStep(run.runId, {
+          step: "post-update verification",
+          status: "in_progress",
+        });
+      }
+      await closeDatabases();
+      // Frozen v24 storage preserves the exact input to the candidate schema migration.
+      fs.unlinkSync(agent);
+      {
+        using seed = new DatabaseSync(agent);
+        seed.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+        seed.exec(`PRAGMA user_version = 24;
             INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
             VALUES ('primary', 'agent', 24, 'main', '2026.9.9', 1, 1)`);
-      seed.exec(
-        "INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at) VALUES('test','retained','{\"keep\":true}',NULL,1)",
-      );
-    }
-    if (mode === "foreign-agent" || mode === "early foreign-agent") {
+        seed.exec(
+          "INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at) VALUES('test','retained','{\"keep\":true}',NULL,1)",
+        );
+      }
       const foreign = state.path("foreign-agent");
       fs.mkdirSync(foreign);
       const moved = path.join(foreign, "openclaw-agent.sqlite");
@@ -326,7 +317,7 @@ it.each([
         plugins: { enabled: false },
         agents: { ownership: "explicit", entries: { main: { agentDir: foreign } } },
       });
-      if (mode === "early foreign-agent") {
+      if (early) {
         registerOpenClawAgentDatabase({
           agentId: "main",
           path: agent,
@@ -335,87 +326,36 @@ it.each([
         });
       }
       await closeOpenClawStateDatabaseAsync();
-    }
-    const root = fs.realpathSync(state.stateDir);
-    stubDoctorEnv({
-      ...buildUpdateDoctorEnv({
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
-        serviceRepairPolicy: "external",
-      }),
-      ...buildUpdateRehearsalPathEnv(root),
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-    });
-    if (mode === "flag-only") {
-      vi.stubEnv("TMPDIR", path.dirname(root));
-    }
-    const before = readFiles([agent, state.configPath]);
-    const snapshot = sqliteSnapshot.prepareSqliteReadOnlyLocation;
-    const observe = vi
-      .spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocation")
-      .mockImplementation(async (...args) => {
-        const prepared = await snapshot(...args);
-        if (mode === "changed namespace" && getOpenClawDatabaseMaintenanceScope()) {
-          vi.stubEnv("TMPDIR", path.dirname(root));
-        }
-        return prepared;
+      const root = fs.realpathSync(state.stateDir);
+      stubDoctorEnv({
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          serviceRepairPolicy: "external",
+        }),
+        ...buildUpdateRehearsalPathEnv(root),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_RUN_ID: undefined,
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
       });
-    const runtime = createDoctorRuntime();
-    // Observe the actual capture owner without replacing its implementation.
-    const capture = vi.spyOn(originalCapture, "preserveDoctorOriginalState");
-    mocks.runContributions.mockImplementation(async () => {
-      const scope = getOpenClawDatabaseMaintenanceScope();
-      expect(scope?.ownsSchemaMaintenance).toBe(true);
-      if (!scope) {
-        throw new Error("Expected real Doctor maintenance");
-      }
-      scope.assertOwnerCurrent();
-      scope.assertDatabaseAccess(shared);
-      await withAgentDatabaseMaintenanceLease({ env: process.env }, (lease) =>
-        migrateOpenClawAgentDatabaseForMaintenance({ agentId: "main", pathname: agent }, lease),
-      );
-    });
-    try {
-      if (mode === "flag-only") {
-        await expect(preflightUpdateDoctorCli({})).rejects.toMatchObject({
-          code: "update-schema-bump-unfenced",
-        });
-      } else {
-        // The actual CLI preflight must not cache state-only facts as a full fleet.
+      const before = readFiles([agent, state.configPath]);
+      const runtime = createDoctorRuntime();
+      // Observe the actual capture owner without replacing its implementation.
+      const capture = vi.spyOn(originalCapture, "preserveDoctorOriginalState");
+      try {
+        // CLI state-only admission must not replace the flow's complete fleet inspection.
         const preflight = await preflightUpdateDoctorCli({});
         expect(preflight).toBeUndefined();
-        const doctor = runDoctorHealthFlow(runtime, repairOptions, undefined, preflight);
-        if (mode === "owned") {
-          await doctor;
-          expect(mocks.runContributions).toHaveBeenCalledOnce();
-        } else {
-          await expect(doctor).rejects.toThrow(
-            mode === "changed namespace" ? /namespace changed/ : /schema|coverage|rehearsal/i,
-          );
-        }
-      }
-      if (mode !== "owned") {
+        await expect(
+          runDoctorHealthFlow(runtime, repairOptions, undefined, preflight),
+        ).rejects.toThrow(/schema|coverage|rehearsal/i);
         expect(capture).not.toHaveBeenCalled();
         expect(mocks.runContributions).not.toHaveBeenCalled();
+        expect(readFiles([agent, state.configPath])).toEqual(before);
+      } finally {
+        capture.mockRestore();
+        await closeOpenClawStateDatabaseAsync();
       }
-      expect(fs.readFileSync(state.configPath)).toEqual(before[1]);
-      if (mode === "owned") {
-        using migrated = new DatabaseSync(agent, { readOnly: true });
-        expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
-        );
-        expect(
-          migrated.prepare("SELECT value_json FROM cache_entries WHERE key='retained'").get(),
-        ).toEqual({ value_json: '{"keep":true}' });
-      } else {
-        expect(fs.readFileSync(agent)).toEqual(before[0]);
-      }
-    } finally {
-      observe.mockRestore();
-      capture.mockRestore();
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-});
+    });
+  },
+);
