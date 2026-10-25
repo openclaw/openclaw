@@ -109,6 +109,27 @@ it("rejects generated music downloads that exceed the configured media cap", asy
   ).rejects.toThrow("fal generated music download exceeds 1 bytes");
 });
 
+it.each([
+  { label: "a JSON error payload", body: '{"error":"quota"}', contentType: "application/json" },
+  {
+    label: "a problem+json payload",
+    body: '{"title":"gone"}',
+    contentType: "application/problem+json",
+  },
+  { label: "an HTML page", body: "<html>sign in</html>", contentType: "text/html" },
+  { label: "an empty body", body: "", contentType: "audio/mpeg" },
+])("rejects a generated music download that returns $label", async ({ body, contentType }) => {
+  mockAudio(
+    { audio: { url: "https://v3b.fal.media/files/b/out.mp3", content_type: "audio/mpeg" } },
+    streamedAudio(body),
+    contentType,
+  );
+
+  await expect(generateMusic({ prompt: "short track" })).rejects.toThrow(
+    "fal generated music download: malformed audio response",
+  );
+});
+
 it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {
   await expect(generateMusic({ lyrics: "[Verse]\nNeon rain", instrumental: true })).rejects.toThrow(
     "fal MiniMax music generation cannot use lyrics when instrumental=true.",
