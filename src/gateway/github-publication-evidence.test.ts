@@ -180,9 +180,7 @@ async function evidenceFixture(imported = false) {
       new Response(JSON.stringify({ url }), { status: 201 }),
   );
   vi.stubGlobal("fetch", fetch);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
+  onTestFinished(() => vi.unstubAllGlobals());
   const upload = (input: Record<string, unknown> = {}, client?: typeof f.guestSource.client) =>
     f.invoke(
       "guest",
@@ -195,6 +193,8 @@ async function evidenceFixture(imported = false) {
       SESSION_KEY,
       { client, sandbox },
     );
+  const rejectEvidence = (overrides: Record<string, unknown>, message?: string) =>
+    expect(upload({ evidence: { ...evidence, ...overrides } })).rejects.toThrow(message);
   return {
     ...f,
     sandbox,
@@ -203,6 +203,7 @@ async function evidenceFixture(imported = false) {
     url,
     fetch,
     upload,
+    rejectEvidence,
     config,
     async deselectPublisher() {
       const next = await updateGitHubToolIdentityConfig({
@@ -300,28 +301,21 @@ describe("workspace evidence through the guest tool and registered publication a
       "unsafe\nname.png",
       "proof.txt",
     ]) {
-      await expect(f.upload({ evidence: { ...f.evidence, path: filename } })).rejects.toThrow();
+      await f.rejectEvidence({ path: filename });
     }
-    await expect(f.upload({ evidence: { ...f.evidence, sha256: "f".repeat(64) } })).rejects.toThrow(
-      "bytes changed",
-    );
-    await expect(
-      f.upload({ evidence: { ...f.evidence, sizeBytes: f.bytes.length - 1 } }),
-    ).rejects.toThrow();
-    await expect(
-      f.upload({ evidence: { ...f.evidence, sizeBytes: 10_000_001 } }),
-    ).rejects.toThrow();
-    await fs.writeFile(path.join(f.local!.cwd, "fake.png"), "<html>private content</html>");
+    await f.rejectEvidence({ sha256: "f".repeat(64) }, "bytes changed");
+    await f.rejectEvidence({ sizeBytes: f.bytes.length - 1 });
+    await f.rejectEvidence({ sizeBytes: 10_000_001 });
     const fake = Buffer.from("<html>private content</html>");
-    await expect(
-      f.upload({
-        evidence: {
-          path: "fake.png",
-          sha256: createHash("sha256").update(fake).digest("hex"),
-          sizeBytes: fake.length,
-        },
-      }),
-    ).rejects.toThrow("do not match");
+    await fs.writeFile(path.join(f.local!.cwd, "fake.png"), fake);
+    await f.rejectEvidence(
+      {
+        path: "fake.png",
+        sha256: createHash("sha256").update(fake).digest("hex"),
+        sizeBytes: fake.length,
+      },
+      "do not match",
+    );
     const foreign = path.join(path.dirname(f.local!.cwd), "foreign.png");
     await fs.writeFile(foreign, f.bytes);
     await fs.symlink(foreign, path.join(f.local!.cwd, "foreign.png"));
@@ -333,9 +327,7 @@ describe("workspace evidence through the guest tool and registered publication a
     await expect(foreignUpload).rejects.not.toThrow(path.dirname(f.local!.cwd));
     await expect(f.upload({ publishingSessionKey: "agent:main:foreign" })).rejects.toThrow();
     await expect(f.upload({ requestId: randomUUID() })).rejects.toThrow("publication changed");
-    await expect(
-      f.upload({ evidence: { ...f.evidence, repository: "foreign/repo" } }),
-    ).rejects.toThrow();
+    await f.rejectEvidence({ repository: "foreign/repo" });
     expect(f.fetch).not.toHaveBeenCalled();
   });
 

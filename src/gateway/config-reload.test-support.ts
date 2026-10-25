@@ -431,15 +431,12 @@ export function registerReverseHotReloadTest() {
     await waitForReloadState(() => onHotReload.mock.calls.length === 2);
     await flushReload(harness.reloader);
 
-    expect(onHotReload).toHaveBeenCalledTimes(2);
     expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
     expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[0])).toEqual([
+    expect(harness.onConfigAccepted.mock.calls.map(([config]) => config)).toEqual([
       configA,
       initialConfig,
     ]);
-    expect(harness.onConfigApplied).toHaveBeenCalledTimes(2);
     expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
       configA,
       initialConfig,
