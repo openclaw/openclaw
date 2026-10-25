@@ -10,6 +10,13 @@ import { installGitHubPublicationTestHarness } from "./github-publication.test-s
 import * as workspaceStore from "./worker-environments/local-workspace-store.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+const writeGuest = (f: Fixture, name: string, content: string | Uint8Array) =>
+  fs.writeFile(path.join(f.projection, name), content);
+const readGuest = (f: Fixture, name: string) => fs.readFile(path.join(f.projection, name), "utf8");
+const expectGuestMissing = (f: Fixture, name: string) =>
+  expect(fs.stat(path.join(f.projection, name))).rejects.toMatchObject({ code: "ENOENT" });
+
 describe("imported PR source refresh", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
@@ -24,8 +31,8 @@ describe("imported PR source refresh", () => {
       expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.headCommit });
       const runtime = boundRuntime ? await bindFixtureRuntime(f) : undefined;
       using _ = runtime?.projection;
-      await fs.writeFile(path.join(f.projection, "artifact.txt"), "guest saved conflict\n");
-      await fs.writeFile(path.join(f.projection, "untracked.txt"), "retained through recovery\n");
+      await writeGuest(f, "artifact.txt", "guest saved conflict\n");
+      await writeGuest(f, "untracked.txt", "retained through recovery\n");
       // pr.txt is an imported file the guest has staged but not committed.
       const acceptedHead = await f.advanceHead({
         "artifact.txt": "remote PR change\n",
@@ -78,30 +85,23 @@ describe("imported PR source refresh", () => {
         conflictPaths: ["artifact.txt"],
       });
       expect(runtime?.isPaused() ?? false).toBe(false);
-      const conflict = await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8");
+      const conflict = await readGuest(f, "artifact.txt");
       expect(conflict).toContain("guest saved conflict");
       expect(conflict).toContain("remote PR change");
-      expect(await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8")).toBe(
-        "retained through recovery\n",
-      );
-      await expect(fs.stat(path.join(f.projection, "newer-pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(await readGuest(f, "untracked.txt")).toBe("retained through recovery\n");
+      await expectGuestMissing(f, "newer-pr.txt");
       await expect(
         f.invoke({ conflictsResolved: true, expectedHeadCommit: f.pr.head.sha }),
       ).rejects.toThrow("changed");
-      await fs.writeFile(
-        path.join(f.projection, "artifact.txt"),
-        "remote PR change\nguest saved conflict\n",
-      );
+      await writeGuest(f, "artifact.txt", "remote PR change\nguest saved conflict\n");
       // The pending refresh left the imported file staged at its pre-refresh bytes.
       expect(await f.guestGit("status", "--porcelain", "pr.txt")).toBe("AM pr.txt");
       const refreshEntry = await f.guestGit("rev-parse", ":pr.txt");
       // Staging a new version while the refresh is pending is guest work, not refresh output.
       const refreshed = await fs.readFile(path.join(f.projection, "pr.txt"));
-      await fs.writeFile(path.join(f.projection, "pr.txt"), "staged-only guest work\n");
+      await writeGuest(f, "pr.txt", "staged-only guest work\n");
       await f.guestGit("add", "pr.txt");
-      await fs.writeFile(path.join(f.projection, "pr.txt"), refreshed);
+      await writeGuest(f, "pr.txt", refreshed);
       await expect(
         f.invoke({ conflictsResolved: true, expectedHeadCommit: acceptedHead }),
       ).rejects.toThrow("Commit the staged changes");
@@ -126,12 +126,8 @@ describe("imported PR source refresh", () => {
         headCommit: f.pr.head.sha,
         headChanged: false,
       });
-      expect(await fs.readFile(path.join(f.projection, "newer-pr.txt"), "utf8")).toBe(
-        "remote advanced during recovery\n",
-      );
-      expect(await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8")).toBe(
-        "remote PR change\nguest saved conflict\n",
-      );
+      expect(await readGuest(f, "newer-pr.txt")).toBe("remote advanced during recovery\n");
+      expect(await readGuest(f, "artifact.txt")).toBe("remote PR change\nguest saved conflict\n");
       expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(f.pr.head.sha);
       expect(f.writes).toEqual([]);
     },
@@ -139,9 +135,9 @@ describe("imported PR source refresh", () => {
   it("preserves staged-only guest bytes and succeeds after the guest commits them", async () => {
     const f = await fixture();
     await f.invoke();
-    await fs.writeFile(path.join(f.projection, "artifact.txt"), "staged guest version\n");
+    await writeGuest(f, "artifact.txt", "staged guest version\n");
     await f.guestGit("add", "artifact.txt");
-    await fs.writeFile(path.join(f.projection, "artifact.txt"), "base\n");
+    await writeGuest(f, "artifact.txt", "base\n");
     const before = f.readSession().worktree?.githubPullRequest;
     const index = await f.guestGit("write-tree");
     await f.advanceHead({ "newer-pr.txt": "new remote work\n" });
@@ -154,7 +150,7 @@ describe("imported PR source refresh", () => {
     expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
     expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
     expect(await f.guestGit("show", "HEAD:artifact.txt")).toBe("staged guest version");
-    expect(await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8")).toBe("base\n");
+    expect(await readGuest(f, "artifact.txt")).toBe("base\n");
     expect(f.writes).toEqual([]);
   });
   it.each(["Stop", "role", "linked identity", "permission", "remote head"])(
@@ -193,9 +189,7 @@ describe("imported PR source refresh", () => {
       expect(revoked).toBe(true);
       expect(f.readSession().worktree?.githubPullRequest).toEqual(before);
       expect(await f.git("rev-parse", "HEAD")).toBe(head);
-      await expect(fs.stat(path.join(f.projection, "newer-pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectGuestMissing(f, "newer-pr.txt");
       expect(f.writes).toEqual([]);
     },
   );
