@@ -43,6 +43,9 @@ beforeEach(() => {
   writer = createWorkerSessionPlacementStore({ database });
 });
 
+const claimLocal = (identity = sessionIdentity("local"), claimId = "claim", runId = "run") =>
+  writer.claimTurn({ ...identity, owner: { kind: "local" }, claimId, runId });
+
 describe("worker placement read cache", () => {
   it("keeps the syncing owner when a read captured during commit returns its older snapshot", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-pending-replica-"));
@@ -98,12 +101,7 @@ describe("worker placement read cache", () => {
     expect(recoveryReadCount()).toBe(1);
 
     const local = sessionIdentity("recovery-local");
-    const claim = await writer.claimTurn({
-      ...local,
-      owner: { kind: "local" },
-      claimId: "local-claim",
-      runId: "local-run",
-    });
+    const claim = await claimLocal(local, "local-claim", "local-run");
     expect(await reader.readRecoveryCandidates()).toEqual([]);
     await writer.releaseTurnIfOwned(claim);
     expect(await reader.readRecoveryCandidates()).toEqual([]);
@@ -249,12 +247,7 @@ describe("worker placement read cache", () => {
         expect((await reader.readProjection([identity.sessionId])).placements.size).toBe(0);
       }
       const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const claim = await writer.claimTurn({
-        ...identity,
-        owner: { kind: "local" },
-        claimId: "claim",
-        runId: "run",
-      });
+      const claim = await claimLocal(identity);
       const claimed = await read();
       expect(claimed.turnClaim?.claimId).toBe("claim");
       // Borrowed owner facts reject both placement and nested claim mutation.
@@ -276,12 +269,7 @@ describe("worker placement read cache", () => {
     const initial = await reader.prepareMaintenancePlacements();
     initial.release();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const claim = await writer.claimTurn({
-      ...sessionIdentity("local"),
-      owner: { kind: "local" },
-      claimId: "claim",
-      runId: "run",
-    });
+    const claim = await claimLocal();
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
     expect(unchanged.placements).toEqual([]);

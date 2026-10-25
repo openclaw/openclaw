@@ -31,6 +31,17 @@ afterEach(() => drainGlobalSingletonLifecycleState());
 const temporaryDirectory = (name: string) => tempDirs.make(`openclaw-${name}-`);
 const numberedPaths = (prefix: string, count: number, width = 5) =>
   Array.from({ length: count }, (_, index) => `${prefix}-${index.toString().padStart(width, "0")}`);
+const writeFiles = (root: string, files: Record<string, string>) =>
+  Promise.all(
+    Object.entries(files).map(([name, content]) => fs.writeFile(path.join(root, name), content)),
+  );
+const readFile = (root: string, name = "changed.txt") => fs.readFile(path.join(root, name), "utf8");
+const changedFile = { path: "changed.txt", status: "modified", additions: 0, deletions: 0 };
+const artifacts = (root: string, ref: string) =>
+  runGitWorkerOperation({
+    type: "workspace.artifacts",
+    input: { root, ref, previewPath: "changed.txt" },
+  });
 
 function encodeManifest(value: WorkerWorkspaceManifest) {
   const raw = serializeWorkerWorkspaceManifest(value);
@@ -130,12 +141,8 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
   const complete = temporaryDirectory("workspace-staged-v1-complete");
   const baseContents = { "changed.txt": "base\n", "keep.txt": "keep\n" };
   const currentContents = { ...baseContents, "changed.txt": "worker\n" };
-  for (const [name, contents] of Object.entries(baseContents)) {
-    await fs.writeFile(path.join(local, name), contents);
-  }
-  for (const [name, contents] of Object.entries(currentContents)) {
-    await fs.writeFile(path.join(complete, name), contents);
-  }
+  await writeFiles(local, baseContents);
+  await writeFiles(complete, currentContents);
   const base = encodeManifest(makeManifest(baseContents));
   const current = encodeManifest(makeManifest(currentContents));
   const ref = workerWorkspaceResultRef("claim-historical-v1");
@@ -143,19 +150,14 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
   await stageHistoricalV1Result(local, complete, ref, base, current);
   await fs.writeFile(path.join(local, "keep.txt"), "local edit\n");
 
-  const artifacts = await runGitWorkerOperation({
-    type: "workspace.artifacts",
-    input: { root: local, ref, previewPath: "changed.txt" },
-  });
-  expect(artifacts.changes).toEqual([
-    { path: "changed.txt", status: "modified", additions: 0, deletions: 0 },
-  ]);
-  expect(Buffer.from(artifacts.preview!).toString()).toBe("worker\n");
+  const resultArtifacts = await artifacts(local, ref);
+  expect(resultArtifacts.changes).toEqual([changedFile]);
+  expect(Buffer.from(resultArtifacts.preview!).toString()).toBe("worker\n");
 
   const result = await apply(local, ref, base.ref);
   expect(result.changed).toBe(true);
-  await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("worker\n");
-  await expect(fs.readFile(path.join(local, "keep.txt"), "utf8")).resolves.toBe("local edit\n");
+  await expect(readFile(local)).resolves.toBe("worker\n");
+  await expect(readFile(local, "keep.txt")).resolves.toBe("local edit\n");
 });
 
 it("recovers a converged shipped v1 deletion above the historical 25,000-record limit", async () => {
@@ -259,12 +261,9 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
   const local = temporaryDirectory("workspace-large-baseline-local");
   const payload = temporaryDirectory("workspace-large-baseline-payload");
   await git(local, "init", "--quiet");
-  const baseContent = Buffer.from("base\n");
   const currentContent = Buffer.from("worker\n");
-  await Promise.all([
-    fs.writeFile(path.join(local, "changed.txt"), baseContent),
-    fs.writeFile(path.join(payload, "changed.txt"), currentContent),
-  ]);
+  await writeFiles(local, { "changed.txt": "base\n" });
+  await writeFiles(payload, { "changed.txt": "worker\n" });
   const unchangedEntries = fileManifest(
     numberedPaths("file", 31_273).map((name) => `${name}.txt`),
     "unchanged",
@@ -281,17 +280,13 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
 
   await stage(local, payload, ref, base, current);
 
-  const artifacts = await runGitWorkerOperation({
-    type: "workspace.artifacts",
-    input: { root: local, ref, previewPath: "changed.txt" },
-  });
-  expect(artifacts).toEqual({
+  expect(await artifacts(local, ref)).toEqual({
     baseManifestRef: base.ref,
     currentManifestRef: current.ref,
     base: { baseCommit: baseManifest.baseCommit },
     current: { baseCommit: currentManifest.baseCommit },
     changedEntries: [currentManifest.entries[0]],
-    changes: [{ path: "changed.txt", status: "modified", additions: 0, deletions: 0 }],
+    changes: [changedFile],
     preview: new Uint8Array(currentContent),
   });
 
@@ -302,7 +297,7 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
   const committed = vi.fn(async () => {});
   await apply(local, ref, base.ref, emptyJournal({ commit: committed }));
   expect(committed).toHaveBeenCalledOnce();
-  await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("worker\n");
+  await expect(readFile(local)).resolves.toBe("worker\n");
 
   const unchangedRef = workerWorkspaceResultRef("claim-large-baseline-unchanged");
   await stage(local, payload, unchangedRef, current, current);
