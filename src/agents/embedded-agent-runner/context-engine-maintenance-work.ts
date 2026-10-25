@@ -57,7 +57,7 @@ export async function disposeDeferredMaintenanceContextEngine(
     runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
     factoryResourceOwners?: ReadonlySet<ContextEngineMaintenanceResources>;
   },
-  maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "run" | "signal">,
+  maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "runCleanup" | "signal">,
 ): Promise<void> {
   const failures: unknown[] = [];
   const settle = async (work: Promise<unknown>[]) => {
@@ -73,7 +73,7 @@ export async function disposeDeferredMaintenanceContextEngine(
     (releasing ??= settle(resources.map(async (owner) => await owner.release())));
   try {
     await params.runInContext(() =>
-      maintenance.run(() =>
+      maintenance.runCleanup(() =>
         runContextEngineMaintenanceWork(
           async () => {
             const disposal = (async () => {

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
   markGatewayRestartDraining,
@@ -16,7 +17,12 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import {
+  beginForegroundSessionMaintenance,
+  createSessionMaintenanceOwner,
+  waitForSessionMaintenance,
+} from "../session-maintenance/coordinator.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import {
   createBackgroundMaintenanceEngine as engine,
   createMaintenanceGate as gate,
@@ -24,6 +30,13 @@ import {
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 
 const unchanged = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+const { complete } = vi.hoisted(() => ({
+  complete: vi.fn<(request: { signal?: AbortSignal }) => Promise<unknown>>(),
+}));
+// mock-isolation: the host LLM runtime would resolve real models and providers.
+vi.mock("../../plugins/runtime/runtime-llm.runtime.js", () => ({
+  createRuntimeLlm: () => ({ complete }),
+}));
 const sessionKey = "agent:main:maintenance-resources";
 const wait = () => waitForSessionMaintenance(sessionKey);
 const read = (db: DatabaseSync) => db.prepare("SELECT value FROM probe").get()?.value;
@@ -265,6 +278,135 @@ it("keeps accepted maintenance independent of parent completion until gateway re
       await parent.drain();
       await cancellationCheckpoint;
       resetGatewayWorkAdmission();
+    }
+  });
+});
+
+it("carries maintenance cancellation to the host request without losing request cancellation", async () => {
+  complete.mockClear();
+  const maintenance = new AbortController();
+  const request = new AbortController();
+  const llm = resolveContextEngineCapabilities({
+    purpose: "maintenance",
+    abortSignal: maintenance.signal,
+  }).llm!;
+  await llm.complete({ messages: [{ role: "user", content: "prepare" }], signal: request.signal });
+  const passed = complete.mock.calls[0]![0].signal!;
+  expect(passed.aborted).toBe(false);
+  maintenance.abort();
+  expect(passed.aborted).toBe(true);
+  await expect(
+    llm.complete({ messages: [{ role: "user", content: "rerun" }] }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(complete).toHaveBeenCalledOnce();
+
+  const otherMaintenance = new AbortController();
+  const otherRequest = new AbortController();
+  await resolveContextEngineCapabilities({
+    purpose: "maintenance",
+    abortSignal: otherMaintenance.signal,
+  }).llm!.complete({
+    messages: [{ role: "user", content: "prepare" }],
+    signal: otherRequest.signal,
+  });
+  otherRequest.abort();
+  expect(complete.mock.calls[1]![0].signal!.aborted).toBe(true);
+  expect(otherMaintenance.signal.aborted).toBe(false);
+});
+
+it("preempts any engine's host LLM preparation, joins disposal and discards coalesced reruns", async () => {
+  await withResources(async (_db, schedule) => {
+    const started = createDeferredCore();
+    const cleanup = createDeferredCore();
+    const finishCleanup = createDeferredCore();
+    const normalSummaryCompletion = createDeferredCore();
+    let summaryCompleted = false;
+    void normalSummaryCompletion.promise.then(() => {
+      summaryCompleted = true;
+    });
+    complete.mockClear();
+    complete.mockImplementationOnce(async ({ signal }) => {
+      started.resolve();
+      await racePromiseWithAbortSignal(normalSummaryCompletion.promise, signal);
+      return {};
+    });
+    let retained: Parameters<NonNullable<ContextEngine["maintain"]>>[0]["runtimeContext"];
+    const maintain = vi.fn(
+      async ({ runtimeContext }: Parameters<NonNullable<ContextEngine["maintain"]>>[0]) => {
+        retained = runtimeContext;
+        // No engine-specific cancellation wiring: the host capability owns it.
+        await runtimeContext!.llm!.complete({ messages: [{ role: "user", content: "prepare" }] });
+        return unchanged;
+      },
+    );
+    const first = engine(maintain);
+    const firstDispose = vi.fn(async () => {
+      cleanup.resolve();
+      // Disposal is enterable after preemption but holds no publication authority.
+      await expect(retained!.rewriteTranscriptEntries!({ replacements: [] })).rejects.toMatchObject(
+        { name: "AbortError" },
+      );
+      await expect(
+        retained!.llm!.complete({ messages: [{ role: "user", content: "again" }] }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      await finishCleanup.promise;
+    });
+    first.dispose = firstDispose;
+    const rerunMaintain = vi.fn(async () => unchanged);
+    const rerun = engine(rerunMaintain);
+    const rerunDispose = vi.fn(async () => {});
+    rerun.dispose = rerunDispose;
+    await schedule(first);
+    await started.promise;
+    await schedule(rerun);
+    let admitted = false;
+    const admission = beginForegroundSessionMaintenance("agent:main:maintenance-resources").then(
+      (release) => {
+        admitted = true;
+        return release;
+      },
+    );
+    try {
+      await cleanup.promise;
+      expect(admitted).toBe(false);
+      expect(maintain).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+      expect(rerunMaintain).not.toHaveBeenCalled();
+      finishCleanup.resolve();
+      const release = await admission;
+      expect(summaryCompleted).toBe(false);
+      expect(firstDispose).toHaveBeenCalledOnce();
+      expect(rerunDispose).toHaveBeenCalledOnce();
+      release();
+      const successorMaintain = vi.fn(async () => unchanged);
+      const successor = engine(successorMaintain);
+      await schedule(successor);
+      await wait();
+      expect(successorMaintain).toHaveBeenCalledOnce();
+    } finally {
+      finishCleanup.resolve();
+      (await admission)();
+    }
+  });
+});
+
+it("refuses new deferred requests while preempted cleanup waits for an earlier writer", async () => {
+  await withResources(async (_db, schedule) => {
+    const writer = createSessionMaintenanceOwner({ sessionKey });
+    const first = engine(vi.fn(async () => unchanged));
+    await schedule(first);
+    const admission = beginForegroundSessionMaintenance(sessionKey);
+    const failure = vi.fn();
+    const lateMaintain = vi.fn(async () => unchanged);
+    const late = engine(lateMaintain);
+    try {
+      await setImmediate();
+      await schedule(late, undefined, { onDeferredMaintenanceFailure: failure });
+      expect(failure).toHaveBeenCalledOnce();
+      expect(lateMaintain).not.toHaveBeenCalled();
+    } finally {
+      await writer.track(Promise.resolve());
+      (await admission)();
     }
   });
 });
