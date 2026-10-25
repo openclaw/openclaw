@@ -26,6 +26,47 @@ describe("buildHarnessVisibleReplyGuidance", () => {
     },
   );
 
+  it.each([
+    { sessionKey: "agent:main:main", sourceReplyDeliveryMode: "automatic" },
+    { sessionKey: "agent:main:dashboard:task", sourceReplyDeliveryMode: "message_tool_only" },
+  ])(
+    "keeps session-backed WebChat replies targetless ($sessionKey)",
+    ({ sessionKey, sourceReplyDeliveryMode }) => {
+      const guidance = buildHarnessVisibleReplyGuidance({
+        sourceReplyDeliveryMode,
+        messageToolAvailable: true,
+        currentConversation: {
+          agentSessionKey: sessionKey,
+          currentChannelProvider: "webchat",
+        },
+        requireExplicitMessageTarget: false,
+      });
+
+      expect(guidance).toContain("current source is default target");
+      expect(guidance).not.toContain("no current conversation");
+      expect(guidance).not.toContain("target required this turn");
+      expect(guidance).toContain("final=true");
+    },
+  );
+
+  it.each([undefined, "   "])(
+    "does not invent a WebChat destination for session %s",
+    (sessionKey) => {
+      const guidance = buildHarnessVisibleReplyGuidance({
+        messageToolAvailable: true,
+        currentConversation: {
+          agentSessionKey: sessionKey,
+          currentChannelProvider: "webchat",
+        },
+        requireExplicitMessageTarget: false,
+      });
+
+      expect(guidance).toContain("no current conversation");
+      expect(guidance).toContain("target required this turn");
+      expect(guidance).not.toContain("current source is default target");
+    },
+  );
+
   it("preserves channel-sourced reply guidance", () => {
     expect(
       buildHarnessVisibleReplyGuidance({

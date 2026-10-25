@@ -74,6 +74,13 @@ it.each([
     },
     expected: true,
   },
+  {
+    context: {
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main:telegram:direct:heartbeat",
+    },
+    expected: false,
+  },
 ])("reports source routing for $context", ({ context, expected }) => {
   expect(hasMessageToolSourceConversation(context)).toBe(expected);
 });
