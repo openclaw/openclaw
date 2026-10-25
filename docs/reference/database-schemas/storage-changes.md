@@ -2297,8 +2297,13 @@ requests, drains dispatched work, and joins native exit. The process keeps at mo
 reusable archive worker; scopes in the same state directory transfer it with fresh
 authority. Different state directories and unhealthy workers require native exit
 before replacement.
-Cold preparation and mutations retain their separate one-shot workers; cold mutations
-join their existing page maintenance and native exit.
+Cold mutations share that archive worker through a private operation port. Each
+mutation retains its own live writer admission and commit checks, closes its agent
+database, source readers, and shared-state database, then acknowledges cleanup on
+the same port as its result. Cleanup uncertainty retires the worker and joins native
+exit before returning an error. No native connection or lease survives between
+mutations. Cold preparation still uses a separate one-shot worker, and cold
+maintenance retains its existing page reclamation.
 
 History eviction prepares its deletion snapshot in that archive worker's existing
 materialization request. The final reclamation transaction rereads durable references,

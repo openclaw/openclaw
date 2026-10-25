@@ -16,6 +16,19 @@ import {
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
+  expect(
+    projectChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [text("NO_REPLY")],
+        __openclaw: { catalogDisplay: { type: "agentMessage" } },
+      },
+    ]),
+  ).toEqual([expect.objectContaining({ content: [text("NO_REPLY")] })]);
+});
+
 const phasedText = (value: string, phase: string) => ({
   ...text(value),
   textSignature: JSON.stringify({ v: 1, id: phase, phase }),

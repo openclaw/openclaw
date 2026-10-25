@@ -8,6 +8,7 @@ import {
   isCodexAppServerLiveThreadProtected,
 } from "./client-runtime.js";
 import { injectCodexHistoryDelta } from "./context-engine-history.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -57,6 +58,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { splitCodexExtraSystemPrompt } from "./thread-prompt.js";
 import { isTransientCodexRestrictedTurn } from "./thread-restricted-resume.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
@@ -152,6 +154,14 @@ export async function startOrResumeThread(
       params.refreshableInstructions = params.inferenceRoute
         ? undefined
         : input.refreshableInstructions;
+      // Only an actual relay can preserve current context through native compaction.
+      params.developerInstructions =
+        params.inferenceRoute || input.developerInstructions === undefined
+          ? input.developerInstructions
+          : joinPresentSections(
+              input.developerInstructions,
+              splitCodexExtraSystemPrompt(params.params).turn,
+            );
       return context;
     };
     const releaseRetainedThread = (

@@ -139,9 +139,7 @@ it("blocks a loopback result before contacting the synthetic HTTP server", async
   } finally {
     try {
       if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server[Symbol.asyncDispose]();
       }
     } finally {
       await claim.release();

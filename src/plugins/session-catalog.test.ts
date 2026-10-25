@@ -194,7 +194,10 @@ describe("importSessionCatalogHistory", () => {
       "Tool call\n\nbash",
       "Other\n\ncheckpoint",
     ]);
-    expect(transcript.messages[0]?.["__openclaw"]).toEqual({ mirrorOrigin: "pi-catalog-import" });
+    expect(transcript.messages[0]?.["__openclaw"]).toEqual({
+      mirrorOrigin: "pi-catalog-import",
+      catalogDisplay: { type: "userMessage" },
+    });
     expect(transcript.messages.slice(0, 4).map((message) => message.timestamp)).toEqual([
       Date.parse("2026-07-25T12:00:00.000Z"),
       Date.parse("2026"),
@@ -367,6 +370,24 @@ describe("readBoundedSessionCatalogHistory", () => {
         limits: { maxItems: 2, maxBytes: 2 * itemBytes },
       }),
     ).toEqual({ items, totalItems: 2, complete: true });
+  });
+
+  it("retains transcript text when optional display input exceeds the remaining import budget", async () => {
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader([
+        { type: "toolResult", text: "older result", toolInput: { input: "x".repeat(1000) } },
+        { type: "agentMessage", text: "newer answer" },
+      ]),
+      limits: { maxItems: 10, maxBytes: 200 },
+    });
+    expect(history).toEqual({
+      items: [
+        { type: "toolResult", text: "older result", toolInputOmitted: true },
+        { type: "agentMessage", text: "newer answer" },
+      ],
+      totalItems: 2,
+      complete: false,
+    });
   });
 
   it("reports when the newest item itself must be truncated to fit", async () => {

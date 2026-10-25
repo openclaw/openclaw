@@ -49,13 +49,7 @@ function formatSocketEndpoint(
   return address.includes(":") ? `[${address}]:${port}` : `${address}:${port}`;
 }
 
-export function resolveSocketAddress(socket: WebSocket): {
-  remoteAddr?: string;
-  remotePort?: number;
-  localAddr?: string;
-  localPort?: number;
-  endpoint?: string;
-} {
+export function resolveSocketAddress(socket: WebSocket) {
   const rawSocket = (socket as WebSocket & { _socket?: Socket })["_socket"];
   const remoteAddr = rawSocket?.remoteAddress;
   const remotePort = rawSocket?.remotePort;

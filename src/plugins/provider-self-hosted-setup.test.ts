@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedResponse } from "../../test/helpers/provider-http.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
@@ -133,22 +134,6 @@ async function configureSelfHostedTestProvider(params: {
     defaultApiKeyEnvVar: params.envVar ?? "VLLM_API_KEY",
     modelPlaceholder: "Qwen/Qwen3-32B",
   });
-}
-
-function cancelTrackedResponse(init?: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode("ignored"));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 function queueResponse(response: Response, finalUrl: string) {

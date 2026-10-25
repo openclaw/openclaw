@@ -20,16 +20,6 @@ type SecurityFixAction = {
   error?: string;
 } & ({ kind: "chmod"; mode: number } | { kind: "icacls"; command: string });
 
-type SecurityFixResult = {
-  ok: boolean;
-  stateDir: string;
-  configPath: string;
-  configWritten: boolean;
-  changes: string[];
-  actions: SecurityFixAction[];
-  errors: string[];
-};
-
 type SecurityPermissionTarget = {
   path: string;
   mode: number;
@@ -134,10 +124,7 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
-}): Promise<{
-  cfg: OpenClawConfig;
-  changes: string[];
-}> {
+}) {
   let nextCfg = params.cfg;
   const channelChanges: string[] = [];
   const collectPlugins = async (): Promise<ChannelPlugin[]> => {
@@ -244,7 +231,7 @@ export async function fixSecurityFootguns(opts?: {
   stateDir?: string;
   configPath?: string;
   channelPlugins?: ChannelPlugin[];
-}): Promise<SecurityFixResult> {
+}) {
   const env = opts?.env ?? process.env;
   const stateDir = opts?.stateDir ?? resolveStateDir(env);
   const configPath = opts?.configPath ?? resolveConfigPath(env, stateDir);

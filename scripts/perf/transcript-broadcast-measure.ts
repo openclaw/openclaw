@@ -1,9 +1,43 @@
+// --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
+// Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
+// node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
+//   --sessions 10000 --runs 6000 --settled-runs --projects 36 --transcript-mib 16 --port 41723
+// node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+//   --state-dir .local/worker-base --entry dist/entry.js --port 41723 --mock-port 41724 \
+//   --scenario memory-soak --runs 36 --clients 64 --plugins 40 --duration-ms 600000 \
+//   --warmup-ms 10000 --round-interval-ms 15000 --list-interval-ms 5000 --poll-seed worker-churn --mixed-rpc \
+//   --row-mode sidebar --stress-tools --stress-worktree-fanout --list-filter-churn \
+//   --diagnostics --retained-profile-ms 0 --reset-every-rounds 0
+// Keep timing/GC acceptance untraced. Repeat separately with --allocations or
+// --workload-cpu-profile for allocation rate or Worker-constructor CPU attribution.
+// --worker-creation-counts writes operation-labeled constructor timing in a separate count pass.
+// For cold restores, prepare with worker-cold-fixture.ts and add --cold-history.
+// Each cold session is read once before cycling back to already-restored transcripts.
+// Fixed-work comparison: omit --poll-seed and use --soak-rounds 16,
+// --round-interval-ms 37500 and --list-interval-ms 600000 (256 requests per RPC method).
+// Setup can restore cold histories; report setup-inclusive worker/CPU totals too.
+
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
+// --stress-tool-search adds a verified catalog search before each --stress-tools execution.
+// --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
+// On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
+// node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+//   --state-dir <fixture> --entry dist/entry.js --scenario memory-soak \
+//   --clients 64 --exact-clients 4 --runs 8 --plugins 40 --row-mode sidebar \
+//   --chunks 500 --chunk-interval-ms 10 --warmup-ms 60000 --duration-ms 600000 \
+//   --soak-rounds 40 --round-interval-ms 15000 --memory-interval-ms 15000 \
+//   --retained-profile-ms 0 --stress-tools --mixed-rpc --dashboard-rpc \
+//   --list-filter-churn --usage-rpc --list-interval-ms 1000 --poll-seed usage \
+//   --diagnostics --port 41712 --mock-port 41714 --revision <sha>
+// List churn rotates the existing filters and patches a label every tenth list.
+// Usage polling adds usage.cost and sessions.usage overview reads to the
+// mixed rotation; each round reports response cache statuses, including partials.
+// Use separate matching --allocations passes; their traced GC timing is diagnostic.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -67,6 +101,10 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
   options: {
+    // Cold-history worker-churn instrumentation and fixture workload.
+    "cold-history": { type: "boolean", default: false },
+    "worker-creation-counts": { type: "boolean", default: false },
+    "stress-worktree-fanout": { type: "boolean", default: false },
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
     "worker-allocations": { type: "boolean", default: false },
@@ -93,8 +131,10 @@ const { values } = parseArgs({
     "worker-heap-peer-done-file": { type: "string" },
     "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
+    "stress-shell-words": { type: "string", default: "0" },
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
+    "stress-tool-search": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
@@ -108,6 +148,8 @@ const { values } = parseArgs({
     "authority-source-preload": { type: "string" },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
+    "poll-between-rounds": { type: "boolean", default: false },
+    "usage-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -179,6 +221,8 @@ const { values } = parseArgs({
     "poll-seed": { type: "string" },
   },
 });
+// Fixture fanout keeps the same continuous polling as the explicit pacing option.
+const pollBetweenRounds = values["poll-between-rounds"] || values["stress-worktree-fanout"];
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
 }
@@ -332,6 +376,9 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+if (values["stress-tool-search"] && !values["stress-tools"]) {
+  throw new Error("--stress-tool-search requires --stress-tools");
+}
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
   chatActiveHoldMs &&
@@ -557,6 +604,23 @@ if (values["stress-tools"] && !toolScenario) {
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
   );
 }
+const stressShellWords = integer(values["stress-shell-words"], "--stress-shell-words", 0);
+// At most 50,007 source characters and about 10,000 syntax nodes, below both parser limits.
+if (stressShellWords > 10_000 || (stressShellWords > 0 && !values["stress-tools"])) {
+  throw new Error("--stress-shell-words must be 0–10000 and requires --stress-tools when positive");
+}
+const stressShellCommand = stressShellWords ? `: ${"word ".repeat(stressShellWords)}; pwd` : "pwd";
+if (
+  values["stress-worktree-fanout"] &&
+  (!soakScenario || !values["stress-tools"] || historyTurns)
+) {
+  throw new Error(
+    "--stress-worktree-fanout requires memory-soak --stress-tools without seeded history",
+  );
+}
+if (values["stress-worktree-fanout"] && values["worktree-tool-churn"]) {
+  throw new Error("Choose fixture worktree fanout or managed worktree tool churn, not both");
+}
 if (values["stress-session-store"] && !values["stress-tools"]) {
   throw new Error("--stress-session-store requires --stress-tools");
 }
@@ -665,8 +729,14 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
+if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
+  throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
+}
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
+}
+if (values["usage-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
+  throw new Error("--usage-rpc requires memory-soak and --mixed-rpc");
 }
 if (values["github-options-connected"] && !values["dashboard-rpc"]) {
   throw new Error("--github-options-connected requires --dashboard-rpc");
@@ -982,6 +1052,13 @@ const patchSequences = patchKeys.map(() => 0);
 if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
+const coldHistoryKeys: string[] = values["cold-history"]
+  ? JSON.parse(readFileSync(path.join(root, "worker-cold-summary.json"), "utf8")).sessionKeys
+  : [];
+if (values["cold-history"] && (!values["mixed-rpc"] || !coldHistoryKeys.length)) {
+  throw new Error("--cold-history requires --mixed-rpc and a prepared worker-cold fixture");
+}
+let coldHistorySequence = 0;
 let stressWorktree: string | undefined;
 const worktreeToolRoots = new Map<number, string>();
 const worktreeToolSearches = new Map<string, number>();
@@ -999,6 +1076,28 @@ if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image
   }
   if (values["mixed-rpc"]) {
     diffControlOriginal = readFileSync(path.join(stressWorktree, "README.md"), "utf8");
+  }
+}
+if (values["stress-worktree-fanout"]) {
+  const projects: unknown[] = Array.isArray(fixture.projectWorktrees)
+    ? fixture.projectWorktrees
+    : [];
+  if (projects.length < sessionCount) {
+    throw new Error("--stress-worktree-fanout requires one fixture project per active session");
+  }
+  for (const entry of projects.slice(0, sessionCount)) {
+    if (!isRecord(entry) || typeof entry.path !== "string") {
+      throw new Error("Invalid synthetic worktree fixture");
+    }
+    const worktree = realpathSync(entry.path);
+    if (
+      !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+      !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ") ||
+      [...worktreeToolRoots.values()].includes(worktree)
+    ) {
+      throw new Error("Stress sessions require distinct linked worktrees inside the fixture");
+    }
+    worktreeToolRoots.set(worktreeToolRoots.size + 1, worktree);
   }
 }
 const viewerOrigin = "https://broadcast-measure.example.invalid";
@@ -2060,7 +2159,9 @@ const mock = createServer((req, res) => {
           (toolResult) =>
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
-              values["attempt-setup-image"] || values["worktree-tool-churn"]
+              values["attempt-setup-image"] ||
+                values["worktree-tool-churn"] ||
+                values["stress-worktree-fanout"]
                 ? "# Synthetic project "
                 : "Synthetic allocation benchmark tool result.",
             ) ||
@@ -2166,10 +2267,11 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
-        const toolWorktree = values["worktree-tool-churn"]
-          ? worktreeToolRoots.get(index)
-          : stressWorktree;
-        if (values["worktree-tool-churn"] && !toolWorktree) {
+        const toolWorktree =
+          values["worktree-tool-churn"] || values["stress-worktree-fanout"]
+            ? worktreeToolRoots.get(index)
+            : stressWorktree;
+        if ((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && !toolWorktree) {
           throw new Error("Synthetic foreground turn has no owned worktree");
         }
         const items = toolPaths.map((toolPath, toolIndex) => {
@@ -2196,10 +2298,13 @@ const mock = createServer((req, res) => {
                     awaitResults: true,
                     code:
                       storeCode +
-                      `json(await read({ path: ${JSON.stringify(values["worktree-tool-churn"] && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
-                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                      (values["stress-tool-search"]
+                        ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
+                      `json(await read({ path: ${JSON.stringify((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
+                      `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
                       `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(toolWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
-                      (values["worktree-tool-churn"]
+                      (values["worktree-tool-churn"] || values["stress-worktree-fanout"]
                         ? `const match = await exec({ command: "grep -n 'Synthetic project' README.md", workdir: ${JSON.stringify(toolWorktree)} });\n` +
                           'if (match.exitCode !== 0 || !match.aggregated.includes("Synthetic project")) throw new Error("Synthetic worktree grep failed");\n'
                         : "") +
@@ -2376,6 +2481,7 @@ const coldSetupRpc: Array<{
   sessionKey?: string;
 }> = [];
 let lastSubscriberEventAt = performance.now();
+let lastSubscriberEventName: string | undefined;
 let closing = false;
 let subscriberFailure: Error | undefined;
 let recapRequests = 0;
@@ -2739,6 +2845,7 @@ const mixedRpcMethods = [
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...dashboardRpcShapes.map(({ method }) => method),
+  ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
 const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from({ length: sessionCount }, (_, index) =>
@@ -3703,7 +3810,8 @@ async function runRound(
           }
         })()
       : undefined;
-  const providerTimeoutMs = values["attempt-setup-image"] ? 170_000 : 45_000;
+  const providerTimeoutMs =
+    values["attempt-setup-image"] || values["stress-worktree-fanout"] ? 170_000 : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -3952,14 +4060,17 @@ async function runRound(
 }
 async function drainEvents() {
   const started = performance.now();
-  while (performance.now() - started < 15_000) {
+  const timeoutMs = values["stress-worktree-fanout"] ? 60_000 : 15_000;
+  while (performance.now() - started < timeoutMs) {
     assertGatewayAlive();
     if (activeStreams === 0 && performance.now() - lastSubscriberEventAt >= 1000) {
       return;
     }
     await delay(50);
   }
-  throw new Error("model streams and subscriber events did not drain within 15s");
+  throw new Error(
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+  );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
   const states: unknown[] = [];
@@ -4167,6 +4278,7 @@ async function connectClient(index: number) {
       : {}),
     onEvent: (event) => {
       lastSubscriberEventAt = performance.now();
+      lastSubscriberEventName = event.event;
       if (
         measuringWholeSoakAllocation &&
         (event.event === "session.message" || event.event === "sessions.changed")
@@ -4410,6 +4522,9 @@ try {
       ...(values["sqlite-reply-census"]
         ? ["--import", "./scripts/perf/sqlite-reply-census-preload.mjs"]
         : []),
+      ...(values["worker-creation-counts"]
+        ? ["--import", "./scripts/perf/worker-creation-preload.mjs"]
+        : []),
       "--import",
       "./scripts/lib/gateway-bench-profile-preload.ts",
       ...(values["transport-counts"]
@@ -4435,9 +4550,14 @@ try {
   gateway = launch(
     gatewayArgs,
     "gateway",
-    values["transport-counts"]
-      ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
-      : {},
+    {
+      ...(values["transport-counts"]
+        ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
+        : {}),
+      ...(values["worker-creation-counts"]
+        ? { OPENCLAW_BENCH_WORKER_CREATION_FILE: path.join(output, "worker-creations.jsonl") }
+        : {}),
+    },
     true,
   );
   await ready(port, "/readyz", gateway);
@@ -4487,7 +4607,13 @@ try {
         }
         const created = await rpc(client, "sessions.create", {
           key,
-          ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          ...(stressWorktree
+            ? {
+                cwd: values["stress-worktree-fanout"]
+                  ? worktreeToolRoots.get(keyIndex + 1)
+                  : stressWorktree,
+              }
+            : {}),
           ...(values["activity-summaries"] ||
           values["cron-operator-turn"] ||
           sessionEventAncestors === 0
@@ -5161,6 +5287,9 @@ try {
       startedHeapWorkers.push(worker);
     }
   }
+  const wholeSoakResourcesBefore = soakScenario
+    ? await readGatewayResources(gateway, { includeWorkers: true })
+    : undefined;
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
   const wholeChatDiagnosticsEnabled =
@@ -5372,6 +5501,7 @@ try {
       mixedRpcMethods.map((method) => [method, []]),
     );
     const listLatencies = rpcLatencies["sessions.list"]!;
+    const usageCacheStatuses: Record<string, number> = {};
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
@@ -5402,11 +5532,13 @@ try {
                   await Promise.race([delay(initialPhaseMs, undefined, { ref: false }), stopped]);
                 }
                 let poll = clientIndex;
+                let listPoll = round * clientCount + clientIndex;
                 while (true) {
                   if (!polling) {
                     break;
                   }
                   const started = performance.now();
+                  let requestStarted = started;
                   let responseId = "";
                   let diffSessionKey: string | undefined;
                   let githubOptionsSessionKey: string | undefined;
@@ -5444,6 +5576,31 @@ try {
                         onResponse,
                       ),
                     );
+                  } else if (method === "usage.cost" || method === "sessions.usage") {
+                    const usage = await rpc(
+                      client,
+                      method,
+                      {
+                        agentId: "main",
+                        range: "all",
+                        ...(method === "sessions.usage" ? { projection: "overview", limit } : {}),
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(usage) ||
+                      !isRecord(usage.totals) ||
+                      typeof usage.totals.totalTokens !== "number" ||
+                      typeof usage.totals.totalCost !== "number" ||
+                      !Array.isArray(method === "usage.cost" ? usage.daily : usage.sessions)
+                    ) {
+                      throw new Error(`${method} did not return a usage report`);
+                    }
+                    const cacheStatus = isRecord(usage.cacheStatus)
+                      ? String(usage.cacheStatus.status)
+                      : "unspecified";
+                    const statusKey = `${method}:${cacheStatus}`;
+                    usageCacheStatuses[statusKey] = (usageCacheStatuses[statusKey] ?? 0) + 1;
                   } else if (method === "connect") {
                     const peer = createGatewayWsClient(clientConnection);
                     trackClientFrames(peer);
@@ -5468,7 +5625,9 @@ try {
                       {
                         sessionKey: historyTurns
                           ? keys[clientIndex % keys.length]
-                          : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                          : coldHistoryKeys.length
+                            ? coldHistoryKeys[coldHistorySequence++ % coldHistoryKeys.length]
+                            : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
                         limit: 50,
                       },
                       onResponse,
@@ -5504,6 +5663,15 @@ try {
                       target.worktree,
                     );
                   } else {
+                    const listSequence = listPoll;
+                    listPoll += clientCount;
+                    if (values["list-filter-churn"] && listSequence % 10 === 0) {
+                      const params = {
+                        key: parentKey,
+                        label: `Synthetic list filter churn ${listChurnSequence++}`,
+                      };
+                      assertSessionPatch(params, await rpc(client, "sessions.patch", params));
+                    }
                     const search = values["worktree-tool-churn"]
                       ? Math.floor(poll / mixedRpcMethods.length) % 2 === 0
                         ? "Synthetic"
@@ -5513,11 +5681,9 @@ try {
                     const listFilter = search
                       ? { archived: "all", search }
                       : values["list-filter-churn"]
-                        ? listFilterShapes[
-                            (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
-                              listFilterShapes.length
-                          ]
+                        ? listFilterShapes[listSequence % listFilterShapes.length]
                         : undefined;
+                    requestStarted = performance.now();
                     const page = await rpc(
                       client,
                       method,
@@ -5550,7 +5716,7 @@ try {
                     }
                   }
                   const ended = performance.now();
-                  const requestDurationMs = ended - started;
+                  const requestDurationMs = ended - requestStarted;
                   rpcLatencies[method]!.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
@@ -5558,7 +5724,7 @@ try {
                       responseId,
                       client: clientIndex,
                       round,
-                      startedAtEpochMs: performance.timeOrigin + started,
+                      startedAtEpochMs: performance.timeOrigin + requestStarted,
                       endedAtEpochMs: performance.timeOrigin + ended,
                       durationMs: requestDurationMs,
                       ...(diffSessionKey ? { diffSessionKey } : {}),
@@ -5588,8 +5754,8 @@ try {
         if (!values["dashboard-rpc"]) {
           await drainEvents();
         }
-        if (values["dashboard-rpc"]) {
-          // Dashboards keep polling between bursts of agent work.
+        if (values["dashboard-rpc"] || pollBetweenRounds) {
+          // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,
             measurementStartedAt + durationMs,
@@ -5915,6 +6081,7 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...(values["usage-rpc"] ? { usageCacheStatuses } : {}),
       ...(reasoningScenario && { reasoningResponses, reasoningReplayRequests }),
       verifyHistoryReplay,
       ...(verifyHistoryReplay ? { historicalReplayRequests } : {}),
@@ -6113,6 +6280,9 @@ try {
     // Keep equal work counts without shortening the continuous GC/allocation window.
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
+  const wholeSoakResourcesAfter = soakScenario
+    ? await readGatewayResources(gateway, { includeWorkers: true })
+    : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
@@ -6384,7 +6554,9 @@ try {
     presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    pollBetweenRounds,
     mixedRpc: values["mixed-rpc"],
+    usageRpc: values["usage-rpc"],
     ...(values["dashboard-rpc"]
       ? {
           dashboardRpc: {
@@ -6457,7 +6629,14 @@ try {
           },
         }
       : {}),
+    stressShellWords,
+    stressWorktreeFanout: values["stress-worktree-fanout"],
+    stressWorktrees: values["stress-worktree-fanout"] ? [...worktreeToolRoots.values()] : [],
+    workerCreationCounts: values["worker-creation-counts"],
+    coldHistorySessions: coldHistoryKeys.length,
+    coldHistoryRequests: coldHistorySequence,
     stressSessionStore: values["stress-session-store"],
+    stressToolSearch: values["stress-tool-search"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
     cronOperatorTurn: values["cron-operator-turn"],
@@ -6620,6 +6799,18 @@ try {
           initialRetainedResources,
           initialMemoryCollected,
           memorySamples,
+          ...(wholeSoakResourcesBefore && wholeSoakResourcesAfter
+            ? {
+                wholeSoakResources: {
+                  before: wholeSoakResourcesBefore,
+                  after: wholeSoakResourcesAfter,
+                  cpuUsage: measureGatewayCpuUsage(
+                    wholeSoakResourcesBefore,
+                    wholeSoakResourcesAfter,
+                  ),
+                },
+              }
+            : {}),
           retainedProfile,
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,

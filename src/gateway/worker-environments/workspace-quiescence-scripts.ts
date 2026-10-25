@@ -5,8 +5,7 @@ import {
   WORKSPACE_QUIESCENCE_PROCESS_IDENTITY_JS as REMOTE_QUIESCENCE_PROCESS_IDENTITY_JS,
 } from "./workspace-quiescence-process-probe.ts";
 
-const REMOTE_QUIESCENCE_CONTEXT_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
+const QUIESCENCE_CONTEXT_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -14,6 +13,8 @@ const root = fs.realpathSync(process.argv[1]);
 const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
 const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
 const windowsLeaseDatabasePath = path.join(leaseDirectory, "windows-shared-host.sqlite");`;
+const REMOTE_QUIESCENCE_CONTEXT_JS = String.raw`const childProcess = require("node:child_process");
+${QUIESCENCE_CONTEXT_JS}`;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`${REMOTE_QUIESCENCE_PROBE_JS}
 let processProbe = createProcessProbe();
@@ -439,14 +440,20 @@ watchdogMain(process.argv[1], process.argv[2]);
 // unsignalable, e.g. macOS SIP-protected same-uid processes on shared static-ssh dev hosts)
 // must not crash cleanup/resume paths, but a freeze target that returns EPERM stays counted
 // as live so quiescence fails closed instead of reporting a still-running process as frozen.
-const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`(() => {
-${REMOTE_QUIESCENCE_CONTEXT_JS}
+function createWorkspaceQuiesceScript(local: boolean) {
+  return String.raw`(() => {
+${local ? QUIESCENCE_CONTEXT_JS : REMOTE_QUIESCENCE_CONTEXT_JS}
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 fs.mkdirSync(leaseDirectory, { recursive: true, ...(process.platform === "win32" ? {} : { mode: 0o700 }) });
 if (process.platform !== "win32") fs.chmodSync(leaseDirectory, 0o700);
-const watchdogLifetime = process.argv[4] || "detached";
+${
+  local
+    ? String.raw`if (process.argv[4] !== "owned") throw new Error("local quiescence requires an owned watchdog");
+const ownedWatchdog = true;`
+    : String.raw`const watchdogLifetime = process.argv[4] || "detached";
 if (watchdogLifetime !== "detached" && watchdogLifetime !== "owned") throw new Error("invalid watchdog lifetime");
-const ownedWatchdog = watchdogLifetime === "owned";
+const ownedWatchdog = watchdogLifetime === "owned";`
+}
 let nonce = ownedWatchdog ? process.argv[5] : crypto.randomBytes(16).toString("hex");
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 let watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
@@ -522,12 +529,16 @@ if (!sharedHost && sawUnverifiedEmptyLeaseWatchdog) {
   throw new Error("could not verify prior workspace quiescence watchdog retirement; retry when ps is available");
 }
 writeLease();
-const watchdog = ownedWatchdog ? { pid: process.pid } : childProcess.spawn(
+${
+  local
+    ? "const watchdog = { pid: process.pid };"
+    : String.raw`const watchdog = ownedWatchdog ? { pid: process.pid } : childProcess.spawn(
   process.execPath,
   ["-e", ${JSON.stringify(REMOTE_QUIESCENCE_WATCHDOG_JS)}, leasePath, nonce],
   { detached: true, stdio: "ignore" },
 );
-if (!ownedWatchdog) watchdog.unref();
+if (!ownedWatchdog) watchdog.unref();`
+}
 if (!Number.isSafeInteger(watchdog.pid) || watchdog.pid < 1) {
   fs.unlinkSync(leasePath);
   throw new Error("workspace quiescence watchdog did not start");
@@ -638,6 +649,7 @@ if (ownedWatchdog) {
 }
 })();
 `;
+}
 
 const REMOTE_WINDOWS_WORKSPACE_QUIESCE_JS = String.raw`(() => {
 ${REMOTE_QUIESCENCE_CONTEXT_JS}
@@ -669,10 +681,15 @@ process.stdout.write(resumeWorkspaceLease(process.argv[3] === "owned"));
 `;
 
 export const workspaceQuiescenceScripts = {
-  acquire: REMOTE_WORKSPACE_QUIESCE_JS,
+  acquire: createWorkspaceQuiesceScript(false),
   renew: REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   release: REMOTE_WORKSPACE_RESUME_JS,
 } as const;
+
+export const localWorkspaceQuiescenceScripts = {
+  ...workspaceQuiescenceScripts,
+  acquire: createWorkspaceQuiesceScript(true),
+};
 
 export function workspaceQuiescenceArguments(
   root: string,

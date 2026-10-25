@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { loadChatHistory } from "../pages/chat/chat-history.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
@@ -305,12 +306,12 @@ it.each([
       }
       return sessionsResult(query.search === child.key ? [fresh] : [parent], 10);
     });
-    const { sidebar, provider, sessions, context, data } = await mountRoster(request, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "worker" }],
-    });
+    const { sidebar, provider, sessions, context, data } = await mountRoster(
+      request,
+      makeBootRoster({
+        agents: [{ id: "main" }, { id: "worker" }],
+      }),
+    );
     const query = buildSessionsListQuery(
       context.agentSelection.state.scopeId,
       { includeGlobal: true, includeUnknown: true, statusFilter: "active" },

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -53,12 +54,9 @@ function createContext(
     policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
   const agents = base.agents;
-  agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+  agents.state.agentsList = makeBootRoster({
     agents: ["main", "other"].map((id) => ({ id })),
-  };
+  });
   const selection = base.settingsAgentSelection;
   selection.set("main");
   return {

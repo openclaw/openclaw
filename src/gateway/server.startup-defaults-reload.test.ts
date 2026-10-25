@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 
 it("preserves computed defaults from cold startup through a live config reload", async () => {
   const token = "provider-defaults-startup-token";
@@ -52,13 +53,17 @@ it("preserves computed defaults from cold startup through a live config reload",
         },
       },
     });
-    server = await startGatewayServerCore(await getFreePort(), {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
+    const kernel = await captureGatewayKernel(async () => {
+      server = await startGatewayServerCore(await getFreePort(), {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
     });
-    await server.startupSettled;
+    await server!.startupSettled;
     const initialConfig = getRuntimeConfig();
+    expect(initialConfig).not.toBe(kernel.cfgAtStart);
+    expect(kernel.gatewayRequestContext.getCommittedRuntimeConfig?.()).toBe(initialConfig);
     expect(initialConfig.plugins?.entries?.anthropic?.enabled).toBe(true);
     expect(resolveEffectiveCompactionMode(initialConfig)).toBe("safeguard");
     expect(initialConfig.models?.providers?.anthropic?.models).toEqual([]);
