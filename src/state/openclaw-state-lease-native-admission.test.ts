@@ -14,6 +14,7 @@ const options = {
 };
 const fixture = vi.hoisted(() => ({
   expiresAt: 10_000,
+  renewalFailure: undefined as Error | undefined,
   forbiddenSqlite: vi.fn(() => {
     throw new Error("Native admission boundary controls must not open SQLite");
   }),
@@ -39,6 +40,9 @@ vi.mock("./openclaw-state-lease-storage.js", () => ({
   },
   renewOpenClawStateLease: () => {
     fixture.expiresAt = Date.now() + 1_000;
+    if (fixture.renewalFailure) {
+      throw fixture.renewalFailure;
+    }
     return fixture.expiresAt;
   },
   releaseOpenClawStateLeaseBestEffort: async () => {},
@@ -52,6 +56,7 @@ vi.mock("./openclaw-state-lease-heartbeat.js", () => ({
 
 beforeEach(() => {
   fixture.expiresAt = 10_000;
+  fixture.renewalFailure = undefined;
   vi.useFakeTimers();
   vi.setSystemTime(9_000);
 });
@@ -71,22 +76,33 @@ it("keeps a lease with a worker expiry 30 days ahead alive", async () => {
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it.each(["live", "expired", "renewed"] as const)(
-  "gates effects on a %s native lease",
-  async (state) => {
+it.each(
+  (["live", "expired", "renewed"] as const).flatMap((state) =>
+    (["current", "admission"] as const).map((boundary) => ({ state, boundary })),
+  ),
+)(
+  "gates effects on a $state native lease at the $boundary boundary",
+  async ({ state, boundary }) => {
     const effect = vi.fn();
-    const operation = withLease(options, async (lease) =>
-      withAdmission(lease, "/synthetic-state/lease.sqlite", async (admission) => {
+    const operation = withLease({ ...options, processBound: true }, async (lease) => {
+      const run = (assertCurrent: () => void) => {
         if (state === "renewed") {
           vi.setSystemTime(9_500);
           lease.renew?.();
         }
         // Change only the clock; the queued expiry callback has not run.
         vi.setSystemTime(state === "live" ? 9_999 : 10_000);
-        admission.assertCurrent();
+        assertCurrent();
         effect();
-      }),
-    );
+      };
+      if (boundary === "current") {
+        run(lease.assertCurrent);
+      } else {
+        await withAdmission(lease, "/synthetic-state/lease.sqlite", async (admission) =>
+          run(() => admission.assertCurrent()),
+        );
+      }
+    });
     if (state === "expired") {
       await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
     } else {
@@ -95,3 +111,21 @@ it.each(["live", "expired", "renewed"] as const)(
     expect(effect).toHaveBeenCalledTimes(state === "expired" ? 0 : 1);
   },
 );
+
+it("keeps the confirmed expiry when renewal has an unknown outcome", async () => {
+  const failure = new Error("Synthetic renewal connection lost");
+  const effect = vi.fn();
+  await expect(
+    withLease({ ...options, processBound: true }, async (lease) => {
+      vi.setSystemTime(9_500);
+      fixture.renewalFailure = failure;
+      expect(() => lease.renew?.()).toThrow(failure);
+      lease.assertCurrent();
+      // The durable write may have succeeded, but its reply did not confirm the new expiry.
+      vi.setSystemTime(10_000);
+      lease.assertCurrent();
+      effect();
+    }),
+  ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+  expect(effect).not.toHaveBeenCalled();
+});

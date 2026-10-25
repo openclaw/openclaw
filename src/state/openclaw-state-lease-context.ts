@@ -6,6 +6,8 @@ import type {
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
+  /** Check this operation's current owner; maintenance retains durable verification. */
+  assertCurrent(): void;
   /** Renew before a blocking phase, carrying this caller's authority into timer renewal.
    * Renew again after a temporary authority scope ends to restore the caller's context. */
   renew?(): void;

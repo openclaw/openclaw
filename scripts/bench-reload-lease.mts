@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -50,6 +50,49 @@ function readFileIfPresent(file: string) {
 function setPhase(phase: string) {
   writeFileSync(path.join(output, "phase"), phase);
 }
+function readLeaseSettlement(phases: Set<string>) {
+  let releases = 0;
+  let pendingAcquisition = false;
+  for (const file of readdirSync(output)) {
+    if (!file.startsWith("sql-") || !file.endsWith(".jsonl")) {
+      continue;
+    }
+    const data = readFileSync(path.join(output, file), "utf8");
+    const sites = new Map<number, "acquire" | "release">();
+    let pending = false;
+    // The observer may still be appending its last record.
+    for (const line of data.slice(0, data.lastIndexOf("\n") + 1).split("\n")) {
+      if (!line) {
+        continue;
+      }
+      const row = JSON.parse(line);
+      if (Array.isArray(row)) {
+        if (phases.has(row[0])) {
+          const operation = sites.get(row[1]);
+          if (operation === "release") {
+            releases++;
+            pending = false;
+          } else if (operation === "acquire") {
+            pending = true;
+          }
+        }
+      } else if (row.type === "site" && row.ok && row.method !== "prepare") {
+        const sql = row.sql.replaceAll('"', "").replace(/\s+/g, " ").trim();
+        if (
+          /^delete from state_leases where scope = \? and lease_key = \? and owner = \?;?$/i.test(
+            sql,
+          )
+        ) {
+          sites.set(row.id, "release");
+        } else if (/^insert into state_leases /i.test(sql)) {
+          sites.set(row.id, "acquire");
+        }
+      }
+    }
+    pendingAcquisition ||= pending;
+  }
+  return { releases, pendingAcquisition };
+}
 const token = `synthetic-${randomUUID()}`;
 const config: OpenClawConfig = {
   ...structuredClone(BASE_GATEWAY_BENCH_CONFIG),
@@ -90,7 +133,14 @@ const gateway = spawn(
 gateway.stdout.pipe(log);
 gateway.stderr.pipe(log);
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
-const result = { ok: false, writes: 0, observations: 0, samples, applied: 0 };
+const result = {
+  ok: false,
+  writes: 0,
+  observations: 0,
+  samples,
+  applied: 0,
+  leaseReleases: [] as number[],
+};
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -139,15 +189,15 @@ try {
   setPhase("settle");
   await delay(Number(values["settle-seconds"]) * 1_000);
   for (let sample = 0; sample < samples + 2; sample++) {
-    setPhase(
+    const actionPhase =
       sample < samples
         ? sample === 0
           ? "first-reload"
           : `warm-reload-${sample}`
         : sample === samples
           ? "plugin-enable"
-          : "plugin-disable",
-    );
+          : "plugin-disable";
+    setPhase(actionPhase);
     const observed = await client.request("config.get", {}, 120_000);
     assert.ok(observed.ok, "Config observation failed");
     result.observations++;
@@ -192,8 +242,24 @@ try {
       assert.ok(Date.now() < deadline, "Reload did not publish its applied revision");
       await delay(100);
     }
-    setPhase(`reload-settle-${sample}`);
-    await delay(1_000);
+    const settlePhase = `reload-settle-${sample}`;
+    setPhase(settlePhase);
+    const phases = new Set([actionPhase, settlePhase]);
+    // Applied config precedes cleanup. Cold startup can contribute an extra release;
+    // it must not hide a later acquisition for the write reload or accepted-runtime echo.
+    for (;;) {
+      assert.ok(Date.now() < deadline, "Reload scopes did not release their leases");
+      const settlement = readLeaseSettlement(phases);
+      if (settlement.releases >= 2 && !settlement.pendingAcquisition) {
+        await delay(1_000);
+        const settled = readLeaseSettlement(phases);
+        if (!settled.pendingAcquisition) {
+          result.leaseReleases.push(settled.releases);
+          break;
+        }
+      }
+      await delay(100);
+    }
   }
   setPhase("idle");
   await delay(Number(values["idle-seconds"]) * 1_000);

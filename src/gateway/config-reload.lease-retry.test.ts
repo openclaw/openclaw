@@ -74,7 +74,7 @@ async function admittedWrite(hash: string) {
   return { ...harness, application, settled };
 }
 
-it("bounds lease reads across config observation and application", async () => {
+it("keeps config observation and application free of main-thread lease reads", async () => {
   const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
   const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
@@ -104,7 +104,7 @@ it("bounds lease reads across config observation and application", async () => {
   harness.watcher.emit("change");
   await flushReload(harness.reloader);
 
-  expect(checkpoints).toEqual([0, 1]);
+  expect(checkpoints).toEqual([0, 0]);
   expect(harness.onHotReload).toHaveBeenCalledOnce();
   expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
   reads.restore();
