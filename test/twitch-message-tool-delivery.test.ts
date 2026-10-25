@@ -144,11 +144,9 @@ describe("Twitch message-tool delivery", () => {
         expect.soft(isDeliveredMessagingToolResult({ args, result })).toBe(sent);
         const actionResult = await runAction.mock.results[0]?.value;
         expect.soft(actionResult).toMatchObject({ handledBy: "core", to: target });
-        const output = formatMessageCliText(actionResult).join("\n");
-        const expectedOutput = sent
-          ? "fixture-sent-1"
-          : "send suppressed: adapter_returned_no_send";
-        expect.soft(output).toContain(expectedOutput);
+        expect
+          .soft(formatMessageCliText(actionResult).join("\n"))
+          .toContain(sent ? "fixture-sent-1" : "send suppressed: adapter_returned_no_send");
         const completed = audits.filter((e) => e.outcome === "sent" || e.outcome === "suppressed");
         const expectedAudit = sent
           ? { outcome: "sent", resultCount: 1 }
