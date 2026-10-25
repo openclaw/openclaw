@@ -70,6 +70,8 @@ function commandArgvAt(index: number): string[] {
   const call = expectDefined(runCommandWithTimeoutMock.mock.calls[index], `command #${index + 1}`);
   return call[0] as string[];
 }
+const cloneDestination = () =>
+  path.resolve(expectDefined(commandArgvAt(0).at(-1), "clone destination"));
 
 function firstInstallOptions() {
   return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
@@ -84,11 +86,15 @@ function expectSuccess(result: GitResult): asserts result is Extract<GitResult, 
     throw new Error(result.error);
   }
 }
-function expectFailure(result: GitResult, message: string) {
+function expectFailure(
+  result: GitResult,
+  message: string,
+): asserts result is Extract<GitResult, { ok: false }> {
   expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.error).toContain(message);
+  if (result.ok) {
+    throw new Error("Expected failed git install");
   }
+  expect(result.error).toContain(message);
 }
 
 function mockGitCommands(...outputs: Array<string | { code: number; stderr: string }>) {
@@ -146,21 +152,16 @@ async function installWithSecurityEvents(options: Parameters<typeof installPlugi
 }
 
 describe("parseGitPluginSpec", () => {
-  it("normalizes GitHub shorthand and ref selectors", () => {
-    expect(expectParsedGitSpec("git:github.com/acme/demo@v1.2.3")).toMatchObject({
+  it.each([
+    ["git:github.com/acme/demo@v1.2.3", "v1.2.3"],
+    ["git:acme/demo@feature/foo", "feature/foo"],
+    ["git:acme/demo#main", "main"],
+  ])("normalizes GitHub shorthand and ref selectors: %s", (spec, ref) => {
+    expect(expectParsedGitSpec(spec)).toMatchObject({
       url: "https://github.com/acme/demo.git",
-      ref: "v1.2.3",
+      ref,
       label: "acme/demo",
-      normalizedSpec: "git:https://github.com/acme/demo.git@v1.2.3",
-    });
-    expect(expectParsedGitSpec("git:acme/demo@feature/foo")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "feature/foo",
-      label: "acme/demo",
-    });
-    expect(expectParsedGitSpec("git:acme/demo#main")).toMatchObject({
-      url: "https://github.com/acme/demo.git",
-      ref: "main",
+      normalizedSpec: `git:https://github.com/acme/demo.git@${ref}`,
     });
   });
 
@@ -366,11 +367,7 @@ describe("installPluginFromGitSpec", () => {
       const result = await install({ spec, gitDir });
       expectSuccess(result);
 
-      const cloneArgv = commandArgvAt(0);
-      const cloneDest = expectDefined(
-        cloneArgv[cloneArgv.length - 1],
-        "cloneArgv[cloneArgv.length - 1] test invariant",
-      );
+      const cloneDest = cloneDestination();
       const normalizedSpec = spec === demoSpec ? normalizedDemoSpec : spec;
       const persistentRepoDir = expectedGitRepoDir(gitDir, normalizedSpec);
       const cloneParent = await fs.realpath(path.dirname(path.resolve(cloneDest)));
@@ -436,13 +433,7 @@ describe("installPluginFromGitSpec", () => {
     const result = await install({ gitDir, dryRun: true });
 
     expect(result.ok).toBe(true);
-    const cloneArgv = commandArgvAt(0);
-    const cloneDest = path.resolve(
-      expectDefined(
-        cloneArgv[cloneArgv.length - 1],
-        "cloneArgv[cloneArgv.length - 1] test invariant",
-      ),
-    );
+    const cloneDest = cloneDestination();
     expect(path.relative(gitDir, cloneDest).split(path.sep)[0]).toBe("..");
     await expect(fs.access(gitDir)).rejects.toThrow();
   });
@@ -457,16 +448,10 @@ describe("installPluginFromGitSpec", () => {
 
     const result = await install({ spec: "git:https://token:secret@github.com/acme/demo.git" });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("failed to clone github.com/acme/demo");
-      expect(result.error).toContain("https://***:***@github.com/acme/demo.git");
-      expect(result.error).toContain("https://***:***@github.com/acme/fallback.git");
-      expect(result.error).not.toContain("token");
-      expect(result.error).not.toContain("secret");
-      expect(result.error).not.toContain("other");
-      expect(result.error).not.toContain("credential");
-    }
+    expectFailure(result, "failed to clone github.com/acme/demo");
+    expect(result.error).toContain("https://***:***@github.com/acme/demo.git");
+    expect(result.error).toContain("https://***:***@github.com/acme/fallback.git");
+    expect(result.error).not.toMatch(/token|secret|other|credential/);
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
 

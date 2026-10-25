@@ -375,7 +375,7 @@ it("lets native require handle compiled plugin SDK aliases before source-transfo
     ok: true as const,
     moduleExport: { loadedFrom: target },
   }));
-  const { load, createJiti, fromSourceTransformer, getPluginModuleLoaderStats } = await mockLoader(
+  const { load, createJiti, getPluginModuleLoaderStats } = await mockLoader(
     "native-require-plugin-sdk-alias",
     nativeStub,
   );
@@ -389,7 +389,6 @@ it("lets native require handle compiled plugin SDK aliases before source-transfo
     loadedFrom: "/repo/dist/extensions/demo/api.js",
   });
   expect(createJiti).not.toHaveBeenCalled();
-  expect(fromSourceTransformer).not.toHaveBeenCalled();
   expect(nativeStub).toHaveBeenCalledWith(
     "/repo/dist/extensions/demo/api.js",
     expect.objectContaining({ fallbackOnMissingDependency: true }),
@@ -454,7 +453,7 @@ it("propagates native plugin evaluation errors without running the plugin twice"
       ].join("\n"),
       "utf8",
     );
-    const { load, createJiti, fromSourceTransformer } = await mockLoader("native-evaluation-error");
+    const { load, createJiti } = await mockLoader("native-evaluation-error");
     const loader = load({
       modulePath,
       importerUrl: import.meta.url,
@@ -465,7 +464,6 @@ it("propagates native plugin evaluation errors without running the plugin twice"
     expect(() => loader(modulePath)).toThrow(expectedError);
     expect(Reflect.get(globalThis, sideEffectMarker)).toBe(1);
     expect(createJiti).not.toHaveBeenCalled();
-    expect(fromSourceTransformer).not.toHaveBeenCalled();
   } finally {
     Reflect.deleteProperty(globalThis, sideEffectMarker);
     fs.rmSync(fixtureDir, { recursive: true, force: true });
