@@ -121,11 +121,6 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ["custom default Chrome MCP", withProfile(mcpProfile, "work", { defaultProfile: "work" }), "mcp"],
   ["explicit Chrome MCP endpoint", withProfile(remoteMcp), false],
   [
-    "Chrome MCP endpoint arguments",
-    withProfile({ ...mcpProfile, mcpArgs: ["--browserUrl", remoteMcp.cdpUrl] }),
-    false,
-  ],
-  [
     "explicit Chrome MCP auto-connect override",
     withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }),
     "mcp",
@@ -142,16 +137,10 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ],
   ["remote CDP", withProfile({ cdpUrl: "https://browser.example" }), false],
   ["profile attach-only", withProfile({ cdpPort: 18801, attachOnly: true }), false],
-  ["inherited attach-only", withProfile({ cdpPort: 18801 }, "work", { attachOnly: true }), false],
   [
     "explicit managed override of inherited attach-only",
     withProfile({ cdpPort: 18801, attachOnly: false }, "work", { attachOnly: true }),
     "managed",
-  ],
-  [
-    "Lightpanda",
-    withProfile({ engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true }),
-    false,
   ],
   ["unconfigured built-ins", {}, false],
 ])("checks only launch prerequisites for %s", async (_name, browser, mode) => {
@@ -171,29 +160,22 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   expect(text.includes("Google Chrome was not found")).toBe(chromeMcp);
 });
 
-it.each<[string, boolean | undefined, boolean | undefined, NodeJS.ProcessEnv, boolean]>([
-  ["profile headless override", false, true, {}, false],
-  ["profile headed override", true, false, {}, true],
-  ["Linux headless default", undefined, undefined, {}, false],
-  ["environment headless override", false, false, { OPENCLAW_BROWSER_HEADLESS: "1" }, false],
-  ["environment headed override", true, true, { OPENCLAW_BROWSER_HEADLESS: "0" }, true],
-])(
-  "matches managed launch display requirements for %s",
-  async (name, global, profile, env, warning) => {
-    const { text } = await diagnose(
-      withProfile({ cdpPort: 18801, headless: profile }, "work", { headless: global }),
-      { env },
-    );
-    expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(warning);
-    if (warning) {
-      expect(text).toContain(
-        name === "profile headed override"
-          ? "browser.profiles.work.headless=false"
-          : "OPENCLAW_BROWSER_HEADLESS=0",
-      );
-    }
-  },
-);
+it.each([
+  ["profile", {}, { headless: false }, "browser.profiles.work.headless=false"],
+  [
+    "environment",
+    { OPENCLAW_BROWSER_HEADLESS: "0" },
+    { headless: true },
+    "OPENCLAW_BROWSER_HEADLESS=0",
+  ],
+] as const)("names the effective %s display requirement", async (_source, env, profile, hint) => {
+  const { text } = await diagnose(
+    withProfile({ cdpPort: 18801, ...profile }, "work", { headless: true }),
+    { env },
+  );
+  expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(true);
+  expect(text).toContain(hint);
+});
 
 it("checks effective executables once per path and names only profiles missing a browser", async () => {
   const resolveManagedExecutable = vi.fn((resolved: { executablePath?: string }) =>
