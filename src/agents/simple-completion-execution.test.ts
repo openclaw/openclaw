@@ -188,11 +188,7 @@ it.each<{
   { name: "insecure endpoint", patch: { baseUrl: "http://opencode.ai/zen/go/v1" } },
 ])("preserves routing options for $name", async ({ patch, options, expectedHeaders }) => {
   const original = structuredClone(options);
-  const model: Model = {
-    ...baseModel,
-    ...opencode,
-    ...patch,
-  };
+  const model: Model = { ...baseModel, ...opencode, ...patch };
   const originalModelHeaders = structuredClone(model.headers);
   for (let index = 0; index < 2; index++) {
     await complete({ model, options });
