@@ -87,6 +87,20 @@ function deliveryFixture(overrides: Partial<HandlerOptions> = {}) {
   return { sent, directBlockDeliveries, handler, final };
 }
 
+function pipelineFixture(
+  options: Pick<Parameters<typeof createBlockReplyPipeline>[0], "coalescing" | "timeoutMs">,
+  overrides: Partial<HandlerOptions> = {},
+) {
+  const sent: ReplyPayload[] = [];
+  const pipeline = createBlockReplyPipeline({
+    onBlockReply: async (payload) => {
+      sent.push(payload);
+    },
+    ...options,
+  });
+  return { handler: createHandler({ ...overrides, blockReplyPipeline: pipeline }), sent, pipeline };
+}
+
 describe("createBlockReplyDeliveryHandler", () => {
   it.each([false, true])(
     "delivers independent replies without buffering or completing the turn (streaming=%s)",
@@ -201,11 +215,8 @@ describe("createBlockReplyDeliveryHandler", () => {
       "commentaryPayloadsEnabled",
     ],
   ] as const)("gates %s before delivery bookkeeping", async (_label, payload, enabledFlag) => {
-    const onBlockReply = vi.fn(async () => {});
     const enqueue = vi.fn();
     const baseParams = {
-      onBlockReply,
-      blockStreamingEnabled: true,
       blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
     };
 
@@ -331,18 +342,15 @@ describe("createBlockReplyDeliveryHandler", () => {
         enqueue: vi.fn(),
       } as unknown as BlockReplyPipelineLike;
       const absPath = path.join("/tmp/home", "openclaw", "survived.png");
-      const warning =
-        "⚠️ Media failed. Try sending a smaller supported file or a different format.";
+      const warning = "Media failed.";
 
       const handler = createHandler({
-        onBlockReply: vi.fn(async () => {}),
         normalizeMediaPaths: async (payload) => ({
           ...payload,
           text: warning,
           mediaUrl: absPath,
           mediaUrls: [absPath],
         }),
-        blockStreamingEnabled: true,
         blockReplyPipeline,
       });
 
@@ -365,25 +373,18 @@ describe("createBlockReplyDeliveryHandler", () => {
   it.each([false, true])(
     "uses payload identity after source text changes (coalescing=%s)",
     async (coalescing) => {
-      const sent: ReplyPayload[] = [];
-      const pipeline = createBlockReplyPipeline({
-        onBlockReply: async (payload) => {
-          sent.push(payload);
+      const { handler, pipeline, sent } = pipelineFixture(
+        {
+          timeoutMs: 5000,
+          coalescing: coalescing ? { ...defaultCoalescing, joiner: "" } : undefined,
         },
-        timeoutMs: 5000,
-        ...(coalescing
-          ? { coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: "" } }
-          : {}),
-      });
-      const handler = createHandler({
-        onBlockReply: vi.fn(async () => {}),
-        normalizeStreamingText: (payload) => ({
-          text: payload.text?.replace(/^HEARTBEAT_OK /, ""),
-          skip: false,
-        }),
-        blockStreamingEnabled: true,
-        blockReplyPipeline: pipeline,
-      });
+        {
+          normalizeStreamingText: (payload) => ({
+            text: payload.text?.replace(/^HEARTBEAT_OK /, ""),
+            skip: false,
+          }),
+        },
+      );
       const sourcePayload = (text: string) =>
         setReplyPayloadMetadata(
           { text },
@@ -483,18 +484,9 @@ it.each([true, false])(
 
 it("keeps completed CLI segments distinct through coalescing and final dedupe", async () => {
   const { prepareCliReplyPayload } = await import("./cli-reply-payload.js");
-  const sent: ReplyPayload[] = [];
-  const pipeline = createBlockReplyPipeline({
-    onBlockReply: async (payload) => {
-      sent.push(payload);
-    },
+  const { handler, pipeline, sent } = pipelineFixture({
     timeoutMs: 0,
     coalescing: defaultCoalescing,
-  });
-  const handler = createHandler({
-    onBlockReply: async () => {},
-    blockStreamingEnabled: true,
-    blockReplyPipeline: pipeline,
   });
   try {
     await handler({ text: "Checking." });

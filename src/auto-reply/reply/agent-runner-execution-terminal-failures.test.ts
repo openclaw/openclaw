@@ -72,39 +72,34 @@ async function finalPayload(params: Parameters<typeof runTurn>[0] = {}) {
   return result.payload;
 }
 
+function mockFallbackResult(result: unknown, provider = "openai", model = "test-model") {
+  state.runWithModelFallbackMock.mockResolvedValueOnce({ result, provider, model, attempts: [] });
+}
+
+function onlyTerminal(runId: string) {
+  const terminals = terminalEvents(runId);
+  expect(terminals).toHaveLength(1);
+  return terminals[0]!;
+}
+
 it.each([
-  { message: MISSING_REPLY_NOTICE_TEXT, expected: MISSING_REPLY_NOTICE_TEXT },
-  {
-    message: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
-    expected: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
-  },
-  { message: "private provider detail", expected: "Agent run failed" },
-])(
-  "egresses only host missing-reply copy from an incomplete turn",
-  async ({ message, expected }) => {
-    state.runWithModelFallbackMock.mockResolvedValueOnce({
-      result: {
-        payloads: [],
-        meta: {
-          error: { kind: "incomplete_turn", message, fallbackSafe: false },
-          terminalReply: { disposition: "empty" },
-          terminalReplyExpectation: "result-required",
-        },
-      },
-      provider: "openai",
-      model: "test-model",
-      attempts: [],
-    });
+  [MISSING_REPLY_NOTICE_TEXT, MISSING_REPLY_NOTICE_TEXT],
+  [MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT, MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT],
+  ["private provider detail", "Agent run failed"],
+])("egresses only host missing-reply copy from an incomplete turn", async (message, expected) => {
+  mockFallbackResult({
+    payloads: [],
+    meta: {
+      error: { kind: "incomplete_turn", message, fallbackSafe: false },
+      terminalReply: { disposition: "empty" },
+      terminalReplyExpectation: "result-required",
+    },
+  });
 
-    const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
+  const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
 
-    expect(terminalEvents(result.runId)).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({ phase: "error", error: expected }),
-      }),
-    ]);
-  },
-);
+  expect(onlyTerminal(result.runId).data).toMatchObject({ phase: "error", error: expected });
+});
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -121,18 +116,17 @@ it("preserves disabled retry exhaustion through returned provider payloads", asy
     rawError,
     rateLimitRetriesExhausted: 0,
   });
-  state.runWithModelFallbackMock.mockResolvedValueOnce({
-    result: {
+  mockFallbackResult(
+    {
       payloads,
       meta: {
         replayInvalid: true,
         error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
       },
     },
-    provider: "external",
-    model: "primary",
-    attempts: [],
-  });
+    "external",
+    "primary",
+  );
   const result = await runTurn(createRunAgentTurnParams(createFollowupRun()));
   const text = JSON.stringify(result);
   expect(text).toContain("recovery is disabled");
@@ -186,12 +180,11 @@ it("keeps the provider reset hint when the chain summary exceeds the length guar
     `claude-cli/claude-sonnet-5: ${hint} (unknown) | ` +
     "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
   expect(message.length).toBeGreaterThan(300);
-  state.runWithModelFallbackMock.mockResolvedValueOnce({
-    result: { payloads: [], meta: { error: new Error(message) } },
-    provider: "anthropic",
-    model: "claude-opus-5",
-    attempts: [],
-  });
+  mockFallbackResult(
+    { payloads: [], meta: { error: new Error(message) } },
+    "anthropic",
+    "claude-opus-5",
+  );
 
   const result = await runTurn(createRunAgentTurnParams(createFollowupRun()));
 
@@ -254,9 +247,8 @@ it("retains automatic recovery when restart admission refuses an active turn", a
     const result = await runRawTurn({ replyOperation });
     expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
     expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    const terminals = terminalEvents(result.runId);
-    expect(terminals).toHaveLength(1);
-    expect(terminals[0]?.data).toMatchObject({
+    const terminal = onlyTerminal(result.runId);
+    expect(terminal.data).toMatchObject({
       phase: "end",
       aborted: true,
       stopReason: "restart",
@@ -264,7 +256,7 @@ it("retains automatic recovery when restart admission refuses an active turn", a
     expect(
       deriveGatewaySessionLifecycleProjectionPatch({
         entry: { updatedAt: 1, startedAt: 1 },
-        event: { ...terminals[0]!, ts: 2 },
+        event: { ...terminal, ts: 2 },
       }),
     ).toMatchObject({ status: "interrupted", abortedLastRun: true });
   } finally {
@@ -310,9 +302,7 @@ it.each([
       expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
     }
     expect(continueStalledTurn).toHaveBeenCalledExactlyOnceWith(expect.any(String), replyOperation);
-    const terminals = terminalEvents(result.runId);
-    expect(terminals).toHaveLength(1);
-    expect(terminals[0]?.data).toMatchObject(
+    expect(onlyTerminal(result.runId).data).toMatchObject(
       continuing
         ? { phase: "end", yielded: true, terminalReply: { disposition: "empty" } }
         : { phase: "error" },
@@ -323,35 +313,22 @@ it.each([
 });
 
 it.each([
-  { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
-  {
-    reason: "restart",
-    code: "aborted_for_restart",
-    phase: "end",
-    stopReason: "restart",
-    backendOwned: true,
-    restartError: true,
-  },
-  {
-    reason: "superseded",
-    code: "aborted_for_supersession",
-    phase: "error",
-    stopReason: "superseded",
-  },
+  ["restart", "aborted_for_restart", "end", false],
+  ["restart", "aborted_for_restart", "end", true],
+  ["superseded", "aborted_for_supersession", "error", false],
 ] as const)(
-  "records one $stopReason abort terminal event without returning a reply ($restartError)",
-  async (testCase) => {
-    const { reason, code, phase, stopReason } = testCase;
+  "records one %s abort terminal event without returning a reply (%s, %s, backend-owned=%s)",
+  async (reason, code, phase, backendOwned) => {
     const upstreamAbort = new AbortController();
     const replyOperation = runningOperation("abort-terminal", "session", upstreamAbort.signal);
     const failMock = vi.spyOn(replyOperation, "fail");
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       if (reason === "superseded") {
         replyOperation.supersede();
-      } else if (!("backendOwned" in testCase)) {
+      } else if (!backendOwned) {
         upstreamAbort.abort(createAgentRunRestartAbortError());
       }
-      if ("restartError" in testCase) {
+      if (backendOwned) {
         throw createAgentRunRestartAbortError();
       }
       throw Object.assign(new Error("aborted"), { name: "AbortError" });
@@ -368,9 +345,11 @@ it.each([
       expect(replyOperation.result).toEqual({ kind: "aborted", code });
       expect(failMock).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      const terminals = terminalEvents(result.runId);
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.data).toMatchObject({ phase, aborted: true, stopReason });
+      expect(onlyTerminal(result.runId).data).toMatchObject({
+        phase,
+        aborted: true,
+        stopReason: reason,
+      });
     } finally {
       replyOperation.complete();
       failMock.mockRestore();

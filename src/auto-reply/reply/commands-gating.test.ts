@@ -1,4 +1,3 @@
-// Tests command gating rules for ownership, channel, and active session state.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
@@ -6,9 +5,8 @@ import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import type { ConfigSnapshotMock } from "./commands.test-harness.js";
+import { buildCommandTestParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => ({ valid: true, parsed: {} })),
@@ -148,36 +146,20 @@ vi.mock("./config-write-authorization.js", () => ({
 }));
 
 function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsParams {
-  return commandFixture(
-    commandBody.trim(),
-    {
-      cfg,
-      ctx: {
-        Body: commandBody,
-        CommandBody: commandBody,
-        CommandSource: "text",
-        CommandAuthorized: true,
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        SessionKey: "agent:main:main",
-      },
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      workspaceDir: "/tmp",
-      provider: "whatsapp",
-      model: "test-model",
-      sessionEntry: undefined,
-    },
-    {
-      surface: "whatsapp",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      senderIsOwner: false,
-      senderId: "user-1",
-      from: "user-1",
-      to: "bot-1",
-    },
-  );
+  const params = buildCommandTestParams(commandBody, cfg, { SessionKey: "agent:main:main" });
+  Object.assign(params.command, {
+    surface: "whatsapp",
+    channel: "whatsapp",
+    channelId: "whatsapp",
+    ownerList: [],
+    senderIsOwner: false,
+    isAuthorizedSender: true,
+    assertOwnerCurrent: undefined,
+    senderId: "user-1",
+    from: "user-1",
+    to: "bot-1",
+  });
+  return params;
 }
 
 function ownerParams(commandBody: string): HandleCommandsParams {
@@ -389,14 +371,12 @@ describe("command gating", () => {
         },
       },
     });
-    const params = ownerParams("/config show gateway.auth.token");
-
-    const result = await handleConfigCommand(params, true);
-    const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Config gateway.auth.token");
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
+    const result = await handleConfigCommand(ownerParams("/config show gateway.auth.token"), true);
+    expectText(
+      result?.reply?.text,
+      ["Config gateway.auth.token", REDACTED_SENTINEL],
+      ["OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623"],
+    );
   });
 
   it("redacts secret-shaped fields from /debug show replies", async () => {
@@ -415,16 +395,12 @@ describe("command gating", () => {
         ackReaction: ":)",
       },
     });
-    const params = ownerParams("/debug show");
-
-    const result = await handleDebugCommand(params, true);
-    const output = result?.reply?.text ?? "";
-
-    expect(output).toContain("Debug overrides (memory-only)");
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).toContain("ackReaction");
-    expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_TOKEN_65623");
-    expect(output).not.toContain("OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623");
+    const result = await handleDebugCommand(ownerParams("/debug show"), true);
+    expectText(
+      result?.reply?.text,
+      ["Debug overrides (memory-only)", REDACTED_SENTINEL, "ackReaction"],
+      ["OPENCLAW_DEBUG_SHOW_CANARY_TOKEN_65623", "OPENCLAW_DEBUG_SHOW_CANARY_BOT_TOKEN_65623"],
+    );
   });
 
   it.each([
@@ -439,10 +415,7 @@ describe("command gating", () => {
     }
     const secret = `OPENCLAW_${name.toUpperCase()}_SET_CANARY_TOKEN_65623`;
     const result = await handler(ownerParams(`/${name} set gateway.auth.token="${secret}"`), true);
-    const output = result?.reply?.text ?? "";
-    expect(output).toContain(`${label}: gateway.auth.token=`);
-    expect(output).toContain(REDACTED_SENTINEL);
-    expect(output).not.toContain(secret);
+    expectText(result?.reply?.text, [`${label}: gateway.auth.token=`, REDACTED_SENTINEL], [secret]);
   });
 
   it("blocks disallowed /config set writes", async () => {
