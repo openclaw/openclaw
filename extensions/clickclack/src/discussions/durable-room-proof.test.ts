@@ -1,8 +1,9 @@
 import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { resolveClickClackAccount } from "../accounts.js";
 import { handleClickClackInbound } from "../inbound.js";
 import { createInboundMessage, createInboundRuntime } from "../inbound.test-support.js";
@@ -12,11 +13,7 @@ import { discussionChannel, MANAGED_CONTRACT_FIELDS } from "./service-test-suppo
 import { ClickClackDiscussionService } from "./service.js";
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  const text = Buffer.concat(chunks).toString("utf8");
+  const text = (await consumeBuffer(req)).toString("utf8");
   return text ? (JSON.parse(text) as Record<string, unknown>) : {};
 }
 
@@ -86,22 +83,16 @@ async function startMockClickClack() {
       sendJson(res, 500, { error: "mock ClickClack request failed" });
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     channels,
     messages,
     patches,
     get createCount() {
       return createCount;
     },
-    close: async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    close: () => server[Symbol.asyncDispose](),
   };
 }
 

@@ -7,7 +7,6 @@ import { vitestArtifactEvidence, writeJson } from "./evidence-gallery.test-suppo
 import {
   buildQaOccurrenceEvidenceSummary,
   validateQaEvidenceSummaryJson,
-  type QaEvidenceOccurrence,
 } from "./evidence-summary.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
@@ -17,7 +16,7 @@ import {
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
-import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
+import { makeQaSuiteTestOccurrence } from "./suite-test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { exclusiveLiveChannels, liveAdapterFactories } = vi.hoisted(() => {
@@ -145,16 +144,7 @@ it.each(["full", "slim"] as const)(
     const digest = createHash("sha256").update(artifactContent).digest("hex");
     for (const [index, file] of evidencePaths.entries()) {
       const summary = await readEvidence(file);
-      const occurrence: QaEvidenceOccurrence = {
-        id: `shard-${index}-observation`,
-        parentCell: null,
-        scenario: null,
-        retryOf: null,
-        terminalStatus: "pass",
-        assertions: null,
-        launch: makeQaSuiteTestLaunch(),
-        receipts: [],
-      };
+      const occurrence = makeQaSuiteTestOccurrence(`shard-${index}-observation`);
       const artifact = summary.entries[0]?.execution?.artifacts[0];
       if (artifact) {
         occurrence.receipts.push({

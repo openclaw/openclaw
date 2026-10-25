@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   audioClock,
   listeners,
@@ -46,12 +47,7 @@ function consultReply(method: string, reply: () => Promise<unknown>) {
   );
   return client;
 }
-const consultResult = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultResult = consultRunResult();
 const readyResultCall = [
   "talk.session.submitToolResult",
   {

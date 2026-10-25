@@ -11,6 +11,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { CliSessionBinding } from "../config/sessions/types.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -353,6 +354,23 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
+export function createTestCliSessionBinding(
+  context: PreparedCliRunContext,
+  sessionId: string,
+): CliSessionBinding {
+  return {
+    sessionId,
+    authEpoch: context.authEpoch,
+    authEpochVersion: context.authEpochVersion,
+    extraSystemPromptHash: context.extraSystemPromptHash,
+    messageToolPolicyHash: context.messageToolPolicyHash,
+    promptToolNamesHash: context.promptToolNamesHash,
+    cwdHash: context.cwdHash,
+    mcpConfigHash: context.preparedBackend.mcpConfigHash,
+    mcpResumeHash: context.preparedBackend.mcpResumeHash,
+  };
+}
+
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(
@@ -567,6 +585,29 @@ export function createContextEngineCustodyFixture() {
     async cleanup() {
       await resources.release();
       close();
+    },
+  };
+}
+
+export function createPersistedCompletionHandoff(
+  sourceSessionKey: string,
+  sourceSessionId: string,
+  target: { sessionKey: string; sessionId: string },
+) {
+  return {
+    trustedInternalHandoff: {
+      kind: "subagent-completion" as const,
+      sourceSessionKey,
+      sourceSessionId,
+      targetSessionKey: target.sessionKey,
+      targetSessionId: target.sessionId,
+      provider: "claude-cli",
+      model: "opus",
+    },
+    inputProvenance: {
+      kind: "inter_session" as const,
+      sourceTool: "subagent_announce",
+      sourceSessionKey,
     },
   };
 }

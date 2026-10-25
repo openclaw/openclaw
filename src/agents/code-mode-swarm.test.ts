@@ -11,7 +11,6 @@ import {
 } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
   mcpTool,
   resetCodeModeTestState,
   resultDetails,
@@ -20,6 +19,7 @@ import {
 } from "./code-mode.test-support.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { SpawnSubagentParams } from "./subagents/spawn/subagent-spawn-contract.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
   addClientToolsToToolCatalog,
   clearToolSearchCatalog,

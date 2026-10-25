@@ -1,3 +1,4 @@
+import type { GatewaySessionMessageSubscriptionOptions } from "@openclaw/gateway-client/browser";
 import type {
   SessionsRecoverParams,
   SessionsRecoverResult,
@@ -17,12 +18,14 @@ import { buildSessionRequestParams } from "./session-requests.ts";
 import type {
   SessionCompactResult,
   SessionConnectionOwner,
+  SessionGateway,
   SessionMessageSubscription,
   SessionRefreshOutcome,
 } from "./session-types.ts";
 
 type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
+  gateway: SessionGateway;
   reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   notifyCreated: (key: string) => void;
   reportError: (error: unknown) => void;
@@ -154,30 +157,44 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
 
   const subscribeMessages = async (
     key: string,
-    options: { agentId?: string | null; includeApprovals?: boolean; mode?: "narration" } = {},
+    options: GatewaySessionMessageSubscriptionOptions = {},
+    startup?: { beforeHello?: true },
   ): Promise<SessionMessageSubscription> => {
     const scope = host.connection.capture();
-    if (!scope || disposed) {
+    const beforeHello =
+      startup?.beforeHello === true && host.gateway.snapshot.phase !== "connected";
+    const client = beforeHello ? host.gateway.snapshot.client : scope?.client;
+    if (!client || disposed) {
       throw new Error("Session message subscription requires an active Gateway connection");
+    }
+    const dispatch = client.connectSent;
+    const isCurrent = () =>
+      !disposed &&
+      (beforeHello
+        ? host.gateway.snapshot.client === client && client.connectSent === dispatch
+        : scope !== null && host.connection.isCurrent(scope));
+    if (beforeHello && (!(await dispatch) || !isCurrent())) {
+      throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     const normalizedKey = key.trim();
     const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
-    const { mode, includeApprovals } = options;
+    const { mode, includeApprovals, initialHistory } = options;
     const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
-    if (disposed || !host.connection.isCurrent(scope)) {
+    if (!isCurrent()) {
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     const subscription = await runtime
-      .getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
+      .getGatewaySessionMessageSubscriptionCoordinator(client, {
         keysEquivalent: areUiSessionKeysEquivalent,
       })
       .acquire(normalizedKey, {
         agentId,
         ...(includeApprovals ? { includeApprovals: true } : {}),
         ...(mode ? { mode } : {}),
+        ...(initialHistory ? { initialHistory } : {}),
       });
     ownedSubscriptions.add(subscription);
-    if (disposed || !host.connection.isCurrent(scope)) {
+    if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {
       await unsubscribeMessages(subscription).catch(() => undefined);
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }

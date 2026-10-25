@@ -22,18 +22,18 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import {
+  isInternalCanvasEntryUrl,
+  resolveCanvasIframeUrl,
+  resolveEmbedSandbox,
+  type EmbedSandboxMode,
+} from "../../../lib/chat/canvas-embed-policy.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
   ToolPreview as ToolPreviewModel,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  isInternalCanvasEntryUrl,
-  resolveCanvasIframeUrl,
-  resolveEmbedSandbox,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -42,7 +42,7 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   WidgetCardMenu,
@@ -51,6 +51,11 @@ import {
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
+import {
+  isManagedCanvasDocumentPreview,
+  widgetPreviewHeight,
+  widgetPreviewLayoutKey,
+} from "./widget-preview-layout.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -60,6 +65,10 @@ registerMcpAppEnglish();
 
 const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
   export: "YouTubeVideoCard",
+});
+
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
 });
 
 const CanvasWidgetMount = lazy(() => import("./canvas-widget-mount.tsx"), {
@@ -101,29 +110,6 @@ type WidgetCardOptions = {
 };
 
 type WidgetExportSource = HTMLIFrameElement | OpenClawCanvasWidgetView | undefined;
-
-function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
-  const viewId = preview.viewId?.trim();
-  const entryUrl = preview.url?.trim();
-  if (!viewId || !entryUrl) {
-    return false;
-  }
-  try {
-    const entry = new URL(entryUrl, "http://localhost");
-    const prefix = "/__openclaw__/canvas/documents/";
-    if (entry.origin !== "http://localhost" || !entry.pathname.startsWith(prefix)) {
-      return false;
-    }
-    const [encodedDocumentId, entrypoint] = entry.pathname.slice(prefix.length).split("/", 2);
-    if (!encodedDocumentId || !entrypoint) {
-      return false;
-    }
-    const documentId = decodeURIComponent(encodedDocumentId);
-    return /^[A-Za-z0-9._-]+$/u.test(documentId) && documentId === viewId;
-  } catch {
-    return false;
-  }
-}
 
 // Sandboxed widget documents report their content height via postMessage so the
 // preview iframe can fit short/tall widgets. The event source must be one of our
@@ -394,16 +380,8 @@ function WidgetContent(props: {
 }) {
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
-  const layoutKey = () =>
-    props.preview.mcpApp
-      ? `mcp:${props.preview.mcpApp.viewId}`
-      : managed()
-        ? `canvas:${props.preview.viewId!.trim()}`
-        : `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`;
-  const height = () =>
-    props.options?.widgetLayout?.read(layoutKey()) ??
-    props.preview.preferredHeight ??
-    (props.preview.mcpApp ? 600 : 420);
+  const layoutKey = () => widgetPreviewLayoutKey(props.preview);
+  const height = () => widgetPreviewHeight(props.preview, props.options?.widgetLayout);
   return (
     <Show
       when={props.options?.mediaReadAllowed !== false}
@@ -714,7 +692,11 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      {(preview) => (
+        <ChatLazyBoundary>
+          <BrowserTabCardHost preview={preview()} latest={false} />
+        </ChatLazyBoundary>
+      )}
     </Show>
   );
 }

@@ -69,9 +69,7 @@ suite.define(() => {
     const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const page = await context.newPage();
     const children = [
@@ -704,9 +702,7 @@ suite.define(() => {
   it("lists a personal pin once in Pinned and presents its pin state", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const page = await context.newPage();
     await seedPersonalSessionPins(page, ["agent:main:pinned"]);

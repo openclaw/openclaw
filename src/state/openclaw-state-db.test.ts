@@ -1984,7 +1984,7 @@ describe("openclaw state database", () => {
       const refusal = {
         changes: [],
         warnings: [
-          `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+          `Failed migrating shared state database schema: SqliteSchemaMismatchError: missing table apns_registration_tombstones. Database: ${databasePath}`,
         ],
       };
       expect(

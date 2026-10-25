@@ -7,6 +7,7 @@ import {
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runSecretsCommand } from "../cli/secrets-cli-output.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -49,7 +50,7 @@ it.each(["plaintext", "references", "missing"])(
         }
       }
       const configBefore = await fs.readFile(state.configPath, "utf8");
-      const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+      const ttyMock = createCliTtyMock([process.stdin]);
       let stdout = "";
       let stderr = "";
       const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space) => {
@@ -60,7 +61,7 @@ it.each(["plaintext", "references", "missing"])(
         return true;
       });
       try {
-        Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+        ttyMock.set(true);
         await expect(
           runSecretsCommand(
             true,
@@ -72,11 +73,7 @@ it.each(["plaintext", "references", "missing"])(
       } finally {
         json.mockRestore();
         error.mockRestore();
-        if (stdinTTY) {
-          Object.defineProperty(process.stdin, "isTTY", stdinTTY);
-        } else {
-          Reflect.deleteProperty(process.stdin, "isTTY");
-        }
+        ttyMock.restore();
       }
 
       expect(JSON.parse(stdout)).toEqual({

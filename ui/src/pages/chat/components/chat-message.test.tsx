@@ -143,6 +143,7 @@ describe("grouped chat rendering", () => {
       const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
         createUserMessage("Attempted message", {
+          timestamp: 1_000,
           __openclaw: {
             id: "attempted-send",
             kind: "pending-send",
@@ -165,6 +166,7 @@ describe("grouped chat rendering", () => {
       expect(status?.title).toBe("Delivery diagnostic");
       expect(status?.textContent).toContain(label);
       expect(status?.textContent).not.toContain("unconfirmed");
+      expectAbsent(".chat-group-timestamp");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(Boolean(retry)).toBe(canRetry);
       retry?.click();
@@ -179,6 +181,13 @@ describe("grouped chat rendering", () => {
       } else {
         expect(discard).toBeNull();
       }
+      const bubble = element(".chat-bubble");
+      renderGroupedMessage(createUserMessage("Attempted message", { timestamp: 1_000 }), "user");
+      expectAbsent(".chat-send-status");
+      expect(element(".chat-bubble")).toBe(bubble);
+      expect(requireElement(".chat-group-timestamp", HTMLTimeElement).dateTime).toBe(
+        new Date(1_000).toISOString(),
+      );
     },
   );
 

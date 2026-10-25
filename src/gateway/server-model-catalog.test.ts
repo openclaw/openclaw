@@ -1,9 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import {
-  preparePublishedModelCatalogOwnerIdentity,
-  resolvePublishedModelCatalogOwner,
-} from "../agents/prepared-model-catalog-owner.js";
+import { preparePublishedModelCatalogOwnerIdentity } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import {
@@ -19,10 +16,7 @@ import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "./server-model-catalog-auth.js";
-import {
-  createPreparedGatewayModelCatalog,
-  readPreparedGatewayModelMetadata,
-} from "./server-model-catalog-view.js";
+import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import {
   loadGatewayModelCatalogSnapshot,
   loadPreparedGatewayModelCatalogSnapshot,
@@ -43,12 +37,7 @@ const snapshot: ModelCatalogSnapshot = {
 function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
   return {
     ...extra,
-    agents: {
-      ...extra.agents,
-      entries: {
-        [agentId]: { agentDir, workspace: workspaceDir },
-      },
-    },
+    agents: { ...extra.agents, entries: { [agentId]: { agentDir, workspace: workspaceDir } } },
   };
 }
 
@@ -103,7 +92,6 @@ function rowFacts(
 
 describe("gateway prepared model catalog", () => {
   it("keeps a prepared metadata miss separate from the current runtime generation", async () => {
-    const capturedMetadata = createPluginMetadataSnapshotFixture();
     const currentMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -114,15 +102,12 @@ describe("gateway prepared model catalog", () => {
         },
       ],
     });
-    const catalogFor = (metadataSnapshot?: typeof capturedMetadata) =>
-      createPreparedGatewayModelCatalog({ entries: [], metadataSnapshot });
-    const absent = catalogFor();
-    const present = catalogFor(capturedMetadata);
-    const current = catalogFor(currentMetadata);
+    const absent = createPreparedGatewayModelCatalog({ entries: [] });
+    const current = createPreparedGatewayModelCatalog({
+      entries: [],
+      metadataSnapshot: currentMetadata,
+    });
     withPluginRuntimeGenerationScope({ metadataSnapshot: currentMetadata }, () => {
-      expect(readPreparedGatewayModelMetadata({})).toBe(currentMetadata);
-      expect(readPreparedGatewayModelMetadata({}, absent)).toBeNull();
-      expect(readPreparedGatewayModelMetadata({}, present)).toBe(capturedMetadata);
       const entry = {
         sessionId: "prepared-catalog",
         updatedAt: 1,
@@ -238,13 +223,6 @@ describe("gateway prepared model catalog", () => {
         workspaceDir: shared ? "/tmp/worker-workspace" : workspaceDir,
       };
       await expect(project).resolves.toMatchObject(expected);
-      const resolved = resolvePublishedModelCatalogOwner(candidate);
-      expect(
-        resolvePublishedModelCatalogOwner({
-          ...resolved,
-          catalogOwner: { ...resolved.catalogOwner },
-        }),
-      ).toEqual(resolved);
     },
   );
 

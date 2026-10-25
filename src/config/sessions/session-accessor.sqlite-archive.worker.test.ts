@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
@@ -19,7 +20,7 @@ import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
 } from "../../trajectory/runtime-store.test-support.js";
-import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -191,8 +192,9 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
+    expect(archive?.encoding).toBe("zstd");
     expect(
-      decodeSessionArchiveBytes(archive?.bytes ?? new Uint8Array(), archive?.encoding === "zstd"),
+      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
     ).toBe(jsonl(events));
   });
 

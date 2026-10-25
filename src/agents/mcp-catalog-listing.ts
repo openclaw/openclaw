@@ -59,7 +59,7 @@ async function collectMcpPaginatedItems<T>(
   const deadlineAtMs = performance.now() + timeoutMs;
   const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
-  deadlineTimer.unref?.();
+  deadlineTimer.unref();
   const assertActive = () => {
     if (signal.aborted) {
       throw abortError(signal, params.label);
@@ -94,9 +94,6 @@ async function collectMcpPaginatedItems<T>(
       collectedBytes += measured.bytes;
 
       for (const item of page.items) {
-        if (item === undefined) {
-          continue;
-        }
         if (items.length >= MCP_CATALOG_MAX_ITEMS) {
           throw new Error(`${params.label} exceeded ${MCP_CATALOG_MAX_ITEMS} ${params.itemLabel}`);
         }

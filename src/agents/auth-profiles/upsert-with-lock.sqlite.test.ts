@@ -294,8 +294,8 @@ it("rejects stale nonportable OAuth batches admitted after a newer generation se
 
 it.each(["rotated", "appeared"] as const)(
   "rejects queued OAuth writes when main authority has %s",
-  async (mode) => {
-    await withPeers(async (root, mainAgentDir, peerAgentDir) => {
+  (mode) =>
+    withPeers(async (root, mainAgentDir, peerAgentDir) => {
       const profileId = "openai:default";
       const credential =
         mode === "rotated"
@@ -334,8 +334,7 @@ it.each(["rotated", "appeared"] as const)(
       );
       expect(readPersistedStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
       expect(readPersistedStore(mainAgentDir)?.profiles[profileId]).toEqual(authoritative);
-    });
-  },
+    }),
 );
 
 it.each(["upsert", "batch"] as const)(

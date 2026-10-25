@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import type { BoardWidget } from "../../lib/board/types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -7,6 +8,18 @@ import {
   createBoardWidgetFrame,
   type BoardWidgetFrameOwner,
 } from "./board-widget-frame.tsx";
+
+export function grantedFrameWidgetFixture(): BoardWidget {
+  return createBoardWidget({
+    name: "weather",
+    grantState: "granted",
+    viewTicket: "ticket",
+    viewGeneration: "generation",
+    sandboxUrl: "/mcp-app-sandbox",
+    sandboxPort: 8444,
+    sandboxOrigin: "https://sandbox.example",
+  });
+}
 
 type FrameHost = Parameters<typeof createBoardWidgetFrame>[0];
 
@@ -64,4 +77,16 @@ export function dispatchFrameMessage(
   return window.dispatchEvent(
     new MessageEvent("message", { source: frame.contentWindow, ...init }),
   );
+}
+
+export function acknowledgeWidgetHostInit(port: MessagePort, ready: { resolve: () => void }) {
+  port.addEventListener("message", (event) => {
+    if (event.data.type === "openclaw:widget-host-init") {
+      port.postMessage({
+        type: "openclaw:widget-host-init-ack",
+        ticket: event.data.ticket,
+      });
+      ready.resolve();
+    }
+  });
 }

@@ -65,6 +65,7 @@ export type Job = {
 };
 export type Slot = {
   sharedState?: true;
+  postgresPoolSent?: boolean;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   listActiveDegradedSecretOwners,
   setActiveCredentialDegradedOwner,
@@ -320,21 +321,15 @@ describe("secrets runtime provider and media surfaces", () => {
       await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
 
-    let releaseFirstActivation!: () => void;
-    const firstActivationBlocked = new Promise<void>((resolve) => {
-      releaseFirstActivation = resolve;
-    });
-    let reportFirstActivationQueued!: () => void;
-    const firstActivationQueued = new Promise<void>((resolve) => {
-      reportFirstActivationQueued = resolve;
-    });
+    const firstActivationBlocked = createDeferredCore();
+    const firstActivationQueued = createDeferredCore();
     let activationCalls = 0;
     registerProviderAuthRuntimeSnapshotActivationOwner({
       runExclusive: async (operation) => {
         activationCalls += 1;
         if (activationCalls === 1) {
-          reportFirstActivationQueued();
-          await firstActivationBlocked;
+          firstActivationQueued.resolve();
+          await firstActivationBlocked.promise;
         }
         return await operation();
       },
@@ -347,13 +342,13 @@ describe("secrets runtime provider and media surfaces", () => {
     });
 
     const refresh = refreshActiveProviderAuthRuntimeSnapshot();
-    await firstActivationQueued;
+    await firstActivationQueued.promise;
     const concurrentConfig = asConfig({
       ...initial.config,
       logging: { level: "debug" },
     });
     setRuntimeConfigSnapshot(concurrentConfig, initial.sourceConfig);
-    releaseFirstActivation();
+    firstActivationBlocked.resolve();
 
     await expect(refresh).resolves.toBe(true);
     expect(activationCalls).toBe(2);

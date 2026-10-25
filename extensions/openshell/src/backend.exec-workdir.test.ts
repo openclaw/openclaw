@@ -17,7 +17,11 @@ import {
   installOpenShellBackendMocks,
   uninstallOpenShellBackendMocks,
 } from "./openshell-backend.test-support.js";
-import { createOpenShellTestWorkspace, writeFiles } from "./openshell-fs.test-support.js";
+import {
+  createOpenShellTestWorkspace,
+  expectFiles,
+  writeFiles,
+} from "./openshell-fs.test-support.js";
 import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
 beforeAll(installOpenShellBackendMocks);
@@ -220,21 +224,11 @@ it("validates locally and uploads the workspace once when exec begins", async ()
     "pwd",
     "/sandbox",
   );
-  const nestedFile = path.join(workspaceDir, "nested", "note.txt");
   const bridge = createBridge(backend, workspaceDir);
-  expect(bridge.pathMappings).toContainEqual({
-    hostRoot: path.resolve(workspaceDir),
-    containerRoot: "/sandbox",
-  });
-  expect(bridge.resolvePath({ filePath: "nested/note.txt" })).toEqual({
-    hostPath: nestedFile,
-    relativePath: "nested/note.txt",
-    containerPath: "/sandbox/nested/note.txt",
-  });
   await bridge.writeFile({ filePath: "nested/note.txt", data: "nested", mkdir: true });
   expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
     context: expect.objectContaining({ sandboxName: backend.runtimeId }),
-    args: uploadArgs(nestedFile, "/sandbox/nested/note.txt"),
+    args: uploadArgs(path.join(workspaceDir, "nested/note.txt"), "/sandbox/nested/note.txt"),
     cwd: workspaceDir,
   });
   expect(backend.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
@@ -394,13 +388,11 @@ it("downloads the primary root without reconciling the writable containing agent
   const exec = await prepare(backend, "true");
   await finalize(backend, exec.finalizeToken);
 
-  await expect(
-    Promise.all([
-      fs.readFile(path.join(agentWorkspaceDir, "agent-only"), "utf8"),
-      fs.readFile(path.join(workspaceDir, "primary-only"), "utf8"),
-      fs.readFile(path.join(agentWorkspaceDir, "project/agent-shadow.txt"), "utf8"),
-    ]),
-  ).resolves.toEqual(["local-agent", "remote-primary", "preserved-shadow"]);
+  await expectFiles(agentWorkspaceDir, {
+    "agent-only": "local-agent",
+    "project/agent-shadow.txt": "preserved-shadow",
+  });
+  await expectFiles(workspaceDir, { "primary-only": "remote-primary" });
   expect(cliCalls("download").map(([params]) => params.args.at(-2))).toEqual([remoteWorkspaceDir]);
 });
 

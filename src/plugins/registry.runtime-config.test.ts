@@ -26,7 +26,6 @@ import {
   createLazyPluginRuntime,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
-import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
@@ -34,6 +33,10 @@ import {
   markPluginRegistryRetired,
   revokePluginRecord,
 } from "./registry-lifecycle.js";
+import {
+  createOwnershipHarness as createHarness,
+  createOwnershipRecord as createRecord,
+} from "./registry-ownership.test-support.js";
 import {
   createRuntimeTestRegistry,
   createTestPluginRegistry,
@@ -49,17 +52,6 @@ import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-function createHarness(id: string) {
-  return {
-    id,
-    label: id,
-    supports: () => ({ supported: true as const }),
-    runAttempt: async () => {
-      throw new Error("unused");
-    },
-  };
-}
 
 function scopeCapture(id: string) {
   const scopes: ReturnType<typeof getPluginRuntimeGatewayRequestScope>[] = [];
@@ -78,20 +70,6 @@ function scopeCapture(id: string) {
     },
     scopes,
   };
-}
-
-function createRecord(
-  id: string,
-  overrides: Partial<Parameters<typeof createPluginRecord>[0]> = {},
-) {
-  return createPluginRecord({
-    id,
-    source: `/plugins/${id}/index.js`,
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    ...overrides,
-  });
 }
 
 type CreateSession = PluginRuntime["agent"]["session"]["createSessionEntry"];

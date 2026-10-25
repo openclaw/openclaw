@@ -3,9 +3,9 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   applyExtractedSkillRoot,
   installExtractedSkillRoot,
@@ -23,7 +23,7 @@ import type { GatewayClient } from "./client-types.js";
 import type { RespondFn } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
-  scan: vi.fn(async () => undefined),
+  scan: vi.fn<() => Promise<void>>(async () => undefined),
   beforeMove: undefined as ((from: string, to: string) => Promise<void>) | undefined,
 }));
 vi.mock("../../plugins/install-security-scan.js", () => ({
@@ -140,31 +140,21 @@ it.each(["scan", "publish", "replace", "workspace-host"] as const)(
             bridge: { readFile: unavailable, writeFile: unavailable, stat: unavailable },
           })
         : undefined;
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const pause = async () => {
-      entered.resolve();
-      await release.promise;
-      return undefined;
-    };
+    const gate = createEnteredGate();
     if (phase === "scan") {
-      hooks.scan.mockImplementationOnce(pause);
+      hooks.scan.mockImplementationOnce(gate.wait);
     } else {
       hooks.beforeMove = async (from, to) => {
         if (from.includes(".openclaw-install-stage-") && path.basename(to) === slug) {
-          await pause();
+          await gate.wait();
         }
       };
     }
     const pending = dispatch(uploadId, slug, force);
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "install settled before publication",
-      );
+      await awaitGateBeforeSettlement(gate.entered, pending, "install settled before publication");
       setUploads(false);
-      release.resolve();
+      gate.release();
       expect(await pending).toContainEqual([
         false,
         undefined,
@@ -191,7 +181,7 @@ it.each(["scan", "publish", "replace", "workspace-host"] as const)(
         defaultSkillUploadStore.withCommittedUpload(uploadId, async () => undefined),
       ).rejects.toThrow("upload not found");
     } finally {
-      release.resolve();
+      gate.release();
       await pending.finally(() => releaseWorkspace?.());
     }
   },

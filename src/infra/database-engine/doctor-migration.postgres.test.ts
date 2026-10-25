@@ -251,19 +251,14 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
 
   async function prepare(fail = false) {
     await prepareSource(predecessor);
+    const registered = originalMigrations!.find((migration) => migration.version === target)!;
     stateEngineSchema.postgresMigrations = [
       {
-        version: target,
-        fromSchema: {
-          postgres: predecessor.postgres!,
-          postgresFragments: predecessor.postgresFragments,
-        },
-        schema: {
-          postgres: stateEngineSchema.postgres!,
-          postgresFragments: stateEngineSchema.postgresFragments,
-        },
+        ...registered,
         backup,
-        sql: `UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'doctor.fixture'; ${fail ? "SELECT doctor_fixture_midway_failure;" : ""} UPDATE schema_meta SET schema_version = ${target}; UPDATE config_machine_state SET value_json = '${target}' WHERE state_key = 'state.schema.contentVersion';`,
+        sql: `${registered.sql}
+          UPDATE config_machine_state SET value_json = '"after"' WHERE state_key = 'doctor.fixture';
+          ${fail ? "SELECT doctor_fixture_midway_failure;" : ""}`,
       },
     ];
   }
@@ -296,7 +291,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26, 27, 28])(
+  it.each([24, 25, 26, 27, 28, 31])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       stateEngineSchema.postgresMigrations = originalMigrations;
@@ -611,6 +606,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [30, false],
     [31, false],
     [32, false],
+    [33, false],
+    [34, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -904,7 +901,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             {
               indexname: "idx_agent_session_windows_conversation",
               indexdef:
-                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id) WHERE (primary_conversation_id IS NOT NULL)",
             },
           ]);
           if (foreignWrite) {

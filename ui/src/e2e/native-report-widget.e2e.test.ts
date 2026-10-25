@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { BoardReport } from "../../../src/boards/board-report.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -34,19 +35,16 @@ function reportSnapshot(detailsUrl: string, revision = 1) {
     revision,
     tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "community-report",
-        tabId: "main",
         title: "Weekly community report",
         contentKind: "plugin",
         pluginKind: "session:report",
         props,
         sizeW: 12,
         sizeH: 20,
-        position: 0,
-        grantState: "none",
         revision,
-      },
+      }),
     ],
   };
 }

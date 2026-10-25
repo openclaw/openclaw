@@ -11,7 +11,7 @@ import {
   loadSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../../config/types.models.js";
+import type { ModelProviderConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../../../cron/config-revision.js";
 import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
@@ -27,6 +27,7 @@ import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import * as doctor from "../../doctor-config-flow.test-support.js";
+import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import { maybeRepairCronInferenceBindings } from "./inference-binding-migration.js";
 import { inspectCronJobsForDoctor } from "./store-repair.js";
 
@@ -297,15 +298,7 @@ const session = (id: string, overrides: Partial<SessionEntry>) =>
     },
   );
 
-const configuredModel = (id: string): ModelDefinitionConfig => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 8192,
-  maxTokens: 1024,
-});
+const configuredModel = (id: string) => createTestModelDefinition(id, { maxTokens: 1024 });
 
 const provider = (apiKey: string, baseUrl: string): ModelProviderConfig => ({
   api: "openai-completions",

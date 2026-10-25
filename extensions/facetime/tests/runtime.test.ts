@@ -328,14 +328,10 @@ describe("FaceTime runtime call sequencing", () => {
       const startupError = new Error("capture failed during startup");
       let startupReleased = false;
       let releaseStartup: Promise<boolean> | undefined;
-      let confirmProcessAbsence = () => {};
-      let inspectProcessAbsence = () => {};
-      const processAbsence = new Promise<void>((resolve) => {
-        confirmProcessAbsence = resolve;
-      });
-      const processAbsenceInspected = new Promise<void>((resolve) => {
-        inspectProcessAbsence = resolve;
-      });
+      const { promise: processAbsence, resolve: confirmProcessAbsence } =
+        Promise.withResolvers<void>();
+      const { promise: processAbsenceInspected, resolve: inspectProcessAbsence } =
+        Promise.withResolvers<void>();
       mocks.helper.inspectCall.mockRejectedValue(new Error("helper inspection unavailable"));
       mocks.startTalk.mockImplementationOnce(
         async (params: { onFailure(error: Error): Promise<boolean> }) => {
@@ -445,13 +441,8 @@ describe("FaceTime runtime call sequencing", () => {
     const talk = createTalkDriver({});
     mocks.startTalk.mockResolvedValueOnce(talk);
     const runtime = await createRuntime();
-    let resolveUnmute = (_result: unknown) => {};
-    mocks.helper.setMuted.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          resolveUnmute = resolve;
-        }),
-    );
+    const { promise: unmute, resolve: resolveUnmute } = Promise.withResolvers<unknown>();
+    mocks.helper.setMuted.mockImplementationOnce(async () => await unmute);
     void mocks.helperParams?.onMessage(incomingCall(1));
     await vi.waitFor(() => expect(mocks.helper.setMuted).toHaveBeenCalledOnce());
     const hangup = runtime.hangup();
@@ -678,10 +669,8 @@ describe("FaceTime runtime call sequencing", () => {
         { assertCurrent() {} },
       );
       let finishReply = () => {};
-      let signalHelperStarted = () => {};
-      const helperStarted = new Promise<void>((resolve) => {
-        signalHelperStarted = resolve;
-      });
+      const { promise: helperStarted, resolve: signalHelperStarted } =
+        Promise.withResolvers<void>();
       mocks.helper.startCall.mockImplementationOnce(
         () =>
           new Promise<Record<string, unknown>>((resolve, reject) => {

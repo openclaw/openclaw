@@ -4,12 +4,12 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
   EnvironmentAction,
   EnvironmentChangeCounts,
   hasEnvironmentTextChanges,
-} from "./chat-details-environment.tsx";
-import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
+} from "./chat-environment-content.tsx";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,

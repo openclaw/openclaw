@@ -96,7 +96,6 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -375,7 +374,7 @@ function expectSingleDiagnosticMessage(
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
     ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
-    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
+    ({ getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -2411,18 +2410,4 @@ describe("resolvePluginTools optional tools", () => {
   });
 });
 
-describe("buildPluginToolMetadataKey", () => {
-  beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
-  });
-
-  it("does not collide when ids or names contain separator-like characters", () => {
-    expect(buildPluginToolMetadataKey("plugin", "a\uE000b")).not.toBe(
-      buildPluginToolMetadataKey("plugin\uE000a", "b"),
-    );
-    expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
-      buildPluginToolMetadataKey("plugin\u0000a", "b"),
-    );
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

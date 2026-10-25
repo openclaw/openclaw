@@ -9,6 +9,8 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readProjectCheckoutRemoteHead,
@@ -294,7 +296,16 @@ async function materializeCapturedRepositoryWorkspace(
           ...snapshot,
           indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
         })) {
-          await command(restore.argv, { cwd: root, input: restore.input });
+          await command(
+            [
+              process.execPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+              ),
+              restore.action,
+            ],
+            { cwd: root, input: restore.input },
+          );
         }
         await applied.verifyLocalStable();
         assertCurrent();

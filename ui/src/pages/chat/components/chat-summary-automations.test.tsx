@@ -11,6 +11,7 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createMobileRootContentFixture as rootContent } from "../chat-mobile-host.test-support.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
 import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
 import {
@@ -686,29 +687,7 @@ it("shares pending reads, retained results, and failed refresh recovery between 
           page={{
             kind: "root",
             content: {
-              entries: {
-                labels: {
-                  people: "People",
-                  taskProgress: "Task progress",
-                  subagents: "Subagents",
-                  processes: "Processes",
-                  environment: "Environment",
-                  context: "Context",
-                  pullRequests: "Pull requests",
-                  automations: "Automations",
-                  generatedFiles: "Generated files",
-                  session: "Session",
-                },
-                people: { label: "People" },
-                versions: { label: "Versions", metadata: 1 },
-                onNavigate: vi.fn(),
-              },
-              processes: undefined,
-              subagents: {
-                workingLabel: "Working",
-                onOpenSubagent: vi.fn(),
-                onOpenSubagents: vi.fn(),
-              },
+              ...rootContent(),
               automations: { inventory, summary: { label: "Automations" } },
             },
           }}

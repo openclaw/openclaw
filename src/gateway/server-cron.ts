@@ -20,8 +20,8 @@ import { isCronExecutionIdle } from "../cron/execution-idle.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import type { DeferredHookWake } from "../cron/service/wake.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
+import { getCronJobsStoreRevision } from "../cron/store.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -62,7 +62,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   bindCronStreamRemoval,
   bindCronStreamUpdate,
@@ -94,23 +94,6 @@ import {
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-
-export type GatewayCronState = {
-  cron: GatewayCronServiceContract;
-  deferHookWake?: DeferredHookWake;
-  storePath: string;
-  cronEnabled: boolean;
-  prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
-  reconcileExitWatchers: () => Promise<void>;
-  reconcileStreamWatchers: () => Promise<void>;
-  stopStreamWatchers: () => Promise<void>;
-};
-
-export type GatewayCronExitWatcherHandoff = {
-  current: () => CronExitWatchers;
-  adopt: (watchers: CronExitWatchers) => Promise<void> | void;
-  stopOwner: () => Promise<void>;
-};
 
 export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
@@ -347,6 +330,19 @@ export function buildGatewayCronService(params: {
     }
   };
 
+  // Store revisions also cover SDK writes that do not emit cron events.
+  let heartbeatSummary: { cfg: OpenClawConfig; revision: number; jobs: CronJob[] } | undefined;
+  const readHeartbeatSummary = async (cfg: OpenClawConfig) => {
+    const revision = getCronJobsStoreRevision(storePath);
+    if (heartbeatSummary?.cfg === cfg && heartbeatSummary.revision === revision) {
+      return heartbeatSummary.jobs;
+    }
+    const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
+    if (!stopped && revision === getCronJobsStoreRevision(storePath)) {
+      heartbeatSummary = { cfg, revision, jobs };
+    }
+    return jobs;
+  };
   const legacyMonitorJobs = new Map<string, CronJob>();
   let legacyProjectionClosed = false;
   let legacyProjectionRevision = 0;
@@ -354,7 +350,7 @@ export function buildGatewayCronService(params: {
     const revision = ++legacyProjectionRevision;
     const cfg = getRuntimeConfig();
     try {
-      const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
+      const jobs = await readHeartbeatSummary(cfg);
       if (
         legacyProjectionClosed ||
         revision !== legacyProjectionRevision ||
@@ -927,6 +923,7 @@ export function buildGatewayCronService(params: {
   let schedulingResume: Deferred | undefined;
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     stopped = true;
+    heartbeatSummary = undefined;
     started = false;
     legacyProjectionClosed = true;
     legacyProjectionRevision += 1;
@@ -1069,6 +1066,7 @@ export function buildGatewayCronService(params: {
 
   return {
     cron,
+    readHeartbeatSummary,
     deferHookWake: (opts) => cron.deferHookWake(opts),
     storePath,
     cronEnabled,

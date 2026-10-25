@@ -63,6 +63,7 @@ describe("diagnostic memory", () => {
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
       postgresBridgeCount: 0,
+      postgresPoolSelfRootCount: 0,
       workerHeapSampledCount: 0,
       workerHeapTotalBytes: 0,
       workerHeapUsedBytes: 0,
@@ -281,6 +282,7 @@ describe("diagnostic memory", () => {
           arrayBuffersBytes: 5,
           workerCount: 0,
           postgresBridgeCount: 0,
+          postgresPoolSelfRootCount: 0,
           workerHeapSampledCount: 0,
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
@@ -315,6 +317,7 @@ describe("diagnostic memory", () => {
           arrayBuffersBytes: 5,
           workerCount: 0,
           postgresBridgeCount: 0,
+          postgresPoolSelfRootCount: 0,
           workerHeapSampledCount: 0,
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,

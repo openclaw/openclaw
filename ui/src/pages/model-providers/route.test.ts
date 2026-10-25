@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -24,12 +25,9 @@ const modelsHello = {
 };
 const authStatus = { ts: 1, providers: [{ provider: "openai", status: "ok", profiles: [] }] };
 const catalog = { models: [{ id: "fixture", provider: "openai", name: "Fixture" }] };
-const roster = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
+const roster = makeBootRoster({
   agents: [{ id: "main" }, { id: "research" }],
-} satisfies AgentsListResult;
+}) satisfies AgentsListResult;
 const cleanups: Array<() => void> = [];
 type RouteId = "model-providers" | "other";
 

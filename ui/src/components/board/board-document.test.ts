@@ -9,6 +9,7 @@ import {
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -24,6 +25,8 @@ import {
 import "./board-document.tsx";
 
 const mounted: HTMLElement[] = [];
+const documentClient = (request: GatewayRequestHandler) =>
+  ({ request, addEventListener: vi.fn(() => vi.fn()) }) as unknown as GatewayBrowserClient;
 
 afterEach(() => {
   for (const element of mounted.splice(0)) {
@@ -128,19 +131,14 @@ it("uses a prepared gallery session without describing it again", async () => {
     }
     return { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] };
   });
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.preparedSession = { sessionKey: "dashboard", agentId: "main" };
-  element.gatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello: { features: { methods: ["board.get"] } },
-  } as ApplicationGatewaySnapshot;
-  document.body.append(element);
+  mountDocument({
+    preparedSession: { sessionKey: "dashboard", agentId: "main" },
+    gatewaySnapshot: {
+      client: documentClient(request),
+      phase: "connected",
+      hello: { features: { methods: ["board.get"] } },
+    } as ApplicationGatewaySnapshot,
+  });
 
   await vi.waitFor(() =>
     expect(request).toHaveBeenCalledWith("board.get", {
@@ -274,14 +272,10 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
     recoveryRequested.resolve();
     return recovery.promise;
   });
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
   const element = mountDocument({
     preparedSession,
     gatewaySnapshot: connected(
-      client,
+      documentClient(request),
       gatewayHelloForMethods(["board.get", "board.update"], ["operator.write"]),
     ),
   });
@@ -352,14 +346,10 @@ it("keeps passive documents live with saved HTML and pure core reports only", as
       ],
     }),
   );
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
   const element = mountDocument({
     passive: true,
     preparedSession: { sessionKey: "dashboard", agentId: "main" },
-    gatewaySnapshot: connected(client, {
+    gatewaySnapshot: connected(documentClient(request), {
       ...gatewayHelloForMethods(["board.get", "board.widget.appView"]),
       controlUiWidgetKinds: [
         { pluginId: "session", kind: "session:report", label: "Report" },

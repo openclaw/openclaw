@@ -18,7 +18,6 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "./directory-durability.js";
-import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
@@ -42,7 +41,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { UpdateCaptureSpaceError } from "./update-capture-space.js";
+import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
@@ -171,56 +170,6 @@ async function inspectRestorableDatabaseFiles(
   return identities;
 }
 
-async function checkDatabaseBackupSpace(directory: string, files: readonly string[]) {
-  const { bytes, largest, families } = await measureUpdateStateFiles(files);
-  const warnings: string[] = [];
-  const check = (target: string, requiredBytes: number, purpose: string) => {
-    const space = tryReadDiskSpace(target);
-    if (space && space.availableBytes < requiredBytes) {
-      throw new UpdateCaptureSpaceError(
-        `${purpose} needs ${formatDiskSpaceBytes(requiredBytes)} near ${target}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free disk space before retrying; the databases have not been migrated.`,
-        { requiredBytes, availableBytes: space.availableBytes },
-      );
-    }
-    if (!space) {
-      warnings.push(
-        `Available disk space could not be measured near ${target}; database backup will be attempted.`,
-      );
-    }
-  };
-  const reserve = 64 * 1024 * 1024;
-  // This volume holds snapshots, same-volume rollback copies, and acquisition/publication scratch.
-  check(directory, bytes === 0 ? 0 : 2 * bytes + 3 * largest + reserve, "Update database backup");
-  const backupDevice = (await fs.stat(directory, { bigint: true })).dev;
-  const sources = new Map<bigint | string, { directory: string; bytes: number; largest: number }>();
-  for (const family of families) {
-    const sourceDirectory = path.dirname(family.path);
-    const device = (await fs.stat(sourceDirectory, { bigint: true })).dev;
-    if (device > 0n && device === backupDevice) {
-      continue;
-    }
-    // Unknown identity cannot prove that the backup volume's allowance covers this destination.
-    const key = device > 0n ? device : sourceDirectory;
-    let source = sources.get(key);
-    if (!source) {
-      source = { directory: sourceDirectory, bytes: 0, largest: 0 };
-      sources.set(key, source);
-      if (device === 0n) {
-        warnings.push(
-          `Filesystem identity is unavailable near ${sourceDirectory}; restore space is checked separately.`,
-        );
-      }
-    }
-    source.bytes += family.bytes;
-    source.largest = Math.max(source.largest, family.bytes);
-  }
-  for (const source of sources.values()) {
-    // Migrated files remain in place during rollback: reserve S + largest publication scratch + headroom.
-    check(source.directory, source.bytes + source.largest + reserve, "Update database rollback");
-  }
-  return warnings;
-}
-
 async function canonicalDatabaseInventory(
   plan: InspectionPlan,
   includeOwners: boolean,
@@ -318,7 +267,10 @@ export async function createUpdateDatabaseBackupInProcess(
     );
   const inventory = await inventoryFor(inspectionPlan);
   const identities = await inspectRestorableDatabaseFiles(inventory.present);
-  const warnings = await checkDatabaseBackupSpace(directory, inventory.present);
+  const { warnings } = await checkUpdateDatabaseBackupSpace(
+    directory,
+    await measureUpdateStateFiles(inventory.present),
+  );
   const { buildBackupArchivePath } = await import("../commands/backup-shared.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
     await import("./sqlite-snapshot.js");

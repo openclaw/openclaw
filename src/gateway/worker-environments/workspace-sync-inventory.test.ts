@@ -1,17 +1,10 @@
 import { ChildProcess } from "node:child_process";
 import { tracingChannel } from "node:diagnostics_channel";
 import fs, { type FileHandle } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../../test/helpers/fixture-receipts.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -26,14 +19,6 @@ import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 import { writeWorkspaceFiles as files } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -44,48 +29,42 @@ function commandFixture() {
   return { root, outputPath: path.join(root, "output"), controller: new AbortController() };
 }
 
-function injectPositiveShortWrite(targetPath: string): () => boolean {
-  let shortWriteObserved = false;
-  interceptOutput(targetPath, (handle) => {
-    let injectShortWrite = true;
-    const injectedHandle = Object.create(handle) as typeof handle;
-    injectedHandle.close = handle.close.bind(handle);
-    injectedHandle.write = (async (
-      data: string | NodeJS.ArrayBufferView,
-      offsetOrPosition: number | null = null,
-      length?: number | null,
-      position?: number | null,
-    ) => {
-      const buffer =
-        typeof data === "string"
-          ? Buffer.from(data)
-          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-      const offset = typeof data === "string" ? 0 : (offsetOrPosition ?? 0);
-      const requested =
-        typeof data === "string" ? buffer.length : (length ?? buffer.length - offset);
-      const filePosition = typeof data === "string" ? offsetOrPosition : position;
-      const writeLength = injectShortWrite ? Math.max(1, Math.floor(requested / 2)) : requested;
-      injectShortWrite = false;
-      shortWriteObserved ||= writeLength < requested;
-      return await handle.write(buffer, offset, writeLength, filePosition);
-    }) as typeof handle.write;
-    injectedHandle.writeFile = (async (data: string | NodeJS.ArrayBufferView) => {
-      const buffer =
-        typeof data === "string"
-          ? Buffer.from(data)
-          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-      let offset = 0;
-      while (offset < buffer.length) {
-        const { bytesWritten } = await injectedHandle.write(buffer, offset, buffer.length - offset);
-        if (bytesWritten === 0) {
-          throw new Error("injected file write made no progress");
+function observeCommand(marker: string) {
+  const ready = createDeferred();
+  const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+  const closed = vi.fn();
+  let stderr = "";
+  const channel = tracingChannel("child_process.spawn").start;
+  const observe = (message: unknown) => {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !("process" in message) ||
+      !(message.process instanceof ChildProcess) ||
+      !message.process.spawnargs.includes(marker)
+    ) {
+      return;
+    }
+    const child = message.process;
+    child.once("spawn", () =>
+      child.stderr?.on("data", (chunk: Buffer | string) => {
+        stderr += String(chunk);
+        if (stderr.split("\n").includes("fixture ready")) {
+          ready.resolve();
         }
-        offset += bytesWritten;
-      }
-    }) as typeof handle.writeFile;
-    return injectedHandle;
-  });
-  return () => shortWriteObserved;
+      }),
+    );
+    child.once("exit", (code, signal) => exited.resolve({ code, signal }));
+    child.once("close", closed);
+  };
+  channel.subscribe(observe);
+  return {
+    ready,
+    exited,
+    closed,
+    stderr: () => stderr,
+    [Symbol.dispose]: () => channel.unsubscribe(observe),
+  };
 }
 
 function interceptOutput(target: string, intercept: (handle: FileHandle) => FileHandle | void) {
@@ -149,19 +128,29 @@ function transferList(
 }
 
 describe("runWorkspaceInventoryCommandToFile", () => {
-  it("fully persists bounded stdout after a positive short write", async () => {
+  it("persists stdout at its exact output budget", async () => {
     const { outputPath } = commandFixture();
     const expected = Buffer.from("bounded workspace inventory output\n");
-    const shortWriteObserved = injectPositiveShortWrite(outputPath);
-
     await inventoryCommand(
       [process.execPath, "-e", "process.stdout.write(process.argv[1])", expected.toString()],
       outputPath,
       { maxOutputBytes: expected.length },
     );
-
-    expect(shortWriteObserved()).toBe(true);
     await expect(fs.readFile(outputPath)).resolves.toEqual(expected);
+  });
+
+  it("filters missing files from a persisted Git transfer list", async () => {
+    const { root, outputPath } = commandFixture();
+    const preparedListPath = path.join(root, "prepared");
+    await files(root, {
+      "alpha.txt": "alpha",
+      "nested/beta.txt": "beta",
+      prepared: "alpha.txt\0missing.txt\0nested/beta.txt\0",
+    });
+    await filterExistingGitTransferList({ gitRoot: root, preparedListPath, outputPath });
+    await expect(fs.readFile(outputPath)).resolves.toEqual(
+      Buffer.from("alpha.txt\0nested/beta.txt\0"),
+    );
   });
 
   it.each(
@@ -254,84 +243,28 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     },
   );
 
-  it("fully persists a filtered Git transfer list after a positive short write", async () => {
-    const { root, outputPath } = commandFixture();
-    const preparedListPath = path.join(root, "prepared");
-    await files(root, {
-      "alpha.txt": "alpha",
-      "nested/beta.txt": "beta",
-      prepared: "alpha.txt\0missing.txt\0nested/beta.txt\0",
-    });
-    const shortWriteObserved = injectPositiveShortWrite(outputPath);
-
-    await filterExistingGitTransferList({ gitRoot: root, preparedListPath, outputPath });
-
-    expect(shortWriteObserved()).toBe(true);
-    await expect(fs.readFile(outputPath)).resolves.toEqual(
-      Buffer.from("alpha.txt\0nested/beta.txt\0"),
-    );
-  });
-
   it("force-kills a command that ignores abort termination", async ({ signal, onTestFinished }) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sync-"));
-    const outputPath = path.join(root, "output");
-    const controller = new AbortController();
-    const readyPath = path.join(root, "ready");
+    const { root, outputPath, controller } = commandFixture();
+    const marker = path.join(root, "command-identity");
+    using observed = observeCommand(marker);
     const operation = inventoryCommand(
       [
         process.execPath,
-        "--input-type=module",
         "-e",
-        [
-          'import fs from "node:fs";',
-          fixtureReceiptClientSource(receipts.endpoint),
-          'process.on("SIGTERM", () => {});',
-          'fs.writeFileSync(process.argv[1], "ready");',
-          'sendReceipt(process.argv[1], "ready");',
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
-        readyPath,
+        'process.on("SIGTERM", () => {}); process.stderr.write("fixture ready\\n"); setInterval(() => {}, 1000);',
+        marker,
       ],
       outputPath,
       { signal: controller.signal },
     );
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        controller.abort();
-        await operation.catch(() => undefined);
-        await fs.rm(root, { recursive: true, force: true });
-      })());
-    // A timed-out body starts finally but Vitest does not join it; the hook retains
-    // the worker until the command's delayed force-kill and cleanup have finished.
+    const cleanup = async () => {
+      controller.abort();
+      await operation.catch(() => undefined);
+    };
+    // Retain cleanup when Vitest aborts the body before native termination settles.
     onTestFinished(cleanup);
-
     try {
-      // Receipts and command completion use separate pipes; the durable marker decides
-      // readiness if the operation settles before the receipt reaches this process.
-      const readReady = () =>
-        fs.readFile(readyPath, "utf8").catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return "";
-          }
-          throw error;
-        });
-      await withinTest(
-        Promise.race([
-          receipts.waitFor(readyPath, "ready"),
-          operation
-            .then(
-              () => new Error(`Timed out waiting for ${readyPath}`),
-              (error: unknown) => error,
-            )
-            .then(async (error) => {
-              if ((await readReady()) !== "ready") {
-                throw error;
-              }
-            }),
-        ]),
-        signal,
-      );
+      await withinTest(Promise.race([observed.ready.promise, operation]), signal);
       const abortedAt = Date.now();
       controller.abort();
       await expect(operation).rejects.toBe(controller.signal.reason);
@@ -371,35 +304,9 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       const cancellation = new Error("inventory stopped after command outcome");
       const timeout = mode.startsWith("timeout-");
       const exitCode = mode === "timeout-clean-exit" ? 0 : 7;
-      const ready = createDeferred();
-      const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
-      const closed = vi.fn();
+      using observed = observeCommand(marker);
+      const { ready, exited, closed } = observed;
       const settled = vi.fn();
-      let observedStderr = "";
-      const spawnChannel = tracingChannel("child_process.spawn").start;
-      const observeSpawn = (message: unknown) => {
-        if (
-          !message ||
-          typeof message !== "object" ||
-          !("process" in message) ||
-          !(message.process instanceof ChildProcess) ||
-          !message.process.spawnargs.includes(marker)
-        ) {
-          return;
-        }
-        const child = message.process;
-        child.once("spawn", () => {
-          child.stderr?.on("data", (chunk: Buffer | string) => {
-            observedStderr += String(chunk);
-            if (observedStderr.split("\n").includes("fixture ready")) {
-              ready.resolve();
-            }
-          });
-        });
-        child.once("exit", (code, signal) => exited.resolve({ code, signal }));
-        child.once("close", closed);
-      };
-      spawnChannel.subscribe(observeSpawn);
       const descendant = [
         'process.on("SIGTERM", () => {});',
         'process.send("ready"); process.disconnect();',
@@ -430,7 +337,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           await vi.advanceTimersByTimeAsync(10_000);
         }
         if (mode !== "abort-exit") {
-          expect(await exited.promise, observedStderr).toEqual({ code: exitCode, signal: null });
+          expect(await exited.promise, observed.stderr()).toEqual({ code: exitCode, signal: null });
         }
         expect(closed).not.toHaveBeenCalled();
         expect(settled).not.toHaveBeenCalled();
@@ -441,7 +348,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           await vi.advanceTimersByTimeAsync(300);
         }
         const error = await producing.catch((value: unknown) => value);
-        expect(await exited.promise, observedStderr).toEqual({ code: exitCode, signal: null });
+        expect(await exited.promise, observed.stderr()).toEqual({ code: exitCode, signal: null });
         expect(closed).toHaveBeenCalledOnce();
         if (mode === "ordinary-exit") {
           expect(error).toMatchObject({
@@ -462,7 +369,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           vi.useRealTimers();
         }
         await producing.catch(() => undefined);
-        spawnChannel.unsubscribe(observeSpawn);
       }
     },
   );

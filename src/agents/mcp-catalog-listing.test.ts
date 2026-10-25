@@ -19,6 +19,7 @@ async function fixture() {
   await Promise.all([client.connect(outbound), server.connect(inbound)]);
   return {
     server,
+    transport: inbound,
     list(
       kind: "tools" | "resources" | "prompts",
       timeoutMs = 1_000,
@@ -68,6 +69,23 @@ it("rejects repeated and cyclic cursors", async () => {
   }));
   await expect(catalog.list("tools")).rejects.toThrow("repeated pagination cursor");
 });
+
+it.each(["tools", "resources", "prompts"] as const)(
+  "rejects malformed %s entries at the SDK boundary",
+  async (kind) => {
+    await using catalog = await fixture();
+    catalog.server.setRequestHandler("tools/list", async () => ({ tools: [] }));
+    catalog.server.setRequestHandler("resources/list", async () => ({ resources: [] }));
+    catalog.server.setRequestHandler("prompts/list", async () => ({ prompts: [] }));
+    const send = catalog.transport.send.bind(catalog.transport);
+    catalog.transport.send = (message, options) =>
+      send(
+        "result" in message ? { ...message, result: { [kind]: [undefined] } } : message,
+        options,
+      );
+    await expect(catalog.list(kind)).rejects.toThrow(`Invalid result for ${kind}/list`);
+  },
+);
 
 it("enforces page, item, and aggregate byte bounds through the SDK", async () => {
   await using catalog = await fixture();

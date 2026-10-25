@@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-vi.mock("./auth.js", () => ({
-  authorizeHttpGatewayConnect: vi.fn(),
-}));
+// mock-isolation: Control authentication outcomes while testing request-authority handoff.
+vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: vi.fn() }));
 
 const defaultConfig = vi.hoisted(() => ({
   gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } },
@@ -55,19 +54,17 @@ const readProfileSource = () => ({
   path: "/synthetic/openclaw.sqlite",
   env: { OPENCLAW_STATE_DIR: "/synthetic" },
 });
-function profileAuthorityFixture(profile: typeof ownerProfile, aliases = [profile.profileId]) {
+function profileAuthorityFixture(
+  { profileId, displayName, avatarRevision, hasAvatar }: typeof ownerProfile,
+  aliases = [profileId],
+) {
   return {
-    profileId: profile.profileId,
+    profileId,
     role: null,
     aliases,
     isCurrent: () => true,
     readSource: readProfileSource,
-    display: {
-      id: profile.profileId,
-      displayName: profile.displayName,
-      avatarRevision: profile.avatarRevision,
-      hasAvatar: profile.hasAvatar,
-    },
+    display: { id: profileId, displayName, avatarRevision, hasAvatar },
   };
 }
 
@@ -227,20 +224,16 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     },
   );
 
+  const outcomes = [
+    "completed",
+    "disconnected",
+    "policy-changed",
+    "stale-at-entry",
+    "identity-grants",
+  ] as const;
   it.each(
     (["global", "gateway"] as const).flatMap((configSource) =>
-      (
-        [
-          "completed",
-          "disconnected",
-          "policy-changed",
-          "stale-at-entry",
-          "identity-grants",
-        ] as const
-      ).map((outcome) => ({
-        configSource,
-        outcome,
-      })),
+      outcomes.map((outcome) => ({ configSource, outcome })),
     ),
   )(
     "keeps HTTP authorization pending on profile acquisition and revalidates before completion ($configSource policy, $outcome)",
@@ -410,8 +403,9 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
   );
 
   it("uses the verified GitHub profile before dispatching a request without roles", async () => {
-    const sync = vi.fn().mockResolvedValue({ profileId: "profile-github", updatedAt: 3 });
-    vi.mocked(githubIdentity.createAuthenticatedGitHubIdentitySync).mockReturnValue(sync);
+    vi.mocked(githubIdentity.createAuthenticatedGitHubIdentitySync).mockReturnValue(
+      vi.fn().mockResolvedValue({ profileId: "profile-github", updatedAt: 3 }),
+    );
     vi.mocked(profileAuthority.prepareUserProfileRoleAuthority).mockResolvedValue(
       profileAuthorityFixture(expectedGitHubProfile, [
         "profile-github",
@@ -476,11 +470,9 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       trustedProxies: ["127.0.0.1"],
     });
 
-    const [authParams] = vi.mocked(authorizeHttpGatewayConnect).mock.calls.at(-1) ?? [];
-    if (authParams === undefined) {
-      throw new Error("Expected HTTP gateway auth to be called");
-    }
-    expect(authParams.browserOriginPolicy).toEqual({
+    expect(
+      vi.mocked(authorizeHttpGatewayConnect).mock.calls.at(-1)?.[0].browserOriginPolicy,
+    ).toEqual({
       requestHost: "gateway.example.com",
       origin: "https://evil.example",
       fetchSite: "cross-site",
@@ -497,11 +489,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     });
 
     await expect(
-      authorizeGatewayHttpRequestOrReply({
-        req: createReq(),
-        res,
-        auth: { mode: "token", allowTailscale: false, token: "secret" },
-      }),
+      authorize({ res, auth: { mode: "token", allowTailscale: false, token: "secret" } }),
     ).resolves.toBeNull();
 
     expect(sendGatewayAuthFailure).toHaveBeenCalledWith(res, {

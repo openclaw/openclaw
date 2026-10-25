@@ -69,6 +69,7 @@ export function setDispatchMock(
     dispatch: vi.fn(),
     forceDestroyEnvironment: vi.fn(),
     reclaim: vi.fn(),
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: vi.fn().mockResolvedValue(undefined),
     reconcileActive: vi.fn().mockResolvedValue(undefined),
     ...overrides,

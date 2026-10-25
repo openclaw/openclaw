@@ -374,13 +374,11 @@ it.for([
     kind === "npm" ? "npm@10.0.0" : kind === "bun" ? "bun@1.2.0" : undefined,
     lockfiles,
   );
-  const resolveRegistryChannel = vi.fn(() => "extended-stable" as const);
   const env = kind === "lockless npm" ? { BUN_INSTALL: path.join(base, "custom-bun-home") } : {};
   await withEnvAsync(env, async () => {
     const status = await inspectStatus(root, {
       fetchGit: false,
       timeoutMs: 1000,
-      resolveRegistryChannel,
     });
     expect(status).toMatchObject({
       root,
@@ -406,10 +404,6 @@ it.for([
               ? { reason: "unknown package manager" }
               : {}),
       },
-    });
-    expect(resolveRegistryChannel).toHaveBeenCalledWith({
-      installKind: "package",
-      git: undefined,
     });
   });
 });

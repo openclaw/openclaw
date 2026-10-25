@@ -11,6 +11,7 @@ import {
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
 import { afterWorkboardUpdate } from "../../test/settle.ts";
+import { openCardMenu } from "./view.test-support.ts";
 import {
   mountPage,
   observeSessions,
@@ -295,10 +296,11 @@ it("keeps a bare unknown link unresolved despite an ambient roster owner", async
   await afterWorkboardUpdate(() =>
     expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
   );
+  const menu = openCardMenu(page.container.querySelector(".workboard-card")!);
   expect(openSessionButton(page.container)).toBeUndefined();
   expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
   expectDefined(
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
+    menu.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
     "open unresolved card details",
   ).click();
   await afterWorkboardUpdate(() =>
@@ -658,8 +660,9 @@ describe("selection reconciliation", () => {
       page.fixture.connection.connected = true;
       page.fixture.notify();
       await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
+      const menu = openCardMenu(page.container.querySelector(".workboard-card")!);
       expectDefined(
-        page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
+        menu.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
         "open task details",
       ).click();
       await afterWorkboardUpdate(() =>
@@ -772,7 +775,9 @@ describe("selection reconciliation", () => {
     await afterWorkboardUpdate(() =>
       expect(page.container.querySelector(".workboard-card")?.textContent).toContain(card.title),
     );
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]')!.click();
+    openCardMenu(page.container.querySelector(".workboard-card")!)
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')!
+      .click();
     await afterWorkboardUpdate(() =>
       expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
     );

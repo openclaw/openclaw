@@ -101,6 +101,7 @@ function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown
     }),
     markTimedOutDuringCompaction: () => {},
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async (promise) => await promise,
@@ -157,6 +158,7 @@ function prompt(transcriptLeafId: string | null = null) {
 
 function finalizationInput(preparedState: ReturnType<typeof prepared>) {
   return {
+    runAbortController: new AbortController(),
     agentDir: "/tmp/agent",
     resolveActiveContextEnginePluginId: () => undefined,
     setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },

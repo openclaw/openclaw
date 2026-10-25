@@ -135,16 +135,7 @@ it("releases session mutation admission during Git while the registry claim fenc
   });
   void cleanup.catch(() => {});
   const waitForStage = (gate: Promise<void>, stage: string) =>
-    withinTest(
-      awaitGateBeforeSettlement(
-        gate,
-        cleanup.then((result) => {
-          throw new Error(`Cleanup settled before ${stage}: ${JSON.stringify(result)}`);
-        }),
-        `Cleanup settled before ${stage}`,
-      ),
-      signal,
-    );
+    withinTest(awaitGateBeforeSettlement(gate, cleanup, `Cleanup settled before ${stage}`), signal);
   const identities = [sessionKey, entry.sessionId];
   try {
     await waitForStage(entered.promise, "snapshot capture");
@@ -217,47 +208,36 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   setRuntimeConfigSnapshot({});
   const repo = await initializeRepository(tempDirs.make("worktree-gc-cadence-"));
-  await materializeManagedWorktreeFixtures({
-    env,
-    repoRoot: repo,
-    stateDir: repo,
-    names: ["first", "second", "third"],
-    now: 1,
-  });
+  const seed = (repoRoot: string, names: string[], now = 1) =>
+    materializeManagedWorktreeFixtures({ env, repoRoot, stateDir: repoRoot, names, now });
+  await seed(repo, ["first", "second", "third"]);
   const service = new ManagedWorktreeService({ env });
   const commands = vi.spyOn(gitExec, "executeGitCommand");
-  const maintenanceRoots = () =>
-    commands.mock.calls.flatMap(([cwd, , options]) =>
-      options?.operation === "worktree.maintenance" ? [cwd] : [],
+  const expectMaintenance = (...roots: string[]) => {
+    const calls = commands.mock.calls.filter(
+      (call) => call[2]?.operation === "worktree.maintenance",
     );
+    expect(new Set(calls.map(([cwd]) => cwd))).toEqual(new Set(roots));
+    commands.mockClear();
+  };
   await service.gc();
-  expect(maintenanceRoots().length).toBeGreaterThan(0);
-  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
-  commands.mockClear();
+  expectMaintenance(repo);
 
   const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
   await fs.mkdir(orphan, { recursive: true });
   expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
   await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(maintenanceRoots()).toEqual([]);
+  expectMaintenance();
 
   const otherRepo = await initializeRepository(tempDirs.make("worktree-gc-new-repo-"));
-  await materializeManagedWorktreeFixtures({
-    env,
-    repoRoot: otherRepo,
-    stateDir: otherRepo,
-    names: ["new-repo"],
-    now: Date.now(),
-  });
+  await seed(otherRepo, ["new-repo"], Date.now());
   await service.gc();
-  expect(new Set(maintenanceRoots())).toEqual(new Set([otherRepo]));
-  commands.mockClear();
+  expectMaintenance(otherRepo);
 
   await service.gc({ retryDeferred: true });
-  expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
-  commands.mockClear();
+  expectMaintenance(repo, otherRepo);
   await service.gc();
-  expect(maintenanceRoots()).toEqual([]);
+  expectMaintenance();
 
   // Registry preparation and native leases finish before the cadence-only clock scope.
   const records = await registryReads.readRegistryWorktrees(env);
@@ -268,14 +248,13 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
   try {
     const maintain = createWorktreeGitMaintenance(env);
     await maintain({});
-    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
-    commands.mockClear();
+    expectMaintenance(repo, otherRepo);
     now += WORKTREE_GC_INTERVAL_MS - 1;
     await maintain({});
-    expect(maintenanceRoots()).toEqual([]);
+    expectMaintenance();
     now += 1;
     await maintain({});
-    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+    expectMaintenance(repo, otherRepo);
   } finally {
     clock.mockRestore();
     inventory.mockRestore();

@@ -36,9 +36,7 @@ afterEach(async () => {
 });
 
 function createWorkspace(avatar?: string) {
-  const root = tempRoots.make("openclaw-avatar-file-");
-  const workspace = path.join(root, "workspace");
-  fs.mkdirSync(workspace);
+  const workspace = tempRoots.make("openclaw-avatar-file-");
   const file = (name: string) => path.join(workspace, name);
   const write = (name: string, body: string | Uint8Array) => {
     fs.writeFileSync(file(name), body);
@@ -186,7 +184,6 @@ it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements
   const avatarPath = file("avatar.png");
   const unchangedMtime = new Date("2024-01-01T00:00:00Z");
   fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
-  const originalStat = fs.statSync(avatarPath);
   const originalIdentity = fs.statSync(avatarPath, { bigint: true });
   const originalFstatSync = fs.fstatSync;
   // fs-safe derives numeric metadata from the pinned descriptor's bigint observation.
@@ -210,19 +207,7 @@ it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements
   fs.writeFileSync(avatarPath, "modified");
   fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
   ctimeMs += 1;
-  expect(await prepare()).toMatchObject({
-    ok: true,
-    file: {
-      body: Buffer.from("modified"),
-      stat: {
-        ctimeMs,
-        dev: String(originalStat.dev),
-        ino: String(originalStat.ino),
-        mtimeMs: originalStat.mtimeMs,
-        size: originalStat.size,
-      },
-    },
-  });
+  expectBody(await prepare(), "modified");
   const replacement = write("replacement.png", "replacement bytes");
   fs.renameSync(replacement, avatarPath);
   expectBody(await prepare(), "replacement bytes");

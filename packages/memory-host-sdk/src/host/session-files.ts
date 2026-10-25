@@ -458,7 +458,7 @@ export async function buildSessionEntries(
 }
 
 /** The shared transcript worker runs the same projection as inline readers. */
-export async function buildSessionEntryInProcess(
+async function buildSessionEntryInProcess(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
   snapshot?: SessionEntrySnapshot,

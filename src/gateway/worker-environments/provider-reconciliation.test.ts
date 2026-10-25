@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { tryBeginGatewaySuspendAdmission } from "../../process/gateway-work-admission.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -12,7 +14,11 @@ type Environment = NonNullable<ReturnType<typeof testState.store.get>>;
 const fail = (message: string) => async () => {
   throw new Error(message);
 };
-const lifecycleLease = (leaseId: string) => ({ leaseId, profile: { region: "test" } });
+const lifecycleLease = (leaseId: string) => ({
+  leaseId,
+  profile: { region: "test" },
+  signal: expect.any(AbortSignal),
+});
 
 function expectState(
   environmentId: string,
@@ -85,6 +91,82 @@ async function beginTeardown(record: Environment, lastError?: string) {
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("defers teardown admitted during suspension and retries its intent after resume", async () => {
+    const environment = await support.seedReady("suspended-teardown");
+    const destroy = vi.fn(async () => {});
+    const workerService = service({ destroy });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    try {
+      await expect(workerService.destroy(environment.environmentId)).rejects.toThrow("paused");
+      expect(destroy).not.toHaveBeenCalled();
+      expectState(environment.environmentId, "destroying", {
+        leaseId: environment.leaseId,
+        destroyRequestedAtMs: expect.any(Number),
+      });
+    } finally {
+      suspension?.rollback();
+    }
+    await workerService.reconcileOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expectState(environment.environmentId, "destroyed");
+  });
+
+  it.each(["shutdown", "timeout", "bootstrap failure"] as const)(
+    "interrupts provider teardown on %s and retries the retained lease after restart",
+    async (reason) => {
+      const bootstrapFailure = reason === "bootstrap failure";
+      const environment = bootstrapFailure
+        ? await support.seedBootstrapping("interrupted-teardown")
+        : await support.seedReady("interrupted-teardown");
+      if (bootstrapFailure) {
+        testState.prepareInstallation = vi.fn(fail("installation failed"));
+      } else {
+        await beginTeardown(environment);
+      }
+      const entered = createDeferred<AbortSignal | undefined>();
+      const release = createDeferred();
+      const destroy = vi.fn(async ({ signal }: WorkerLifecycleLease) => {
+        entered.resolve(signal);
+        await racePromiseWithAbortSignal(release.promise, signal);
+      });
+      const workerService = service({ destroy }, { providerCallTimeoutMs: 1_000 });
+      if (reason === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const reconciliation = workerService.reconcileOnce();
+      let stopping: Promise<void> | undefined;
+      try {
+        const signal = await entered.promise;
+        if (reason !== "timeout") {
+          stopping = workerService.stop();
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(signal?.aborted).toBe(true);
+        await reconciliation;
+        await (stopping ?? workerService.stop());
+        expectState(environment.environmentId, "destroying", {
+          leaseId: environment.leaseId,
+          destroyRequestedAtMs: expect.any(Number),
+          lastError: bootstrapFailure
+            ? expect.stringContaining("installation failed")
+            : expect.stringMatching(/paused|aborted|timed out/i),
+        });
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await reconciliation;
+        await (stopping ?? workerService.stop());
+      }
+      await support.reopenWorkerEnvironmentStore();
+      const restarted = service({ destroy });
+      await restarted.reconcileOnce();
+      expect(destroy).toHaveBeenCalledTimes(2);
+      expectState(environment.environmentId, bootstrapFailure ? "failed" : "destroyed");
+    },
+  );
 
   it("adopts a matching milestone-1 row that predates worker credentials", async () => {
     const environmentId = "worker-milestone-one";
@@ -571,7 +653,7 @@ describe("worker environment service", () => {
     resolutionFails = false;
     await workerService.reconcileOnce();
     expect(testState.store.get(intent.environmentId)?.state).toBe("destroyed");
-    expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);
+    expect(destroyed).toEqual([lifecycleLease("lease-retried")]);
     expect(testState.prepareInstallation).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -34,9 +35,10 @@ import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { requestChatSend } from "./chat-send-request.ts";
+import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
@@ -873,21 +875,15 @@ describe("canonical session message recovery", () => {
       listBranches,
       refresh: vi.fn(async () => {
         await refreshFinished.promise;
-        state.sessionsResult = {
-          ts: 2,
-          path: "",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [
-            {
-              key: state.sessionKey,
-              kind: "direct",
-              hasActiveRun: false,
-              status: "done",
-              updatedAt: 2,
-            },
-          ],
-        };
+        state.sessionsResult = sessionListResult(2, [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            hasActiveRun: false,
+            status: "done",
+            updatedAt: 2,
+          },
+        ]);
       }),
     };
 
@@ -917,6 +913,31 @@ describe("canonical session message recovery", () => {
 });
 
 describe("chat state render lifecycle", () => {
+  it("publishes activity for stream boundaries without republishing continuing text", () => {
+    const changed = vi.fn();
+    const controller = createChatState<ChatPageHost>({ awaitDomCommit: async () => true }, changed);
+    onTestFinished(controller.dispose);
+    const state = createPageState(
+      createChatPageStateContext(),
+      controller.createRenderLifecycle(),
+      { dispatchEvent: () => true },
+    );
+    controller.attach(state);
+    changed.mockClear();
+    const run = chatRunPresentation(state);
+
+    run.batch(() => (state.chatStream = "First"));
+    expect(changed).toHaveBeenCalledOnce();
+    changed.mockClear();
+
+    run.batch(() => (state.chatStream = "First and second"));
+    expect(state.chatStream).toBe("First and second");
+    expect(changed).not.toHaveBeenCalled();
+
+    run.batch(() => (state.chatStream = null));
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
   it("publishes queued-edit retention without rendering and preserves the edit token", () => {
     const changed = vi.fn();
     const awaitDomCommit = vi.fn(async () => true);
@@ -1607,22 +1628,7 @@ describe("chat state render lifecycle", () => {
         if (ready) {
           writes.push(request);
         }
-        pending.handleResponse({
-          type: "res",
-          id: request.id,
-          ok: ready,
-          ...(ready
-            ? { payload: { status: "ok", runId: "started" } }
-            : {
-                error: {
-                  code: "UNAVAILABLE",
-                  message: "Agent is preparing",
-                  retryable: true,
-                  retryAfterMs: 1_000,
-                  details: { reason: "startup-sidecars", method: request.method },
-                },
-              }),
-        });
+        pending.handleResponse(startupAdmissionResponse(request, ready));
       },
     };
     const { controller, dispose } = createOwner(createRenderer());

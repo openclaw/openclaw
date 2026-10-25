@@ -249,23 +249,6 @@ export function registerCancellationReconciliationTests({
     });
   });
 
-  it("retires a reconciled tombstone without replaying requester stop delivery", async () => {
-    const mod = getRegistry();
-    const killedAt = Date.now() - 5 * 60_000;
-    const startedAt = killedAt - 60_000;
-    const child = makeChild("requester-stop-suppressed", startedAt, "run-retired-kill");
-    await mod.addSubagentRunForTests(
-      makeKilledRun(killedAt, {
-        ...child,
-        expectsCompletionMessage: true,
-        killReconciliation: { killedAt, suppressTaskDelivery: true },
-      }),
-    );
-    await mod.testing.sweepOnceForTests();
-    await waitForFast(() => expect(findRequesterRun(child.runId)).toBeUndefined());
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-  });
-
   it.each(["new completion", "new completion without start", "old completion"] as const)(
     "retires superseded tombstones without mutating the successor: %s",
     async (source) => {

@@ -85,10 +85,26 @@ describe("normalizePluginsConfig", () => {
   });
 
   it("shares frozen policy only for deeply frozen plugin configs", () => {
-    const frozen = freezeJsonSnapshot({ entries: { "voice-call": { enabled: true } } });
+    const frozen = freezeJsonSnapshot({
+      entries: {
+        "voice-call": {
+          enabled: true,
+          hooks: { timeouts: { before_agent_start: 1000 } },
+          subagent: { allowedModels: ["example/model"] },
+          llm: { allowedModels: ["example/model"], allowedCompletionModels: ["example/model"] },
+        },
+      },
+    });
     const shared = normalizePluginsConfig(frozen);
     expect(normalizePluginsConfig(frozen)).toBe(shared);
     expect(Object.isFrozen(shared.entries["voice-call"])).toBe(true);
+    const normalizedEntry = shared.entries["voice-call"]!;
+    for (const policy of [normalizedEntry.hooks, normalizedEntry.subagent, normalizedEntry.llm]) {
+      expect(Object.isFrozen(policy)).toBe(true);
+      for (const value of Object.values(policy!)) {
+        expect(Object.isFrozen(value)).toBe(true);
+      }
+    }
     // Mutable sources can change in place, so every read normalizes again.
     const mutable = { entries: { "voice-call": { enabled: true } } };
     expect(normalizePluginsConfig(mutable)).not.toBe(normalizePluginsConfig(mutable));

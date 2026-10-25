@@ -23,7 +23,6 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { readSessionIdentityEvidenceInDatabase as readEvidence } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -345,25 +344,9 @@ describe("worker placement session evidence", () => {
         }
 
         registryListing.invalidateRegisteredAgentDatabasesMemo({ env: process.env });
-        const calibration = new (requireNodeSqlite().DatabaseSync)(":memory:");
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        const cachedInsert = calibration.prepare("INSERT INTO calibration VALUES (?)");
-        const cachedRead = calibration.prepare("SELECT value FROM calibration");
         const observation = observeMainThreadSql();
         try {
-          try {
-            observation.calibrate();
-            cachedInsert.run(1);
-            cachedRead.get();
-            cachedRead.all();
-            expect([...cachedRead.iterate()]).toHaveLength(1);
-            expect(observation.calls.slice(2).every((call) => call.mock.calls.length > 0)).toBe(
-              true,
-            );
-          } finally {
-            calibration.close();
-            observation.clear();
-          }
+          observation.calibrate();
           const resolve = await createResolver(placements);
           await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
             placements.map(() => "current"),

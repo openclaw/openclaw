@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { board as emptyBoard, seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
@@ -10,24 +11,17 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard:workboard-layout";
-const boardSnapshot = {
-  ...emptyBoard(sessionKey),
-  widgets: [
-    {
-      name: "workboard-board",
-      tabId: "main",
-      title: "Platform board",
-      contentKind: "plugin",
-      pluginKind: "workboard:board",
-      props: { boardId: "platform" },
-      sizeW: 12,
-      sizeH: 5,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
-};
+const boardSnapshot = emptyBoard(sessionKey, [
+  createBoardWidget({
+    name: "workboard-board",
+    title: "Platform board",
+    contentKind: "plugin",
+    pluginKind: "workboard:board",
+    props: { boardId: "platform" },
+    sizeW: 12,
+    sizeH: 5,
+  }),
+]);
 
 const statuses = ["ready", "running", "done"] as const;
 const cards = statuses.map((status, index) => ({

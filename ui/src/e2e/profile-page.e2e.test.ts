@@ -3,16 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
-import {
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineProfilePreferenceTests } from "./profile-page-preferences.test-support.ts";
 
@@ -155,20 +152,9 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const el = (selector: string) => page.locator(selector);
 
-      await page.route(new URL(profilePath, suite.server.baseUrl).href, async (route) => {
-        const response = await route.fetch();
-        const body = await response.text();
-        await route.fulfill({
-          body,
-          headers: {
-            ...response.headers(),
-            "content-security-policy": buildControlUiCspHeader({
-              inlineScriptHashes: computeInlineScriptHashes(body),
-            }),
-          },
-          response,
-        });
-      });
+      await page.route(new URL(profilePath, suite.server.baseUrl).href, (route) =>
+        fulfillWithControlUiCsp(route),
+      );
       const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
       await page.addInitScript((sameOriginGatewayUrl) => {
         (
