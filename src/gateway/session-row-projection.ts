@@ -650,7 +650,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       readSourceEntry,
       state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
     }),
-    present(this: void, record: records.MaterializedRow, options?: records.SnapshotOptions) {
+    present: (record: records.MaterializedRow, options?: records.SnapshotOptions) => {
       residency.describe(record);
       return records.present(record, metadata.current, options);
     },
