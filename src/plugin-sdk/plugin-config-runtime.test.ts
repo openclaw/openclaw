@@ -33,6 +33,34 @@ it("reuses captured plugin policy across reads and keeps revisions independent",
   expect(normalize).not.toHaveBeenCalled();
 });
 
+it("resolves live enablement from prepared policy and refreshes same-object publications", () => {
+  using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
+  const config = configFor({ " CODEX ": { enabled: true } });
+  snapshots.setRuntimeConfigSnapshot(config);
+  const resolve = () =>
+    runtime.resolveEffectiveEnableState({ id: "codex", origin: "bundled", rootConfig: config });
+  normalize.mockClear();
+  for (let i = 0; i < 10; i++) {
+    expect(resolve()).toEqual({ enabled: true });
+  }
+  expect(normalize).not.toHaveBeenCalled();
+
+  config.plugins!.entries![" CODEX "]!.enabled = false;
+  snapshots.setRuntimeConfigSnapshot(config);
+  normalize.mockClear();
+  expect(resolve()).toEqual({ enabled: false, reason: "disabled in config" });
+  expect(normalize).not.toHaveBeenCalled();
+
+  expect(
+    runtime.resolveEffectiveEnableState({
+      id: "codex",
+      origin: "bundled",
+      rootConfig: config,
+      config: runtime.normalizePluginsConfig({ entries: { codex: { enabled: true } } }),
+    }),
+  ).toEqual({ enabled: true });
+});
+
 it("keeps public normalized policy mutable without changing the published host policy", () => {
   const pluginConfig = { enabled: false, mode: "strict" };
   const config = configFor({ "google-gemini-cli": { enabled: true, config: pluginConfig } });

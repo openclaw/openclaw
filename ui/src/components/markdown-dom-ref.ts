@@ -1,10 +1,11 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
+import type { MarkdownContent } from "../lib/markdown-content.ts";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
-  | string
-  | { messageKey: string; source: string; parts: readonly [string, string] };
+  | MarkdownContent
+  | { messageKey: string; source: string; parts: readonly [MarkdownContent, MarkdownContent] };
 
 /** Bind a sanitized Markdown island without letting Solid render inside it. */
 export function createMarkdownRef(
@@ -28,7 +29,7 @@ export function createMarkdownRef(
         return;
       }
       reconciler.setConnected(value.connected ?? true);
-      if (typeof value.content === "string") {
+      if (typeof value.content === "string" || "fragment" in value.content) {
         reconciler.updateHtml(value.content, value.media, value.incremental);
       } else {
         const { messageKey, source, parts } = value.content;

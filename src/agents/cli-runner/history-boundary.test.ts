@@ -98,7 +98,7 @@ async function settleNativeBinding(
 
 describe("CLI transcript account boundary", () => {
   it.each(["claude-cli", "google-gemini-cli"] as const)(
-    "hands cron and Talk results to the next %s resume once without granting recovery",
+    "hands cron and Talk results to the next native-only %s resume once without granting recovery",
     async (provider) => {
       const f = await fixture();
       const config = { session: { store: f.target.storePath } };
@@ -248,7 +248,13 @@ describe("CLI transcript account boundary", () => {
               buildCliSessionBinding(context, output.sessionId!, output),
             );
           },
-          { provider, config, cliSessionBinding: binding, prompt: `TYPED_REQUEST_${turn}` },
+          {
+            provider,
+            config,
+            nativeAuthOnly: true,
+            cliSessionBinding: binding,
+            prompt: `TYPED_REQUEST_${turn}`,
+          },
         );
       }
       for (const marker of markers) {

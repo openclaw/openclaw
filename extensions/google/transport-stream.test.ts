@@ -825,34 +825,30 @@ describe("google transport stream", () => {
       },
     );
 
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          systemPrompt: "Follow policy.",
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: {
-                type: "object",
-                properties: { q: { type: "string" } },
-                required: ["q"],
-              },
+    const result = await runGeminiStreamResult({
+      model,
+      context: {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
             },
-          ],
-        } as unknown as Parameters<typeof streamFn>[1],
-        {
-          apiKey: "gemini-api-key",
-          cachedContent: " cachedContents/request-cache ",
-          reasoning: "medium",
-          toolChoice: "auto",
-        } as Parameters<typeof streamFn>[2],
-      ),
-    );
-    const result = await stream.result();
+          },
+        ],
+      } as unknown as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
+      options: {
+        apiKey: "gemini-api-key",
+        cachedContent: " cachedContents/request-cache ",
+        reasoning: "medium",
+        toolChoice: "auto",
+      },
+    });
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
@@ -1922,20 +1918,7 @@ describe("google transport stream", () => {
       guardedFetchMock.mockResolvedValueOnce(
         buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
       );
-      const streamFn = createGoogleVertexTransportStreamFn();
-      const stream = await Promise.resolve(
-        streamFn(
-          buildGoogleVertexModel(),
-          { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-            typeof streamFn
-          >[1],
-          {
-            apiKey: "gcp-vertex-credentials",
-            fetch: vi.fn(),
-          } as Parameters<typeof streamFn>[2],
-        ),
-      );
-      await stream.result();
+      await runGoogleVertexStreamResult({ fetch: vi.fn() });
 
       const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
       expect(String(url)).toBe(

@@ -260,6 +260,19 @@ on such a route stays unbound and runs on that key; once a stored account become
 job stops with the adoption instructions instead of switching to that account. Job
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.
+
+Unbound CLI-runtime automations use the CLI's own login and do not require an
+inference binding. OpenClaw does not forward a stored inference profile on this
+native-only path. Jobs with a saved inference binding keep using that account.
+Known provider-auth environment variables and the backend's credential exclusions
+are removed after environment overrides, even when the live-test preserve-env
+option is set. Runtime settings, such as the context window, are retained.
+For paired-node runs, the Gateway withholds host credentials on every node. Nodes
+advertising native-only auth support also use their own provider inventory to
+remove credentials. Older nodes retain their existing local environment behavior
+and receive no new invocation parameter. Update the node and approve its new
+capability to apply node-side filtering.
+
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.

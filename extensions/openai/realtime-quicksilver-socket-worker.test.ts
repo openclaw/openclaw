@@ -118,10 +118,7 @@ describe("GPT-Live socket worker managed proxy", () => {
     const authority = `gpt-live.openai.test:${target.port}`;
     const audio: Buffer[] = [];
     const errors: Error[] = [];
-    let echoed!: () => void;
-    const firstAudio = new Promise<void>((resolve) => {
-      echoed = resolve;
-    });
+    const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<void>();
     const socket = OpenAIQuicksilverWorkerSocket.create(
       `ws://${authority}`,
       { maxPayload: 1024 * 1024 },

@@ -173,6 +173,8 @@ export type CliSecretInput = SpawnSecretInput & {
 };
 
 type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
+  /** Per-run resets happen before prepared overlays; they are not credential exclusions. */
+  resetEnv?: readonly string[];
   /** Exact process cleanup retained across attempt copies and natural registry removal. */
   closeLiveSession?: (
     reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,

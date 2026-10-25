@@ -138,10 +138,7 @@ describe("Synology Chat client loopback", () => {
     const port = await reserveLoopbackPort();
     const nativeSetTimeout = globalThis.setTimeout;
     let releaseRetry: (() => void) | undefined;
-    let markRetryScheduled!: () => void;
-    const retryScheduled = new Promise<void>((resolve) => {
-      markRetryScheduled = resolve;
-    });
+    const { promise: retryScheduled, resolve: markRetryScheduled } = Promise.withResolvers<void>();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     timeoutSpy.mockImplementation(((
       callback: (...args: unknown[]) => void,

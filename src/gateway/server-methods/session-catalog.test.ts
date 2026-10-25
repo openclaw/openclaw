@@ -11,6 +11,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   catalogHost,
@@ -167,7 +168,7 @@ describe("session catalog Gateway methods", () => {
           params: { metadataOnly: true, progressId: "metadata-progress" },
           context,
           respond: metadata,
-          client: { connId: "metadata-client" },
+          client: { connId: "metadata-client", connect: gatewayConnect([]) },
         } as never);
       await readMetadata();
       expect(list).not.toHaveBeenCalled();
@@ -316,7 +317,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.list",
       { progressId: "progress-creator" },
       {},
-      { connId: "requester", connect: {} },
+      { connId: "requester", connect: gatewayConnect([]) },
       { broadcastToConnIds },
     );
     const projectedSessions = [
@@ -519,7 +520,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.continue",
       { catalogId: "remote", hostId: "node:devbox", threadId: "thread-1" },
       {},
-      { connect: { scopes: ["operator.write", "operator.admin"] } },
+      { connect: gatewayConnect(["operator.write", "operator.admin"]) },
     );
 
     expect(continueSession).toHaveBeenCalledWith({
@@ -607,7 +608,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
     connId: `viewer-${index}`,
-    connect: { scopes: ["operator.admin"] },
+    connect: gatewayConnect(["operator.admin"]),
   }));
   const broadcasts = clients.map(() => vi.fn());
   const request = (

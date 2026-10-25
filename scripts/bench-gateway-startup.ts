@@ -261,6 +261,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: BASE_CONFIG,
   },
   {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    config: BASE_CONFIG,
+  },
+  {
     id: "skipChannels",
     name: "gateway, skip channels",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },

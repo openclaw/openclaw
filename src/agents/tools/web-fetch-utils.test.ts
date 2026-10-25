@@ -104,6 +104,17 @@ describe("web-fetch-utils", () => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
 
+  it.each(["markdown", "text"] as const)(
+    "separates definition-list terms in %s mode",
+    async (extractMode) => {
+      const result = await extractBasicHtmlContent({
+        html: "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>",
+        extractMode,
+      });
+      expect(result?.text).toBe("Region\nEMEA\nUnits\n120");
+    },
+  );
+
   it("separates HTML table cells and preserves preformatted code whitespace", () => {
     const html =
       "<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>def f(x):\n    if x:\n        return 1\n    return 0</code></pre><p>Done after the example code.</p></article>";

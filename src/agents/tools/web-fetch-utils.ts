@@ -27,6 +27,9 @@ const BLOCK_BREAK_TAGS = new Set([
   "tr",
   "ul",
   "ol",
+  "dl",
+  "dt",
+  "dd",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.

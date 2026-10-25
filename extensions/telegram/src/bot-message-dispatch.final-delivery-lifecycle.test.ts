@@ -3,6 +3,7 @@ import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -406,6 +407,85 @@ const buttons = [[{ text: "Continue", callback_data: "ask:continue" }]];
 const settled = "The question has settled.";
 
 describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
+  it("delivers a question once while an in-flight progress draft is retired", async () => {
+    vi.useFakeTimers();
+    const editStarted = createDeferred<void>();
+    const releaseEdit = createDeferred<void>();
+    let questionDelivery: unknown;
+    const register = vi
+      .spyOn(questionGatewayRuntime, "registerChannelDelivery")
+      .mockImplementation(() => {});
+    try {
+      const { bot, messages, sendMessage, editMessageText, deleteMessage } =
+        await observeTransport();
+      dispatchReplyMock.mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Check the workspace before asking the user", status: "in_progress" }],
+        });
+        const draftResult = createDraftStream.mock.results[0];
+        if (draftResult?.type !== "return") {
+          throw new Error("Expected the Telegram draft factory to return a stream");
+        }
+        const draft: TelegramDraftStream = draftResult.value;
+        await draft.flush();
+        expect(sendMessage).toHaveBeenCalledOnce();
+
+        const edit = editMessageText.getMockImplementation()!;
+        editMessageText.mockImplementationOnce(async (...args) => {
+          editStarted.resolve();
+          await releaseEdit.promise;
+          return edit(...args);
+        });
+        await replyOptions?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Verify the workspace before asking the user", status: "in_progress" }],
+        });
+        const flushing = draft.flush();
+        await editStarted.promise;
+        const retirement = replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+        const delivery = dispatcherOptions.deliver(
+          { ...question, channelData: { ...question.channelData, telegram: { buttons } } },
+          { kind: "tool" },
+        );
+        releaseEdit.resolve();
+        await Promise.all([flushing, retirement]);
+        questionDelivery = await delivery;
+        return { queuedFinal: true };
+      });
+
+      await dispatchTurn(bot, {
+        streamMode: "progress",
+        cfg: { channels: { telegram: { botToken: "123456:question-fixture" } } },
+      });
+      await vi.runOnlyPendingTimersAsync();
+      expect(questionDelivery).toMatchObject({ visibleReplySent: true });
+      expect(sendMessage.mock.calls.filter(([, text]) => text === question.text)).toHaveLength(1);
+      expect([...messages.values()]).toEqual([question.text]);
+      const [messageId] = messages.keys();
+      expect(editMessageText).toHaveBeenCalledWith(
+        "123",
+        messageId,
+        question.text,
+        expect.objectContaining({ reply_markup: { inline_keyboard: buttons } }),
+      );
+      expect(register).toHaveBeenCalledOnce();
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({
+          questionId: question.channelData.askUser.questionId,
+          deliveryId: `telegram:default:123:${messageId}`,
+        }),
+      );
+      expect(deleteMessage).toHaveBeenCalledWith(123, 1001);
+      expect(deleteMessage).not.toHaveBeenCalledWith(123, messageId);
+    } finally {
+      releaseEdit.resolve();
+      register.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { streamMode: "progress", controls: "buttonless", rejectControls: false },
     { streamMode: "partial", controls: "buttons", rejectControls: true },

@@ -724,9 +724,13 @@ describe("resumed Claude session gaps", () => {
         }
         for (const reason of ["auth-profile", "auth-epoch"] as const) {
           expect(
-            (await loadCliSessionPromptContext({ ...options, rawTranscriptReseedReason: reason }))
-              .sessionGapContext,
-          ).toBeUndefined();
+            await loadCliSessionPromptContext({ ...options, rawTranscriptReseedReason: reason }),
+          ).toMatchObject({
+            resumeContext: undefined,
+            sessionGapContext: undefined,
+            reseedMessages: [],
+            durableContext: undefined,
+          });
         }
         // A fresh replacement after the switch may reseed, but never gets a resume-gap note.
         expect(

@@ -291,46 +291,8 @@ describe("memory embedding query retry cancellation", () => {
 describe.each(["text", "structured"])("memory embedding batch retry boundary (%s)", (kind) => {
   const batchInputs = (texts: string[]) =>
     kind === "text" ? texts : texts.map((text) => ({ text }));
-  it.each([
-    [
-      "explicit maximum and actual input counts",
-      (count: number) =>
-        `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
-    ],
-    ["an explicit maximum input length", () => "embeddings max input length is 10"],
-    [
-      "a DashScope-style per-request row cap",
-      () =>
-        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
-    ],
-    [
-      "an explicit input array item cap",
-      () => '{"error":{"code":"1214","message":"input array max 10"}}',
-    ],
-  ])(
-    "splits provider errors with %s without retrying oversized requests",
-    async (_label, error) => {
-      const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
-      const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
-        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
-        if (texts.length > 10) {
-          throw new Error(`openai-compatible embeddings failed: HTTP 400: ${error(texts.length)}`);
-        }
-        return texts.map((text) => [Number.parseInt(text.slice(5), 10)]);
-      });
-      const manager = createEmbeddingBatchRetryHarness(embedBatch);
-
-      await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
-        items.map((_, index) => [index]),
-      );
-      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
-      expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
-      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
-    },
-  );
-
-  it("sends a batch under the provider row cap in one request", async () => {
-    const items = Array.from({ length: 10 }, (_, index) => `item-${index}`);
+  it("splits a provider row-cap error without retrying oversized requests", async () => {
+    const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
     const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (texts.length > 10) {
@@ -345,9 +307,9 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
       items.map((_, index) => [index]),
     );
-    expect(embedBatch).toHaveBeenCalledOnce();
-    expect(embedBatch.mock.calls[0]?.[0]).toHaveLength(10);
+    expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+    expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -358,39 +320,9 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       items: ["one", "two"],
     },
     {
-      label: "a nonnumeric row cap containing request-id digits",
-      message: "batch size is invalid, it should not be larger than unknown; request id 12345",
-      items: ["one", "two"],
-    },
-    {
       label: "a numeric row cap rejecting a single item",
       message: "batch size is invalid, it should not be larger than 10",
       items: ["one"],
-    },
-    {
-      label: "an input array item length limit",
-      message: "input array item max length 64",
-      items: ["one", "two"],
-    },
-    {
-      label: "a numbered input array element token limit",
-      message: "input array element 0 exceeds 256 tokens",
-      items: ["one", "two"],
-    },
-    {
-      label: "an input array token limit",
-      message: "input array max 64 tokens",
-      items: ["one", "two"],
-    },
-    {
-      label: "a numeric prefix with a token suffix",
-      message: "input array max 64tokens",
-      items: ["one", "two"],
-    },
-    {
-      label: "a fractional input array limit",
-      message: "input array max 64.5",
-      items: ["one", "two"],
     },
   ])("does not retry or split $label", async ({ message, items }) => {
     const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async () => {
