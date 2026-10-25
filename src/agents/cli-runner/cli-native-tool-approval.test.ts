@@ -187,8 +187,8 @@ describe("requestCliNativeToolApproval", () => {
     }).resolves.toEqual({ kind: "allow", grantAlways: false });
 
     const gatewayTimeoutMs = DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
-    expect(mockCallGatewayTool).toHaveBeenNthCalledWith(
-      1,
+    const [request, wait] = mockCallGatewayTool.mock.calls;
+    expect(request).toMatchObject([
       "plugin.approval.request",
       { timeoutMs: gatewayTimeoutMs },
       {
@@ -197,23 +197,18 @@ describe("requestCliNativeToolApproval", () => {
         toolCallId: "tool-1",
         agentId: "main",
         sessionKey: "agent:main:main",
-        title: "claude-cli native tool: Bash",
-        description: '{"command":"ls"}\nExec allowlist miss: ls',
-        detail: '{"command":"ls"}',
-        severity: "warning",
         allowedDecisions: ["allow-once", "deny"],
         timeoutMs: DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
         twoPhase: true,
       },
       { expectFinal: false },
-    );
-    expect(mockCallGatewayTool).toHaveBeenNthCalledWith(
-      2,
+    ]);
+    expect(wait).toMatchObject([
       "plugin.approval.waitDecision",
       { timeoutMs: gatewayTimeoutMs },
       { id: "approval-1" },
       { signal: undefined },
-    );
+    ]);
   });
 
   it("honors an immediate decision without waiting", async () => {

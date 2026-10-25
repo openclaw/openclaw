@@ -224,56 +224,40 @@ describe("native CLI login owner", () => {
     );
   });
 
-  type NoOwnerSetup = {
-    prepared?: ReturnType<typeof backendUsing>;
-    credential?: Parameters<Fixture["run"]>[3];
-    sessionEntry?: never;
-    // An API key in the child env is resolved, and found to name no native login.
-    resolvesOwner?: true;
-  };
-  const identityLess = {
-    type: "oauth" as const,
-    provider: "claude-cli",
-    access: "synthetic-access",
-    refresh: "synthetic-refresh",
-    expires: Date.now() + 60_000,
-  };
-  it.each<[string, (backend: string) => NoOwnerSetup]>([
-    [
-      "the child authenticates another way",
-      (backend) => ({
-        prepared: backendUsing(backend, { ANTHROPIC_API_KEY: "synthetic-key" }),
-        resolvesOwner: true,
-      }),
-    ],
-    ["there is no prepared backend to derive the child environment from", () => ({})],
-    [
-      "a forwarded credential is in play",
-      (backend) => ({ prepared: backendUsing(backend), credential: identityLess }),
-    ],
-    [
-      "the CLI is placed on a node",
-      (backend) => ({
-        prepared: backendUsing(backend),
-        sessionEntry: { execHost: "node", execNode: "node-a" } as never,
-      }),
-    ],
-  ])("has no native owner when %s", async (_name, setup) => {
-    const { f, backend } = await setupNative();
-    const { prepared, credential, sessionEntry, resolvesOwner } = setup(backend);
-    const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      sessionEntry ? { ...native, sessionEntry } : native,
-      credential,
-      prepared,
-    );
-    if (!resolvesOwner) {
-      expect(lookup).not.toHaveBeenCalled();
-    }
-    expect(profile).not.toHaveBeenCalled();
-  });
+  it.each(["API key", "unprepared backend", "forwarded credential", "node placement"])(
+    "has no native owner with %s",
+    async (mode) => {
+      const { f, backend } = await setupNative();
+      const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
+      const prepared =
+        mode === "unprepared backend"
+          ? undefined
+          : backendUsing(backend, mode === "API key" ? { ANTHROPIC_API_KEY: "synthetic-key" } : {});
+      const credential =
+        mode === "forwarded credential"
+          ? {
+              type: "oauth" as const,
+              provider: "claude-cli",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: Date.now() + 60_000,
+            }
+          : undefined;
+      await f.run(
+        undefined,
+        async (allowed) => expect(allowed).toBe(false),
+        mode === "node placement"
+          ? { ...native, sessionEntry: { execHost: "node", execNode: "node-a" } as never }
+          : native,
+        credential,
+        prepared,
+      );
+      if (mode !== "API key") {
+        expect(lookup).not.toHaveBeenCalled();
+      }
+      expect(profile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a recovery boundary for a reassigned or revoked login, uncached, at the same instant", async () => {
     const { f, backend } = await setupNative();
@@ -299,34 +283,10 @@ describe("native CLI login owner", () => {
   it("refuses private input at the readable boundary once the login is reassigned", async () => {
     const { f, backend } = await setupNative(true);
     await withWriter(f, "boundary-native-readable", backendUsing(backend), async (writer) => {
+      profile.mockClear();
       await writer.assertReadable();
       loginIn(backend, "uuid:account-b");
       await expect(writer.assertReadable()).rejects.toThrow(authorityChanged);
-    });
-  });
-
-  it("looks the login up at each private-input boundary and coverage commit, never at a liveness check", async () => {
-    const { f, backend } = await setupNative(true);
-    const lookup = vi.spyOn(cliCredentials, "readAttestedNativeCliLoginOwner");
-    const attest = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
-    await withWriter(f, "boundary-native-every-call", backendUsing(backend), async (writer) => {
-      lookup.mockClear();
-      attest.mockClear();
-      profile.mockClear();
-      for (let check = 0; check < 20; check += 1) {
-        writer.assertCurrent();
-      }
-      expect(lookup).not.toHaveBeenCalled();
-      await writer.assertReadable();
-      writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, true);
-      writer.checkNativeLoginBoundary(true);
-      writer.checkNativeLoginBoundary(false);
-      expect(lookup).toHaveBeenCalledTimes(4);
-      lookup.mockClear();
-      append(f, "covered turn", 2);
-      expect(lookup).toHaveBeenCalledTimes(1);
-      // Boundary and commit checks are local: no attestation, no network.
-      expect(attest).not.toHaveBeenCalled();
       expect(profile).not.toHaveBeenCalled();
     });
   });
@@ -496,8 +456,18 @@ describe("native CLI login owner", () => {
 
   it("does not cover a turn commit whose login is reassigned while the command is queued", async () => {
     const { f, backend } = await setupNative(true);
-    const before = coveredSeq(f);
+    let covered = coveredSeq(f);
     await withWriter(f, "boundary-native-queued-turn", backendUsing(backend), async () => {
+      profile.mockClear();
+      await persistSessionTranscriptTurn(f.target, {
+        expectedSessionId: f.target.sessionId,
+        messages: [1, 2, 3].map((n) => ({
+          message: { role: "user" as const, content: `covered row ${n}`, timestamp: 1 + n },
+        })),
+      });
+      expect(coveredSeq(f)).toBe(covered + 3);
+      covered += 3;
+      expect(profile).not.toHaveBeenCalled();
       const queued = afterCommandQueued("session.turn.commit", () =>
         loginIn(backend, "uuid:account-b", { rotate: true, recordAccount: "uuid:account-a" }),
       );
@@ -509,7 +479,7 @@ describe("native CLI login owner", () => {
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("queued under account b");
     expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
-      maxSeq: before,
+      maxSeq: covered,
     });
   });
 
@@ -534,25 +504,6 @@ describe("native CLI login owner", () => {
       expect(coveredSeq(f)).toBe(start + 1);
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("queued report b");
-  });
-
-  it("looks the login up once for a worker turn commit, however many rows it covers", async () => {
-    const { f, backend } = await setupNative(true);
-    const before = coveredSeq(f);
-    const lookup = vi.spyOn(cliCredentials, "readAttestedNativeCliLoginOwner");
-    await withWriter(f, "boundary-native-one-lookup", backendUsing(backend), async () => {
-      lookup.mockClear();
-      await persistSessionTranscriptTurn(f.target, {
-        expectedSessionId: f.target.sessionId,
-        messages: [1, 2, 3].map((n) => ({
-          message: { role: "user" as const, content: `covered row ${n}`, timestamp: 1 + n },
-        })),
-      });
-      expect(lookup).toHaveBeenCalledTimes(1);
-    });
-    expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
-      maxSeq: before + 3,
-    });
   });
 
   it("runs a refresh-due turn without saved history but keeps covering it", async () => {

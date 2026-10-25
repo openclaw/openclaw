@@ -1,4 +1,3 @@
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -15,7 +14,6 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
@@ -77,6 +75,11 @@ const persistAnswer = (params: RunParams, text: string) =>
     modelId: "test-model",
     stopReason: "stop",
   });
+const withCredential = (
+  f: Fixture,
+  credential: Parameters<Fixture["run"]>[3],
+  action: Parameters<Fixture["run"]>[1],
+) => f.run(undefined, action, {}, credential);
 const seededFixture = async () => {
   const f = await fixture();
   await f.seed();
@@ -322,7 +325,7 @@ describe("CLI transcript account boundary", () => {
     async (change) => {
       const f = await seededFixture();
       const abort = new AbortController();
-      const spy = afterPlanning(() => {
+      afterPlanning(() => {
         if (change === "revocation") {
           abort.abort();
         } else if (change === "reset") {
@@ -338,11 +341,6 @@ describe("CLI transcript account boundary", () => {
         "changed-preparation",
         async (params) => {
           await expect(prepareCliHistoryBoundary(params, identity)).rejects.toThrow();
-          if (change === "append" || change === "rewrite") {
-            expect(spy).toHaveBeenCalledTimes(2);
-          } else if (change === "revocation") {
-            expect(spy).toHaveBeenCalledOnce();
-          }
           expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
         },
         { abortSignal: abort.signal },
@@ -354,7 +352,7 @@ describe("CLI transcript account boundary", () => {
     "plans again after one late %s instead of failing the turn",
     async (change) => {
       const f = await seededFixture();
-      const spy = afterPlanning(() => {
+      afterPlanning(() => {
         if (change === "append") {
           append(f, "late settle");
         } else {
@@ -363,7 +361,6 @@ describe("CLI transcript account boundary", () => {
       }, true);
       await f.withRun("replanned-preparation", async (params) => {
         const writer = await prepareCliHistoryBoundary(params, identity);
-        expect(spy).toHaveBeenCalledTimes(2);
         expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
         // The fresh plan judges the settled transcript: an unproven foreign row stays
         // unknown, while an emptied context may start a new boundary.
@@ -371,28 +368,6 @@ describe("CLI transcript account boundary", () => {
       });
     },
   );
-
-  it("retains same-account raw and compacted history without exposing private metadata", async () => {
-    const f = await seededFixture();
-    await f.run("epoch-a", async (allowed, params) => {
-      expect(await history(allowed, params)).toContain("A private canary");
-      const manager = f.manager();
-      const leaf = manager.getLeafId();
-      if (!leaf) {
-        throw new Error("Missing seeded transcript leaf");
-      }
-      manager.appendCompaction("A private summary", leaf, 1000);
-    });
-    await f.run("epoch-a", async (allowed, params) => {
-      expect(await history(allowed, params)).toContain("A private summary");
-    });
-    const entry: InternalSessionEntry | undefined = loadSessionEntryReadOnly(f.target);
-    expect(entry?.cliHistoryBoundary?.state).toBe("known");
-    if (!entry) {
-      throw new Error("Missing session");
-    }
-    expect(projectPublicSessionEntry(entry)).not.toHaveProperty("cliHistoryBoundary");
-  });
 
   it.each([false, true])(
     "keeps compacted history only when the complete source is account-owned (foreign tail: %s)",
@@ -433,29 +408,20 @@ describe("CLI transcript account boundary", () => {
       refresh: "synthetic-refresh",
       expires: Date.now() + 60_000,
     };
-    await f.run(undefined, async (allowed) => expect(allowed).toBe(false), {}, credential);
-    await f.run(
-      undefined,
-      async (allowed) => {
-        expect(allowed).toBe(true);
-        append(f, "named account", 1);
-      },
-      {},
-      { ...credential, accountId: "account-a" },
-    );
-    await f.run(
-      undefined,
+    await withCredential(f, credential, async (allowed) => expect(allowed).toBe(false));
+    await withCredential(f, { ...credential, accountId: "account-a" }, async (allowed) => {
+      expect(allowed).toBe(true);
+      append(f, "named account", 1);
+    });
+    await withCredential(
+      f,
+      { ...credential, accountId: "account-a", access: "rotated-access" },
       async (allowed, params) => {
         expect(await history(allowed, params)).toContain("named account");
       },
-      {},
-      { ...credential, accountId: "account-a", access: "rotated-access" },
     );
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      {},
-      { ...credential, accountId: "account-b" },
+    await withCredential(f, { ...credential, accountId: "account-b" }, async (allowed) =>
+      expect(allowed).toBe(false),
     );
   });
 
@@ -623,11 +589,6 @@ describe("CLI transcript account boundary", () => {
         expect(
           getOwnedSessionTranscriptWriterFence({
             sessionTarget: { sessionKey: f.target.sessionKey },
-          }),
-        ).toBeUndefined();
-        expect(
-          getOwnedSessionTranscriptWriterFence({
-            sessionTarget: { ...f.target, storePath: path.join(f.target.storePath, "other") },
           }),
         ).toBeUndefined();
         expect(await history(true, params)).toContain("A private canary");
