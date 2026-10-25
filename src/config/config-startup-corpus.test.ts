@@ -6,8 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
-import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
-import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
@@ -15,11 +13,9 @@ import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import { resolveProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  listConfigCorpusFixtureNames,
-  readConfigCorpusFixture,
-} from "./config-corpus.test-support.js";
+import { listConfigCorpusFixtureNames } from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
+import { migrateConfigCorpus, prepareConfigCorpus } from "./startup-corpus-fixture.test-support.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -240,44 +236,10 @@ describe("operator config startup corpus", () => {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       });
-      const pluginDir = path.join(home, "external-plugin");
-      fs.mkdirSync(pluginDir);
-      writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
-        id: "fixture-extension",
-        configSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: { apiKey: { type: "string" } },
-        },
-      });
-      fs.writeFileSync(
-        path.join(pluginDir, "index.ts"),
-        'export default { id: "fixture-extension", register() {} };\n',
-      );
-
-      // Relocate sanitized operator paths without removing their config contracts.
-      const raw: unknown = JSON.parse(readConfigCorpusFixture(name), (_key, value: unknown) =>
-        typeof value === "string" && value.startsWith("/home/fixture/")
-          ? path.join(home, value.slice("/home/fixture/".length))
-          : value,
-      );
-      writeJson(configPath, raw);
+      prepareConfigCorpus(home, configPath, name);
       const io = createIO();
       const snapshot = await io.readConfigFileSnapshot();
-      const migrated = applyLegacyCompatibilityStep({
-        snapshot,
-        state: {
-          cfg: snapshot.sourceConfig,
-          candidate: snapshot.sourceConfig,
-          pendingChanges: false,
-          fixHints: [],
-        },
-        shouldRepair: true,
-        doctorFixCommand: "openclaw doctor --fix",
-      });
-      const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
-        sourceRaw: snapshot.parsed,
-      });
+      const { migrated, normalized } = migrateConfigCorpus(snapshot);
       const retired = await retireHeartbeatWithDoctor(normalized.config, env);
       writeJson(configPath, retired);
       const startup = await loadGatewayStartupConfigSnapshot({

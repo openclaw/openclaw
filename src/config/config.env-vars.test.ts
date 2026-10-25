@@ -30,6 +30,11 @@ const key = "OPENCLAW_TEST_ENV";
 const dotenvKey = "OPENCLAW_TEST_DOTENV";
 const shellKey = "OPENCLAW_TEST_SHELL";
 const config = (vars: Record<string, string>): OpenClawConfig => ({ env: { vars } });
+const prepareChange = (
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+) => prepareEnv({ previousConfig, nextConfig, env });
 const windows = () => vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 function applied(source: OpenClawConfig) {
   const env = {};
@@ -115,11 +120,7 @@ describe("config env vars", () => {
     const previousConfig = config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" });
     const env: NodeJS.ProcessEnv = applied(previousConfig);
     env.KEEP_OVERRIDE = "ambient";
-    const prepared = prepareEnv({
-      previousConfig,
-      nextConfig: config({ UPDATE_ME: "new" }),
-      env,
-    });
+    const prepared = prepareChange(previousConfig, config({ UPDATE_ME: "new" }), env);
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
     expect(prepared.env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
     const publication = captureEnvEnumerations(env, () => prepared.publish());
@@ -141,7 +142,7 @@ describe("config env vars", () => {
     stage.prepare(nextConfig).publish().commit();
     expect(publishedEnv().ownedEnv).toEqual({ [key]: "config" });
     expect(publishedEnv().sourceConfig).toBe(nextConfig);
-    prepareEnv({ previousConfig: nextConfig, nextConfig: {} }).publish().commit();
+    prepareChange(nextConfig, {}).publish().commit();
     expect([process.env[key], process.env[dotenvKey], process.env[shellKey]]).toEqual([
       undefined,
       "shared",
@@ -205,11 +206,8 @@ describe("config env vars", () => {
   it("restores the last committed config environment after a rejected replacement", () => {
     const previousConfig = initialize();
     const acceptedConfig = config({ [key]: "accepted" });
-    prepareEnv({ previousConfig, nextConfig: acceptedConfig }).publish().commit();
-    const replacement = prepareEnv({
-      previousConfig: acceptedConfig,
-      nextConfig: config({ [key]: "rejected" }),
-    }).publish();
+    prepareChange(previousConfig, acceptedConfig).publish().commit();
+    const replacement = prepareChange(acceptedConfig, config({ [key]: "rejected" })).publish();
     expect(process.env[key]).toBe("rejected");
 
     replacement();
@@ -235,11 +233,11 @@ describe("config env vars", () => {
       windows();
       const previousConfig = config({ Config_Value: "old" });
       const env: NodeJS.ProcessEnv = applied(previousConfig);
-      const prepared = prepareEnv({
+      const prepared = prepareChange(
         previousConfig,
-        nextConfig: config({ CONFIG_VALUE: concurrent ? "new" : "old" }),
+        config({ CONFIG_VALUE: concurrent ? "new" : "old" }),
         env,
-      });
+      );
       const rollback = prepared.publish();
       expect(env).toEqual({ CONFIG_VALUE: concurrent ? "new" : "old" });
       if (concurrent) {
@@ -256,11 +254,11 @@ describe("config env vars", () => {
     const concurrentKey = key.toLowerCase();
     vi.stubEnv(concurrentKey, undefined);
     const previousConfig = initialize({ [key]: "owned" });
-    const unchanged = prepareEnv({ previousConfig, nextConfig: previousConfig });
+    const unchanged = prepareChange(previousConfig, previousConfig);
     delete process.env[key];
     process.env[concurrentKey] = "owned";
     unchanged.publish().commit();
-    prepareEnv({ previousConfig, nextConfig: {} }).publish().commit();
+    prepareChange(previousConfig, {}).publish().commit();
     expect(process.env[concurrentKey]).toBe("owned");
   });
 
@@ -304,11 +302,7 @@ describe("config env vars", () => {
     const ownedEnv = collectConfigRuntimeEnvOwnership(previousConfig, before, env, {
       replacedLowerPrecedenceKeys,
     });
-    const prepared = prepareEnv({
-      previousConfig,
-      nextConfig: config({ [key]: "next" }),
-      env,
-    });
+    const prepared = prepareChange(previousConfig, config({ [key]: "next" }), env);
     expect(replacedLowerPrecedenceKeys).toEqual([key]);
     expect(ownedEnv).toEqual({ [key]: "shared" });
     expect(prepared.env[key]).toBe("next");
@@ -352,15 +346,12 @@ describe("config-owned fs-safe mode migration", () => {
     initializePublishedConfigRuntimeEnv(source, {
       ownedEnv: collectConfigRuntimeEnvOwnership(source, before, process.env),
     });
-    const replacement = prepareEnv({
-      previousConfig: source,
-      nextConfig: config({ [nativeKey]: "off" }),
-    }).publish();
+    const replacement = prepareChange(source, config({ [nativeKey]: "off" })).publish();
     expect([process.env[nativeKey], process.env[legacyKey]]).toEqual(["off", undefined]);
     replacement();
     expect(process.env[nativeKey]).toBe("require");
     expect(publishedEnv().ownedEnv).toEqual({ [legacyKey]: "require" });
-    prepareEnv({ previousConfig: source, nextConfig: {} }).publish().commit();
+    prepareChange(source, {}).publish().commit();
     expect(process.env[nativeKey]).toBeUndefined();
   });
 

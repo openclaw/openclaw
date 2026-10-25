@@ -16,6 +16,20 @@ vi.mock("@openclaw/fs-safe/watch", async (importOriginal) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+type Source = { subscription: WatchSubscription; options: WatchOptions };
+
+function failSource({ options }: Source, operation: "scan" | "watch" = "scan") {
+  options.onHealth?.({
+    state: "unavailable",
+    mode: operation === "scan" || options.mode !== "poll" ? "events" : "poll",
+    directories: 0,
+    failure:
+      operation === "scan"
+        ? { operation, error: new Error("watch observation worker stopped") }
+        : { operation, code: "watch-limit", error: new Error("watch limit reached") },
+  });
+}
+
 const adapters = new Set<ReturnType<typeof createConfigFileAdapter>>();
 afterEach(async () => {
   await Promise.all([...adapters].map((adapter) => adapter.stop()));
@@ -45,7 +59,7 @@ async function fixture({
     sampling.push(sample);
     return sample;
   });
-  const sources: Array<{ subscription: WatchSubscription; options: WatchOptions }> = [];
+  const sources: Source[] = [];
   let installed: ((source: (typeof sources)[number]) => void) | undefined;
   const ready = createDeferred();
   const watch = observation.watch;
@@ -260,12 +274,7 @@ describe("config file observation", () => {
       const h = await fixture();
       const previous = h.sources[0]!;
       const installed = h.nextSource();
-      previous.options.onHealth?.({
-        state: "unavailable",
-        mode: "events",
-        directories: 0,
-        failure: { operation: "scan", error: new Error("watch observation worker stopped") },
-      });
+      failSource(previous);
       await previous.subscription.close();
       if (edit) {
         await fs.writeFile(h.p("openclaw.json"), '{"changedWhileUnavailable":true}');
@@ -292,19 +301,7 @@ describe("config file observation", () => {
         intervalMs: 300_000,
         pollIntervalMs: 250,
       });
-      const fail = () => {
-        const { options } = h.sources.at(-1)!;
-        options.onHealth?.({
-          state: "unavailable",
-          mode: options.mode === "poll" ? "poll" : "events",
-          directories: 0,
-          failure: {
-            operation: "watch",
-            code: "watch-limit",
-            error: new Error("watch limit reached"),
-          },
-        });
-      };
+      const fail = () => failSource(h.sources.at(-1)!, "watch");
       for (const ms of [500, 2000, 5000]) {
         const previous = h.sources.at(-1)!;
         const installed = h.nextSource();
@@ -342,12 +339,7 @@ describe("config file observation", () => {
     const h = await fixture();
     const previous = h.sources[0]!;
     vi.spyOn(previous.subscription, "close").mockRejectedValue(new Error("retirement failed"));
-    previous.options.onHealth?.({
-      state: "unavailable",
-      mode: "events",
-      directories: 0,
-      failure: { operation: "scan", error: new Error("watch observation worker stopped") },
-    });
+    failSource(previous);
     await vi.advanceTimersByTimeAsync(500);
     expect(h.adapter.status()).toBe("disabled");
     expect(h.onChange).toHaveBeenCalledOnce();

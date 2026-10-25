@@ -27,6 +27,7 @@ import type { ConfigIoFactoryOptions } from "./io.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.restoreAllMocks();
     clearPluginMetadataLifecycleCaches();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -63,6 +64,11 @@ function expectArchived(root: string, original: string) {
   const clobbered = clobberFiles(root);
   expect(clobbered).toHaveLength(1);
   expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+}
+
+function expectRecovered({ root, configPath, original, backup }: ReturnType<typeof fixture>) {
+  expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+  expectArchived(root, original);
 }
 
 const withPromises = (overrides: Partial<typeof fs.promises>) => ({
@@ -125,31 +131,24 @@ describe("prepared config recovery", () => {
         raw: '{"gateway":{"mode":"local"}}',
         parsed: { gateway: { mode: "local" } },
       };
-      const readSync = vi
-        .spyOn(deferredMigrations, "readDeferredPluginMigrations")
-        .mockImplementation(() => {
-          throw unavailable;
-        });
-      const readAsync = vi
-        .spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync")
-        .mockRejectedValue(unavailable);
-      try {
-        const prepared =
-          mode === "sync"
-            ? context.prepareRecoveryBackupCandidate(candidate)
-            : await context.prepareRecoveryBackupCandidateAsync(candidate);
-        expect(prepared).toMatchObject({
-          ok: true,
-          candidate: {
-            raw: '{"gateway":{"mode":"local"}}',
-            parsed: { gateway: { mode: "local" } },
-            config: { gateway: { mode: "local" } },
-          },
-        });
-      } finally {
-        readSync.mockRestore();
-        readAsync.mockRestore();
-      }
+      vi.spyOn(deferredMigrations, "readDeferredPluginMigrations").mockImplementation(() => {
+        throw unavailable;
+      });
+      vi.spyOn(deferredMigrations, "readDeferredPluginMigrationsAsync").mockRejectedValue(
+        unavailable,
+      );
+      const prepared =
+        mode === "sync"
+          ? context.prepareRecoveryBackupCandidate(candidate)
+          : await context.prepareRecoveryBackupCandidateAsync(candidate);
+      expect(prepared).toMatchObject({
+        ok: true,
+        candidate: {
+          raw: '{"gateway":{"mode":"local"}}',
+          parsed: { gateway: { mode: "local" } },
+          config: { gateway: { mode: "local" } },
+        },
+      });
     },
   );
 
@@ -240,7 +239,8 @@ describe("prepared config recovery", () => {
   it.each(["completed", "during-apply"] as const)(
     "restores unchanged source bytes without replacing newer %s health metadata",
     async (phase) => {
-      const { root, configPath, original, backup, env, io } = fixture();
+      const f = fixture();
+      const { root, configPath, env, io } = f;
       const plan = await recovery(io);
       const logger = { warn: vi.fn(), error: vi.fn() };
       const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
@@ -258,8 +258,7 @@ describe("prepared config recovery", () => {
             }
           : undefined,
       );
-      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      expectArchived(root, original);
+      expectRecovered(f);
       if (previousHealth) {
         expect(readConfigHealthStateFromStore(deps)).toEqual(previousHealth);
       } else {
@@ -311,32 +310,27 @@ describe("prepared config recovery", () => {
       ...store,
       read: async () => ({ state: {}, basis: null }),
     });
-    const spy = vi
-      .spyOn(healthOwner, "captureConfigHealthStateStore")
-      .mockImplementation((...args) => unavailable(capture(...args)));
-    try {
-      const { root, configPath, original, backup, env, io } = fixture();
-      const plan = await recovery(io);
-      await plan.apply();
-      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      expectArchived(root, original);
-      const health = readConfigHealthStateFromStore({
-        env,
-        homedir: () => root,
-        logger: { warn: vi.fn() },
-      });
-      expect(health.entries?.[configPath]).toBeUndefined();
-    } finally {
-      spy.mockRestore();
-    }
+    vi.spyOn(healthOwner, "captureConfigHealthStateStore").mockImplementation((...args) =>
+      unavailable(capture(...args)),
+    );
+    const f = fixture();
+    const { root, configPath, env, io } = f;
+    const plan = await recovery(io);
+    await plan.apply();
+    expectRecovered(f);
+    const health = readConfigHealthStateFromStore({
+      env,
+      homedir: () => root,
+      logger: { warn: vi.fn() },
+    });
+    expect(health.entries?.[configPath]).toBeUndefined();
   });
 
   it.each(["full", "core-only"] as const)(
     "previews %s recovery without writes, then restores the admitted bytes",
     async (pluginValidation) => {
-      const { root, configPath, original, backup, databasePath, env, io } = fixture({
-        pluginValidation,
-      });
+      const f = fixture({ pluginValidation });
+      const { root, configPath, backup, databasePath, env, io } = f;
       // No sidecars are excluded: a read must not create even an empty WAL.
       expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
       const before = manifest(root);
@@ -354,8 +348,7 @@ describe("prepared config recovery", () => {
       expect(manifest(root)).toEqual(before);
 
       await plan.apply();
-      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      expectArchived(root, original);
+      expectRecovered(f);
       const persisted = await io.readConfigFileSnapshotWithPluginMetadata();
       expect(persisted.snapshot).toEqual(plan.snapshot);
     },
