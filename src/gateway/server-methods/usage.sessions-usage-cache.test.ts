@@ -12,8 +12,6 @@ import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worke
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -64,10 +62,9 @@ async function runSessionsUsage(
   client?: GatewayClient,
   method: "sessions.usage" | "usage.cost" = "sessions.usage",
   rows: UsageSessionStoreFixture & { storePath?: string; agentId?: string } = { store: {} },
-  context?: NonNullable<Parameters<typeof invokeUsage>[3]>["context"],
 ) {
   const [ok, payload, error] = usageReply(
-    await invokeUsage(method, params, runtimeConfig, { rows, client, context }),
+    await invokeUsage(method, params, runtimeConfig, { rows, client }),
   );
   expect(ok, JSON.stringify(error)).toBe(method !== "usage.cost");
   return expectDefined(method === "usage.cost" ? error : payload, "usage result");
@@ -167,20 +164,7 @@ describe("sessions.usage result cache and owner attribution", () => {
       updatedAt: index + 1,
     }));
     const tokens = Object.fromEntries(entries.map((entry, index) => [entry.sessionId, index + 1]));
-    const creatorConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const projection = createSessionRowProjectionFixture({
-      cfg: creatorConfig,
-      store: Object.fromEntries(entries.map((entry) => [`agent:main:${entry.sessionId}`, entry])),
-      agentId: "main",
-      storePath: "/tmp/usage.sqlite",
-    });
-    using cleanup = new DisposableStack();
-    cleanup.defer(() => projection.dispose());
-    const context = bindSessionRowProjection(
-      { getRuntimeConfig: () => creatorConfig },
-      () => projection,
-    );
-    const query = fixture(entries, tokens, context);
+    const query = fixture(entries, tokens);
     const first = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
     const second = await query({
       projection: "overview",
@@ -213,11 +197,7 @@ describe("sessions.usage result cache and owner attribution", () => {
   });
 });
 
-function fixture(
-  entries: SessionEntry[],
-  tokens: Record<string, number>,
-  context?: NonNullable<Parameters<typeof invokeUsage>[3]>["context"],
-) {
+function fixture(entries: SessionEntry[], tokens: Record<string, number>) {
   const rows = Object.fromEntries(entries.map((entry) => [`agent:main:${entry.sessionId}`, entry]));
   const creatorConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
   mocks.discoverAllSessions.mockResolvedValue(
@@ -254,7 +234,6 @@ function fixture(
       client ?? undefined,
       "sessions.usage",
       { store: rows, agentId: "main", storePath: "/tmp/usage.sqlite" },
-      context,
     );
 }
 
