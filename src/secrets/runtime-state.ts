@@ -41,6 +41,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { isRecord } from "../utils.js";
 import {
   clearActiveCredentialDegradedOwners,
@@ -53,6 +54,7 @@ import {
   hasSameSecretProviderDefinition,
   isSecretsRuntimeDisplayChange,
 } from "./runtime-source-contract.js";
+import { cloneSecretsRuntimeSnapshot } from "./runtime-state-clone.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -129,23 +131,6 @@ function cloneSecretsRuntimeRefreshContext(
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
     ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
     ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
-  };
-}
-
-function cloneSnapshot(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  authStores: PreparedSecretsRuntimeSnapshot["authStores"],
-): PreparedSecretsRuntimeSnapshot {
-  return {
-    sourceConfig: cloneConfigWithResolutionFacts(snapshot.sourceConfig),
-    config: cloneConfigWithResolutionFacts(snapshot.config),
-    authStores,
-    authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
-    authStoreSnapshotsRevision: snapshot.authStoreSnapshotsRevision,
-    warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    degradedOwners: structuredClone(snapshot.degradedOwners ?? []),
-    secretOwners: structuredClone(snapshot.secretOwners ?? []),
-    webTools: structuredClone(snapshot.webTools),
   };
 }
 
@@ -808,7 +793,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
       entry.store.profiles,
     );
   }
-  const next = cloneSnapshot(params.snapshot, authStores);
+  const next = cloneSecretsRuntimeSnapshot(params.snapshot, authStores);
+  // This owner replaces source revisions; immutable copies reuse snapshot-comparison facts.
+  freezeJsonSnapshot(next.sourceConfig);
   if (params.mergeLiveAuthBookkeeping !== false) {
     next.authStores = mergeLiveAuthStoreBookkeeping(
       next.authStores,
@@ -827,7 +814,12 @@ export function activateSecretsRuntimeSnapshotState(params: {
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
   if (!params.preserveRuntimeConfigPublication) {
-    setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+    setRuntimeConfigSnapshot(
+      next.config,
+      params.runtimeSourceConfig
+        ? freezeJsonSnapshot(cloneConfigWithResolutionFacts(params.runtimeSourceConfig))
+        : next.sourceConfig,
+    );
   }
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
@@ -979,7 +971,10 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   if (!activeSnapshot) {
     return null;
   }
-  const snapshot = cloneSnapshot(activeSnapshot, listOwnedRuntimeAuthProfileStoreSnapshots());
+  const snapshot = cloneSecretsRuntimeSnapshot(
+    activeSnapshot,
+    listOwnedRuntimeAuthProfileStoreSnapshots(),
+  );
   snapshot.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   if (activeRefreshContext) {
@@ -1064,7 +1059,9 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
   if (activeSnapshotRevision !== params.expectedSecretsRevision) {
     return false;
   }
-  const nextRuntimeSourceConfig = cloneConfigWithResolutionFacts(params.runtimeSourceConfig);
+  const nextRuntimeSourceConfig = freezeJsonSnapshot(
+    cloneConfigWithResolutionFacts(params.runtimeSourceConfig),
+  );
   const nextSecretsSourceConfig = cloneConfigWithResolutionFacts(params.secretsSourceConfig);
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
@@ -1080,7 +1077,7 @@ export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
 
 function advanceSecretsRuntimeSourceSnapshot(sourceConfig: OpenClawConfig): void {
   if (activeSnapshot) {
-    activeSnapshot.sourceConfig = sourceConfig;
+    activeSnapshot.sourceConfig = freezeJsonSnapshot(sourceConfig);
     activeSnapshotRevision += 1;
     activeSnapshotLineageStartRevision = activeSnapshotRevision;
     activeSnapshotLineageAuthStores = listOwnedRuntimeAuthProfileStoreSnapshots();
@@ -1112,7 +1109,7 @@ export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
   if (
     !setRuntimeConfigSourceSnapshotIfCurrent({
       expectedRevision: runtimeMetadata.revision,
-      sourceConfig: cloneConfigWithResolutionFacts(params.runtimeSourceConfig),
+      sourceConfig: freezeJsonSnapshot(cloneConfigWithResolutionFacts(params.runtimeSourceConfig)),
     })
   ) {
     return false;
