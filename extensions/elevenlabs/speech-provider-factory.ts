@@ -149,6 +149,20 @@ function normalizeElevenLabsTtsModelId(value: string | undefined): string | unde
   }
 }
 
+// Eleven v3 and later steer delivery with bracketed audio tags such as "[warmly]".
+const ELEVENLABS_AUDIO_TAG_MODEL = /^eleven_v[3-9]/i;
+
+function applyElevenLabsTextPrefix(
+  text: string,
+  prefix: string | undefined,
+  modelId: string,
+): string {
+  if (!prefix || !ELEVENLABS_AUDIO_TAG_MODEL.test(modelId) || text.trimStart().startsWith("[")) {
+    return text;
+  }
+  return `${prefix} ${text}`;
+}
+
 function normalizeElevenLabsSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
@@ -208,6 +222,7 @@ function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
     seed: normalizeElevenLabsSeed(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization),
     languageCode: trimToUndefined(raw?.languageCode),
+    textPrefix: trimToUndefined(raw?.textPrefix),
     voiceSettings: {
       ...DEFAULT_ELEVENLABS_VOICE_SETTINGS,
       ...normalizeVoiceSettings(rawVoiceSettings),
@@ -244,12 +259,14 @@ function resolveElevenLabsTtsRequest(
   if (!apiKey) {
     throw new Error("ElevenLabs API key missing");
   }
+  const modelId =
+    normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId;
   return {
-    text: req.text,
+    text: applyElevenLabsTextPrefix(req.text, config.textPrefix, modelId),
     apiKey,
     baseUrl: config.baseUrl,
     voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-    modelId: normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
+    modelId,
     outputFormat: options.outputFormat,
     seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
     applyTextNormalization:
