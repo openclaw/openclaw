@@ -14,6 +14,7 @@ import {
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   estimateAggregateUsageCost,
@@ -193,6 +194,19 @@ export function resolveSessionChildController(
     normalizeOptionalString(run?.requesterSessionKey)
   );
 }
+
+export function shouldPropagateChildActivity(
+  key: string,
+  entry: SessionEntry,
+  ownerSessionKey: string,
+): boolean {
+  return (
+    entry.sidebarRoot !== true ||
+    isSubagentSessionKey(key) ||
+    resolveSessionChildController(key, entry) === ownerSessionKey
+  );
+}
+
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {

@@ -19,6 +19,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { claimAgentRunContext } from "../infra/agent-run-registry.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -106,38 +107,55 @@ describe("session list subagent metadata", () => {
       const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
       for (const [sessionKey, entry] of [
         [formerParent, { sessionId: "former-parent", updatedAt: now }],
-        [promoted, {
-          sessionId: "promoted",
-          updatedAt: now,
-          parentSessionKey: formerParent,
-          sidebarRoot: true,
-        }],
-        [promotedChild, {
-          sessionId: "promoted-child",
-          updatedAt: now,
-          parentSessionKey: promoted,
-          spawnedBy: promoted,
-        }],
+        [
+          promoted,
+          {
+            sessionId: "promoted",
+            updatedAt: now,
+            parentSessionKey: formerParent,
+            sidebarRoot: true,
+          },
+        ],
+        [
+          promotedChild,
+          {
+            sessionId: "promoted-child",
+            updatedAt: now,
+            parentSessionKey: promoted,
+            spawnedBy: promoted,
+          },
+        ],
         [ordinaryParent, { sessionId: "ordinary-parent", updatedAt: now }],
-        [ordinaryChild, {
-          sessionId: "ordinary-child",
-          updatedAt: now,
-          parentSessionKey: ordinaryParent,
-          spawnedBy: ordinaryParent,
-        }],
+        [
+          ordinaryChild,
+          {
+            sessionId: "ordinary-child",
+            updatedAt: now,
+            parentSessionKey: ordinaryParent,
+            spawnedBy: ordinaryParent,
+          },
+        ],
       ] as const) {
         await replaceSessionEntry({ storePath, sessionKey }, entry);
       }
-      const runs = canonicalSubagentRunFixtures(new Map([
-        ["promoted-child", runFixture("promoted-child", promotedChild, now - 1_000, now - 900, {
-          requesterSessionKey: promoted,
-          controllerSessionKey: promoted,
-        })],
-        ["ordinary-child", runFixture("ordinary-child", ordinaryChild, now - 1_000, now - 900, {
-          requesterSessionKey: ordinaryParent,
-          controllerSessionKey: ordinaryParent,
-        })],
-      ]));
+      const runs = canonicalSubagentRunFixtures(
+        new Map([
+          [
+            "promoted-child",
+            runFixture("promoted-child", promotedChild, now - 1_000, now - 900, {
+              requesterSessionKey: promoted,
+              controllerSessionKey: promoted,
+            }),
+          ],
+          [
+            "ordinary-child",
+            runFixture("ordinary-child", ordinaryChild, now - 1_000, now - 900, {
+              requesterSessionKey: ordinaryParent,
+              controllerSessionKey: ordinaryParent,
+            }),
+          ],
+        ]),
+      );
       saveSubagentRegistryToSqlite(runs);
       const read = async (sessionKey: string) =>
         expectDefined(await rowReader.row(sessionKey, { now }), "resident row");
@@ -145,8 +163,52 @@ describe("session list subagent metadata", () => {
       expect((await read(promoted)).hasActiveSubagentRun).toBe(true);
       expect((await read(formerParent)).hasActiveSubagentRun).not.toBe(true);
       expect((await read(ordinaryParent)).hasActiveSubagentRun).toBe(true);
-    }),
-  );
+    }));
+
+  test("keeps a promoted child active on its live controller when its requester differs", () =>
+    withRegistry(async () => {
+      const now = Date.now();
+      const controller = "agent:main:dashboard:controller";
+      const requester = "agent:main:dashboard:requester";
+      const promoted = "agent:main:dashboard:promoted-controlled-child";
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      for (const [sessionKey, entry] of [
+        [controller, { sessionId: "controller", updatedAt: now }],
+        [requester, { sessionId: "requester", updatedAt: now }],
+        [
+          promoted,
+          {
+            sessionId: "promoted-controlled-child",
+            updatedAt: now,
+            parentSessionKey: controller,
+            sidebarRoot: true,
+          },
+        ],
+      ] as const) {
+        await replaceSessionEntry({ storePath, sessionKey }, entry);
+      }
+      await addSubagentRunForTests(
+        runFixture("promoted-controlled-child", promoted, now - 1_000, now - 900, {
+          requesterSessionKey: requester,
+          controllerSessionKey: controller,
+        }),
+      );
+      claimAgentRunContext(
+        "promoted-controlled-child",
+        { sessionKey: promoted },
+        { trackOwner: true, ownsContext: true },
+      );
+      const read = async (sessionKey: string) =>
+        expectDefined(await rowReader.row(sessionKey, { now }), "resident row");
+
+      const promotedRow = await read(promoted);
+      expect(promotedRow.controlOwnerSessionKey).toBe(controller);
+      expect(promotedRow.hasActiveSubagentRun).toBe(true);
+      const controllerRow = await read(controller);
+      expect(controllerRow.childSessions).toEqual([promoted]);
+      expect(controllerRow.hasActiveSubagentRun).toBe(true);
+      expect((await read(requester)).hasActiveSubagentRun).toBe(true);
+    }));
 
   function listSubagentSessions(
     store: Record<string, SessionEntry>,
