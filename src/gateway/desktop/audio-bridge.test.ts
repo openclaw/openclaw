@@ -81,6 +81,16 @@ function ingressRequest(url: string, context: RemoteControlUiIngressContext) {
   return req;
 }
 
+function liveIngress(isCurrent: () => boolean) {
+  return createRemoteControlUiIngressTestContext({
+    assertCurrent() {
+      if (!isCurrent()) {
+        throw new Error("ingress revoked");
+      }
+    },
+  });
+}
+
 function fixture(
   requester?: { isCurrent(): boolean; signal?: AbortSignal },
   source?: DesktopAudioSource,
@@ -126,7 +136,7 @@ function fixture(
     }
     return capture;
   };
-  return { observation, peer, start, captures, firstCapture, attach };
+  return { observation, peer, start, firstCapture, attach };
 }
 
 describe("screen-owned desktop audio", () => {
@@ -231,16 +241,7 @@ describe("screen-owned desktop audio", () => {
       });
       const audio = await native.owner.ready;
       const requesterAbort = new AbortController();
-      const ingress =
-        authority === "ingress"
-          ? createRemoteControlUiIngressTestContext({
-              assertCurrent() {
-                if (!current) {
-                  throw new Error("ingress revoked");
-                }
-              },
-            })
-          : undefined;
+      const ingress = authority === "ingress" ? liveIngress(() => current) : undefined;
       const f = fixture(
         { isCurrent: () => authority === "ingress" || current, signal: requesterAbort.signal },
         audio.source,
@@ -303,13 +304,7 @@ it("rechecks ingress authority before publishing after observer authentication",
   const authentication = createDeferred();
   peers.authenticate.mockImplementation(() => authentication.promise);
   let current = true;
-  const context = createRemoteControlUiIngressTestContext({
-    assertCurrent() {
-      if (!current) {
-        throw new Error("ingress revoked");
-      }
-    },
-  });
+  const context = liveIngress(() => current);
   const desktop = new PassThrough();
   const transport = new PassThrough();
   const peer = new ObserverPeer();

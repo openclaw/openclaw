@@ -280,7 +280,6 @@ describe("gateway host desktop source", () => {
       expect(JSON.stringify(observed)).not.toMatch(
         /native stderr|private\/audio|synthetic-secret/u,
       );
-      expect(start).not.toHaveBeenCalled();
       expect(await releaseDesktopObserverToken(observed.wsPath, requester)).toBe(true);
       expect(start).not.toHaveBeenCalled();
     },

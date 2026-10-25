@@ -18,7 +18,6 @@ const CLIENT_HELLO = Buffer.concat([VERSION, Buffer.from([2])]);
 
 afterEach(() => Promise.all(cleanups.splice(0).map((cleanup) => cleanup())));
 
-/** Serves one scripted RFB handshake so probes exercise the real socket reader. */
 async function listenScriptedRfb(script: (socket: net.Socket) => void): Promise<number> {
   const { server } = createSocketServer(cleanups, script);
   return listenLoopback(server);
@@ -95,9 +94,7 @@ describe("RFB server probe", () => {
 
   it("times out a server that never speaks", async () => {
     const port = await listenScriptedRfb(() => undefined);
-    await expect(probe(port, 50)).resolves.toEqual({
-      kind: "timeout",
-    });
+    await expect(probe(port, 50)).resolves.toEqual({ kind: "timeout" });
   });
 });
 
@@ -157,14 +154,11 @@ describe("retained RFB connection", () => {
 
   it("rejects a changed downstream version without forwarding authentication bytes", async () => {
     const received: Buffer[] = [];
-    let closed = false;
+    const closed = createDeferred();
     const port = await listenScriptedRfb((socket) => {
-      socket.once("close", () => {
-        closed = true;
-      });
+      socket.once("close", () => closed.resolve());
       socket.on("data", (data) => received.push(Buffer.from(data)));
-      socket.write(Buffer.from("RFB 003.008\n"));
-      socket.once("data", () => socket.write(Buffer.from([1, 2])));
+      serveHandshake(socket, () => {});
     });
     const stream = await connect(port);
     const failure = new Promise<Error>((resolve) => {
@@ -174,27 +168,25 @@ describe("retained RFB connection", () => {
     await expect(failure).resolves.toMatchObject({
       message: "RFB client changed the inspected protocol version",
     });
-    await vi.waitFor(() => expect(closed).toBe(true));
-    expect(Buffer.concat(received)).toEqual(Buffer.from("RFB 003.008\n"));
+    await closed.promise;
+    expect(Buffer.concat(received)).toEqual(VERSION);
   });
 
   it.each(["banner", "security", "handoff"])(
     "cancels the owned socket during %s",
     async (phase) => {
       let connected = false;
-      let closed = false;
+      const closed = createDeferred();
       const port = await listenScriptedRfb((socket) => {
         connected = true;
-        socket.once("close", () => {
-          closed = true;
-        });
+        socket.once("close", () => closed.resolve());
         if (phase === "banner") {
           return;
         }
-        socket.write(Buffer.from("RFB 003.008\n"));
+        socket.write(VERSION);
         socket.once("data", () => {
           if (phase === "handoff") {
-            socket.write(Buffer.from([1, 2]));
+            socket.write(OFFER);
           }
         });
       });
@@ -210,7 +202,7 @@ describe("retained RFB connection", () => {
         controller.abort(new Error("desktop owner stopped"));
         await rejected;
       }
-      await vi.waitFor(() => expect(closed).toBe(true));
+      await closed.promise;
     },
   );
   it("ends writes and preserves terminal response bytes while a consumer remains paused", async () => {

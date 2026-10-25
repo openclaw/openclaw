@@ -6,13 +6,13 @@ import { Duplex } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { WebSocket as NpmWebSocket } from "../../../packages/gateway-client/src/websocket.js";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   expectUnauthorizedUpgrade,
   closeServer,
   setupDesktopDiagnostics,
+  waitForClose,
 } from "./desktop.test-support.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import {
@@ -45,12 +45,6 @@ async function expectCloseLog(
 function closedSocket(ws: WebSocket) {
   return new Promise<[number, string]>((resolve) => {
     ws.once("close", (code, reason) => resolve([code, reason.toString()]));
-  });
-}
-
-function nextFrame(ws: WebSocket) {
-  return new Promise<Buffer>((resolve) => {
-    ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
   });
 }
 
@@ -157,17 +151,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
         client: {
           authenticatedUserId: userId,
           authenticatedUserProfile: gatewayProfile("synthetic-profile", displayName, 0),
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-              displayName: "Unverified wire name",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-          },
+          connect: gatewayConnect(undefined, { displayName: "Unverified wire name" }),
         },
       });
       const current = await createProxyHarness({ control: true, registry, requester });
@@ -309,9 +293,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   it("closes malformed view-only streams with a policy violation", async () => {
     const harness = await createProxyHarness();
     const closed = closedSocket(harness.ws);
-    harness.ws.send(
-      Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 1, 254])]),
-    );
+    harness.ws.send(Buffer.concat([HELLO, Buffer.from([254])]));
     await expect(closed).resolves.toEqual([1008, "invalid view-only RFB stream"]);
     expect(harness.release).toHaveBeenCalledOnce();
   });
@@ -319,9 +301,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   it("propagates websocket close to the unix socket", async () => {
     const logCapture = captureLogs();
     const harness = await createProxyHarness();
-    const closed = new Promise<void>((resolve) => {
-      harness.desktopPeer.once("close", resolve);
-    });
+    const closed = waitForClose(harness.desktopPeer);
     const token = new URL(harness.observerUrl).searchParams.get("token");
     harness.ws.close(1001, `browser left\n${token}`);
     await closed;
@@ -364,9 +344,9 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
         stream,
         requester: { signal: new AbortController().signal, isCurrent: () => true },
       });
-      const pulse = nextFrame(harness.ws);
+      const pulse = once(harness.ws, "message");
       stream.push(Buffer.from("synthetic-server-pulse"));
-      await expect(pulse).resolves.toEqual(Buffer.from("synthetic-server-pulse"));
+      expect((await pulse)[0]).toEqual(Buffer.from("synthetic-server-pulse"));
       harness.ws.send(HELLO);
       await expect.poll(() => releaseWrite).toBeDefined();
       const gatewaySocket = pause.mock.contexts.at(-1);
