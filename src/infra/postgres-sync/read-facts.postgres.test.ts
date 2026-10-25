@@ -18,13 +18,12 @@ import { agentEngineSchema } from "../../state/openclaw-agent-db-engine.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import type { StoreSchema } from "../database-engine/contract.js";
-import { openEngineStore, readEngineAnchor } from "../database-engine/open.js";
+import { openPostgresEngineTestStore } from "../database-engine/engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "../database-engine/physical-facts.js";
 import { executeSqliteQuerySync } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
 import { failAfterStatement } from "./sql.test-support.js";
@@ -42,18 +41,10 @@ function openStore(schema: StoreSchema) {
   const open = () => {
     const anchor = openNodeSqliteDatabase(pathname);
     try {
-      const db = openEngineStore({
+      const db = openPostgresEngineTestStore({
         anchor,
         schema,
         input: { connection: connection!, schemaPrefix: prefix },
-        openSqlite: () => {
-          throw new Error("Expected PostgreSQL store");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-        },
       });
       assert(isPostgresSqlConnection(db), "Expected PostgreSQL connection");
       handles.push({ db, anchor });

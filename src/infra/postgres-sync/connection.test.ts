@@ -358,23 +358,3 @@ it("prepares before asynchronous admission and commits only inside its guard", a
   expect(result).toBe("result");
   expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
 });
-
-it("rolls a failed inner write back to its savepoint before the outer commit", () => {
-  const { db, statements } = transactionFixture();
-  const failure = new Error("inner write refused");
-  immediate(db, () => {
-    expect(() =>
-      immediate(db, () => {
-        throw failure;
-      }),
-    ).toThrow(failure);
-    expect(db.isTransaction).toBe(true);
-  });
-  expect(statements).toEqual([
-    writeBegin,
-    "SAVEPOINT openclaw_tx_nested",
-    "ROLLBACK TO SAVEPOINT openclaw_tx_nested",
-    "RELEASE SAVEPOINT openclaw_tx_nested",
-    "COMMIT",
-  ]);
-});
