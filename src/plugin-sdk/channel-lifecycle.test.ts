@@ -12,23 +12,8 @@ import {
   startAccountAndTrackLifecycle,
 } from "./test-helpers/start-account-lifecycle.js";
 
-class FakeServer extends EventEmitter {
-  close(callback?: () => void) {
-    queueMicrotask(() => {
-      this.emit("close");
-      callback?.();
-    });
-  }
-}
-
-function startPassiveAccount<Handle>(
-  start: () => Promise<Handle>,
-  stop?: (handle: Handle) => void,
-) {
-  return startAccountAndTrackLifecycle({
-    account: { accountId: "default" },
-    startAccount: ({ abortSignal }) => runPassiveAccountLifecycle({ abortSignal, start, stop }),
-  });
+function expectOutcome(task: Promise<unknown>, failure?: Error) {
+  return failure ? expect(task).rejects.toBe(failure) : expect(task).resolves.toBeUndefined();
 }
 
 async function expectTaskPending(task: Promise<unknown>) {
@@ -44,9 +29,10 @@ async function expectTaskPending(task: Promise<unknown>) {
 describe("plugin-sdk channel lifecycle helpers", () => {
   it("binds account id onto status patches", () => {
     const setStatus = vi.fn();
-    const statusSink = createAccountStatusSink({ accountId: "default", setStatus });
-    statusSink({ running: true, lastStartAt: 123 });
-
+    createAccountStatusSink({ accountId: "default", setStatus })({
+      running: true,
+      lastStartAt: 123,
+    });
     expect(setStatus).toHaveBeenCalledWith({
       accountId: "default",
       running: true,
@@ -67,10 +53,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     if (outcome === "none") {
       await expectTaskPending(task);
     }
-    const settled =
-      outcome === "throw"
-        ? expect(task).rejects.toBe(failure)
-        : expect(task).resolves.toBeUndefined();
+    const settled = expectOutcome(task, outcome === "throw" ? failure : undefined);
     abort.abort();
     await settled;
     if (outcome !== "none") {
@@ -83,10 +66,8 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     const stop = vi.fn();
     const task = runPassiveAccountLifecycle({
       abortSignal: abort.signal,
-      start: async () => ({ stop }),
-      stop: async (handle) => {
-        handle.stop();
-      },
+      start: async () => stop,
+      stop: async (handle) => handle(),
     });
 
     await expectTaskPending(task);
@@ -105,19 +86,21 @@ describe("plugin-sdk channel lifecycle helpers", () => {
       const stop = vi.fn();
       const assertAfterAbort = vi.fn();
       const failure = new Error(`${failurePhase} failed`);
-      const { abort, task, isSettled } = startPassiveAccount(
-        async () => {
-          if (failurePhase === "startup") {
-            throw failure;
-          }
-          return startup.promise;
-        },
-        (unregister) => unregister(),
-      );
-      const accountOutcome =
-        failurePhase === "startup"
-          ? expect(task).rejects.toBe(failure)
-          : expect(task).resolves.toBeUndefined();
+      const { abort, task, isSettled } = startAccountAndTrackLifecycle({
+        account: { accountId: "default" },
+        startAccount: ({ abortSignal }) =>
+          runPassiveAccountLifecycle({
+            abortSignal,
+            start: async () => {
+              if (failurePhase === "startup") {
+                throw failure;
+              }
+              return startup.promise;
+            },
+            stop: (unregister) => unregister(),
+          }),
+      });
+      const accountOutcome = expectOutcome(task, failurePhase === "startup" ? failure : undefined);
       try {
         await expect(
           expectPendingUntilAbort({
@@ -139,10 +122,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
             assertAfterAbort,
           }),
         ).rejects.toBe(failure);
-        expect({ aborted: abort.signal.aborted, settled: isSettled() }).toEqual({
-          aborted: true,
-          settled: true,
-        });
+        expect([abort.signal.aborted, isSettled()]).toEqual([true, true]);
         expect(stop).toHaveBeenCalledTimes(failurePhase === "startup" ? 0 : 1);
         expect(assertAfterAbort).not.toHaveBeenCalled();
       } finally {
@@ -155,10 +135,11 @@ describe("plugin-sdk channel lifecycle helpers", () => {
   );
 
   it.each([false, true])("keeps server task pending until close (abort=%s)", async (useAbort) => {
-    const server = new FakeServer();
+    const server = new EventEmitter();
+    const close = () => queueMicrotask(() => server.emit("close"));
     const abort = new AbortController();
     const onAbort = vi.fn(async () => {
-      server.close();
+      close();
     });
     const task = keepHttpServerTaskAlive({
       server,
@@ -168,7 +149,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     if (useAbort) {
       abort.abort();
     } else {
-      server.close();
+      close();
     }
     await expect(task).resolves.toBeUndefined();
     if (useAbort) {
@@ -196,11 +177,7 @@ describe("plugin-sdk channel lifecycle helpers", () => {
         },
       });
 
-      if (outcome === "success") {
-        await expect(task).resolves.toBeUndefined();
-      } else {
-        await expect(task).rejects.toBe(failure);
-      }
+      await expectOutcome(task, outcome === "success" ? undefined : failure);
     },
   );
 });

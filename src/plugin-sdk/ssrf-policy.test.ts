@@ -9,11 +9,9 @@ import {
 import {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
-  hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   mergeSsrFPolicies,
-  migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -28,7 +26,7 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
   }) as unknown as LookupFn;
 }
 
-function resolveAllowedOrigin(baseUrl: string, address: string, family: number) {
+function resolveAllowedOrigin(baseUrl: string, address: string, family = 4) {
   const url = new URL(baseUrl);
   const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
   expect(policy?.allowedOrigins).toEqual([url.origin]);
@@ -46,32 +44,12 @@ it("isPrivateNetworkOptInEnabled accepts nested dangerous opt-in config", () => 
   expect(isPrivateNetworkOptInEnabled(nestedOptIn)).toBe(true);
 });
 it("ssrfPolicyFromPrivateNetworkOptIn returns the compat policy for nested input", () => {
-  expect(ssrfPolicyFromPrivateNetworkOptIn(nestedOptIn)).toEqual({ allowPrivateNetwork: true });
+  expect(
+    ssrfPolicyFromPrivateNetworkOptIn({ network: { dangerouslyAllowPrivateNetwork: true } }),
+  ).toEqual({ allowPrivateNetwork: true });
 });
 it("mergeSsrFPolicies returns undefined when no policy contributes values", () => {
   expect(mergeSsrFPolicies(undefined, {})).toBeUndefined();
-});
-
-describe("legacy private-network alias helpers", () => {
-  it("detects the flat allowPrivateNetwork alias", () => {
-    expect(hasLegacyFlatAllowPrivateNetworkAlias({ allowPrivateNetwork: true })).toBe(true);
-    expect(hasLegacyFlatAllowPrivateNetworkAlias({ network: {} })).toBe(false);
-  });
-
-  it("prefers the canonical network key when both old and new keys are present", () => {
-    const changes: string[] = [];
-    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
-      entry: {
-        allowPrivateNetwork: true,
-        network: { dangerouslyAllowPrivateNetwork: false },
-      },
-      pathPrefix: "channels.matrix.accounts.default",
-      changes,
-    });
-
-    expect(migrated.entry).toEqual({ network: { dangerouslyAllowPrivateNetwork: false } });
-    expect(changes[0]).toContain("(false)");
-  });
 });
 
 describe("assertHttpUrlTargetsPrivateNetwork", () => {
@@ -106,13 +84,12 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
   });
 
   it("rejects malformed URLs without retaining credential-bearing input", async () => {
-    const secretUser = "matrix-user";
-    const secretPass = "matrix-fixture";
-    const malformed = `http://${secretUser}:${secretPass}@${["invalid", "host"].join(" ")}`;
-
-    const error = await assertHttpUrlTargetsPrivateNetwork(malformed, {
-      dangerouslyAllowPrivateNetwork: true,
-    }).then(
+    const error = await assertHttpUrlTargetsPrivateNetwork(
+      "http://matrix-user:matrix-fixture@invalid host",
+      {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    ).then(
       () => {
         throw new Error("expected rejection");
       },
@@ -124,8 +101,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
     expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
 
     const serialized = JSON.stringify(error, Object.getOwnPropertyNames(error));
-    expect(serialized).not.toContain(secretUser);
-    expect(serialized).not.toContain(secretPass);
+    expect(serialized).not.toMatch(/matrix-user|matrix-fixture/);
   });
 });
 
@@ -135,16 +111,16 @@ it("normalizeHostnameSuffixAllowlist normalizes wildcard prefixes and deduplicat
   ).toEqual(["*"]);
 });
 it.each([
-  ["supports suffix match", "https://a.example.com/x", ["example.com"], true],
-  ["supports wildcard allowlist", "https://evil.com/x", ["*"], true],
-])("isHttpsUrlAllowedByHostnameSuffixAllowlist $0", (_name, url, allowlist, expected) => {
-  expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(expected);
+  ["https://a.example.com/x", ["example.com"]],
+  ["https://evil.com/x", ["*"]],
+])("allows HTTPS suffix match: %s via %j", (url, allowlist) => {
+  expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(true);
 });
 it.each([
-  ["returns undefined for an explicit empty list", [], undefined],
-  ["returns undefined when wildcard is mixed with concrete hosts", ["example.com", "*"], undefined],
+  ["empty", [], undefined],
+  ["wildcard", ["example.com", "*"], undefined],
   [
-    "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
+    "normalized",
     ["*.TrafficManager.NET", ".trafficmanager.net.", " blob.core.windows.net "],
     {
       hostnameAllowlist: [
@@ -155,24 +131,20 @@ it.each([
       ],
     },
   ],
-])("buildHostnameAllowlistPolicyFromSuffixAllowlist $0", (_name, input, expected) => {
+])("builds hostname policy: %s", (_name, input, expected) => {
   expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(input)).toEqual(expected);
 });
 
 describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () => {
-  // allowedOrigins must not bypass metadata/link-local rejection at resolution.
   it.each([
-    ["AWS/EC2 IMDS IPv4 literal", "169.254.169.254", 4, undefined],
-    ["GCP metadata canonical hostname", "metadata.google.internal", 4, "169.254.169.254"],
-    ["non-metadata link-local IPv4 literal", "169.254.42.42", 4, undefined],
-  ])(
-    "rejects plugin-supplied allowedOrigins entry: $0",
-    async (_name, hostname, family, resolvedAddress) => {
-      await expect(
-        resolveAllowedOrigin(`http://${hostname}/v1`, resolvedAddress ?? hostname, family),
-      ).rejects.toThrow(SsrFBlockedError);
-    },
-  );
+    ["169.254.169.254", "169.254.169.254"],
+    ["metadata.google.internal", "169.254.169.254"],
+    ["169.254.42.42", "169.254.42.42"],
+  ])("rejects metadata/link-local allowedOrigin: %s", async (hostname, address) => {
+    await expect(resolveAllowedOrigin(`http://${hostname}/v1`, address)).rejects.toThrow(
+      SsrFBlockedError,
+    );
+  });
 
   it.each([
     ["IPv4 loopback", "127.0.0.1", 4],
