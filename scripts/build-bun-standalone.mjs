@@ -12,6 +12,7 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
+import { bundleStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -786,7 +787,10 @@ do {
   discoveredRoots = sourceEntrypoints().length;
   sourceLoads.clear();
   sourceGraph?.loaded.clear();
-  result = await Bun.build({ ...buildOptions, entrypoints: sourceEntrypoints() });
+  result = await bundleStandaloneModules(
+    { ...buildOptions, entrypoints: sourceEntrypoints() },
+    Bun.build,
+  );
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone bundle failed");
   }
