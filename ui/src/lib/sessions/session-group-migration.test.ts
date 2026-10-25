@@ -11,7 +11,6 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import type { SessionGateway } from "./session-capability.ts";
 import { sessionChanged } from "./session-rpc.test-support.ts";
 
 const legacyKey = "openclaw:sessions:custom-groups";
@@ -28,31 +27,33 @@ function legacyGroups() {
   return legacy;
 }
 
-function createGatewayHarness(request: ReturnType<typeof vi.fn>, scopes: string[]) {
-  const harness = sharedGatewayHarness({ request } as unknown as GatewayBrowserClient, [
+function createGatewayHarness(
+  request: ReturnType<typeof vi.fn>,
+  scopes = ["operator.write"],
+  methods = [
     "sessions.groups.list",
     "sessions.groups.defaults",
     "sessions.groups.put",
     "sessions.groups.rename",
-  ]);
+  ],
+) {
+  const harness = sharedGatewayHarness({ request } as unknown as GatewayBrowserClient, methods);
   harness.gateway.snapshot.hello = {
     ...harness.gateway.snapshot.hello,
     auth: { role: "operator", scopes },
   } as GatewayHelloOk;
   return harness;
 }
-function createGateway(request: ReturnType<typeof vi.fn>, scopes: string[]): SessionGateway {
-  return createGatewayHarness(request, scopes).gateway;
+function createSessions(request: ReturnType<typeof vi.fn>, scopes?: string[], methods?: string[]) {
+  return createTestSessionCapability(createGatewayHarness(request, scopes, methods).gateway);
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
 it.each(["disconnected", "disposed"] as const)(
   "retires automatic group loads for a %s owner",
   async (boundary) => {
-    const stale = createDeferred<{ groups: { name: string; position: number }[] }>();
+    const stale = createDeferred<Groups>();
     let reads = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.groups.list") {
@@ -63,15 +64,12 @@ it.each(["disconnected", "disposed"] as const)(
       }
       return sessionsResult([], 1);
     });
-    const harness = createGatewayHarness(request, ["operator.write"]);
+    const harness = createGatewayHarness(request);
     const bootstrap = createConnectionBootstrapCoordinator();
     bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
     const sessions = createSessionCapability(
       harness.gateway,
-      {
-        state: { selectedId: "main" },
-        subscribe: () => () => {},
-      },
+      { state: { selectedId: "main" }, subscribe: () => () => {} },
       { connectionBootstrap: bootstrap },
     );
     const invalidate = () => harness.emitEvent(sessionChanged({ reason: "groups" }));
@@ -82,7 +80,7 @@ it.each(["disconnected", "disposed"] as const)(
       invalidate();
       if (boundary === "disconnected") {
         harness.publish(false);
-      } else if (boundary === "disposed") {
+      } else {
         sessions.dispose();
       }
       stale.resolve({ groups: [{ name: "Stale", position: 0 }] });
@@ -100,7 +98,7 @@ it.each(["disconnected", "disposed"] as const)(
 it("does not migrate browser groups without operator.write", async () => {
   const legacy = legacyGroups();
   const request = groupRequests({ "sessions.groups.list": () => ({ groups: [] }) });
-  const sessions = createTestSessionCapability(createGateway(request, ["operator.read"]));
+  const sessions = createSessions(request, ["operator.read"]);
 
   await sessions.groupsLoad();
 
@@ -116,7 +114,7 @@ it("migrates browser groups with operator.write", async () => {
     "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
     "sessions.groups.defaults": () => ({ defaults: [{ name: "Research" }] }),
   });
-  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+  const sessions = createSessions(request);
 
   await sessions.groupsLoad();
 
@@ -135,7 +133,7 @@ it("does not replace saved groups from an invalidated legacy import", async () =
     "sessions.groups.put": () => ({ groups: [{ name: "Research", position: 0 }] }),
     "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
   });
-  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+  const sessions = createSessions(request);
   onTestFinished(() => current.resolve({ groups: [clientGroup] }));
   const staleLoad = sessions.groupsLoad();
   sessions.groupsInvalidate();
@@ -155,14 +153,11 @@ it("clears cached cwd when a defaults update omits the removed value", async () 
     "sessions.groups.defaults": () => ({ defaults: [clientDefaults] }),
     "sessions.groups.update": () => ({ defaults: [{ name: "Client", worktree: false }] }),
   });
-  const gateway = createGateway(request, ["operator.write"]);
-  gateway.snapshot.hello = {
-    ...gateway.snapshot.hello,
-    features: {
-      methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
-    },
-  } as GatewayHelloOk;
-  const sessions = createTestSessionCapability(gateway);
+  const sessions = createSessions(request, undefined, [
+    "sessions.groups.list",
+    "sessions.groups.defaults",
+    "sessions.groups.update",
+  ]);
 
   await sessions.groupsLoad();
   expect(sessions.state.groupSettings).toEqual(expectedClient);
@@ -187,7 +182,7 @@ it("keeps path-free mutations pending until fresh defaults arrive", async () => 
     },
     "sessions.groups.put": () => ({ groups: [clientGroup] }),
   });
-  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+  const sessions = createSessions(request);
 
   await expect(sessions.groupsLoad()).resolves.toBeNull();
   expect(sessions.groupsStatus()).toBe("unavailable");
@@ -208,7 +203,7 @@ it("joins an in-flight load so route consumers see current defaults", async () =
     "sessions.groups.list": () => ({ groups: [clientGroup] }),
     "sessions.groups.defaults": () => defaults.promise,
   });
-  const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
+  const sessions = createSessions(request);
 
   const backgroundLoad = sessions.groupsLoad();
   await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
@@ -234,7 +229,7 @@ it("returns only defaults owned by the current same-client connection", async ()
     "sessions.groups.list": () => ({ groups: [clientGroup] }),
     "sessions.groups.defaults": () => (++calls === 1 ? stale.promise : current.promise),
   });
-  const harness = createGatewayHarness(request, ["operator.write"]);
+  const harness = createGatewayHarness(request);
   const sessions = createTestSessionCapability(harness.gateway);
 
   const staleLoad = sessions.groupsLoad();
@@ -244,17 +239,11 @@ it("returns only defaults owned by the current same-client connection", async ()
   const currentLoad = sessions.groupsLoad();
   await vi.waitFor(() => expect(calls).toBe(2));
 
-  stale.resolve({
-    defaults: [{ name: "Client", cwd: "/gateway-a", worktree: true }],
-  });
+  stale.resolve({ defaults: [{ name: "Client", cwd: "/gateway-a", worktree: true }] });
   await expect(staleLoad).resolves.toBeNull();
-  current.resolve({
-    defaults: [{ name: "Client", cwd: "/gateway-b", worktree: false }],
-  });
-  await expect(currentLoad).resolves.toEqual([
-    { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
-  ]);
-  expect(sessions.state.groupSettings).toEqual([
-    { name: "Client", position: 0, cwd: "/gateway-b", worktree: false },
-  ]);
+  const currentDefaults = { name: "Client", cwd: "/gateway-b", worktree: false };
+  current.resolve({ defaults: [currentDefaults] });
+  const expected = [{ ...clientGroup, ...currentDefaults }];
+  await expect(currentLoad).resolves.toEqual(expected);
+  expect(sessions.state.groupSettings).toEqual(expected);
 });

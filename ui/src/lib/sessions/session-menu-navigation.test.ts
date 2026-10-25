@@ -21,8 +21,10 @@ const session = {
 const agent = { id: "research", name: "Research" };
 const sessionPath = "/dashboard/research/dashboard/12345678-90ab-cdef-1234-567890abcdef";
 
-function fixture() {
-  const request = vi.fn<(...args: unknown[]) => Promise<ChatHistoryResult>>();
+let params: Parameters<typeof runSessionNavigationAction>[1];
+let request: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<ChatHistoryResult>>>;
+beforeEach(() => {
+  request = vi.fn<(...args: unknown[]) => Promise<ChatHistoryResult>>();
   const context = {
     basePath: "/control",
     agentSelection: { state: { selectedId: "research" } },
@@ -40,13 +42,7 @@ function fixture() {
     },
     sessions: { state: { result: { sessions: [{ ...session, boardFace: "dashboard" }] } } },
   } as unknown as ApplicationContext;
-  const params = { context, session, isCurrent: () => true };
-  return { params, request };
-}
-let params: ReturnType<typeof fixture>["params"];
-let request: ReturnType<typeof fixture>["request"];
-beforeEach(() => {
-  ({ params, request } = fixture());
+  params = { context, session, isCurrent: () => true };
 });
 const run = (kind: Parameters<typeof runSessionNavigationAction>[0]) =>
   runSessionNavigationAction(kind, params);
@@ -64,12 +60,14 @@ function page(messages: unknown[], extra: Partial<ChatHistoryResult> = {}): Chat
 function message(seq: number, content: string) {
   return { role: "assistant", content, __openclaw: { seq } };
 }
+const leaf = (activeLeafEntryId: string | null) =>
+  ({ activeLeafEntryId }) as ChatHistoryResult["sessionInfo"];
 function tailPage(extra: Partial<ChatHistoryResult> = {}) {
   return page([message(3, "Newest")], {
     hasMore: true,
     nextOffset: 1,
     deltaCursor: "stable-cursor",
-    sessionInfo: { activeLeafEntryId: "leaf-3" } as ChatHistoryResult["sessionInfo"],
+    sessionInfo: leaf("leaf-3"),
     ...extra,
   });
 }
@@ -154,9 +152,7 @@ it("copies every history page chronologically without duplicating replayed recor
 it.each([null, "leaf-3"])(
   "copies paged history when only the tail carries leaf %s",
   async (activeLeafEntryId) => {
-    const tail = tailPage({
-      sessionInfo: { activeLeafEntryId } as ChatHistoryResult["sessionInfo"],
-    });
+    const tail = tailPage({ sessionInfo: leaf(activeLeafEntryId) });
     request.mockResolvedValueOnce(tail);
     request.mockResolvedValueOnce(page([message(1, "Oldest"), message(2, "Middle")]));
     request.mockResolvedValueOnce(tail);
@@ -199,10 +195,7 @@ it.each([
   ["page", { totalMessages: 4 }],
   ["page", { hasMore: true, nextOffset: 1 }],
   ["tail", { deltaCursor: "rewritten-cursor" }],
-  [
-    "tail",
-    { sessionInfo: { activeLeafEntryId: "different-branch" } as ChatHistoryResult["sessionInfo"] },
-  ],
+  ["tail", { sessionInfo: leaf("different-branch") }],
 ] as const)("rejects inconsistent or stalled history at %s: %j", async (stage, changed) => {
   const tail = tailPage();
   request.mockResolvedValueOnce(tail);
@@ -223,25 +216,23 @@ it("retires a pending transcript copy when its source view changes", async () =>
   await rejectCopy();
 });
 
-it("retires a transcript copy before its deferred reader starts", async () => {
-  let current = true;
-  params.isCurrent = () => current;
-  const pending = copy();
-  current = false;
-  await pending;
-  expect(request).not.toHaveBeenCalled();
-  expect(copyToClipboard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
-});
-
-it("keeps the deferred transcript read on its initiating connection", async () => {
-  const pending = copy();
-  params.context.gateway.snapshot.client = null;
-  await pending;
-  expect(request).not.toHaveBeenCalled();
-  expect(copyToClipboard).not.toHaveBeenCalled();
-  expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
-});
+it.each(["view", "connection"])(
+  "retires a deferred transcript copy on %s change",
+  async (owner) => {
+    let current = true;
+    params.isCurrent = () => current;
+    const pending = copy();
+    if (owner === "view") {
+      current = false;
+    } else {
+      params.context.gateway.snapshot.client = null;
+    }
+    await pending;
+    expect(request).not.toHaveBeenCalled();
+    expect(copyToClipboard).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.copyTranscriptChanged") });
+  },
+);
 
 it("denies transcript reads without a compatible read scope", async () => {
   params.context.gateway.snapshot.hello!.auth!.scopes = [];
