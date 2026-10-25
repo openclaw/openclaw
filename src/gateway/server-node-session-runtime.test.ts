@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
-import { makeClient } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import {
   createChatRunState,
@@ -14,13 +14,12 @@ import {
 import { createAgentEventHandler } from "./server-chat.js";
 import { broadcastChatTerminal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 const assistantMessage = (text: string) => ({
   role: "assistant",
   content: [{ type: "text", text }],
 });
-const decodedFrames = (frames: string[]) => frames.map((frame) => JSON.parse(frame));
-const payloads = (frames: string[]) => decodedFrames(frames).map((frame) => frame.payload);
 
 function createRuntime(
   overrides: Partial<Parameters<typeof createGatewayNodeSessionRuntime>[0]> = {},
@@ -49,18 +48,35 @@ function registerNode(
   surface?: { platform: string; caps: string[]; commands: string[] },
 ) {
   const frames: string[] = [];
-  const client = makeClient(connId, nodeId, frames, {
-    clientId: "node-host",
-    platform: "macos",
-    ...surface,
-  });
-  client.connect.role = "node";
-  client.connect.scopes = [];
+  const socket = {
+    readyState: WebSocket.OPEN,
+    bufferedAmount: 0,
+    send: vi.fn((payload: string) => frames.push(payload)),
+    close: vi.fn(),
+  };
+  const client: GatewayWsClient = {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connId,
+    usesSharedGatewayAuth: false,
+    connect: {
+      role: "node",
+      scopes: [],
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: surface?.platform ?? "macos",
+        mode: "node",
+      },
+      caps: surface?.caps,
+      commands: surface?.commands,
+      device: { id: nodeId },
+    } as unknown as GatewayWsClient["connect"],
+  };
   runtime.nodeRegistry.register(client, {
     pairingIdentity: "identity-a",
     pairingGeneration,
   });
-  return { socket: client.socket, client, frames };
+  return { socket, client, frames };
 }
 
 function pairedSubscriber(event: "chat" | "agent", sessionKey = "main", subscribe = true) {
@@ -150,13 +166,18 @@ function publishInventory(runtime: ReturnType<typeof createRuntime>, available: 
   });
 }
 
+const inventoryBroadcast = [
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  { nodeId: "node-a" },
+  { dropIfSlow: true },
+];
 const inventoryOrder = [
   "availability",
   "inventory",
   `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
 ];
 
-test("routes fanout without reparsing and removes both session indexes through connected nodes", async () => {
+test("routes fanout and removes both session indexes through connected nodes", async () => {
   const runtime = createRuntime({
     resolveCurrentPairingState: async (nodeId) => ({
       identity: "identity-a",
@@ -175,14 +196,9 @@ test("routes fanout without reparsing and removes both session indexes through c
   runtime.nodeSubscribe("node-b", "main", "conn-b");
   expect(runtime.nodeHasSessionSubscribers(" main ")).toBe(true);
   expect(runtime.nodeHasSessionSubscribers("Main")).toBe(false);
-  using parse = vi.spyOn(JSON, "parse");
   await runtime.nodeSendToSession("main", "chat", { ok: true });
-  expect(parse).not.toHaveBeenCalled();
-  parse.mockRestore();
-  expect(decodedFrames(a.frames)).toEqual([
-    { type: "event", event: "chat", payload: { ok: true } },
-  ]);
-  expect(payloads(b.frames)).toEqual([{ ok: true }]);
+  expect(a.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
+  expect(b.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
 
   runtime.nodeUnsubscribe("node-a", " main ", "conn-a");
   runtime.nodeUnsubscribe("node-b", "main", "conn-retired");
@@ -218,7 +234,9 @@ test("settles a failed node transport while delivering to its subscribed sibling
   await expect(runtime.nodeSendToSession("main", "tick", {})).resolves.toBeUndefined();
   expect(sendRaw).toHaveBeenCalledOnce();
   expect(a.frames).toEqual([]);
-  expect(decodedFrames(b.frames)).toEqual([{ type: "event", event: "tick", payload: {} }]);
+  expect(b.frames.map((frame) => JSON.parse(frame))).toEqual([
+    { type: "event", event: "tick", payload: {} },
+  ]);
 });
 
 test("drops unserializable payloads before reaching a subscribed node transport", async () => {
@@ -254,15 +272,15 @@ test.each(["chat", "agent"] as const)(
       { liveText: { group: publisher.group.signal } },
     );
 
-    const received = payloads(frames);
+    const payloads = frames.map((frame) => JSON.parse(frame).payload);
     const snapshot = (index: number) =>
-      event === "chat" ? received[index].message?.content[0].text : received[index].data?.text;
-    expect(received).toHaveLength(8);
+      event === "chat" ? payloads[index].message?.content[0].text : payloads[index].data?.text;
+    expect(payloads).toHaveLength(8);
     const snapshots = [0, 1, 3, 4, 5, 6].map(snapshot);
     expect(snapshots).toEqual(["AB", undefined, "ABCD", "X", undefined, "Z"]);
-    expect(event === "chat" ? received[1].deltaText : received[1].data.delta).toBe("C");
-    expect(received[2]).toEqual({ stream: "tool" });
-    expect(received[7]).toMatchObject({
+    expect(event === "chat" ? payloads[1].deltaText : payloads[1].data.delta).toBe("C");
+    expect(payloads[2]).toEqual({ stream: "tool" });
+    expect(payloads[7]).toMatchObject({
       state: "final",
       message: { content: [{ text: "Z" }] },
     });
@@ -280,7 +298,7 @@ test("re-baselines after a failed send or a skipped publication", async () => {
   await publisher.send("ABCD", "D", { isCurrent: () => false });
   await publisher.send("ABCDE", "E");
 
-  const texts = payloads(frames).map((payload) => payload.message.content[0].text);
+  const texts = frames.map((frame) => JSON.parse(frame).payload.message.content[0].text);
   expect(texts).toEqual(["A", "ABC", "ABCDE"]);
 });
 
@@ -295,7 +313,7 @@ test("preserves transformed assistant snapshots before resuming queued appends",
   f.release();
   await Promise.all([transformed, append]);
 
-  expect(payloads(frames).map((payload) => payload.data)).toEqual([
+  expect(frames.map((frame) => JSON.parse(frame).payload.data)).toEqual([
     { text: "foo", delta: "foo" },
     { text: "X", delta: "bar" },
     { delta: "baz" },
@@ -317,7 +335,7 @@ test("does not inherit receipts when a connection is replaced during pairing ver
   await publisher.send("ABCD", "D");
 
   expect(originalFrames).toHaveLength(1);
-  expect(payloads(replacementFrames)).toEqual([
+  expect(replacementFrames.map((frame) => JSON.parse(frame).payload)).toEqual([
     {
       runId: "run-a",
       state: "delta",
@@ -371,7 +389,7 @@ test.each([
   f.release();
   await Promise.all([firstTail, secondTail, ...sends]);
 
-  const events = decodedFrames(frames);
+  const events = frames.map((frame) => JSON.parse(frame));
   expect(
     events.filter((frame) => frame.event === "agent").map((frame) => frame.payload.data),
   ).toEqual([
@@ -428,7 +446,7 @@ test.each([
       f.release();
       await Promise.all(sends);
 
-      const events = decodedFrames(frames);
+      const events = frames.map((frame) => JSON.parse(frame));
       const assistant = events.filter(
         (frame) => frame.event === "agent" && frame.payload.stream === "assistant",
       );
@@ -450,20 +468,23 @@ test.each([
 test.each(["replacement", "capacity-only"])("routes runner inventory changes on %s", (change) => {
   const order: string[] = [];
   const broadcast = vi.fn((event: string) => order.push(`broadcast:${event}`));
-  const onRunnerStateChanged: NonNullable<
-    Parameters<typeof createGatewayNodeSessionRuntime>[0]["onRunnerStateChanged"]
-  > = (_nodeId, state) => {
+  const onRunnerStateChanged = vi.fn((_nodeId, state) => {
     if (state.availabilityChanged) {
       order.push("availability");
     }
     if (state.inventoryChanged) {
       order.push("inventory");
     }
-  };
+  });
   const runtime = createRuntime({ broadcast, onRunnerStateChanged });
   registerNode(runtime, "conn-original", "generation-a");
   const expectChange = (availabilityChanged: boolean, currentRunner: boolean, from: number) => {
+    expect(broadcast.mock.calls).toEqual([inventoryBroadcast]);
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(currentRunner);
+    expect(onRunnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-a", {
+      inventoryChanged: true,
+      availabilityChanged,
+    });
     expect(order.slice(from)).toEqual(
       availabilityChanged ? inventoryOrder : inventoryOrder.slice(1),
     );
@@ -473,12 +494,40 @@ test.each(["replacement", "capacity-only"])("routes runner inventory changes on 
   expectChange(true, true, 0);
 
   broadcast.mockClear();
+  onRunnerStateChanged.mockClear();
   if (change === "replacement") {
     registerNode(runtime, "conn-replacement", "generation-a");
   } else {
     expect(publishInventory(runtime, 0)).toEqual({ changed: true });
   }
   expectChange(change === "replacement", change !== "replacement", 3);
+});
+
+test("forwards subscribed payload json without parsing it again", async () => {
+  const runtime = createRuntime();
+  const { frames } = registerNode(runtime, "conn-node-a", "generation-a");
+  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
+  runtime.nodeSubscribe("node-a", "main", "conn-node-a");
+  expect(runtime.nodeHasSessionSubscribers(" main ")).toBe(true);
+
+  const parseSpy = vi.spyOn(JSON, "parse");
+  try {
+    await runtime.nodeSendToSession("main", "chat", { ok: true });
+    expect(frames).toHaveLength(1);
+    expect(parseSpy).not.toHaveBeenCalled();
+  } finally {
+    parseSpy.mockRestore();
+  }
+  expect(JSON.parse(frames[0] ?? "{}")).toEqual({
+    type: "event",
+    event: "chat",
+    payload: { ok: true },
+  });
+
+  runtime.nodeUnsubscribe("node-a", "main", "conn-retired");
+  expect(runtime.nodeHasSessionSubscribers("main")).toBe(true);
+  runtime.nodeUnsubscribe("node-a", "main", "conn-node-a");
+  expect(runtime.nodeHasSessionSubscribers("main")).toBe(false);
 });
 
 test.each([true, false])(
@@ -515,7 +564,7 @@ test.each([true, false])(
       expect(send).not.toHaveBeenCalled();
     }
 
-    expect(decodedFrames(frames)).toEqual([
+    expect(frames.map((frame) => JSON.parse(frame))).toEqual([
       { type: "event", event: "voicewake.changed", payload: { triggers: ["openclaw"] } },
       ...(hasGeneration
         ? [{ type: "event", event: "voicewake.routing.changed", payload: { config: routing } }]

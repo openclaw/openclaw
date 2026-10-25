@@ -85,7 +85,10 @@ function storedProbe(entry: SessionEntry, followupRun = createProbeRun(), sessio
 }
 
 function routeResult(text: string, provider: string, model: string) {
-  return createRunResult(text, { agentMeta: { provider, model } });
+  return createRunResult(text, {
+    durationMs: 1,
+    agentMeta: { sessionId: "session", provider, model },
+  });
 }
 
 function recheck(run: ReturnType<typeof createFollowupRun>["run"], entry: SessionEntry) {

@@ -634,7 +634,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     "preserves final payloads with $name",
     async ({ replies }) => {
       const dispatcher = await dispatchFinals(replies);
-      expectCalls([dispatcher.sendFinalReply, replies.map((reply) => [reply])]);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(replies.length);
+      for (const [index, reply] of replies.entries()) {
+        expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(index + 1, reply);
+      }
     },
   );
 });

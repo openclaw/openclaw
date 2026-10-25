@@ -1,4 +1,5 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+// Slack tests cover setup surface plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createQueuedWizardPrompter,
@@ -19,7 +20,11 @@ function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): O
 const slackSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: async ({ cfg }) => cfg,
   resolveAllowFromEntries: async ({ entries }) =>
-    entries.map((input) => ({ input, resolved: false, id: null })),
+    entries.map((entry) => ({
+      input: entry,
+      resolved: false,
+      id: null,
+    })),
   resolveGroupAllowlist: async ({ entries }) => entries,
 });
 
@@ -31,12 +36,8 @@ const credentialOnlySlackSetupWizard = {
   finalize: undefined,
 };
 
-function configure(
-  queued: ReturnType<typeof createQueuedWizardPrompter>,
-  cfg: OpenClawConfig = {},
-  accountId = "default",
-) {
-  const adapter = createSetupWizardAdapter({
+function createConfigure(accountId = "default") {
+  return createSetupWizardAdapter({
     plugin: {
       id: "slack",
       meta: { label: "Slack" },
@@ -47,20 +48,17 @@ function configure(
       setupContract: slackSetupContract,
     } as never,
     wizard: credentialOnlySlackSetupWizard,
-  });
-  return runSetupWizardConfigure({
-    configure: adapter.configure,
-    cfg,
-    prompter: queued.prompter,
-    options: { secretInputMode: "plaintext" },
-  });
+  }).configure;
 }
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const baseCfg = slackConfig({ botToken: "xoxb-test", appToken: "xapp-test" });
+const baseCfg = slackConfig({
+  botToken: "xoxb-test",
+  appToken: "xapp-test",
+});
 
 function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): string {
   const [call] = mock.mock.calls;
@@ -71,6 +69,14 @@ function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): s
 }
 
 describe("slackSetupWizard.prepare", () => {
+  it("keeps the manifest out of framed intro note lines", () => {
+    const lines = buildSlackSetupLines();
+
+    expect(lines.join("\n")).not.toContain("Manifest (JSON):");
+    expect(lines.join("\n")).not.toContain('"display_information"');
+    expect(lines).toContain("3) Socket Mode: enable it and create an app-level token (xapp-...)");
+  });
+
   it("gives HTTP bot setup signing guidance without a Socket Mode manifest", async () => {
     const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
     const note = vi.fn(async () => {});
@@ -84,6 +90,7 @@ describe("slackSetupWizard.prepare", () => {
     const instructions = requireFirstStringArg(note, "Slack HTTP setup instructions");
     expect(instructions).toContain("Signing Secret");
     expect(instructions).toContain("public HTTPS Request URL");
+    expect(note).toHaveBeenCalledWith(instructions, "Channel setup");
     expect(plain).not.toHaveBeenCalled();
   });
 
@@ -100,57 +107,164 @@ describe("slackSetupWizard.prepare", () => {
       }),
     });
 
-    const lines = buildSlackSetupLines();
-    expect(note).toHaveBeenCalledWith(lines.join("\n"), expect.any(String));
-    expect(lines.join("\n")).not.toContain("Manifest (JSON):");
-    expect(lines.join("\n")).not.toContain('"display_information"');
-    expect(lines).toContain("3) Socket Mode: enable it and create an app-level token (xapp-...)");
+    expect(plain).toHaveBeenCalledTimes(1);
+    expect(note).toHaveBeenCalledWith(buildSlackSetupLines().join("\n"), expect.any(String));
     const manifest = requireFirstStringArg(plain, "Slack manifest plain text");
-    expect(JSON.parse(manifest)).toMatchObject({
+    expect(JSON.parse(manifest)).toEqual({
+      display_information: {
+        name: "OpenClaw",
+        description: "OpenClaw app for OpenClaw",
+      },
       features: {
+        bot_user: {
+          display_name: "OpenClaw",
+          always_online: true,
+        },
         app_home: {
           home_tab_enabled: true,
           messages_tab_enabled: true,
           messages_tab_read_only_enabled: false,
         },
-        slash_commands: [expect.objectContaining({ command: "/openclaw", should_escape: false })],
+        agent_view: {
+          agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
+          suggested_prompts: [
+            {
+              title: "What can you do?",
+              message: "What can you help me with?",
+            },
+            {
+              title: "Summarize this channel",
+              message: "Summarize the recent activity in this channel.",
+            },
+            {
+              title: "Draft a reply",
+              message: "Help me draft a reply.",
+            },
+          ],
+        },
+        slash_commands: [
+          {
+            command: "/openclaw",
+            description: "Send a message to OpenClaw",
+            should_escape: false,
+          },
+        ],
       },
-      settings: { socket_mode_enabled: true },
+      oauth_config: {
+        scopes: {
+          bot: [
+            "app_mentions:read",
+            "assistant:write",
+            "channels:history",
+            "channels:manage",
+            "channels:read",
+            "channels:write.invites",
+            "chat:write",
+            "commands",
+            "emoji:read",
+            "files:read",
+            "files:write",
+            "groups:history",
+            "groups:read",
+            "im:history",
+            "im:read",
+            "im:write",
+            "mpim:history",
+            "mpim:read",
+            "mpim:write",
+            "pins:read",
+            "pins:write",
+            "reactions:read",
+            "reactions:write",
+            "usergroups:read",
+            "users:read",
+          ],
+        },
+      },
+      settings: {
+        socket_mode_enabled: true,
+        event_subscriptions: {
+          bot_events: [
+            "app_home_opened",
+            "app_mention",
+            "app_context_changed",
+            "agent_session_stopped",
+            "agent_session_title_changed",
+            "channel_rename",
+            "member_joined_channel",
+            "member_left_channel",
+            "message.channels",
+            "message.groups",
+            "message.im",
+            "message.mpim",
+            "pin_added",
+            "pin_removed",
+            "reaction_added",
+            "reaction_removed",
+          ],
+        },
+      },
     });
   });
 
-  it.each(["socket", "http"] as const)(
-    "collects user credentials for %s transport",
-    async (mode) => {
-      const credential = mode === "http" ? "signingSecret" : "appToken";
-      const transportToken = mode === "http" ? "test-signing-secret" : "test-app-token";
-      const queued = createQueuedWizardPrompter({
-        selectValues: ["user"],
-        textValues: ["test-user-token", transportToken],
-      });
-      const result = await configure(queued, slackConfig(mode === "http" ? { mode } : {}));
+  it("collects only the user token and Socket Mode transport token for user identity", async () => {
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["user"],
+      textValues: ["test-user-token", "test-app-token"],
+    });
+    const configure = createConfigure();
 
-      expect(result.cfg.channels?.slack).toMatchObject({
-        enabled: true,
-        postAs: "user",
-        userToken: "test-user-token",
-        [credential]: transportToken,
-      });
-      expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
-      if (mode === "http") {
-        expect(result.cfg.channels?.slack?.mode).toBe("http");
-        expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
-      }
-      expect(await slackSetupWizard.status.resolveConfigured({ cfg: result.cfg })).toBe(true);
-      const instructions = requireFirstStringArg(queued.note, "Slack user identity instructions");
-      expect(instructions).toContain("User Token Scopes");
-      expect(instructions).toContain("Subscribe to events on behalf of users");
-      expect(instructions).toContain("/channels/slack#user-identity-post-as-a-real-person");
-      expect(queued.select.mock.invocationCallOrder[0]).toBeLessThan(
-        queued.note.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-    },
-  );
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: {} as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      postAs: "user",
+      userToken: "test-user-token",
+      appToken: "test-app-token",
+    });
+    expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack user OAuth token", "Enter Slack app token (xapp-...)"]);
+    expect(queued.note).toHaveBeenCalledTimes(1);
+    const instructions = requireFirstStringArg(queued.note, "Slack user identity instructions");
+    expect(instructions).toContain("User Token Scopes");
+    expect(instructions).toContain("Subscribe to events on behalf of users");
+    expect(instructions).toContain("/channels/slack#user-identity-post-as-a-real-person");
+    expect(queued.select.mock.invocationCallOrder[0]).toBeLessThan(
+      queued.note.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("collects a signing secret instead of an app token for HTTP user identity", async () => {
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["user"],
+      textValues: ["test-user-token", "test-signing-secret"],
+    });
+    const configure = createConfigure();
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: slackConfig({ mode: "http" }),
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      postAs: "user",
+      mode: "http",
+      userToken: "test-user-token",
+      signingSecret: "test-signing-secret",
+    });
+    expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
+    expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+  });
 
   it("collects a signing secret instead of an app token for HTTP bot identity", async () => {
     vi.stubEnv("SLACK_BOT_TOKEN", "");
@@ -159,7 +273,14 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-signing-secret"],
     });
-    const result = await configure(queued, slackConfig({ mode: "http" }));
+    const configure = createConfigure();
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: slackConfig({ mode: "http" }),
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
@@ -168,6 +289,9 @@ describe("slackSetupWizard.prepare", () => {
       signingSecret: "test-signing-secret",
     });
     expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack bot token (xoxb-...)", "Enter Slack signing secret"]);
   });
 
   it("does not use the Socket Mode environment shortcut for HTTP bot setup", async () => {
@@ -178,7 +302,14 @@ describe("slackSetupWizard.prepare", () => {
       confirmValues: [true],
       textValues: ["test-signing-secret"],
     });
-    const result = await configure(queued, slackConfig({ mode: "http" }));
+    const configure = createConfigure();
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: slackConfig({ mode: "http" }),
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
 
     expect(result.cfg.channels?.slack).toMatchObject({
       enabled: true,
@@ -187,6 +318,10 @@ describe("slackSetupWizard.prepare", () => {
     });
     expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
     expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(queued.confirm).toHaveBeenCalledTimes(1);
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack signing secret"]);
   });
 
   it("continues user setup after preserving a user-token SecretRef", async () => {
@@ -195,21 +330,23 @@ describe("slackSetupWizard.prepare", () => {
       confirmValues: [true],
       textValues: ["test-app-token"],
     });
+    const configure = createConfigure("work");
     const userTokenRef = {
       source: "env" as const,
       provider: "default",
       id: "TEST_SLACK_USER_TOKEN",
     };
 
-    const result = await configure(
-      queued,
-      slackConfig({
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: slackConfig({
         accounts: {
           work: { postAs: "user", userToken: userTokenRef },
         },
       }),
-      "work",
-    );
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
 
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
       postAs: "user",
@@ -218,20 +355,37 @@ describe("slackSetupWizard.prepare", () => {
     });
   });
 
-  it("switches user identity back to implicit bot", async () => {
+  it.each([
+    { name: "new setup", cfg: {} as OpenClawConfig },
+    {
+      name: "switch from user identity",
+      cfg: slackConfig({ postAs: "user" }),
+    },
+  ])("keeps bot identity implicit for $name", async ({ cfg }) => {
     vi.stubEnv("SLACK_BOT_TOKEN", "");
     vi.stubEnv("SLACK_APP_TOKEN", "");
     const queued = createQueuedWizardPrompter({
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-app-token"],
     });
-    const result = await configure(queued, slackConfig({ postAs: "user" }));
+    const configure = createConfigure();
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
 
     expect(result.cfg.channels?.slack).toEqual({
       enabled: true,
       botToken: "test-bot-token",
       appToken: "test-app-token",
     });
+    expect(JSON.stringify(result.cfg.channels?.slack)).toBe(
+      '{"enabled":true,"botToken":"test-bot-token","appToken":"test-app-token"}',
+    );
+    expect(result.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
   it("keeps a named bot override when the channel default is user identity", async () => {
@@ -239,9 +393,11 @@ describe("slackSetupWizard.prepare", () => {
       selectValues: ["bot"],
       textValues: ["test-bot-token", "test-app-token"],
     });
-    const result = await configure(
-      queued,
-      slackConfig({
+    const configure = createConfigure("work");
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: slackConfig({
         postAs: "user",
         userToken: "test-user-token",
         appToken: "test-user-app-token",
@@ -249,8 +405,9 @@ describe("slackSetupWizard.prepare", () => {
           work: { userToken: "", appToken: "" },
         },
       }),
-      "work",
-    );
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
 
     expect(result.cfg.channels?.slack?.postAs).toBe("user");
     expect(result.cfg.channels?.slack?.accounts?.work).toMatchObject({
@@ -274,6 +431,7 @@ describe("slackSetupWizard.prepare", () => {
       prompter: queued.prompter,
     });
 
+    expect(queued.select).toHaveBeenCalledTimes(1);
     expect(result?.cfg.channels?.slack).toMatchObject({
       enabled: true,
       userToken: "test-user-token",
@@ -312,6 +470,32 @@ describe("slackSetupWizard.dmPolicy", () => {
 });
 
 describe("slackSetupWizard.status", () => {
+  it.each([
+    {
+      name: "Socket Mode",
+      slack: {
+        postAs: "user" as const,
+        userToken: "test-user-token",
+        appToken: "test-app-token",
+      },
+    },
+    {
+      name: "HTTP mode",
+      slack: {
+        postAs: "user" as const,
+        mode: "http" as const,
+        userToken: "test-user-token",
+        signingSecret: "test-signing-secret",
+      },
+    },
+  ])("treats a complete user-identity $name account as configured", async ({ slack }) => {
+    expect(
+      await slackSetupWizard.status.resolveConfigured({
+        cfg: { channels: { slack } } as OpenClawConfig,
+      }),
+    ).toBe(true);
+  });
+
   it("uses configured defaultAccount for omitted setup configured state", async () => {
     const configured = await slackSetupWizard.status.resolveConfigured({
       cfg: slackConfig({
@@ -319,7 +503,14 @@ describe("slackSetupWizard.status", () => {
         botToken: "xoxb-root",
         appToken: "xapp-root",
         accounts: {
-          work: { botToken: "", appToken: "" },
+          alerts: {
+            botToken: "xoxb-alerts",
+            appToken: "xapp-alerts",
+          },
+          work: {
+            botToken: "",
+            appToken: "",
+          },
         },
       }),
     });

@@ -494,6 +494,7 @@ vi.mock("./resolve-channels.js", () => ({
     entries.map((input) => ({ input, resolved: false })),
 }));
 
+// mock-isolation: Keep monitor user resolution offline and controlled by each fixture.
 vi.mock("./resolve-users.js", () => ({
   resolveSlackUserAllowlist: slackTestState.resolveSlackUserAllowlistMock,
 }));
@@ -506,6 +507,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Capture monitor replies without invoking the Slack outbound transport.
 vi.mock("./send.js", () => ({ sendMessageSlack: slackTestState.sendMock }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {

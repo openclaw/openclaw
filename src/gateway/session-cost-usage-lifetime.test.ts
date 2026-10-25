@@ -431,7 +431,7 @@ it("routes startup, shared selectors, invalidations, and admitted topology owner
       getConfig: () => config,
       warn: vi.fn(),
     });
-    const topology = { agentId: "alpha", topology: true };
+    const topology = { agentId: "alpha", topology: true } as const;
     const cases: Array<
       [
         name: string,

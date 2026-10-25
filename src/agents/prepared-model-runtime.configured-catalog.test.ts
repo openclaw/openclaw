@@ -8,7 +8,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
-import { configFor, modelDefinition, providerEntry } from "./model-auth.fixtures.test-support.js";
+import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { snapshot } from "./model-catalog-fixtures.test-support.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
@@ -24,8 +24,11 @@ import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 const endpoint = "https://fixture.invalid/v1";
 const model = (id: string, overrides: Parameters<typeof modelDefinition>[1] = {}) =>
   modelDefinition(id, { contextWindow: 32_000, maxTokens: 4096, reasoning: false, ...overrides });
-const provider = (models: ReturnType<typeof model>[], baseUrl = endpoint) =>
-  providerEntry(baseUrl, { api: "openai-responses", models });
+const provider = (models: ReturnType<typeof model>[], baseUrl = endpoint) => ({
+  baseUrl,
+  api: "openai-responses" as const,
+  models,
+});
 const metadataFor = (modelCatalog: PluginMetadataSnapshot["plugins"][number]["modelCatalog"]) =>
   createPluginMetadataSnapshotFixture({
     plugins: [{ id: "fixture", providers: ["fixture"], modelCatalog }],

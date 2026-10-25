@@ -427,6 +427,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const { candidateSettled, fallbackRelease } = holdSettledFallback();
     state.runEmbeddedAgentMock.mockResolvedValueOnce(
       createRunResult("late reply", {
+        durationMs: 1,
         agentMeta: {
           sessionId: "session",
           provider: "anthropic",
@@ -502,7 +503,10 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
             params.onCompactionAccounting?.(fact);
           }
           return createRunResult("done", {
+            durationMs: 1,
             agentMeta: {
+              provider: "anthropic",
+              model: "claude",
               compactionCount: fact ? 99 : index === 1 ? 2 : 0,
               lastCallUsage: { input: 777 },
               sessionId: "untrusted-model-id",
