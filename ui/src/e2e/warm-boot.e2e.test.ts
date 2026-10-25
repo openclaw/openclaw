@@ -400,7 +400,9 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await expect.poll(() => composer.inputValue()).toBe("A draft before reconnect");
           await expect.poll(() => composer.isEnabled()).toBe(true);
-          await expect.poll(() => page.locator("[data-chat-model-select]").textContent()).toContain("Remembered model");
+          await expect
+            .poll(() => page.locator("[data-chat-model-select]").textContent())
+            .toContain("Remembered model");
           await page.locator("[data-composer-catalog-state=stale]").waitFor({ state: "visible" });
           await composer.fill("Typing while the Gateway is still connecting");
           expect(await gateway.getRequests("chat.send")).toEqual([]);
