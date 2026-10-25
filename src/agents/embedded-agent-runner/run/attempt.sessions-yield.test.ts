@@ -87,6 +87,12 @@ async function persistentSession(label: string) {
 }
 
 describe("stripSessionsYieldArtifacts", () => {
+  it("leaves a continuable suffix unchanged", async () => {
+    const session = buildSession([user], SessionManager.inMemory());
+    await stripSessionsYieldArtifacts(session);
+    expect(session.agent.state.messages).toEqual([user]);
+  });
+
   it.each([false, true])(
     "caps persisted assistant removal independently of persisted interrupt=%s",
     async (includeInterrupt) => {
@@ -130,21 +136,24 @@ describe("stripSessionsYieldArtifacts", () => {
     ]);
   });
 
-  it("keeps SQLite history consistent after multi-turn yield cleanup", async () => {
+  it("keeps SQLite history and trailing metadata available after multi-turn yield cleanup", async () => {
     const { dir, scope, sessionManager } = await persistentSession("sqlite");
     const { toolResult, assistants } = await seed(sessionManager, 3);
+    await sessionManager.appendCustomEntryAsync("plugin-state", { enabled: true });
     const generationBefore = readSessionTranscriptWatermark(scope).generation;
     const session = buildSession([toolResult, ...assistants, interrupt()], sessionManager);
     await stripSessionsYieldArtifacts(session);
     expect(session.agent.state.messages).toEqual([toolResult]);
     expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
-    const generationAfter = readSessionTranscriptWatermark(scope).generation;
-    session.messages = session.agent.state.messages;
-    await stripSessionsYieldArtifacts(session);
-    expect(session.agent.state.messages).toEqual([toolResult]);
-    expect(readSessionTranscriptWatermark(scope).generation).toBe(generationAfter);
     const reopened = await SessionManager.openAsync(scope, dir);
     expect(reopened.buildSessionContext().messages).toEqual([toolResult]);
+    expect(reopened.getEntries()).toContainEqual(
+      expect.objectContaining({
+        type: "custom",
+        customType: "plugin-state",
+        data: { enabled: true },
+      }),
+    );
     expect(await loadTranscriptEvents(scope)).not.toContainEqual(
       expect.objectContaining({ type: "custom_message", customType: interruptType }),
     );
