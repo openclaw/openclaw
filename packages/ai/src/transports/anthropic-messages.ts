@@ -10,13 +10,16 @@ import {
   hasRuntimeContextMarker,
   supportsClaudeInHistorySystemMessages,
   type Context,
-  type ImageContent,
   type Model,
-  type TextContent,
 } from "@openclaw/llm-core";
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
+import {
+  createAnthropicInlineImageBudget,
+  normalizeAnthropicInlineContent,
+  resolveAnthropicImageMediaType,
+  type AnthropicInlineImageBudget,
+} from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
@@ -71,58 +74,6 @@ import {
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
-const ANTHROPIC_IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
-type AnthropicImageMediaType = (typeof ANTHROPIC_IMAGE_MEDIA_TYPES)[number];
-// Resource-safety ceiling above Anthropic's direct request envelope; route-specific
-// API limits remain provider policy rather than a shared payload-conversion rule.
-const ANTHROPIC_INLINE_IMAGES_DECODE_SAFETY_BYTES = 64 * 1024 * 1024;
-
-function resolveAnthropicImageMediaType(value: string): AnthropicImageMediaType {
-  const mediaType = ANTHROPIC_IMAGE_MEDIA_TYPES.find((candidate) => candidate === value);
-  if (mediaType) {
-    return mediaType;
-  }
-  throw new Error(`Unsupported Anthropic image media type after normalization: ${value}`);
-}
-
-function measureInlineImagesWithinBudget(
-  content: readonly (TextContent | ImageContent)[],
-  budget: { totalBytes: number },
-): number {
-  const bytes = content.reduce(
-    (total, block) =>
-      block.type === "image" ? total + estimateBase64DecodedBytes(block.data) : total,
-    0,
-  );
-  if (budget.totalBytes + bytes > ANTHROPIC_INLINE_IMAGES_DECODE_SAFETY_BYTES) {
-    throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
-  }
-  return bytes;
-}
-
-async function normalizeAnthropicInlineContent(
-  content: readonly (TextContent | ImageContent)[],
-  budget: { totalBytes: number },
-): Promise<Array<TextContent | ImageContent>> {
-  if (!content.some((block) => block.type === "image")) {
-    return content.filter((block): block is TextContent => block.type === "text");
-  }
-  measureInlineImagesWithinBudget(content, budget);
-  const normalized: Array<TextContent | ImageContent> = [];
-  for (const block of content) {
-    if (block.type !== "image") {
-      normalized.push(block);
-      continue;
-    }
-    const normalizedBlocks = await getAiTransportHost().normalizeAnthropicInlineContentBlocks([
-      block,
-    ]);
-    budget.totalBytes += measureInlineImagesWithinBudget(normalizedBlocks, budget);
-    normalized.push(...normalizedBlocks);
-  }
-  return normalized;
-}
-
 type AnthropicReplayBlock =
   | ContentBlockParam
   | AnthropicCompactionBlock
@@ -143,7 +94,7 @@ const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not suppor
 async function convertContentBlocks(
   content: readonly unknown[],
   model: { input: readonly string[] },
-  imageBudget: { totalBytes: number },
+  imageBudget: AnthropicInlineImageBudget,
   profile: "provider" | "transport",
   isError: boolean,
 ) {
@@ -286,7 +237,7 @@ export async function buildAnthropicRequest(
   const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
   const inHistorySystemUpdates =
     !isOAuthToken && isDirectAnthropicModel(model) && supportsClaudeInHistorySystemMessages(model);
-  const imageBudget = { totalBytes: 0 };
+  const imageBudget = createAnthropicInlineImageBudget();
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformed);

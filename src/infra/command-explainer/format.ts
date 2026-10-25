@@ -9,6 +9,20 @@ import {
 } from "../shell-wrapper-resolution.js";
 import type { CommandExplanation } from "./types.js";
 
+// Approval spans must be strict positive source ranges to avoid broken highlighting.
+function spanToCommandSpan(span: {
+  startIndex: number;
+  endIndex: number;
+}): ExecApprovalCommandSpan | null {
+  if (!Number.isSafeInteger(span.startIndex) || !Number.isSafeInteger(span.endIndex)) {
+    return null;
+  }
+  if (span.startIndex < 0 || span.endIndex <= span.startIndex) {
+    return null;
+  }
+  return { startIndex: span.startIndex, endIndex: span.endIndex };
+}
+
 export function isUnsupportedShellWrapperArgv(argv: readonly string[]): boolean {
   const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
   const executable = shellWrapperArgv[0];
@@ -29,15 +43,10 @@ export function formatCommandSpans(explanation: CommandExplanation): ExecApprova
   const commandSpans: ExecApprovalCommandSpan[] = [];
 
   for (const command of [...explanation.topLevelCommands, ...explanation.nestedCommands]) {
-    // Approval spans must be strict positive source ranges to avoid broken highlighting.
-    const span = command.executableSpan;
-    if (!Number.isSafeInteger(span.startIndex) || !Number.isSafeInteger(span.endIndex)) {
-      continue;
+    const commandSpan = spanToCommandSpan(command.executableSpan);
+    if (commandSpan) {
+      commandSpans.push(commandSpan);
     }
-    if (span.startIndex < 0 || span.endIndex <= span.startIndex) {
-      continue;
-    }
-    commandSpans.push({ startIndex: span.startIndex, endIndex: span.endIndex });
   }
   return commandSpans;
 }

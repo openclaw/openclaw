@@ -3,7 +3,6 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
@@ -54,6 +53,7 @@ import {
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
+import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
@@ -532,32 +532,14 @@ export async function runExecProcess({
     requestSignal?.removeEventListener("abort", onRequestCancelled);
   };
   let usingPty = opts.usePty && !opts.sandbox;
-  const emitCompleted = (outcome: ExecProcessOutcome) => {
-    const command = opts.command;
-    const mode = usingPty ? "pty" : "child";
-    const sessionKey = opts.sessionKey;
-    const signal = outcome.exitSignal;
-    const exitSignal = signal === null ? undefined : String(signal);
-    // Payload stays untrusted, but the ambient trace context is the OpenClaw run
-    // scope, so exporters may use it to nest the exec span under its run.
-    emitDiagnosticEventWithTrustedTraceContext({
-      type: "exec.process.completed",
+  const emitCompleted = (outcome: ExecProcessOutcome) =>
+    emitExecProcessCompleted({
+      command: opts.command,
+      mode: usingPty ? "pty" : "child",
+      outcome,
+      sessionKey: opts.sessionKey,
       target: diagnosticTarget,
-      mode,
-      outcome: outcome.status,
-      durationMs: outcome.durationMs,
-      commandLength: command.length,
-      ...(sessionKey?.trim() ? { sessionKey: sessionKey.trim() } : {}),
-      ...(outcome.exitCode != null ? { exitCode: outcome.exitCode } : {}),
-      ...(exitSignal ? { exitSignal } : {}),
-      ...(outcome.status === "failed"
-        ? {
-            timedOut: outcome.timedOut,
-            failureKind: outcome.failureKind,
-          }
-        : {}),
     });
-  };
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = (input: SpawnInput) =>
     runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {

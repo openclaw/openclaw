@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { isBareNpmPackageName } from "../plugins/install-source-spec.js";
@@ -12,6 +13,20 @@ export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
+
+function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
+  const pkg = entry.package;
+  // A selector keeps legacy unscoped results from resolving as local plugin-ID shortcuts.
+  const installSpec = isBareNpmPackageName(pkg.name) ? `${pkg.name}@latest` : pkg.name;
+  const flags = [
+    pkg.family,
+    pkg.channel,
+    pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
+    pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
+  ].filter(Boolean);
+  const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
+  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${installSpec}`)}`)}`;
+}
 
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
@@ -38,20 +53,7 @@ export async function runPluginsSearchCommand(
       return;
     }
     runtime.log(`${theme.heading("ClawHub plugins")} ${theme.muted(`(${results.length})`)}`);
-    const lines = results.map((entry) => {
-      const pkg = entry.package;
-      // A selector keeps legacy unscoped results from resolving as local plugin-ID shortcuts.
-      const installSpec = isBareNpmPackageName(pkg.name) ? `${pkg.name}@latest` : pkg.name;
-      const flags = [
-        pkg.family,
-        pkg.channel,
-        pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
-        pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
-      ].filter(Boolean);
-      const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-      return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${installSpec}`)}`)}`;
-    });
-    runtime.log(lines.join("\n"));
+    runtime.log(results.map(formatPackageSearchLine).join("\n"));
   } catch (error) {
     if (opts.json) {
       throw error;

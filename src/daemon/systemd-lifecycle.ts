@@ -5,6 +5,7 @@ import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type {
   GatewayServiceControlArgs,
+  GatewayServiceEnv,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
   SystemdServiceReadTarget,
@@ -127,12 +128,9 @@ type LegacySystemdUnit = {
   unitPath: string;
 };
 
-export async function uninstallLegacySystemdUnits({
-  env,
-  stdout,
-}: GatewayServiceManageArgs): Promise<LegacySystemdUnit[]> {
-  const units: LegacySystemdUnit[] = [];
-  const discoverySystemctlAvailable = await isSystemctlAvailable(env);
+async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+  const results: LegacySystemdUnit[] = [];
+  const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
     const exists = Boolean(await fs.access(unitPath).then(() => true, ignoreMissingPath));
@@ -140,14 +138,22 @@ export async function uninstallLegacySystemdUnits({
       await fs.access(`${unitPath}.bak`).then(() => true, ignoreMissingPath),
     );
     let enabled = false;
-    if (discoverySystemctlAvailable) {
+    if (systemctlAvailable) {
       const res = await execSystemctlUser(env, ["is-enabled", `${name}.service`]);
       enabled = res.code === 0;
     }
     if (exists || backupExists || enabled) {
-      units.push({ name, unitPath });
+      results.push({ name, unitPath });
     }
   }
+  return results;
+}
+
+export async function uninstallLegacySystemdUnits({
+  env,
+  stdout,
+}: GatewayServiceManageArgs): Promise<LegacySystemdUnit[]> {
+  const units = await findLegacySystemdUnits(env);
   if (units.length === 0) {
     return units;
   }
@@ -180,6 +186,18 @@ export async function uninstallLegacySystemdUnits({
   return units;
 }
 
+type UninstallUserSystemdGatewayUnitResult = {
+  unitName: string;
+  unitPath: string;
+  removed: boolean;
+  /**
+   * False when systemctl could not disable/stop the unit. Deleting the unit
+   * file alone does not evict an already-loaded unit, so callers must not
+   * claim the conflict is resolved on a file-only removal.
+   */
+  disabled: boolean;
+};
+
 /**
  * Removes the canonical *user-scope* gateway unit, leaving any system-scope
  * unit untouched. Used by doctor to resolve a `dueling` installation by
@@ -195,7 +213,7 @@ export async function uninstallUserSystemdGatewayUnit({
   target,
 }: GatewayServiceManageArgs & {
   target?: SystemdServiceReadTarget;
-}) {
+}): Promise<UninstallUserSystemdGatewayUnitResult> {
   const installed = await findInstalledSystemdGatewayScope(env);
   if (target) {
     if (target.scope !== "user") {

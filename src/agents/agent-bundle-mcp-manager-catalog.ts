@@ -1,5 +1,5 @@
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
-import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
+import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
@@ -88,19 +88,7 @@ export function createSessionMcpCatalogStore(
       const tools = (toolsByServerName.get(serverName) ?? []).toSorted((a, b) =>
         a.toolName.localeCompare(b.toolName),
       );
-      const signature = JSON.stringify(
-        tools.map((tool) => [
-          tool.serverName,
-          tool.safeServerName,
-          tool.toolName,
-          tool.title ?? "",
-          tool.description ?? "",
-          tool.fallbackDescription,
-          tool.inputSchema,
-          tool.uiResourceUri ?? "",
-          tool.uiVisibility ?? null,
-        ]),
-      );
+      const signature = mcpCatalogToolsSignature(tools);
       if (entry.signaturesByServer.get(serverName) !== signature) {
         entry.servers.set(serverName, server);
         entry.toolsByServer.set(serverName, tools);

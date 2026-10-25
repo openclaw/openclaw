@@ -13,11 +13,11 @@ import {
   validateSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import { mutateConfigFileWithRetry } from "../../config/config.js";
-import { REDACTED_SENTINEL, redactConfigObject } from "../../config/redact-snapshot.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
+import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   searchSkillsFromClawHub,
@@ -28,7 +28,6 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
@@ -240,49 +239,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const committed = await mutateConfigFileWithRetry<Record<string, unknown>>({
-      afterWrite: { mode: "auto" },
-      mutate: (draft) => {
-        const entries = { ...draft.skills?.entries };
-        const current = { ...entries[p.skillKey] };
-        if (p.enabled !== undefined) {
-          current.enabled = p.enabled;
-        }
-        if (p.apiKey !== undefined) {
-          const trimmed = normalizeSecretInput(p.apiKey);
-          if (trimmed === REDACTED_SENTINEL) {
-            // Keep the stored secret when a client round-trips a redacted response value.
-          } else if (trimmed) {
-            current.apiKey = trimmed;
-          } else {
-            delete current.apiKey;
-          }
-        }
-        if (p.env) {
-          const nextEnv = { ...current.env };
-          for (const [key, value] of Object.entries(p.env)) {
-            const trimmedKey = key.trim();
-            if (!trimmedKey) {
-              continue;
-            }
-            const trimmedVal = value.trim();
-            if (trimmedVal === REDACTED_SENTINEL) {
-              continue;
-            }
-            if (!trimmedVal) {
-              delete nextEnv[trimmedKey];
-            } else {
-              nextEnv[trimmedKey] = trimmedVal;
-            }
-          }
-          current.env = nextEnv;
-        }
-        entries[p.skillKey] = current;
-        draft.skills = { ...draft.skills, entries };
-        return current;
-      },
-    });
-    const updated = committed.result ?? {};
+    const updated = await updateSkillConfigEntry(p);
     respond(
       true,
       { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },

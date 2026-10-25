@@ -1,20 +1,30 @@
 import { ACTIVATION_HINT_COMPAT_RECORDS } from "./activation-hint-records.js";
 import { AGENT_HARNESS_COMPAT_RECORDS } from "./agent-harness-records.js";
+import { AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS } from "./agent-list-runtime-projection-records.js";
+import { ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD } from "./assistant-text-phase-terminal-hint-record.js";
 import { ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS } from "./async-sqlite-preparation-records.js";
 import { AUTH_ASYNC_COMPAT_RECORD } from "./auth-async-record.js";
 import { BINDING_PERSISTENCE_COMPAT_RECORDS } from "./binding-persistence-records.js";
+import { CHANNEL_PAIRING_COMPAT_RECORD } from "./channel-pairing-record.js";
+import { CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD } from "./channel-prepared-tool-policy-record.js";
+import { CRON_STORE_PATH_COMPAT_RECORD } from "./cron-store-path-record.js";
 import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MEMORY_SESSION_COMPAT_RECORDS } from "./memory-session-records.js";
+import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
 import { PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD } from "./plugin-sdk-private-runtime-export-record.js";
 import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD } from "./session-transcript-view-record.js";
 import { SQLITE_RUNTIME_COMPAT_RECORDS } from "./sqlite-runtime-records.js";
 import type { PluginCompatRecord } from "./types.js";
+import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
+import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 // Preserve the finite code union without publishing literal migration metadata through its type.
 function defineCompatRecords<const Code extends string>(
@@ -37,28 +47,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   AUTH_ASYNC_COMPAT_RECORD,
   ...ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS,
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
-  sdkCompatRecord("channel-pairing-sync-allowlist", {
-    deprecated: "2026-10-03",
-    warningStarts: "2026-10-03",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await readChannelAllowFromStore from channel-pairing. The released synchronous reader retains its signature and native behavior through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#channel-pairing-allowlists",
-    surfaces: ["openclaw/plugin-sdk/channel-pairing.readChannelAllowFromStoreSync"],
-    diagnostics: [
-      "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
-    ],
-  }),
-  sdkCompatRecord("cron-store-sync-path", {
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await resolveCronStorePathAsync(storePath) from openclaw/plugin-sdk/cron-store-runtime. The synchronous resolveCronStorePath(storePath) retains its existing return value through 2026-12-31; removal ships in the first January 2027 stable release.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#cron-store-path-resolution",
-    surfaces: ["openclaw/plugin-sdk/cron-store-runtime resolveCronStorePath"],
-    diagnostics: ["Bounded DEP_PLUGIN_SDK warning for synchronous cron path resolution"],
-  }),
+  CHANNEL_PAIRING_COMPAT_RECORD,
+  CRON_STORE_PATH_COMPAT_RECORD,
   sdkCompatRecord("mention-inbox-sync-persistence", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
@@ -98,19 +88,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
     ],
   }),
-  sdkCompatRecord("workspace-mutation-guard-callback", {
-    deprecated: "2026-10-02",
-    warningStarts: "2026-10-02",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await database preparation before ensureAgentWorkspace and use SQL-free guard.assertHost for live authority. Internal recovery predicates run on the worker transaction connection.",
-    docsPath: "/plugins/sdk-migration/how-to-migrate#workspace-mutation-guards",
-    surfaces: ["api.runtime.agent.ensureAgentWorkspace.beforePersistentApply"],
-    diagnostics: [
-      "@deprecated JSDoc and one DEP_WORKSPACE_MUTATION_GUARD warning per process",
-      "Warning explains before-dispatch timing and deprecated but allowed synchronous OpenClaw DB access",
-    ],
-  }),
+  WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
   sdkCompatRecord("skill-command-discovery-sync", {
     deprecated: "2026-10-11",
@@ -129,16 +107,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     ],
   }),
   ...SQLITE_RUNTIME_COMPAT_RECORDS,
-  sdkCompatRecord("native-approval-commit-guard", {
-    deprecated: "2026-10-09",
-    warningStarts: "2026-10-09",
-    removalGate: "stable-deprecation-period",
-    replacement:
-      "Use host-bound api.runtime.gateway.request approval methods. Released opaque approval commit guards run at the worker precommit boundary; they cannot read uncommitted transaction state. Final effect-time authority checks remain synchronous and current.",
-    docsPath: "/plugins/sdk-migration/how-to-migrate#use-worker-owned-approval-requests",
-    surfaces: ["GatewayRequestHandlerOptions.sessionMutationCommitGuard for approval methods"],
-    diagnostics: ["Shared per-plugin capability-family warning on legacy callback use"],
-  }),
+  NATIVE_EXEC_APPROVAL_COMPAT_RECORD,
   sdkCompatRecord("tts-preferences-sync-resolution", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
@@ -155,16 +124,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
     ],
   }),
-  sdkCompatRecord("agent-list-runtime-projection", {
-    deprecated: "2026-10-02",
-    warningStarts: "2026-10-02",
-    removeAfter: "2027-01-02",
-    replacement:
-      "Canonical `cfg.agents.entries`, or `listAgentIds` / `resolveAgentConfig` from `openclaw/plugin-sdk/agent-runtime`",
-    docsPath: "/plugins/sdk-migration/how-to-migrate#agent-roster-config",
-    surfaces: ["non-enumerable runtime OpenClawConfig.agents.list projection"],
-    diagnostics: ["plugin compatibility registry and migration documentation; no runtime warnings"],
-  }),
+  ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   sdkCompatRecord("watched-sessions-sync-harness-context", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
@@ -177,30 +137,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
     ],
   }),
-  sdkCompatRecord("web-search-sync-provider-list", {
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await runtime.webSearch.listProvidersAsync(params). The synchronous listProviders(params) retains its return shape through 2026-12-31; removal ships in the first January 2027 stable release.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#web-search-provider-lists",
-    surfaces: ["PluginRuntime.webSearch.listProviders"],
-    diagnostics: ["Bounded DEP_PLUGIN_SDK warning for synchronous web-search provider lists"],
-  }),
-  sdkCompatRecord("reply-dispatch-progress-receipt-handoff", {
-    deprecated: "2026-10-06",
-    warningStarts: "2026-10-06",
-    removalGate: "stable-deprecation-period",
-    replacement:
-      "Adapt editable progress cards through ReplyDispatchRuntimeInfo.adoptProgressDraft. The released receipt-based adoptProgressContinuation type is retained until an announced later ordinary stable release and explicit maintainer approval; the host never offers it, so adapters keep ordinary waiting-reply delivery.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#progress-card-handoff",
-    surfaces: [
-      "openclaw/plugin-sdk/reply-runtime.ReplyDispatchRuntimeInfo.adoptProgressContinuation",
-    ],
-    diagnostics: [
-      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
-    ],
-  }),
+  WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD,
+  PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
     code: "runtime-config-sync-load",
     status: "deprecated",
@@ -219,42 +157,10 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "TypeScript @deprecated annotation and one DEP_SESSION_PERSISTENCE warning per plugin and runtime-config family per process on legacy use",
     ],
   },
-  sdkCompatRecord("assistant-text-phase-terminal-hint", {
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removalGate: "stable-deprecation-period",
-    replacement: "Omit textPhaseRequiresTerminal; unphased text is never retroactively classified.",
-    docsPath: "/concepts/streaming#text-phases-and-final-replies",
-    surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],
-    diagnostics: ["TypeScript @deprecated annotation; no runtime warning for the ignored field"],
-  }),
-  sdkCompatRecord("session-transcript-sync-view", {
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await loadCombinedSessionStoreForGatewayAsync from openclaw/plugin-sdk/session-transcript-hit. The synchronous export retains its complete, non-incognito view through 2026-12-31; removal ships in the first January 2027 stable release.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#session-transcript-search-views",
-    surfaces: ["openclaw/plugin-sdk/session-transcript-hit loadCombinedSessionStoreForGateway"],
-    diagnostics: ["Bounded DEP_PLUGIN_SDK warning for synchronous session transcript views"],
-  }),
+  ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
+  SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
   PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD,
-  {
-    code: "channel-prepared-tool-policy",
-    status: "deprecated",
-    owner: "channel",
-    deprecated: "2026-10-12",
-    warningStarts: "2026-10-12",
-    removalGate: "stable-deprecation-period",
-    replacement:
-      "Resolve current configuration through security.resolveDirectToolPolicy or groups.resolveToolPolicy using authenticated requester and conversation facts. The legacy snapshot remains execution-local to the original external request, including its queued turn; it is never requester provenance for new delegation.",
-    docsPath: "/plugins/sdk-migration/compatibility-policy#channel-prepared-tool-policy",
-    surfaces: [
-      "BuildChannelInboundEventContextParams.access.toolPolicy",
-      "MsgContext.ConversationToolPolicy",
-    ],
-    diagnostics: ["DEP_CHANNEL_PREPARED_TOOL_POLICY warns once on legacy policy use"],
-  },
+  CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD,
   sdkCompatRecord("plugin-sdk-session-header-link", {
     deprecated: "2026-10-12",
     warningStarts: "2026-10-12",

@@ -8,7 +8,6 @@ import {
 } from "../../../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
-import { resolveSafeTimeoutDelayMs } from "../../../utils/timer-delay.js";
 import {
   type AuthProfileStore,
   isProfileInCooldown,
@@ -35,6 +34,7 @@ import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
+import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
@@ -321,8 +321,10 @@ export function createEmbeddedRunAuthController(params: {
     clearRuntimeAuthRefreshTimer();
     const now = Date.now();
     const refreshAt = runtimeAuthState.expiresAt - RUNTIME_AUTH_REFRESH_MARGIN_MS;
-    const delayMs = resolveSafeTimeoutDelayMs(refreshAt - now, {
-      minMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
+    const delayMs = clampRuntimeAuthRefreshDelayMs({
+      refreshAt,
+      now,
+      minDelayMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
     });
     const refresh = (reason: "scheduled" | "scheduled-retry") => {
       if (state.runtimeAuthRefreshCancelled) {

@@ -174,11 +174,22 @@ function applyImplicitSourceReplySendPolicy(
   params.bestEffort = true;
 }
 
+type PreparedMessageRoute = {
+  params: Record<string, unknown>;
+  channel: ChannelId;
+  channelPlugin: ChannelPlugin;
+  accountId?: string | null;
+  dryRun: boolean;
+  defersExternalTargetResolution: boolean;
+  assertReadAuthorityCurrent?: () => void;
+  assertTargetAuthorityCurrent?: () => void;
+};
+
 export async function prepareMessageRoute(params: {
   input: MessageActionInput;
   actionParams: Record<string, unknown>;
   agentId?: string;
-}) {
+}): Promise<PreparedMessageRoute> {
   const { input, agentId } = params;
   const cfg = input.cfg;
   const action = input.action;

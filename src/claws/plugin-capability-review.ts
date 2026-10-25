@@ -1,18 +1,33 @@
 import { Value } from "typebox/value";
-import {
-  ClawPluginGrantsByIdSchema,
-  type ClawPluginReview,
-} from "../../packages/gateway-protocol/src/schema/claws.js";
+import { ClawPluginGrantsByIdSchema } from "../../packages/gateway-protocol/src/schema/claws.js";
 import {
   PluginDeclaredSurfaceSchema,
   PluginOperatorGrantsSchema,
+  type PluginOperatorGrants,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import type { ClawAddPlan } from "./types.js";
 
+export type ClawPluginCapabilityPlanReview = {
+  actionId: string;
+  pluginId: string;
+  ref: string;
+  version: string;
+  ownerAction: "install" | "reuse";
+  integrity: string;
+  declaredCapabilities: PluginAcceptedDeclaredSurface;
+  capabilityGrants: PluginOperatorGrants;
+  capabilityGrantsByPluginId: Record<string, PluginOperatorGrants>;
+  reviewToken: string;
+  riskWarning?: string;
+};
+
 /** Project only facts already bound to the Add plan's integrity digest. */
-export function projectClawPluginCapabilityReviews(plan: ClawAddPlan): ClawPluginReview[] {
+export function projectClawPluginCapabilityReviews(
+  plan: ClawAddPlan,
+): ClawPluginCapabilityPlanReview[] {
   return plan.actions.flatMap((action) => {
     if (action.kind !== "package" || action.details?.kind !== "plugin" || action.blocked) {
       return [];

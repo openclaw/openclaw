@@ -5,8 +5,8 @@ import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
-import { toSafeImportPath } from "../../../shared/import-specifier.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
+import { importRuntimeModule } from "../../../shared/runtime-import.js";
 
 const subagentAnnounceLoader = createLazyImportLoader(
   () => import("../announce/subagent-announce.js"),
@@ -14,14 +14,11 @@ const subagentAnnounceLoader = createLazyImportLoader(
 const browserCleanupLoader = createLazyImportLoader(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
-const subagentRegistryRuntimeLoader = createLazyPromiseLoader<
-  typeof import("./subagent-registry.runtime.js")
->(
-  () =>
-    import(
-      new URL(["./subagent-registry.runtime", ".js"].join(""), toSafeImportPath(import.meta.url))
-        .href
-    ),
+const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
+  importRuntimeModule<typeof import("./subagent-registry.runtime.js")>(import.meta.url, [
+    "./subagent-registry.runtime",
+    ".js",
+  ]),
 );
 const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
   () => import("../../runtime-plugins.js"),

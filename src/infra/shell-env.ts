@@ -210,20 +210,12 @@ function parseShellEnv(stdout: Buffer): Map<string, string> {
   return shellEnv;
 }
 
-type LoginShellEnvProbeResult =
-  | { ok: true; shellEnv: Map<string, string> }
-  | { ok: false; error: string };
-
-function prepareLoginShellEnvProbe(
-  params: Parameters<typeof getShellPathFromLoginShell>[0] & { purpose: LoginShellEnvProbePurpose },
-) {
-  const request: LoginShellExecParams = {
-    timeoutMs: resolveTimeoutMs(params.timeoutMs),
-    shell: resolveShell(params.env),
-    env: resolveShellExecEnv(params.env),
-    purpose: params.purpose,
-  };
-  const startupEnvEntries = Object.entries(request.env)
+function createLoginShellEnvCacheKey(
+  params: Omit<LoginShellExecParams, "env"> & {
+    execEnv: NodeJS.ProcessEnv;
+  },
+): string {
+  const startupEnvEntries = Object.entries(params.execEnv)
     .filter(([key]) => {
       if (
         key === "HOME" ||
@@ -241,12 +233,26 @@ function prepareLoginShellEnvProbe(
       return key.startsWith("XDG_") || key.startsWith("OPENCLAW_");
     })
     .toSorted(([left], [right]) => left.localeCompare(right));
-  const cacheKey = JSON.stringify([
-    request.shell,
-    request.timeoutMs,
-    request.purpose,
-    startupEnvEntries,
-  ]);
+  return JSON.stringify([params.shell, params.timeoutMs, params.purpose, startupEnvEntries]);
+}
+
+type LoginShellEnvProbeResult =
+  | { ok: true; shellEnv: Map<string, string> }
+  | { ok: false; error: string };
+
+function prepareLoginShellEnvProbe(
+  params: Parameters<typeof getShellPathFromLoginShell>[0] & { purpose: LoginShellEnvProbePurpose },
+) {
+  const request: LoginShellExecParams = {
+    timeoutMs: resolveTimeoutMs(params.timeoutMs),
+    shell: resolveShell(params.env),
+    env: resolveShellExecEnv(params.env),
+    purpose: params.purpose,
+  };
+  const cacheKey = createLoginShellEnvCacheKey({
+    ...request,
+    execEnv: request.env,
+  });
   return { request, cacheKey };
 }
 

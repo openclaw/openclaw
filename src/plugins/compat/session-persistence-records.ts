@@ -1,3 +1,5 @@
+import { REPLY_TOOL_AUTHORITY_COMPAT_RECORD } from "./reply-tool-authority-record.js";
+import { TRANSCRIPT_STATS_COMPAT_RECORD } from "./transcript-stats-record.js";
 import type { PluginCompatRecord } from "./types.js";
 
 const DEPRECATED_SESSION_COMPAT = {
@@ -10,48 +12,8 @@ const DEPRECATED_SESSION_COMPAT = {
 } as const;
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
-  {
-    code: "reply-tool-authority-sync-preparation",
-    status: "deprecated",
-    owner: "sdk",
-    deprecated: "2026-10-04",
-    warningStarts: "2026-10-04",
-    removeAfter: "2026-12-31",
-    replacement:
-      "Await the Async reply-operation, fingerprint, and V2 queue companions. Question dispatchers await authority.assertCurrentAsync after transport preparation and assert current authority immediately before I/O. Released synchronous contracts remain through 2026-12-31; removal ships in the first January 2027 stable release without an SDK major.",
-    docsPath: "/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority",
-    surfaces: [
-      "EmbeddedRunAttemptParams.replyOperation",
-      "EmbeddedRunAttemptParamsV2.replyOperation",
-      "AgentHarnessAttemptParams.replyOperation",
-      "AgentHarnessAttemptParamsV2.replyOperation",
-      "ReplyToolAuthoritySnapshot.fingerprint and project",
-      "ReplyBackendMessageInjectionV2.queueMessage, claimPendingUserInputAnswer, and cancelPendingUserInput",
-      "AgentQuestionDispatcher.authority.assertCurrent",
-    ],
-    diagnostics: [
-      "TypeScript @deprecated annotations and bounded warnings on legacy preparation or injection fallbacks; supported prepared projections and live effect assertions remain silent",
-    ],
-  },
-  {
-    code: "session-transcript-sync-statistics",
-    status: "deprecated",
-    owner: "sdk",
-    removeAfter: "2026-12-31",
-    deprecated: "2026-10-11",
-    warningStarts: "2026-10-11",
-    replacement:
-      "Await readTranscriptStatsAsync from session-store-runtime, or readTranscriptStatsBatchReadOnlyAsync and statSessionEntry from memory-core-host-engine-sessions. Batch reads preserve input order, duplicate IDs, and null results for unavailable stores through the existing history worker. Worker-local kernels and supplied statistics may retain direct synchronous reads; legacy main-thread SDK calls remain compatible through 2026-12-31.",
-    docsPath: "/plugins/sdk-migration/how-to-migrate#await-transcript-statistics",
-    surfaces: [
-      "openclaw/plugin-sdk/session-store-runtime.readTranscriptStatsSync",
-      "openclaw/plugin-sdk/memory-core-host-engine-sessions.readTranscriptStatsBatchReadOnlySync",
-      "openclaw/plugin-sdk/memory-core-host-engine-sessions.statSessionEntrySync",
-    ],
-    diagnostics: [
-      "TypeScript @deprecated annotations and one shared DEP_PLUGIN_SDK warning per plugin and session-store family on main-thread legacy use; worker-local reads do not warn",
-    ],
-  },
+  REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
+  TRANSCRIPT_STATS_COMPAT_RECORD,
   {
     code: "session-store-sync-listing",
     ...DEPRECATED_SESSION_COMPAT,

@@ -899,6 +899,7 @@ packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
 packages/ai/src/api-registry.ts	2
+packages/ai/src/internal/anthropic-inline-images.ts	1
 packages/ai/src/internal/default-runtime.ts	2
 packages/ai/src/openai-completions-messages.ts	7
 packages/ai/src/provider-transcript-transform.ts	2
@@ -2256,6 +2257,7 @@ src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
 src/shared/pid-alive.ts	2
+src/shared/runtime-import.ts	1
 src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	1
