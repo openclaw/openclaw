@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
