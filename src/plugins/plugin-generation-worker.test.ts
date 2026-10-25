@@ -25,7 +25,6 @@ import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-stor
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import {
@@ -36,6 +35,7 @@ import {
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

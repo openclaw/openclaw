@@ -9,6 +9,7 @@ import type {
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { expect, vi } from "vitest";
+import { isProcessAlive as running } from "../test-support/process.test-support.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
@@ -140,14 +141,6 @@ export function recordCredentialBuffers(input: ClaudeCliSecretInput) {
 
 // The transport joins its root and signal dispatch, not foreign descendant extinction.
 export async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
-  const running = (pid: number) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
   try {
     while (pids.some(running)) {
       await waitForProcessTick(10, undefined, { signal });

@@ -169,7 +169,7 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
  * nativeModules: NativeModules, sqlite: {path?: string},
- * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>},
+ * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>}, sourceGraphSha256?: string,
  * compileAot?: (options: {outfile: string, buildInfo: object}) => Promise<void>}} options
  * @returns {Promise<CompiledArtifact[]>}
  */
@@ -193,6 +193,7 @@ export async function compileStandaloneArtifacts({
   nativeModules,
   sqlite,
   resourcePlan,
+  sourceGraphSha256,
   compileAot,
 }) {
   const provenance = {
@@ -215,6 +216,7 @@ export async function compileStandaloneArtifacts({
     .update(
       JSON.stringify({
         ...provenance,
+        ...(sourceGraphSha256 ? { sourceGraphSha256 } : {}),
         bun,
         openclaw,
         target: { platform: process.platform, arch: process.arch },

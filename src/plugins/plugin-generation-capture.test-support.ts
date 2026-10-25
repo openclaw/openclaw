@@ -1,20 +1,12 @@
 import fs from "node:fs";
-import path from "node:path";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { expect, vi, type MockInstance } from "vitest";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 export type Artifact = ReturnType<typeof capturePluginGenerationArtifact>;
 export type Cache = ReturnType<typeof createPluginCache>;
-
-export function writeTree(root: string, files: Record<string, string | Record<string, unknown>>) {
-  for (const [name, value] of Object.entries(files)) {
-    const filename = path.join(root, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, typeof value === "string" ? value : JSON.stringify(value));
-  }
-}
 
 export const expectBytes = (filename: string, bytes: Buffer) => {
   expect(fs.readFileSync(filename)).toEqual(bytes);
@@ -23,7 +15,7 @@ export const expectBytes = (filename: string, bytes: Buffer) => {
 export const readText = (filename: string) => fs.readFileSync(filename, "utf8");
 
 export function createSdkHost(root: string, identity: string) {
-  writeTree(root, {
+  writeArtifacts(root, {
     "package.json": { name: "openclaw", exports: { "./plugin-sdk/identity": "./identity.cjs" } },
     "identity.cjs": `module.exports = ${JSON.stringify(identity)};`,
   });

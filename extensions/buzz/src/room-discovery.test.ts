@@ -1,5 +1,6 @@
 import { getPublicKey, type Event, type Filter, type Relay } from "nostr-tools";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 
 type AuthSigner = (template: {
   kind: number;
@@ -104,15 +105,7 @@ beforeEach(() => {
   relayMocks.connect.mockClear();
   relayMocks.filters.length = 0;
   relayMocks.subscribe.mockReset();
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({
-        self: RELAY_PUBLIC_KEY,
-        software: "https://github.com/block/buzz",
-      }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
 it("discovers only rooms whose member event names the bot public key", async () => {
