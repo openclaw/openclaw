@@ -19,7 +19,6 @@ import * as subagentRegistry from "../../agents/subagents/registry/subagent-regi
 import {
   retireSubagentObligations,
   markSubagentRunTerminated,
-  registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -102,24 +101,16 @@ it.each([
   await seedYieldedParent();
   if (race === "partial cancellation") {
     const brokenKey = "agent:broken:subagent:uncancellable";
-    const brokenStore = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "broken",
-      sessionKey: brokenKey,
-      defaultSessionId: "broken-child-session",
-      lifecycleRevision: "broken-child-revision",
-    });
-    await registerSubagentRun({
+    const brokenStore = await fixture.seedRun({
       runId: "broken-child-run",
       childSessionKey: brokenKey,
       childAgentId: "broken",
-      sessionEntry: loadSessionEntry({ agentId: "broken", sessionKey: brokenKey }),
+      sessionId: "broken-child-session",
+      lifecycleRevision: "broken-child-revision",
       requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: parentKey,
+      requesterTurnRunId: undefined,
       task: "Unreachable sibling",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
+      collect: undefined,
     });
     const database = expectDefined(
       listOpenClawAgentDatabasesForTest().find(
@@ -166,9 +157,9 @@ it.each([
   });
   const child = createEmbeddedRunHandle({ runId: childRunId, abort: childAbort });
   setActiveEmbeddedRun(childId, child, childKey);
-  const acknowledgment: { entry: ReturnType<typeof loadSessionEntry> } = { entry: undefined };
+  let ack: ReturnType<typeof loadSessionEntry>;
   const respond = vi.fn<RespondFn>(() => {
-    acknowledgment.entry = loadSessionEntry(target);
+    ack = loadSessionEntry(target);
   });
   const publications = observeChildPublications();
   const retireObligations = subagentRegistry.retireSubagentObligations;
@@ -210,19 +201,19 @@ it.each([
     expect(childAbort).toHaveBeenCalledOnce();
     if (race === "new turn") {
       await replacementPersistence;
-      expect(acknowledgment.entry).toMatchObject({
+      expect(ack).toMatchObject({
         lifecycleRunId: "new-parent-run",
         abortedLastRun: false,
       });
-      expect(acknowledgment.entry?.status).toBeUndefined();
-      expect(acknowledgment.entry?.lastRunId).toBeUndefined();
+      expect(ack?.status).toBeUndefined();
+      expect(ack?.lastRunId).toBeUndefined();
       return;
     }
     if (race === "reset incarnation") {
-      expect(acknowledgment.entry).toEqual(replacement);
+      expect(ack).toEqual(replacement);
       return;
     }
-    expectCancelledSession(acknowledgment.entry, parentRunId);
+    expectCancelledSession(ack, parentRunId);
     await fixture.settle();
     expect(
       publications.entries.some(
@@ -231,10 +222,7 @@ it.each([
     ).toBe(true);
     expect(await getSubagentRunByChildSessionKey(childKey)).toBeNull();
     expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
-    expect(loadSessionEntry(target)).toMatchObject({
-      status: "killed",
-      abortedLastRun: true,
-    });
+    expectCancelledSession(loadSessionEntry(target), parentRunId);
   } finally {
     retirement?.mockRestore();
     publications.stop();
@@ -244,11 +232,7 @@ it.each([
 });
 
 it("leaves an ownerless session without yielded work unchanged", async () => {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    ...target,
-    defaultSessionId: parentId,
-  });
+  await fixture.writeSession(parentKey, parentId);
   const before = loadSessionEntry(target);
   const respond = vi.fn();
   await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
@@ -309,9 +293,7 @@ it.each([false, true])(
         expect(entry.execution.status).toBe("terminal");
         expect(entry.execution.outcome).toEqual(childOutcome);
       }
-      const retiredChild = await getSubagentRunByChildSessionKey(childKey);
-      expect(retiredChild?.requesterSettleWake).toBeUndefined();
-      expect(retiredChild).toBeNull();
+      expect(await getSubagentRunByChildSessionKey(childKey)).toBeNull();
     } finally {
       publications.stop();
       clearSessionQueues([parentKey, parentId], followup?.controllerInput?.target);

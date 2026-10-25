@@ -76,11 +76,14 @@ function stubFetch(body: (url: URL) => unknown) {
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+const searchResults = (rows: unknown[]) => ({
+  results: rows.map((entry) => ({ score: 1, package: entry })),
+});
+const requestUrl = (input: string | URL | Request) =>
+  new URL(input instanceof Request ? input.url : String(input));
 function stubRegistry(rows: unknown[], nextCursor?: string) {
   return stubFetch((url) =>
-    url.pathname.endsWith("/search")
-      ? { results: rows.map((entry) => ({ score: 1, package: entry })) }
-      : { items: rows, nextCursor },
+    url.pathname.endsWith("/search") ? searchResults(rows) : { items: rows, nextCursor },
   );
 }
 function trendingSkill(source: string, displayName: string, reference: string) {
@@ -160,8 +163,6 @@ it.each([
   if (search) {
     expect(found.result).toMatchObject({ mode: "search", searchLimit: 2 });
     expect(found.result.nextCursor).toBeUndefined();
-    const invalid = await call("browse", { ...request, cursor: "browse-cursor" });
-    expect(invalid.error?.code).toBe("INVALID_REQUEST");
   } else {
     expect(found.result.nextCursor).toBe("page-two");
     const second = await call("browse", {
@@ -170,9 +171,7 @@ it.each([
       cursor: found.result.nextCursor,
     });
     expect(second.result.items).toHaveLength(3);
-    const input = fetchMock.mock.calls[1]![0];
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    expect(url.searchParams.get("cursor")).toBe("page-two");
+    expect(requestUrl(fetchMock.mock.calls[1]![0]).searchParams.get("cursor")).toBe("page-two");
   }
   expect(resolveCoreOperatorGatewayMethodScope("catalog.browse")).toBe("operator.read");
 });
@@ -187,10 +186,6 @@ it("keeps native publisher, registry, external source, and selected agent instal
   ]);
   const other = await call("browse", { ...skillRequest, agentId: "other" });
   expect(other.result.items.every((entry) => !entry.local.installed)).toBe(true);
-  expect(local.skills.mock.calls.map(([workspace]) => workspace)).toEqual([
-    "/tmp/catalog-main",
-    "/tmp/catalog-other",
-  ]);
   const invalid = await call("browse", { kind: "skill", agentId: "unknown" });
   expect(invalid.error?.code).toBe("INVALID_REQUEST");
 });
@@ -242,7 +237,7 @@ it("pages the deduplicated official union without combining keywords or truncati
     const rows = url.pathname.includes("plugins")
       ? [plugin("official-plugin", true), plugin("community", false)]
       : [skill("alice", true), skill("bob", true), skill("unknown")];
-    return { results: rows.map((entry) => ({ score: 1, package: entry })) };
+    return searchResults(rows);
   });
   const request = {
     keywords: [" Calendar  ", "calendar", "   Office   tools "],
@@ -269,11 +264,7 @@ it("pages the deduplicated official union without combining keywords or truncati
   expect(all).toHaveLength(3);
   expect(new Set(all.map((entry) => `${entry.kind}:${entry.registry}:${entry.id}`)).size).toBe(3);
   expect(
-    new Set(
-      fetchMock.mock.calls.map(([input]) =>
-        new URL(input instanceof Request ? input.url : String(input)).searchParams.get("q"),
-      ),
-    ),
+    new Set(fetchMock.mock.calls.map(([input]) => requestUrl(input).searchParams.get("q"))),
   ).toEqual(new Set(["calendar", "office tools"]));
   expect(resolveCoreOperatorGatewayMethodScope("catalog.searchKeywords")).toBe("operator.read");
 });

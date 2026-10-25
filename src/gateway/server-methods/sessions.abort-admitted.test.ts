@@ -28,6 +28,9 @@ const parentId = "embedded-parent-session";
 const target = { agentId: "main", sessionKey: parentKey };
 const identity = { ...target, sessionId: parentId };
 type Request = Parameters<typeof handleGatewayRequest>[0];
+const storeScope = () =>
+  resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" });
+const readSession = () => sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
 
 beforeEach(() => setRuntimeConfigSnapshot({ ...getRuntimeConfig(), ...rolePolicyConfig() }));
 
@@ -90,7 +93,7 @@ async function seedAdmittedSession(runId: string, profileId: string) {
 async function admitSessionRun(runId: string, interrupted?: () => void) {
   const { controller, onInterrupt } = interruptRun(runId, interrupted);
   const admission = await beginSessionEffect({
-    scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
+    scope: storeScope(),
     identities: [parentKey, parentId],
     run: { ...identity, runId },
     onInterrupt,
@@ -99,23 +102,21 @@ async function admitSessionRun(runId: string, interrupted?: () => void) {
   return { admission, controller, onInterrupt };
 }
 
-async function exerciseAdmittedStop(
-  method: "chat.abort" | "sessions.abort",
-  mode:
-    | "live"
-    | "controller-backed"
-    | "old-incarnation"
-    | "already-aborted"
-    | "hidden"
-    | "missing-session-id",
-) {
+it.each([
+  ["chat.abort", "live"],
+  ["sessions.abort", "live"],
+  ["chat.abort", "controller-backed"],
+  ["sessions.abort", "old-incarnation"],
+  ["chat.abort", "already-aborted"],
+  ["chat.abort", "hidden"],
+  ["chat.abort", "missing-session-id"],
+] as const)("%s preserves the %s admitted-run boundary", async (method, mode) => {
   const runId = "http-admitted-run";
   const client = roleClient("write", "admitted-stop-operator");
   if (mode === "old-incarnation") {
     client.connect.scopes = ["operator.sessions.write"];
   }
   await seedAdmittedSession(runId, client.authenticatedUserProfile!.profileId);
-  const context = createDirectChatContext({ getRuntimeConfig });
   const { controller, onInterrupt } = interruptRun(runId);
   const originalReason = new Error("owner already stopped");
   if (mode === "already-aborted") {
@@ -137,9 +138,7 @@ async function exerciseAdmittedStop(
       ? registerChatAbortController({
           target: captureRpcTargetForTest({
             ...identity,
-            storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-              agentId: "main",
-            }),
+            storeScope: storeScope(),
           }),
           runId,
           ...identity,
@@ -157,20 +156,20 @@ async function exerciseAdmittedStop(
   const controllerAbort = vi.fn();
   registration?.controller.signal.addEventListener("abort", controllerAbort, { once: true });
   let ack: ReturnType<typeof sessions.loadSessionEntry>;
-  const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>(() => {
+  const respond = vi.fn<Request["respond"]>(() => {
     ack = sessions.loadSessionEntry(target);
   });
   try {
     await withExecRequestTurn({ identity: run }, async () => {
       const admission = await beginSessionEffect({
-        scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
+        scope: storeScope(),
         identities: [parentKey, run.sessionId],
         run,
         onInterrupt,
         assertAllowed: () => {},
       });
       try {
-        await stop({ client, context, respond }, method);
+        await stop({ client, respond }, method);
       } finally {
         admission.release();
       }
@@ -204,22 +203,7 @@ async function exerciseAdmittedStop(
     releaseExecution?.();
     registration?.cleanup();
   }
-}
-
-it.each(["chat.abort", "sessions.abort"] as const)(
-  "%s stops an admitted controller-less run before its embedded handle exists",
-  (method) => exerciseAdmittedStop(method, "live"),
-);
-
-it.each([
-  "controller-backed",
-  "old-incarnation",
-  "already-aborted",
-  "hidden",
-  "missing-session-id",
-] as const)("admitted Stop preserves the %s boundary", (mode) =>
-  exerciseAdmittedStop(mode === "old-incarnation" ? "sessions.abort" : "chat.abort", mode),
-);
+});
 
 it.each(["forbidden", "allowed"] as const)(
   "chat.abort enforces session access before admitted Stop effects (%s)",
@@ -234,7 +218,7 @@ it.each(["forbidden", "allowed"] as const)(
     try {
       await stop({ client, respond });
       expect(respond).toHaveBeenCalledOnce();
-      const after = sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
+      const after = readSession();
       if (access === "forbidden") {
         expect(onInterrupt).not.toHaveBeenCalled();
         expect(after).toEqual(before);
@@ -263,7 +247,6 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
     client.connect.scopes = ["operator.sessions.write"];
     const runId = "revoked-admitted-run";
     const before = await seedAdmittedSession(runId, client.authenticatedUserProfile!.profileId);
-    const context = createDirectChatContext({ getRuntimeConfig });
     const queued =
       timing === "between admissions"
         ? undefined
@@ -292,7 +275,6 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
       await expect(
         stop({
           client,
-          context,
           respond,
           sessionMutationCommitGuard: authority.assertCurrent,
         }),
@@ -313,7 +295,7 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
         expect(second.controller.signal.aborted).toBe(false);
         expect(second.onInterrupt).not.toHaveBeenCalled();
       }
-      expect(sessions.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(before);
+      expect(readSession()).toEqual(before);
       expect(respond).not.toHaveBeenCalled();
     } finally {
       first.admission.release();
