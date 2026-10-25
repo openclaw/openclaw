@@ -43,9 +43,6 @@ function catalogFile(entry: object, dir = tempDir(), rich = false) {
   });
   return file;
 }
-function externalEntry(entry: ReturnType<typeof catalogEntry>, rich = false) {
-  return lookup(entry.openclaw.channel.id, { catalogPaths: [catalogFile(entry, tempDir(), rich)] });
-}
 function writePlugin(
   dir: string,
   entry: ReturnType<typeof catalogEntry>,
@@ -195,7 +192,7 @@ export function describeChannelPluginCatalogEntriesContract() {
           minHostVersion: ">=2026.5.1",
           expectedIntegrity: "sha512-demo",
         };
-        const entry = externalEntry(
+        const file = catalogFile(
           {
             ...catalogEntry(
               "prerelease-demo",
@@ -207,8 +204,10 @@ export function describeChannelPluginCatalogEntriesContract() {
             source: "external",
             kind: "channel",
           },
+          tempDir(),
           true,
         );
+        const entry = lookup("prerelease-demo", { catalogPaths: [file] });
         const spec = `${name}@${version}`;
         expect(entry).toMatchObject({
           meta: richMeta,
@@ -224,7 +223,8 @@ export function describeChannelPluginCatalogEntriesContract() {
     it("preserves ClawHub-only install metadata", () => {
       const spec = "clawhub:openclaw/clawhub-chat@2026.5.2";
       const install = { clawhubSpec: spec, defaultChoice: "clawhub", minHostVersion: ">=2026.5.1" };
-      expect(externalEntry(catalogEntry("clawhub-chat", null, {}, install))).toMatchObject({
+      const file = catalogFile(catalogEntry("clawhub-chat", null, {}, install));
+      expect(lookup("clawhub-chat", { catalogPaths: [file] })).toMatchObject({
         install,
         installSource: { defaultChoice: "clawhub", clawhub: { spec }, warnings: [] },
       });
