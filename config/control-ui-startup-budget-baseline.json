@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271047,
-  "reason": "Per-instance observer/subscription sharing cuts provider script CPU 60.13% median and 61.79% p95, provider task time 15.06% and 13.94%, and retained Tooltip script CPU 92.50% and 92.51%. Same-host integrated 763ae526 to 8a6d6bcf stock builds measure startup 270647 to 271047 B gzip (+400 B), Chat +833 B and New Session +688 B; JS/CSS requests and CSS bytes are unchanged. Record the measured integrated startup value.",
+  "startupJsGzipBytes": 271987,
+  "reason": "CLS space reservations hold all 32 production-HTTP reload cells below 0.013. Twenty interleaved base/A-A/head triples per mobile theme show script/task CPU medians improve 1.6–3.4% and p95 improve 5.5–9.6%; raw readiness remains noisy. Same-host main77 and candidate builds measure startup 271869 to 271987 B gzip (+118 B), with unchanged 5 JS and 1 CSS requests and unchanged startup raw JS. Accept this measured CLS win and record the complete head size.",
   "updatedAt": "2026-10-25"
 }

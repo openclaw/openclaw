@@ -13,7 +13,7 @@
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
 // OPENCLAW_CONTROL_UI_BUILD_ID supplies the matching identity outside a Git checkout.
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
-// --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
+// --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --boot-route chat|new|sessions|settings selects the measured reload destination.
@@ -413,13 +413,10 @@ if (
 }
 if (
   values["layout-matrix"] &&
-  (values["first-load"] ||
-    values["critical-path"] ||
-    values["gateway-http"] ||
-    values["gateway-url"])
+  (values["first-load"] || values["critical-path"] || values["gateway-url"])
 ) {
   throw new Error(
-    "layout-matrix owns cold/warm setup and route readiness; use the production preview without first-load, critical-path or gateway HTTP modes",
+    "layout-matrix owns cold/warm setup and route readiness; exclude first-load, critical-path and external gateway-url modes",
   );
 }
 const layoutCells = values["layout-matrix"]
@@ -845,6 +842,7 @@ try {
           value: number;
           hadRecentInput: boolean;
           sources: Array<{
+            nodeName: string | null;
             element: string | null;
             previousRect: unknown;
             currentRect: unknown;
@@ -879,14 +877,17 @@ try {
             atMs: entry.startTime,
             value,
             hadRecentInput,
-            sources: sources.map(({ node, previousRect, currentRect }) => ({
-              element:
-                node instanceof Element
-                  ? `${node.localName}${node.id ? `#${node.id}` : ""}.${[...node.classList].join(".")}`
+            sources: sources.map(({ node, previousRect, currentRect }) => {
+              const element = node instanceof Element ? node : node?.parentElement;
+              return {
+                nodeName: node?.nodeName ?? null,
+                element: element
+                  ? `${element.localName}${element.id ? `#${element.id}` : ""}.${[...element.classList].join(".")}`
                   : null,
-              previousRect: previousRect.toJSON(),
-              currentRect: currentRect.toJSON(),
-            })),
+                previousRect: previousRect.toJSON(),
+                currentRect: currentRect.toJSON(),
+              };
+            }),
           });
           if (!hadRecentInput) {
             milestones.nonRecentInputShiftSum += value;
