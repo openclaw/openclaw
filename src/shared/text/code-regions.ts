@@ -9,7 +9,6 @@ export type { CodeRegion } from "./code-ranges.js";
 
 export {
   createTextPartCodeRegionResolver,
-  indexTextParts,
   isInsideCode,
   isInsideSettledBlockCode,
   stripLinesOutsideCode,
