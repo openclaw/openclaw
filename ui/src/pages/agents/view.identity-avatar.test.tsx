@@ -60,7 +60,6 @@ function createView(avatar: string | null = null) {
   const container = document.body.appendChild(document.createElement("div"));
   let props = createProps({
     agentIdentityById: identity(1),
-    overview: { ...createProps().overview },
     readData: () => ({
       ...createProps().readData(),
       agentsList: {
@@ -113,7 +112,7 @@ function createView(avatar: string | null = null) {
   };
 }
 
-it("fetches one persisted settings avatar alongside unrelated requests", async () => {
+it("shares one authenticated avatar between editor and picker alongside unrelated requests", async () => {
   const response = createDeferred<Response>();
   fetchAvatar.mockReturnValue(response.promise);
   const view = createView();
@@ -124,6 +123,16 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
     const classes = view.classes();
     expect(classes).toContain("is-pending");
     expect(classes).not.toContain("is-fallback");
+    const chooser = view.query('button[aria-label="Edit avatar"]');
+    expect(chooser).not.toBeNull();
+    chooser?.click();
+    flush();
+    view.query(".avatar-picker__tab:nth-child(2)")?.click();
+    flush();
+    const preview = view.query(".avatar-picker__preview .identity-avatar--agent");
+    const image = preview?.querySelector("img");
+    expect(preview?.classList).toContain("is-pending");
+    expect(image?.getAttribute("src")).toBeNull();
     await waitForFast(() =>
       expect(fetchAvatar).toHaveBeenCalledWith(
         avatarUrl(1),
@@ -136,6 +145,10 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
     );
     response.resolve(avatarResponse());
     await view.loaded(1);
+    await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
+    image?.dispatchEvent(new Event("load"));
+    flush();
+    expect(preview?.classList).not.toContain("is-pending");
     expect(classes).toContain("is-pending");
     view.image()?.dispatchEvent(new Event("load"));
     flush();

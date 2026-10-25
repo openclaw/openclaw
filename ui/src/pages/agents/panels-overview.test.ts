@@ -1,5 +1,4 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
@@ -16,6 +15,7 @@ const contextConfig = (model: Record<string, unknown>) =>
   agentConfig(
     {
       workspace: "/tmp/agents",
+      skills: ["github", "weather"],
       model: { primary: inheritedAgentModel, fallbacks: ["openai/global-fallback"] },
     },
     { model },
@@ -56,67 +56,49 @@ function renderAgents({ configForm, ...overrides }: ViewOverrides = {}, attached
 
 it.each([
   {
-    name: "inherits a primary while preserving agent-owned fallbacks",
+    panel: "overview",
     model: { fallbacks: ["google/gemini-3-pro"] },
     expectedModel: `${inheritedAgentModel} (+1 fallback)`,
   },
   {
-    name: "preserves explicitly disabled agent fallbacks",
+    panel: "channels",
     model: { fallbacks: [] },
     expectedModel: inheritedAgentModel,
   },
   {
-    name: "prefers a dirty agent primary over stale roster and global models",
+    panel: "cron",
     model: { primary: "anthropic/claude-sonnet-4-6" },
     expectedModel: "anthropic/claude-sonnet-4-6",
   },
-])("buildAgentContext $name", ({ model, expectedModel }) => {
-  const context = buildAgentContext(
-    {
-      id: "beta",
-      workspace: resolvedAgentWorkspace,
-      model: { primary: "openai/stale-roster-model", fallbacks: ["openai/stale-fallback"] },
-    },
-    contextConfig(model),
-    null,
-    "alpha",
-  );
-
-  expect(context).toMatchObject({ workspace: resolvedAgentWorkspace, model: expectedModel });
-});
-
-it.each(["overview", "channels", "cron"] as const)(
-  "shows authoritative agent workspace and effective model on the %s panel",
-  async (activePanel) => {
+] as const)(
+  "shows authoritative workspace, skills and effective model on $panel",
+  async ({ panel, model, expectedModel }) => {
     const container = renderAgents({
-      configForm: contextConfig({ fallbacks: ["google/gemini-3-pro"] }),
+      configForm: contextConfig(model),
       readData: () => ({
         ...createProps().readData(),
-        agentsPanel: activePanel,
+        agentsPanel: panel,
         agentsList: roster({
           id: "beta",
           workspace: resolvedAgentWorkspace,
-          model: { primary: inheritedAgentModel },
+          model: { primary: "openai/stale-roster-model", fallbacks: ["openai/stale-fallback"] },
         }),
       }),
     });
     await waitForSolid(() => {
       expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
-      expect(contextValue(container, "Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
+      expect(contextValue(container, "Primary Model")).toBe(expectedModel);
+      expect(contextValue(container, "Skills Filter")).toBe("2 selected");
     });
   },
 );
 
-it.each([
-  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false },
-  { label: "an active identity save", canUpdateIdentity: true, identitySaving: true },
-])(
-  "keeps identity field permissions correct for $label",
-  ({ canUpdateIdentity, identitySaving }) => {
+it.each([false, true])(
+  "keeps identity field permissions correct with write access %s",
+  (canUpdateIdentity) => {
     const container = renderAgents({
       access: { canUpdateIdentity },
-      overview: {},
-      readData: () => ({ ...createProps().readData(), identitySaving }),
+      readData: () => ({ ...createProps().readData(), identitySaving: canUpdateIdentity }),
     });
 
     expect(
@@ -124,13 +106,6 @@ it.each([
     ).toBe(!canUpdateIdentity);
   },
 );
-
-it("shows inherited skills in the Agent Context overview", () => {
-  const container = renderAgents({
-    configForm: agentConfig({ skills: ["github", "weather"] }),
-  });
-  expect(contextValue(container, "Skills Filter")).toBe("2 selected");
-});
 
 const primary = "openai/gpt-5.4";
 const existingFallback = "anthropic/claude-sonnet-4-6";
@@ -172,28 +147,21 @@ const open = async (field: HTMLElement) => {
   await waitForSolid(() => expect(values(field).length).toBeGreaterThan(0));
 };
 
-it("shows the effective chain and excludes the primary and selected models from choices", async () => {
-  const { field, input } = renderFallbacks();
+it("shows, filters and extends the effective fallback chain for the selected agent", async () => {
+  const { field, input, onModelFallbacksChange } = renderFallbacks();
   expect(values(field, ".multi-select__chip")).toEqual([existingFallback]);
   expect(input).toMatchObject({ disabled: false });
   await open(field);
   expect(values(field)).toEqual(["google/gemini-3-pro"]);
-  typeSearch(field, "fixture/custom-fallback");
-  expect(field.querySelector("[data-custom]")?.getAttribute("data-value")).toBe(
-    "fixture/custom-fallback",
-  );
-});
-
-it("stages the field's next chain for the selected agent", async () => {
-  const { field, onModelFallbacksChange } = renderFallbacks();
-  await open(field);
-  field
-    .querySelector<HTMLElement>('.multi-select__option[data-value="google/gemini-3-pro"]')!
-    .click();
+  field.querySelector<HTMLElement>(".multi-select__option")!.click();
   expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
     existingFallback,
     "google/gemini-3-pro",
   ]);
+  typeSearch(field, "fixture/custom-fallback");
+  expect(field.querySelector("[data-custom]")?.getAttribute("data-value")).toBe(
+    "fixture/custom-fallback",
+  );
 });
 
 it("excludes a profile-qualified primary alias while retaining case-distinct model choices", async () => {
