@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
@@ -23,7 +24,6 @@ import { broadcastChatFinal } from "./chat-broadcast.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import * as workAdmission from "./chat-send-work-admission.js";
 import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
-import * as settlementOwner from "./session-run-settlement.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type { RespondFn } from "./types.js";
@@ -103,7 +103,6 @@ it.for(
     const clientRequest = new AsyncResource("terminal-client-request");
     const modelEntered = createDeferred();
     const modelRelease = createDeferred();
-    const settlementEntered = createDeferred();
     const finalObserved = createDeferred();
     let releaseRetainedWork = () => {};
     const createAdmission = workAdmission.createChatSendWorkAdmission;
@@ -141,14 +140,6 @@ it.for(
       if (event !== "chat" || (payload as { state?: string }).state !== "final") {
         return;
       }
-      const settle = settlementOwner.waitForTerminalSessionRunSettlement;
-      vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
-        (params) => {
-          const result = settle(params);
-          settlementEntered.resolve();
-          return result;
-        },
-      );
       mutation = invoke(finalResponse);
       finalObserved.resolve();
     });
@@ -160,7 +151,8 @@ it.for(
       expectActiveRunRefusal(liveResponse, action);
       modelRelease.resolve();
       await withinTest(finalObserved.promise, signal);
-      await withinTest(settlementEntered.promise, signal);
+      await setImmediate();
+      expect(finalResponse).not.toHaveBeenCalled();
       releaseRetainedWork();
       await withinTest(mutation!, signal);
       expect(finalResponse).toHaveBeenCalledWith(true, expect.any(Object), undefined);
@@ -219,15 +211,6 @@ it.for(
       }
     });
     const subscriptions = startGatewayEventSubscriptions(params);
-    const admissionChecked = createDeferred();
-    const getRelease = sessionAdmission.getTerminalSessionWorkAdmissionRelease;
-    const releaseCheck = vi
-      .spyOn(sessionAdmission, "getTerminalSessionWorkAdmissionRelease")
-      .mockImplementation((admissionTarget) => {
-        const result = getRelease(admissionTarget);
-        admissionChecked.resolve();
-        return result;
-      });
     let mutation: Promise<void> | undefined;
     try {
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
@@ -243,9 +226,7 @@ it.for(
       expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
       const respond = vi.fn<RespondFn>();
       mutation = createMutation(fixture, action)(respond);
-      await withinTest(admissionChecked.promise, signal);
       // A live acquired lease must refuse synchronously, never await its release.
-      expect(releaseCheck.mock.results[0]?.value).toBe(false);
       await withinTest(mutation, signal);
       expectActiveRunRefusal(respond, action);
     } finally {

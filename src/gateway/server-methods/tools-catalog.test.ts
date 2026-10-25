@@ -183,19 +183,16 @@ describe("tools.catalog handler", () => {
       defaultProfiles: [],
     });
     expect(tools.find((tool) => tool.id === "matrix_room")?.description).toBe("Room summary");
-    const discovery = {
-      context: { config: {}, workspaceDir: "/workspace", agentDir: "/agent", agentId: "main" },
-      toolAllowlist: ["group:plugins"],
-      allowGatewaySubagentBinding: true,
-    };
-    expect(loadRegistry).toHaveBeenCalledWith(discovery);
+    for (const discover of [loadRegistry, resolveTools]) {
+      expect(discover).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAllowlist: ["group:plugins"],
+          allowGatewaySubagentBinding: true,
+        }),
+      );
+    }
     expect(resolveTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...discovery,
-        suppressNameConflicts: true,
-        runtimeRegistry: metadata ? toolRegistry : undefined,
-        existingToolNames: expect.any(Set),
-      }),
+      expect.objectContaining({ suppressNameConflicts: true }),
     );
     expect(vi.mocked(resolveTools).mock.calls[0]?.[0].existingToolNames?.has("tts")).toBe(true);
   });

@@ -39,6 +39,7 @@ it.for([
   { route: "ios", outcome: "expire" },
   { route: "forward", outcome: "revoke" },
   { route: "all", outcome: "allow-once" },
+  { route: "forward", outcome: "deny" },
   { route: "all", outcome: "cron" },
 ] as const)(
   "delivers through $route with ambient caller custody and handles $outcome",
@@ -129,7 +130,7 @@ it.for([
       req: { type: "req", id: "attached-approval", method: "environments.session.exec" },
       params: {},
       context,
-      client,
+      client: outcome === "deny" ? null : client,
       isWebchatConnect: () => false,
       respond: vi.fn(),
     };
@@ -148,6 +149,10 @@ it.for([
           options,
           binding,
           argv: ["node", "preview.js"],
+          input:
+            outcome === "allow-once" || outcome === "deny"
+              ? "console.log('script-from-stdin')"
+              : undefined,
           background: true,
           signal: lifetime.signal,
           assertCurrent: () => {
@@ -161,7 +166,7 @@ it.for([
           outcome === "allow-once" || outcome === "cron"
             ? expect(operation).resolves.toBeUndefined()
             : expect(operation).rejects.toThrow(
-                outcome === "expire" ? "not approved" : "run authority ended",
+                outcome === "revoke" ? "run authority ended" : "not approved",
               );
         const event = await Promise.race([
           delivered.promise,
@@ -169,18 +174,23 @@ it.for([
             throw new Error("Approval completed before request delivery");
           }),
         ]);
-        expect(event.request).toMatchObject({
-          runId: run.runId,
-          sessionKey: binding.sessionKey,
-          ...turnSource,
-          allowedDecisions: ["allow-once", "deny"],
-        });
-        expect((await manager.listPendingRecords())[0]).toMatchObject({
-          requestedByConnId: "requester-connection",
-          requestedByDeviceId: "requester-device",
-          requestedByDeviceTokenAuth: true,
-          agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
-        });
+        expect(event.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+        if (outcome !== "deny") {
+          expect(event.request).toMatchObject({
+            runId: run.runId,
+            sessionKey: binding.sessionKey,
+            ...turnSource,
+          });
+          expect((await manager.listPendingRecords())[0]).toMatchObject({
+            requestedByConnId: "requester-connection",
+            requestedByDeviceId: "requester-device",
+            requestedByDeviceTokenAuth: true,
+            agentRuntimeDelegatedAuthority: { ...authority, kind: "local" },
+          });
+        }
+        if (outcome === "allow-once" || outcome === "deny") {
+          expect(event.request.command).toContain("script-from-stdin");
+        }
         if (outcome === "expire") {
           await manager.expire(event.id);
         } else {
@@ -188,7 +198,7 @@ it.for([
             lifetime.abort(new Error("run authority ended"));
             releaseAgentRunDelegatedAuthority(authority);
           }
-          await manager.resolve(event.id, "allow-once", "reviewer");
+          await manager.resolve(event.id, outcome === "deny" ? "deny" : "allow-once", "reviewer");
         }
         await completion;
         expect(await manager.consumeAllowOnce(event.id)).toBe(false);
@@ -204,43 +214,6 @@ it.for([
     );
   },
 );
-
-for (const decision of ["allow-once", "deny"] as const) {
-  it(`shows stdin and honors ${decision} exactly once`, async (test) => {
-    const manager = createTestApprovalManager(test, {
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    });
-    const broadcast = vi.fn(async (_event: string, request: ExecApprovalRequest) => {
-      expect(request.request.command).toContain("script-from-stdin");
-      expect(request.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-      await manager.resolve(request.id, decision, "reviewer");
-    });
-    const options = {
-      client: null,
-      context: {
-        execApprovalManager: manager,
-        broadcast,
-        hasExecApprovalClients: () => true,
-        logGateway: { error: vi.fn() },
-      },
-    } as unknown as GatewayRequestHandlerOptions;
-    const operation = approveSessionEnvironmentCommand({
-      options,
-      binding,
-      argv: ["node"],
-      input: "console.log('script-from-stdin')",
-      background: true,
-      assertCurrent: () => {},
-    });
-    if (decision === "allow-once") {
-      await expect(operation).resolves.toBeUndefined();
-      const id = broadcast.mock.calls[0]![1].id;
-      expect(await manager.consumeAllowOnce(id)).toBe(false);
-    } else {
-      await expect(operation).rejects.toThrow("not approved");
-    }
-  });
-}
 
 it("refuses approval when the complete command cannot be shown", async (test) => {
   const manager = createTestApprovalManager(test);

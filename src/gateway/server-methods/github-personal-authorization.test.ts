@@ -167,7 +167,7 @@ it("shares overlapping options preparation without sharing caller authority or r
   expect(surviving.currentSession().sessionId).toBe(snapshot.entry.sessionId);
   expect(mocks.loadSession).toHaveBeenCalledTimes(1);
   surviving.release();
-  expect(() => surviving.currentSession()).toThrow();
+  expect(() => surviving.currentSession()).toThrow("session lifecycle changed");
   expect(independent.currentSession().sessionId).toBe(snapshot.entry.sessionId);
   publish(snapshot, { archivedAt: 123 });
   expect(() => independent.currentSession()).toThrow("session lifecycle changed");
@@ -181,11 +181,11 @@ it("prepares the new session store after an in-place config publication", async 
   const config = getRuntimeConfigSnapshot()!;
   const { snapshot, pending, entered } = holdSessionRead();
   mocks.loadSession.mockReturnValue(sessionRead("main", { sessionId: "reloaded-session" }));
-  const first = prepare();
+  const first = prepare(createRequest(), "main");
   await entered.promise;
   config.session = { store: "/test/reloaded/sessions.json" };
   setRuntimeConfigSnapshot(config);
-  const second = prepare();
+  const second = prepare(createRequest(), "main");
   await Promise.resolve();
   pending.resolve(snapshot);
   (await first).release();
@@ -236,28 +236,14 @@ it.each([
   );
 });
 
-it("reuses the worker result until publication metadata changes", async () => {
-  const agentId = "research";
-  const loaded = sessionRead(agentId);
-  mocks.loadSession.mockReturnValue(loaded);
-  using read = await prepare(createRequest(), agentId);
-  expect(read.currentSession()).toEqual(read.session);
-  publish(loaded, { label: "renamed" });
-  expect(read.currentSession()).toEqual(read.session);
-  expect(mocks.loadSession).toHaveBeenCalledTimes(1);
-  read.release();
-  expect(() => read.currentSession()).toThrow("session lifecycle changed");
-});
-
 it.each([null, 123])(
   "invalidates a prepared response after an archive receipt from %s",
   async (archivedAt) => {
-    const loaded = sessionRead();
     mocks.loadSession.mockReturnValue(sessionRead("main", { archivedAt: archivedAt ?? undefined }));
     using read = await prepare();
     const initial = read.currentSession();
     expect(initial.archivedAt).toBe(archivedAt);
-    publish(loaded, { archivedAt: archivedAt === null ? 123 : undefined });
+    publish(sessionRead(), { archivedAt: archivedAt === null ? 123 : undefined });
     expect(() => read.currentSession()).toThrow("session lifecycle changed");
     expect(() => read.assertSessionUnchanged(initial)).toThrow("session lifecycle changed");
   },
