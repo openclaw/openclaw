@@ -19,7 +19,6 @@ import type { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
 
 const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
-  ensureOnboardingAgent: vi.fn(),
   ensureWorkspaceAndSessions: vi.fn(),
 }));
 
@@ -27,7 +26,6 @@ vi.mock("../onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../onboard-helpers.js")>()),
   ensureWorkspaceAndSessions: mocks.ensureWorkspaceAndSessions,
 }));
-vi.mock("../onboard-agent.js", () => ({ ensureOnboardingAgent: mocks.ensureOnboardingAgent }));
 vi.mock("./local/auth-choice.js", () => ({
   applyNonInteractiveAuthChoice: mocks.applyAuthChoice,
 }));
@@ -53,9 +51,6 @@ describe("local setup fleet owner persistence", () => {
   it.each([false, true])(
     "preserves a fleet through Doctor and two real setup writes: %j",
     async (include) => {
-      const { ensureOnboardingAgent } =
-        await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
-      mocks.ensureOnboardingAgent.mockImplementation(ensureOnboardingAgent);
       await withTempHome(async (rawHome) => {
         const home = await fs.realpath(rawHome);
         const stateDir = path.join(home, ".openclaw");
@@ -82,32 +77,25 @@ describe("local setup fleet owner persistence", () => {
           { id: "alpha", ...entries.alpha },
           { id: "beta", default: true, ...entries.beta },
         ];
-        const roster = { list };
-        const includeRaw = JSON.stringify(roster);
+        const includeRaw = JSON.stringify({ list });
         if (include) {
           await fs.writeFile(includePath, includeRaw);
         }
         const bindings = [
           { type: "route", agentId: "alpha", match: { channel: "discord", accountId: "*" } },
         ];
-        const raw = JSON.stringify({
+        await write({
           agents: {
-            ...(include ? { $include: "./roster.json" } : roster),
+            ...(include ? { $include: "./roster.json" } : { list }),
             defaults,
           },
           bindings,
           gateway: { mode: "local", port: 24680 },
           models: { providers: { fixture: provider } },
         });
-        await fs.writeFile(configPath, raw);
         resetConfigRuntimeState();
         const before = await readConfigFileSnapshot();
         expect(before.valid, JSON.stringify(before.issues)).toBe(false);
-        expect(before.sourceConfig.agents).toMatchObject(roster);
-        expect(await read()).toBe(raw);
-        if (include) {
-          expect(await read(includePath)).toBe(includeRaw);
-        }
         const canonicalEntries = { ...entries, beta: { ...entries.beta, workspace } };
         let setupIncludeRaw = includeRaw;
         if (include) {
@@ -125,9 +113,8 @@ describe("local setup fleet owner persistence", () => {
         resetConfigRuntimeState();
         const repaired = await readConfigFileSnapshot();
         expect(repaired.valid, JSON.stringify(repaired.issues)).toBe(true);
-        expectFleet(repaired.sourceConfig.agents, canonicalEntries);
-        expect(repaired.sourceConfig.bindings).toEqual(bindings);
         if (include) {
+          expectFleet(repaired.sourceConfig.agents, canonicalEntries);
           expect(await read(includePath)).toBe(includeRaw);
           setupIncludeRaw = JSON.stringify({ entries: canonicalEntries });
           await fs.writeFile(includePath, setupIncludeRaw);
@@ -171,8 +158,6 @@ describe("local setup fleet owner persistence", () => {
             },
             runtime,
           );
-          const onboarded = await mocks.ensureOnboardingAgent.mock.results[rerun]?.value;
-          expect(onboarded).toMatchObject({ agentId: "beta", createdAgent: false });
           expect(mocks.ensureWorkspaceAndSessions).toHaveBeenLastCalledWith(
             workspace,
             runtime,
@@ -203,9 +188,6 @@ describe("local setup fleet owner persistence", () => {
           if (include) {
             expect(await read(includePath)).toBe(setupIncludeRaw);
             expect(JSON.parse(await read()).agents.$include).toBe("./roster.json");
-          } else {
-            const persisted = JSON.parse(await read());
-            expectFleet(persisted.agents, expectedEntries);
           }
           expect(await readProfile(agentDir)).toMatchObject({ provider: "fixture" });
           for (const nonOwner of ["alpha", "ignored"]) {

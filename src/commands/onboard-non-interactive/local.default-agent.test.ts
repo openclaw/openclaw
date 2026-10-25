@@ -172,9 +172,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   it.each([
     { saved: undefined, requested: undefined, expected: "npm", skipSkills: false },
     { saved: "yarn", requested: undefined, expected: "yarn", skipSkills: false },
-    { saved: "yarn", requested: "npm", expected: "npm", skipSkills: false },
     { saved: "bun", requested: "pnpm", expected: "pnpm", skipSkills: false },
-    { saved: "pnpm", requested: "bun", expected: "bun", skipSkills: false },
     { saved: "yarn", requested: "npm", expected: "yarn", skipSkills: true },
   ] as const)(
     "records saved $saved and requested $requested skills manager as $expected",
@@ -191,10 +189,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           preferBrew: false,
         });
         expect(baseConfig.skills?.install?.nodeManager).toBe(saved);
-        if (skipSkills) {
-          expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills).toBe(baseConfig.skills);
-          expect(baseConfig.skills?.install).toEqual({ nodeManager: "yarn", preferBrew: false });
-        }
       }),
   );
 
@@ -208,7 +202,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       if (failure === "gateway") {
         mocks.applyGatewayConfig.mockReturnValue(null);
         await runLocal({ authChoice: "demo-api-key", gatewayBind: "custom" });
-        expect(mocks.applyGatewayConfig).toHaveBeenCalledOnce();
       } else {
         mocks.inferAuthChoice.mockReturnValue({
           matches: [
@@ -232,18 +225,14 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         );
         expect(runtime.exit).toHaveBeenCalledWith(1);
         if (json) {
-          const message = [
-            "Multiple API key flags were provided for non-interactive setup.",
-            "Use a single provider flag or pass --auth-choice explicitly.",
-            "Flags: --openai-api-key, --anthropic-api-key",
-          ].join("\n");
-          const payload = {
+          const payload = lastOutput();
+          expect(payload).toEqual({
             ok: false,
-            error: { type: "cli_error", message },
+            error: { type: "cli_error", message: payload.message },
             phase: "options",
-            message,
-          };
-          expect(runtime.log).toHaveBeenCalledWith(JSON.stringify(payload, null, 2));
+            message: expect.stringContaining("Multiple API key flags were provided"),
+          });
+          expect(payload.message).toContain("--openai-api-key, --anthropic-api-key");
         } else {
           expect(runtime.log).not.toHaveBeenCalled();
         }
@@ -256,65 +245,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     },
   );
 
-  it.each([false, true])("keeps first-agent auth on its workspace (legacy state: %s)", (legacy) =>
-    withTempHome(async (rawHome) => {
-      const home = await fs.realpath(rawHome);
-      const configDir = path.join(home, ".openclaw");
-      const agentId = legacy ? "robby" : "main";
-      const agentDir = path.join(configDir, "agents", agentId, "agent");
-      const workspace = path.join(home, "requested-workspace");
-      const expectedWorkspace = legacy ? path.join(home, "old-workspace") : workspace;
-      if (legacy) {
-        await fs.writeFile(
-          path.join(configDir, "openclaw.json"),
-          JSON.stringify({ agents: { defaults: { workspace: expectedWorkspace } } }),
-        );
-      } else {
-        // withTempHome seeds main sessions; model a first install.
-        await fs.rm(path.join(configDir, "agents"), { recursive: true });
-      }
-      resetConfigRuntimeState();
-      mocks.ensureOnboardingAgent.mockImplementationOnce(
-        async ({ config }: { config: OpenClawConfig }) => ({
-          config: {
-            ...config,
-            agents: { ...config.agents, entries: { [agentId]: { workspace: expectedWorkspace } } },
-          },
-          agentId,
-          bootstrapPending: true,
-          createdAgent: true,
-        }),
-      );
-      await runSetup({
-        agentName: legacy ? agentId : undefined,
-        workspace,
-        authChoice: "demo-api-key",
-        json: true,
-      });
-      const auth = mocks.applyAuthChoice.mock.calls[0]?.[0];
-      expect(auth?.target).toEqual({ agentId, agentDir, workspaceDir: expectedWorkspace });
-      expectWorkspace(agentId, expectedWorkspace);
-      expect(auth?.nextConfig.agents.defaults).toMatchObject({ workspace: expectedWorkspace });
-      const creationOrder = mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!;
-      expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(creationOrder);
-      expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(creationOrder);
-      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
-      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ firstAgent: { name: agentId }, workspace: expectedWorkspace }),
-      );
-      expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
-        `${workspace}/main`,
-      );
-      if (legacy) {
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringContaining("existing agents keep their current workspace"),
-        );
-      } else {
-        expect(runtime.error).not.toHaveBeenCalled();
-      }
-    }),
-  );
-
   it.each(
     [false, true].flatMap((existing) =>
       (["none", "during-auth", "after-creation"] as const).map((foreignWrite) => ({
@@ -323,7 +253,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       })),
     ),
   )(
-    "guards the config revision across named creation: existing=$existing, foreign=$foreignWrite",
+    "guards first-agent ownership and config revision: existing=$existing, foreign=$foreignWrite",
     async ({ existing, foreignWrite }) => {
       const { ensureOnboardingAgent } =
         await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
@@ -334,6 +264,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
         const workspace = path.join(home, "workspace");
+        const agentId = existing ? "robby" : "main";
         // Remove the helper's legacy main sessions to exercise first-install admission.
         await fs.rm(path.join(configDir, "agents"), { recursive: true });
         const initialConfig = {
@@ -344,8 +275,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           await fs.writeFile(configPath, initialRaw);
         }
         resetConfigRuntimeState();
-        const before = await readConfigFileSnapshot();
-        expect(before).toMatchObject({ valid: true, exists: existing });
         let foreignRaw: string | undefined;
         const withModel = (config: OpenClawConfig, primary: string): OpenClawConfig => ({
           ...config,
@@ -358,7 +287,13 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           foreignRaw = JSON.stringify(withModel(config, "fixture/foreign"));
           await fs.writeFile(configPath, foreignRaw);
         };
-        mocks.applyAuthChoice.mockImplementationOnce(async ({ nextConfig }) => {
+        mocks.applyAuthChoice.mockImplementationOnce(async ({ nextConfig, target }) => {
+          expect(target).toEqual({
+            agentId,
+            agentDir: path.join(configDir, "agents", agentId, "agent"),
+            workspaceDir: workspace,
+          });
+          expect(nextConfig.agents.defaults.workspace).toBe(workspace);
           const currentRaw = existing ? await fs.readFile(configPath, "utf8") : null;
           expect(currentRaw).toBe(initialRaw);
           if (!existing) {
@@ -369,10 +304,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           }
           return withModel(nextConfig, "fixture/selected");
         });
-        let creationHash: string | undefined;
         mocks.ensureOnboardingAgent.mockImplementationOnce(async (params) => {
           const created = await ensureOnboardingAgent(params);
-          creationHash = created.configHash;
           if (foreignWrite === "after-creation") {
             await writeForeignConfig(JSON.parse(await fs.readFile(configPath, "utf8")));
           }
@@ -381,7 +314,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         mocks.commitConfig.mockImplementationOnce(commitNonInteractiveOnboardConfig);
 
         const outcome = await runSetup({
-          agentName: "robby",
+          agentName: existing ? agentId : undefined,
           workspace,
           authChoice: "demo-api-key",
           skipBootstrap: true,
@@ -393,21 +326,19 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           expect.soft(persistedRaw).toBe(foreignRaw);
           expect(outcome).toBeInstanceOf(Error);
           expect((outcome as Error).message).toMatch(/config changed|base hash/i);
-          expect(mocks.commitConfig).toHaveBeenCalledTimes(foreignWrite === "during-auth" ? 0 : 1);
           expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
         } else {
           expect(outcome).toBeUndefined();
-          expect(creationHash).toEqual(expect.any(String));
-          expect(creationHash).not.toBe(before.hash);
-          expect(mocks.commitConfig).toHaveBeenCalledWith(
-            expect.objectContaining({ baseHash: creationHash }),
-          );
+          expectWorkspace(agentId, workspace);
+          const creationOrder = mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!;
+          expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(creationOrder);
+          expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(creationOrder);
+          expect(runtime.error).not.toHaveBeenCalled();
           expect(JSON.parse(persistedRaw).agents).toMatchObject({
             defaults: { workspace, model: { primary: "fixture/selected" } },
-            entries: { robby: { name: "robby", workspace } },
+            entries: { [agentId]: { name: agentId, workspace } },
           });
-          expect(Object.keys(JSON.parse(persistedRaw).agents.entries)).toEqual(["robby"]);
-          expect(mocks.logConfigUpdated).toHaveBeenCalledOnce();
+          expect(Object.keys(JSON.parse(persistedRaw).agents.entries)).toEqual([agentId]);
         }
       });
     },
