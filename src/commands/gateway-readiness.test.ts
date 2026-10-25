@@ -42,18 +42,25 @@ vi.mock("../infra/clipboard.js", async (importOriginal) => ({
 }));
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
-  service?: Omit<DaemonStatus["service"], "loaded">;
+  service?: Partial<Omit<DaemonStatus["service"], "loaded">>;
 };
+const portStatus = (status: "free" | "busy", port = 18789) => ({
+  port,
+  status,
+  listeners: [],
+  hints: [],
+});
 
 function createStatus(overrides: StatusOverrides = {}, port = 18789): DaemonStatus {
   const { service, ...rest } = overrides;
-  const serviceStatus = service ?? {
+  const serviceStatus = {
     label: "systemd user",
     loadState: { status: "not-loaded" as const },
     loadedText: "enabled",
     notLoadedText: "disabled",
     command: null,
-    runtime: { status: "stopped" },
+    runtime: { status: "stopped" as const },
+    ...service,
   };
   return {
     service: {
@@ -70,12 +77,7 @@ function createStatus(overrides: StatusOverrides = {}, port = 18789): DaemonStat
       portSource: "env/config",
       probeUrl: `ws://127.0.0.1:${port}`,
     },
-    port: {
-      port,
-      status: "free",
-      listeners: [],
-      hints: [],
-    },
+    port: portStatus("free", port),
     rpc: {
       ok: false,
       error: `connect ECONNREFUSED 127.0.0.1:${port}`,
@@ -91,13 +93,15 @@ afterEach(() => tty.restore());
 const output = () => runtime.log.mock.calls.flat().join("\n");
 const check = (options: { yes?: boolean } = {}) =>
   dashboardCommand(runtime, { noOpen: true, ...options });
+function expectNoRecovery() {
+  for (const action of [confirm, installGateway, startGateway]) {
+    expect(action).not.toHaveBeenCalled();
+  }
+}
 const installedService = (
   overrides: Partial<NonNullable<StatusOverrides["service"]>> = {},
 ): NonNullable<StatusOverrides["service"]> => ({
-  label: "systemd user",
   loadState: { status: "loaded" },
-  loadedText: "enabled",
-  notLoadedText: "disabled",
   command: { programArguments: ["openclaw", "gateway", "run"] },
   runtime: { status: "running" },
   ...overrides,
@@ -105,7 +109,7 @@ const installedService = (
 const runningStatus = () =>
   createStatus({
     service: installedService(),
-    port: { port: 18789, status: "busy", listeners: [], hints: [] },
+    port: portStatus("busy"),
     rpc: { ok: true },
   });
 
@@ -115,18 +119,13 @@ describe("dashboard Gateway readiness", () => {
   });
 
   it("does not start over a busy listener after an inconclusive timeout probe", async () => {
-    const status = createStatus({
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: { ok: false, error: "timeout" },
-    });
+    const status = createStatus({ port: portStatus("busy"), rpc: { ok: false, error: "timeout" } });
     gatherStatus.mockResolvedValue(status);
 
     await check();
 
     expect(output()).not.toContain("Dashboard URL:");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
+    expectNoRecovery();
     expect(output()).toContain("Gateway check failed:");
     expect(output()).not.toContain("Gateway is not running");
     expect(output()).not.toContain("gateway start");
@@ -180,15 +179,12 @@ describe("dashboard Gateway readiness", () => {
       },
       18900,
     );
-
     gatherStatus.mockResolvedValue(status);
 
     await check();
 
     expect(output()).not.toContain("Dashboard URL:");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
+    expectNoRecovery();
     expect(output()).toContain("owning environment or supervisor to start or repair");
   });
 
@@ -197,8 +193,7 @@ describe("dashboard Gateway readiness", () => {
       service: installedService({
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
       }),
-      port: { port: 18789, status: "free", listeners: [], hints: [] },
-      portCli: { port: 49876, status: "busy", listeners: [], hints: [] },
+      portCli: portStatus("busy", 49876),
       rpc: {
         ok: false,
         error: "gateway closed (1008): auth failed",
@@ -206,15 +201,12 @@ describe("dashboard Gateway readiness", () => {
         url: "ws://127.0.0.1:49876",
       },
     });
-
     gatherStatus.mockResolvedValue(status);
 
     await check();
 
     expect(output()).toContain("Dashboard URL: http://127.0.0.1:18789/");
-    expect(confirm).not.toHaveBeenCalled();
-    expect(installGateway).not.toHaveBeenCalled();
-    expect(startGateway).not.toHaveBeenCalled();
+    expectNoRecovery();
     expect(output()).not.toContain("Gateway check failed:");
   });
 });
