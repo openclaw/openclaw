@@ -2403,15 +2403,11 @@ packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/fences.ts
-packages/markdown-core/src/image-code-retention.ts
-packages/markdown-core/src/list-code-retention.ts
 packages/markdown-core/src/markdown-code-regions.ts
-packages/markdown-core/src/reference-definition-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tag-syntax.ts
 packages/markdown-core/src/reasoning-tags-batch.ts
 packages/markdown-core/src/reasoning-tags.ts
-packages/markdown-core/src/table-code-retention.ts
 packages/media-core/src/base64.ts
 packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
