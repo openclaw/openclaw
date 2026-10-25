@@ -4891,7 +4891,6 @@
 ["src/gateway/health/collector.session-store-path.test.ts","../../channels/plugins/read-only.js","cecabb4a873650cfd3cf7f2748c88d071e0d4578d118e7b012e398aa44359ed5",1]
 ["src/gateway/hosted-lifecycle-dispatch.test.ts","./server-methods/sessions-delete.js","1404844f41d6cb137f15ed2cc2124d23c7a83239c1edbf186503b0819532ab11",1]
 ["src/gateway/http-auth-utils.test.ts","../infra/host-account-name.js","8634e10f1dd5a8b1ca7463a1bdf83b071089d3a9e38ad56c72385947b5e88e9c",1]
-["src/gateway/http-utils.authorize-request.test.ts","./auth.js","ec634f738a6f1f8155b1c68474360f6e90c8e11f1c09d4a0a02c0f9f6b82e5ee",1]
 ["src/gateway/http-utils.authorize-request.test.ts","./http-common.js","1ba93af2bb8c0bf55bb5082e18d21e2a5dc022c14e565e8d5f5eaf433855705b",1]
 ["src/gateway/http-utils.model-override.test.ts","../config/config.js","dcecd67d7a74fcca231a232d45797935f1e587f5bff990a8d1b54f00930927f9",1]
 ["src/gateway/http-utils.model-override.test.ts","../config/io.js","4e97196551777ed1734fa725dd67e43065981a03edb69aa6b93d21f6372d8517",1]
