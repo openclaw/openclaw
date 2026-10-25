@@ -169,6 +169,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-group-registration-measure.ts!",
   // Its source header documents this owner-level field-order benchmark.
   "scripts/perf/session-event-field-order.ts!",
+  "scripts/perf/session-array-encoding.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
