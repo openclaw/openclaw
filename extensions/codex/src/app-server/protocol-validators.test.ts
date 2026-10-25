@@ -15,10 +15,7 @@ import type { CodexThreadItem } from "./protocol.js";
 
 function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
   const response = threadStartResult();
-  return {
-    ...response,
-    thread: { ...response.thread, ...threadOverrides },
-  };
+  return { ...response, thread: { ...response.thread, ...threadOverrides } };
 }
 
 function passiveItem(type: string, fields: Record<string, unknown> = {}): CodexThreadItem {
@@ -55,22 +52,24 @@ function completedTurn(value: ReturnType<typeof turn>) {
   }).completedTurn;
 }
 
+function expectInvalid(assertResponse: (value: unknown) => unknown, value: unknown) {
+  expect(() => assertResponse(value)).toThrow("Invalid Codex app-server");
+}
+
 describe("passive native turn items", () => {
   const prompt = "Summarize the conversation.";
   const submittedInput = [{ type: "text" as const, text: prompt, text_elements: [] }];
   const managedHooks = { allowManagedHookPrompts: true };
   const validate = (items: CodexThreadItem[], options = managedHooks) =>
     assertCodexPassiveTurnItems(items, submittedInput, "completion", options);
+  const fragment = { text: "Revise the answer.", hookRunId: "managed-stop-1" };
 
   it("accepts typed managed-hook fragments without allowing another user prompt", () => {
     const items = [
       passiveItem("userMessage", { content: [{ type: "text", text: prompt }] }),
       passiveItem("agentMessage", { text: "Draft." }),
       passiveItem("hookPrompt", {
-        fragments: [
-          { text: "Revise the answer.", hookRunId: "managed-stop-1" },
-          { text: "", hookRunId: "managed-stop-2" },
-        ],
+        fragments: [fragment, { text: "", hookRunId: "managed-stop-2" }],
       }),
       passiveItem("reasoning"),
       passiveItem("agentMessage", { text: "Revised answer." }),
@@ -92,9 +91,7 @@ describe("passive native turn items", () => {
     ];
     const items = [
       passiveItem("userMessage", { content: fallbackInput }),
-      passiveItem("hookPrompt", {
-        fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
-      }),
+      passiveItem("hookPrompt", { fragments: [fragment] }),
       passiveItem("agentMessage", { text: "Revised answer." }),
     ];
 
@@ -126,14 +123,7 @@ describe("passive native turn items", () => {
   it.each(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"])(
     "does not admit %s with managed hooks enabled",
     (type) => {
-      expect(() =>
-        assertCodexPassiveTurnItems(
-          [passiveItem(type)],
-          submittedInput,
-          "completion",
-          managedHooks,
-        ),
-      ).toThrow(`unexpected native item: ${type}`);
+      expect(() => validate([passiveItem(type)])).toThrow(`unexpected native item: ${type}`);
     },
   );
 });
@@ -143,13 +133,9 @@ describe("Codex thread response validators", () => {
     { label: "start", assertResponse: assertCodexThreadStartResponse },
     { label: "resume", assertResponse: assertCodexThreadResumeResponse },
   ])("validates nested thread items in $label responses", ({ assertResponse }) => {
-    const response = makeMinimalResponse({
-      turns: [turn()],
-    });
+    const response = makeMinimalResponse({ turns: [turn()] });
     expect(assertResponse(response)).toMatchObject(response);
-    expect(() => assertResponse(makeMinimalResponse({ turns: [turn(12)] }))).toThrow(
-      "Invalid Codex app-server",
-    );
+    expectInvalid(assertResponse, makeMinimalResponse({ turns: [turn(12)] }));
   });
 
   // The pinned Codex protocol requires both thread identities; never silently
@@ -161,7 +147,7 @@ describe("Codex thread response validators", () => {
     ]) {
       const response = makeMinimalResponse({ sessionId: undefined });
       delete (response.thread as Record<string, unknown>).sessionId;
-      expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
+      expectInvalid(assertResponse, response);
     }
   });
 });
@@ -173,11 +159,9 @@ describe("assertCodexModelListResponse", () => {
       supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
     };
     expect(assertCodexModelListResponse({ data: [model] })).toMatchObject({ data: [model] });
-    expect(() =>
-      assertCodexModelListResponse({
-        data: [{ ...model, supportedReasoningEfforts: [{ reasoningEffort: "", description: "" }] }],
-      }),
-    ).toThrow("Invalid Codex app-server");
+    expectInvalid(assertCodexModelListResponse, {
+      data: [{ ...model, supportedReasoningEfforts: [{ reasoningEffort: "", description: "" }] }],
+    });
   });
 
   it("rejects a null response", () => {
@@ -189,19 +173,8 @@ describe("assertCodexModelListResponse", () => {
 
 describe("prepareCodexServerNotification", () => {
   it("does not merge defaults from unrelated thread item union branches", () => {
-    const snapshot = prepareCodexServerNotification({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turn: {
-          id: "turn-1",
-          status: "completed",
-          items: [{ id: "item-1", type: "plan", text: "ship it" }],
-        },
-      },
-    }).completedTurn;
-
-    expect(snapshot?.items[0]).toEqual({ id: "item-1", type: "plan", text: "ship it" });
+    const plan = { id: "item-1", type: "plan", text: "ship it" };
+    expect(completedTurn({ ...turn(), items: [plan] })?.items[0]).toEqual(plan);
   });
 
   it("rejects malformed nested items and nonterminal snapshots", () => {
@@ -238,40 +211,26 @@ describe("generated response resources", () => {
       const notification = { ...params, error: { ...params.error, codexErrorInfo } };
       expect(readCodexErrorNotification(notification)).toMatchObject(notification);
     }
-    expect(
-      readCodexErrorNotification({
-        ...params,
-        error: {
-          message: "Synthetic error",
-          codexErrorInfo: { httpConnectionFailed: { httpStatusCode: -1 } },
-        },
-      }),
-    ).toBeUndefined();
-    expect(
-      readCodexErrorNotification({
-        ...params,
-        error: { ...params.error, codexErrorInfo: { activeTurnNotSteerable: { turnKind: 12 } } },
-      }),
-    ).toBeUndefined();
-    expect(() =>
-      assertCodexTurnStartResponse({
-        turn: {
-          ...turn(),
-          error: {
-            ...params.error,
-            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: -1 } },
-          },
-        },
-      }),
-    ).toThrow("Invalid Codex app-server");
+    const invalidHttpError = {
+      ...params.error,
+      codexErrorInfo: { httpConnectionFailed: { httpStatusCode: -1 } },
+    };
+    for (const error of [
+      invalidHttpError,
+      {
+        ...params.error,
+        codexErrorInfo: { activeTurnNotSteerable: { turnKind: 12 } },
+      },
+    ]) {
+      expect(readCodexErrorNotification({ ...params, error })).toBeUndefined();
+    }
+    expectInvalid(assertCodexTurnStartResponse, { turn: { ...turn(), error: invalidHttpError } });
   });
 
   it("validates turn-start item contents inside the shared resource", () => {
     const response = { turn: { ...turn(), status: "inProgress" } };
     expect(assertCodexTurnStartResponse(response)).toMatchObject(response);
-    expect(() =>
-      assertCodexTurnStartResponse({ turn: { ...turn(12), status: "inProgress" } }),
-    ).toThrow("Invalid Codex app-server");
+    expectInvalid(assertCodexTurnStartResponse, { turn: { ...turn(12), status: "inProgress" } });
   });
 
   it("preserves closed question records in native turn responses", () => {
@@ -284,10 +243,8 @@ describe("generated response resources", () => {
     };
     const response = { turn: { id: "turn-1", status: "inProgress", items: [item] } };
     expect(assertCodexTurnStartResponse(response)).toBe(response);
-    expect(() =>
-      assertCodexTurnStartResponse({
-        turn: { ...response.turn, items: [{ ...item, questions: [{ ...question, extra: true }] }] },
-      }),
-    ).toThrow("Invalid Codex app-server");
+    expectInvalid(assertCodexTurnStartResponse, {
+      turn: { ...response.turn, items: [{ ...item, questions: [{ ...question, extra: true }] }] },
+    });
   });
 });

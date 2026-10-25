@@ -98,14 +98,12 @@ describe("Codex channel tool progress", () => {
     await harness.waitForMethod("turn/start");
 
     const cases: Array<{
-      label: string;
       toolCallId: string;
       name: string;
       item?: JsonObject;
       completion?: JsonObject;
     }> = [
       {
-        label: "native command",
         toolCallId: "command-1",
         name: "bash",
         item: {
@@ -116,13 +114,11 @@ describe("Codex channel tool progress", () => {
         completion: { aggregatedOutput: "done", exitCode: 0, durationMs: 1 },
       },
       {
-        label: "native file change",
         toolCallId: "patch-1",
         name: "apply_patch",
         item: { type: "fileChange", changes: [{ path: "proof.txt", kind: "update" }] },
       },
       {
-        label: "native web search",
         toolCallId: "search-1",
         name: "web_search",
         item: {
@@ -133,7 +129,6 @@ describe("Codex channel tool progress", () => {
         completion: { durationMs: 1 },
       },
       {
-        label: "native MCP call",
         toolCallId: "mcp-1",
         name: "progressproof.parity_probe",
         item: {
@@ -144,7 +139,7 @@ describe("Codex channel tool progress", () => {
         },
         completion: { result: { content: [{ type: "text", text: "ok" }] }, durationMs: 1 },
       },
-      { label: "OpenClaw dynamic tool", toolCallId: "dynamic-1", name: "agents_list" },
+      { toolCallId: "dynamic-1", name: "agents_list" },
     ];
 
     for (const testCase of cases) {
@@ -179,15 +174,14 @@ describe("Codex channel tool progress", () => {
             event.data?.name === testCase.name,
         );
 
-      expect(toolEvents, testCase.label).toHaveLength(2);
       expect(
         toolEvents.map((event) => event.data?.phase),
-        `${testCase.label} lifecycle`,
+        `${testCase.name} lifecycle`,
       ).toEqual(["start", "result"]);
       for (const event of toolEvents) {
-        expect(event.data, testCase.label).not.toHaveProperty("hideFromChannelProgress");
+        expect(event.data, testCase.name).not.toHaveProperty("hideFromChannelProgress");
       }
-      expect(onToolResult.mock.calls.length, `${testCase.label} verbose callback`).toBe(
+      expect(onToolResult.mock.calls.length, `${testCase.name} verbose callback`).toBe(
         resultCount + 1,
       );
       const prepared = onAgentEvent.mock.calls
@@ -198,15 +192,15 @@ describe("Codex channel tool progress", () => {
             event.data.toolCallId === testCase.toolCallId &&
             !event.data.suppressChannelProgress,
         );
+      const itemId = `tool:${testCase.toolCallId}`;
       expect(
-        prepared.map((event) => event.data.phase),
-        testCase.label,
-      ).toEqual(["start", "end"]);
-      expect(
-        prepared.map((event) => event.data.itemId),
-        testCase.label,
-      ).toEqual([`tool:${testCase.toolCallId}`, `tool:${testCase.toolCallId}`]);
-      expect(onToolResult.mock.calls[resultCount]?.[0], testCase.label).toMatchObject({
+        prepared.map(({ data }) => [data.phase, data.itemId]),
+        testCase.name,
+      ).toEqual([
+        ["start", itemId],
+        ["end", itemId],
+      ]);
+      expect(onToolResult.mock.calls[resultCount]?.[0], testCase.name).toMatchObject({
         channelData: { openclawToolProgressId: prepared[0]?.data.itemId },
       });
     }
