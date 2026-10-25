@@ -728,7 +728,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       replyOutcome?.kind === "suppressed" ||
       (replyOutcome?.kind === "skipped" && replyOutcome.reason === "silent")
     ) {
-      params.runtime.log(
+      params.runtime.log?.(
         `feishu[${account.accountId}]: no-visible-reply fallback skipped for ${replyOutcome.reason} (${reason})`,
       );
       return false;
@@ -739,7 +739,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
     });
     visibleReplySent = true;
-    params.runtime.error(
+    params.runtime.error?.(
       `feishu[${account.accountId}]: sent no-visible-reply fallback (${reason})`,
     );
     return true;
