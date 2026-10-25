@@ -298,15 +298,14 @@ describe("codex plugin", () => {
       dangerous: true,
       duplex: true,
     });
-    expect(
-      registerNodeInvokePolicy.mock.calls
-        .map(([policy]) => policy)
-        .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1")),
-    ).toMatchObject({
+    const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
+      .map(([policy]) => policy)
+      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
+    expect(nodeExecServerPolicy).toMatchObject({
       commands: ["codex.exec-server.stdio.v1"],
       dangerous: true,
-      defaultPlatforms: undefined,
     });
+    expect(nodeExecServerPolicy?.defaultPlatforms).toBeUndefined();
   });
 
   it("keeps native declarations across owner, completion, and owner turns", async () => {

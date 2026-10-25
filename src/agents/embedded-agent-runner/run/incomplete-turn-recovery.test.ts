@@ -150,7 +150,7 @@ describe("incomplete-turn recovery policy", () => {
       const assistant = emptyAssistant({
         provider,
         model: provider === "google-vertex" ? "gemini-3.1-flash" : modelId,
-        content: provider === "anthropic" ? [] : textContent(""),
+        content: provider === "anthropic" ? [] : [{ type: "text", text: "" }],
         usage: createZeroUsageFixture(),
       });
       expect(
