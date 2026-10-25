@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
-import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
+import { PRESENCE_REPOSITORY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
@@ -22,23 +21,10 @@ describe("prepared project retention compatibility", () => {
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
     fixture.config.agents = { entries: { main: {} } };
-    fixture.provider.requiresNodeEnrollment = true;
-    fixture.provider.supportsProjectPreparation = () => true;
+    const options = fixture.intentOwnerOptions("gateway");
     const { target, artifacts } = readWorkerPreparation(fixture.profile())!;
     fixture.provider.resolvePreparationTarget = () => target;
-    const project: RepositoryWorkerProjectSnapshot = {
-      key: PROJECT_KEY,
-      baseCommit: "d".repeat(40),
-      source: {
-        kind: "repository",
-        url: "https://github.com/openclaw/prepared-fixture.git",
-        repositoryId: "R_prepared_fixture",
-        owner: {
-          agent: { agentId: "main", provenance: null },
-          identity: { source: "anonymous" },
-        },
-      },
-    };
+    const project = structuredClone(PRESENCE_REPOSITORY);
     const profileSnapshot = { settings: {}, install: "bundle", executionMode: "worker-turn" };
     const preparation = createWorkerPreparationIdentity({
       namespace: "gateway",
@@ -62,13 +48,9 @@ describe("prepared project retention compatibility", () => {
     const prepareNodeArtifacts = vi.fn(async () => ({ artifacts, assertCurrent() {} }));
     const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
-      store: fixture.store,
-      getConfig: () => fixture.config,
-      projectNamespace: "gateway",
+      ...options,
       providerFor,
       prepareNodeArtifacts,
-      isStopping: () => false,
-      withLock: async (_id, run) => await run(),
       resumeProvision: async (environment) => environment,
     });
     return {
