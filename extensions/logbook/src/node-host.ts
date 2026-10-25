@@ -1,5 +1,5 @@
 // Logbook node-host command: screen capture for headless node hosts (macOS).
-// Nodes without the OpenClaw app (plain `openclaw node host run`) advertise
+// Nodes without the OpenClaw app (plain `openclaw node run`) advertise
 // logbook.snapshot so capture works anywhere the plugin is enabled.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
