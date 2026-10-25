@@ -3182,8 +3182,316 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.exec-approval-actions .btn {
+/* Command approvals keep the command and its decisions together; plugin cards
+   retain their severity-led presentation. */
+.exec-approval-card--command {
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--card);
+  border-color: var(--border);
+
+  .exec-approval-modal-content {
+    gap: 10px;
+  }
+
+  .exec-approval-header {
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .exec-approval-heading {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .exec-approval-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    font-weight: 400;
+    line-height: 22px;
+    overflow-wrap: anywhere;
+  }
+
+  .exec-approval-header-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+    gap: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .exec-approval-countdown {
+    margin: 0;
+    font-size: 12px;
+    line-height: 22px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .exec-approval-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    line-height: 19px;
+  }
+
+  .exec-approval-notes:empty {
+    display: none;
+  }
+
+  .exec-approval-warning,
+  .exec-approval-error,
+  .exec-approval-scope {
+    margin: 0;
+    font-size: inherit;
+    line-height: inherit;
+    overflow-wrap: anywhere;
+  }
+
+  .exec-approval-error {
+    font-size: var(--control-ui-text-xs);
+  }
+
+  .exec-approval-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    min-width: 0;
+  }
+
+  .exec-approval-actions {
+    max-width: 100%;
+    margin-top: 0;
+    margin-left: auto;
+  }
+}
+
+.exec-approval-sentence {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.exec-approval-identity {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  gap: 6px;
+  vertical-align: baseline;
+}
+
+.exec-approval-identity .exec-approval-agent {
+  align-self: center;
+}
+
+.exec-approval-request {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: 6px;
+  color: color-mix(in srgb, var(--text) 90%, transparent);
+
+  svg {
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.exec-approval-sentence .exec-approval-request {
+  display: inline;
+}
+
+.exec-approval-agent-name,
+.exec-approval-automation-name {
+  font-weight: 500;
+}
+
+.exec-approval-fallback-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  corner-shape: superellipse(1.5);
+  color: var(--muted);
+}
+
+.exec-approval-shortcut {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+}
+
+.exec-approval-card .exec-approval-shortcut > span:not(:first-child) {
+  margin-inline-start: 0;
+}
+
+.exec-approval-agent {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.exec-approval-source {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.exec-approval-terminal,
+.exec-approval-mobile-summary,
+.exec-approval-fallback-icon,
+.exec-approval-status-label {
+  background: color-mix(in srgb, var(--text) 6%, var(--card));
+}
+
+.exec-approval-terminal,
+.exec-approval-mobile-summary {
+  border-radius: var(--radius-md);
+}
+
+.exec-approval-terminal {
+  position: relative;
+  min-width: 0;
+  padding: 10px 48px 10px 12px;
+}
+
+.exec-approval-shell {
+  max-height: min(40dvh, 320px);
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.exec-approval-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+  margin-bottom: 2px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: none;
+}
+
+.exec-approval-host {
+  font-family: var(--font-body);
+}
+
+.exec-approval-command-line {
+  display: grid;
+  grid-template-columns: 1ch minmax(0, 1fr);
   gap: 8px;
+
+  .exec-approval-command {
+    margin: 0;
+    padding: 0;
+    max-height: none;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-size: inherit;
+    line-height: inherit;
+  }
+}
+
+.exec-approval-sigil {
+  color: var(--muted);
+  user-select: none;
+}
+
+.exec-approval-info {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.exec-approval-details.oc-popover {
+  /* A viewport budget lets native positioning flip instead of shrinking above the trigger. */
+  max-height: min(420px, calc(100dvh - 16px));
+  width: 380px;
+  max-width: calc(100dvw - 32px);
+  --oc-popover-padding: 12px;
+  font-size: var(--control-ui-text-sm);
+
+  .exec-approval-meta {
+    margin: 0;
+    font-size: inherit;
+  }
+
+  .exec-approval-meta-row {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .exec-approval-meta-row span:last-child {
+    text-align: start;
+  }
+}
+
+.exec-approval-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
+.exec-approval-status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.exec-approval-info--error::after,
+.exec-approval-mobile-summary--error::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+}
+
+.exec-approval-mobile-summary--error {
+  position: relative;
+}
+
+.exec-approval-actions .btn.exec-approval-action--pending {
+  position: relative;
+  opacity: 1;
+}
+
+.exec-approval-action--pending > :not(.exec-approval-spinner) {
+  visibility: hidden;
+}
+
+.exec-approval-spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
 }
 
 /* Opted in by the mobile composer. Width alone must not restyle desktop cards. */
@@ -3200,23 +3508,10 @@ td.data-table-key-col {
   font-family: var(--font-body);
 }
 
-.exec-approval-card--mobile .exec-approval-header {
-  gap: 8px;
-}
-
-.exec-approval-card--mobile .exec-approval-title {
-  font-weight: 500;
-}
-
-.exec-approval-card--mobile .exec-approval-countdown {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 .exec-approval-mobile-disclosure {
   min-width: 0;
   flex-shrink: 0;
-  margin-top: 12px;
+  margin-top: 0;
   overflow: hidden;
 }
 
@@ -3225,8 +3520,6 @@ td.data-table-key-col {
   align-items: flex-start;
   gap: 8px;
   padding: 10px;
-  border-radius: 10px;
-  background: var(--bg-hover);
   cursor: var(--cursor-action);
   list-style: none;
 }
@@ -3281,405 +3574,13 @@ td.data-table-key-col {
   display: contents;
 }
 
-.exec-approval-mobile-metadata .exec-approval-meta {
-  font-weight: 500;
-}
-
-.exec-approval-mobile-metadata .exec-approval-meta-row span:last-child {
-  font-weight: 400;
-}
-
-.exec-approval-mobile-host .exec-approval-meta-row span:last-child {
-  font-family: var(--font-body);
-  font-weight: 500;
-}
-
 .exec-approval-card--mobile .exec-approval-actions:not(openclaw-modal-actions) {
   flex-direction: row;
   flex-wrap: nowrap;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
 }
 
 .exec-approval-card--mobile .exec-approval-actions .btn {
   width: auto;
-  min-width: 0;
-  min-height: 36px;
-  padding: 6px 12px;
-  border-radius: var(--radius-full);
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-}
-
-.exec-approval-card--mobile .exec-approval-mobile-action--allow-always {
-  margin-right: auto;
-  border: 1px solid var(--chat-composer-hairline, var(--border));
-  background: transparent;
-  color: var(--text);
-}
-
-.exec-approval-card--mobile .exec-approval-mobile-action--deny {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text);
-}
-
-/* Command approvals keep the command and its decisions together; plugin cards
-   retain their severity-led presentation. */
-.exec-approval-card--command {
-  gap: 10px;
-  padding: 14px 16px;
-  background: var(--card);
-  border-color: color-mix(in srgb, var(--text) 12%, var(--card));
-
-  .exec-approval-modal-content {
-    gap: 10px;
-  }
-
-  .exec-approval-header {
-    align-items: baseline;
-    gap: 10px;
-  }
-
-  .exec-approval-heading {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .exec-approval-title {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 16px;
-    font-weight: 400;
-    line-height: 22px;
-    overflow-wrap: anywhere;
-  }
-
-  .exec-approval-header-status {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    flex-shrink: 0;
-    gap: 2px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .exec-approval-countdown {
-    margin: 0;
-    font-size: 12px;
-    line-height: 22px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .exec-approval-mobile-disclosure {
-    margin-top: 0;
-  }
-
-  .exec-approval-notes {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 13px;
-    line-height: 19px;
-  }
-
-  .exec-approval-notes:empty {
-    display: none;
-  }
-
-  .exec-approval-warning,
-  .exec-approval-error,
-  .exec-approval-scope {
-    margin: 0;
-    font-size: inherit;
-    line-height: inherit;
-    overflow-wrap: anywhere;
-  }
-
-  .exec-approval-scope {
-    color: var(--muted);
-  }
-
-  .exec-approval-footer {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    min-width: 0;
-  }
-
-  .exec-approval-actions {
-    max-width: 100%;
-    margin-top: 0;
-    margin-left: auto;
-  }
-
-  .exec-approval-actions .btn {
-    position: relative;
-    min-height: 32px;
-    padding: 5px 12px;
-    border-radius: var(--radius-md);
-    font-size: 13px;
-  }
-
-  .exec-approval-actions .btn.danger {
-    background: transparent;
-    border-color: transparent;
-    color: var(--muted);
-  }
-
-  .exec-approval-actions .btn.danger:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-}
-
-.exec-approval-sentence {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.exec-approval-identity {
-  display: inline-flex;
-  align-items: baseline;
-  max-width: 100%;
-  gap: 6px;
-  vertical-align: baseline;
-}
-
-.exec-approval-identity .exec-approval-agent {
-  align-self: center;
-}
-
-.exec-approval-request {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-  max-width: 100%;
-  gap: 6px;
-  color: color-mix(in srgb, var(--text) 90%, transparent);
-
-  svg {
-    flex: 0 0 14px;
-    width: 14px;
-    height: 14px;
-  }
-}
-
-.exec-approval-sentence .exec-approval-request {
-  display: inline;
-}
-
-.exec-approval-agent-name {
-  font-weight: 500;
-}
-
-.exec-approval-fallback-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
-  background: var(--bg-hover);
-  color: var(--muted);
-}
-
-.exec-approval-shortcut {
-  padding: 0 2px;
-  border-radius: 3px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 11px;
-  letter-spacing: -0.04em;
-  opacity: 0.85;
-}
-
-.exec-approval-card .exec-approval-shortcut > span:not(:first-child) {
-  margin-inline-start: 0;
-}
-
-.exec-approval-agent {
-  display: grid;
-  place-items: center;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-full);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.exec-approval-source {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-
-.exec-approval-terminal {
-  position: relative;
-  min-width: 0;
-  padding: 10px 40px 10px 12px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--text) 6%, var(--card));
-}
-
-.exec-approval-shell {
-  max-height: min(40dvh, 320px);
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 21px;
-}
-
-.exec-approval-prompt {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 10px;
-  margin-bottom: 2px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  user-select: none;
-}
-
-.exec-approval-host {
-  color: var(--text);
-  font-family: var(--font-body);
-  font-weight: 400;
-}
-
-.exec-approval-meta .exec-approval-host {
-  font-family: var(--mono);
-}
-
-.exec-approval-cwd {
-  color: var(--muted);
-}
-
-.exec-approval-command-line {
-  display: grid;
-  grid-template-columns: 1ch minmax(0, 1fr);
-  gap: 8px;
-
-  .exec-approval-command {
-    margin: 0;
-    padding: 0;
-    max-height: none;
-    overflow: visible;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    font-size: inherit;
-    line-height: inherit;
-  }
-}
-
-.exec-approval-sigil {
-  color: var(--muted);
-  user-select: none;
-}
-
-.exec-approval-info {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-
-  svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  &:hover,
-  &[aria-expanded="true"] {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-}
-
-.exec-approval-details.oc-popover {
-  /* A viewport budget lets native positioning flip instead of shrinking above the trigger. */
-  max-height: min(420px, calc(100dvh - 16px));
-  width: 380px;
-  max-width: calc(100dvw - 32px);
-  padding: 12px;
-  font-size: 12px;
-
-  .exec-approval-meta {
-    margin: 0;
-    font-size: inherit;
-  }
-
-  .exec-approval-meta-row {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-  }
-
-  .exec-approval-meta-row span:last-child {
-    text-align: start;
-  }
-}
-
-.exec-approval-status {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 19px;
-}
-
-.exec-approval-status-label {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.exec-approval-info--error::after,
-.exec-approval-mobile-summary--error::after {
-  content: "";
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 4px;
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: var(--danger);
-}
-
-.exec-approval-mobile-summary--error {
-  position: relative;
-}
-
-.exec-approval-actions .btn.exec-approval-action--pending {
-  opacity: 1;
-}
-
-.exec-approval-action--pending > :not(.exec-approval-spinner) {
-  visibility: hidden;
-}
-
-.exec-approval-spinner {
-  position: absolute;
-  inset: 0;
-  margin: auto;
 }
 
 .exec-approval-list {
@@ -3735,7 +3636,6 @@ td.data-table-key-col {
   grid-row: 1;
   width: 20px;
   height: 20px;
-  flex-basis: 20px;
   font-size: 10px;
 }
 

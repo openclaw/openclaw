@@ -51,11 +51,6 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
-const MOBILE_DECISION_ORDER = [
-  "allow-always",
-  "deny",
-  "allow-once",
-] as const satisfies readonly ExecApprovalDecision[];
 const MODAL_DECISION_ORDER = [
   "deny",
   "allow-always",
@@ -345,11 +340,8 @@ function ExecApprovalCardContent(
   const decisions = createMemo(() => {
     const eligible = resolveApprovalDecisions(active());
     // Right-aligned footers keep the primary decision at the trailing edge.
-    const order = mobile()
-      ? MOBILE_DECISION_ORDER
-      : props.variant === "modal" || active().kind === "exec"
-        ? MODAL_DECISION_ORDER
-        : undefined;
+    const order =
+      props.variant === "modal" || active().kind === "exec" ? MODAL_DECISION_ORDER : undefined;
     return order ? order.filter((item) => eligible.includes(item)) : eligible;
   });
   const reviewOnlyMessage = () => t("execApproval.reviewOnly");
@@ -396,7 +388,13 @@ function ExecApprovalCardContent(
                     <span class="exec-approval-fallback-icon" aria-hidden="true">
                       <Icon name="terminal" />
                     </span>
-                    <span>{approvalTitle(active())}</span>
+                    <span
+                      class={{
+                        "exec-approval-automation-name": Boolean(active().request.streamProposal),
+                      }}
+                    >
+                      {approvalTitle(active())}
+                    </span>
                   </span>
                 }
               >
@@ -412,10 +410,18 @@ function ExecApprovalCardContent(
                             </span>
                           ) : undefined}
                           <span class="exec-approval-request">
-                            {part.replaceAll(
-                              "{name}",
-                              () => active().request.streamProposal?.name ?? "",
-                            )}
+                            <For each={part.split("{name}")}>
+                              {(segment, nameIndex) => (
+                                <>
+                                  {nameIndex() > 0 ? (
+                                    <span class="exec-approval-automation-name">
+                                      {active().request.streamProposal?.name}
+                                    </span>
+                                  ) : undefined}
+                                  {segment}
+                                </>
+                              )}
+                            </For>
                           </span>
                         </>
                       )}
@@ -541,9 +547,11 @@ function ExecApprovalCardContent(
         return (
           <button
             class={[
-              mobile() && decision === "deny" ? "btn" : decisionClass(decision),
+              active().kind === "exec" && decision === "deny"
+                ? "btn btn--ghost"
+                : decisionClass(decision),
               {
-                [`exec-approval-mobile-action--${decision}`]: mobile(),
+                "btn--sm": active().kind === "exec",
                 "exec-approval-action--pending": pending(),
               },
             ]}
@@ -562,7 +570,7 @@ function ExecApprovalCardContent(
             <Show when={active().kind === "exec" && decision === "allow-once" && shortcuts()}>
               <KeyboardShortcut
                 combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter}
-                class="exec-approval-shortcut"
+                class="shortcut-hint__keys exec-approval-shortcut"
                 ariaHidden={true}
               />
             </Show>
@@ -622,15 +630,18 @@ function ExecApprovalCardContent(
               </button>
             </Show>
             <Show when={!props.connected}>
-              <div class="exec-approval-status" role="status">
+              <div class="exec-approval-status muted" role="status">
                 {t("execApproval.offline")}
               </div>
             </Show>
             <Show
               when={!props.connected || props.canGrant}
               fallback={
-                <div class="exec-approval-status" role="status">
-                  <span class="exec-approval-status-label">{t("execApproval.viewOnly")}</span>
+                <div class="exec-approval-status muted" role="status">
+                  <span class="chip exec-approval-status-label">
+                    <Icon name="lock" />
+                    {t("execApproval.viewOnly")}
+                  </span>
                   <span>{reviewOnlyMessage()}</span>
                 </div>
               }
