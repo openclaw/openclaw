@@ -132,40 +132,35 @@ it.each([
   const direct = scope === "dm" || scope === "scoped-direct";
   const owner = { ownerAllowFrom: [`telegram:${from.id}`] };
   const allowFrom = [grant === "denied" || grant === "restricted" ? "99999" : String(from.id)];
-  const commands =
-    grant === "owner"
-      ? owner
-      : {
-          ...(grant === "restricted" ? owner : {}),
-          allowFrom: { telegram: allowFrom },
-        };
-  const senderScope =
-    scope === "disabled-topic"
-      ? { topics: { "99": { enabled: false } } }
-      : scope === "topic-included" || scope === "topic-excluded"
-        ? {
-            topics: {
-              "99": { allowFrom: [scope === "topic-included" ? String(from.id) : "99999"] },
-            },
-          }
-        : { allowFrom: ["99999"] };
-  const telegram: TelegramConfig = direct
-    ? {
-        dmPolicy: "pairing",
-        ...(scope === "scoped-direct" ? { direct: { [String(chat.id)]: senderScope } } : {}),
-      }
-    : {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["99999"],
-        groups:
-          scope === "group"
-            ? { "*": { requireMention: false } }
-            : { [String(groupChat.id)]: { requireMention: false, ...senderScope } },
-      };
-  const bot = await configuredBot(
-    { ...telegram, streaming: { mode: "off" } },
-    { commands: { native: true, ...commands } },
-  );
+  const commands: NonNullable<OpenClawConfig["commands"]> = { native: true };
+  if (grant !== "owner") {
+    commands.allowFrom = { telegram: allowFrom };
+  }
+  if (grant === "owner" || grant === "restricted") {
+    Object.assign(commands, owner);
+  }
+  const scopedGroup: NonNullable<TelegramConfig["groups"]>[string] = { requireMention: false };
+  if (scope === "disabled-topic") {
+    scopedGroup.topics = { "99": { enabled: false } };
+  } else if (scope === "topic-included" || scope === "topic-excluded") {
+    scopedGroup.topics = {
+      "99": { allowFrom: [scope === "topic-included" ? String(from.id) : "99999"] },
+    };
+  } else if (scope !== "group") {
+    scopedGroup.allowFrom = ["99999"];
+  }
+  const telegram: TelegramConfig = { streaming: { mode: "off" } };
+  if (direct) {
+    telegram.dmPolicy = "pairing";
+    if (scope === "scoped-direct") {
+      telegram.direct = { [String(chat.id)]: { allowFrom: ["99999"] } };
+    }
+  } else {
+    telegram.groupPolicy = "allowlist";
+    telegram.groupAllowFrom = ["99999"];
+    telegram.groups = { [scope === "group" ? "*" : String(groupChat.id)]: scopedGroup };
+  }
+  const bot = await configuredBot(telegram, { commands });
   await handleMessage(bot, 1010, direct ? commandMessage(command) : groupCommand(command));
   const pairing = [
     "sendMessage",
