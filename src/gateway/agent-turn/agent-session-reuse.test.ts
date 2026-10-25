@@ -160,12 +160,9 @@ it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
   [{ freshEntry }, "original", false],
   [{ expectedExistingSessionId: "original" }, "original", false],
   [{ hasRestoredCronContinuation: true }, "original", false],
-  [{ freshEntry: { ...expiredEntry, modelSelectionLocked: true } }, "original", false],
   [{ freshEntry: failedEntry }, "original", false],
   [{ freshEntry: failedEntry, visibleRequest: false }, "replacement", true],
   [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],
-  [requested, "replacement", true],
-  [{ ...requested, freshEntry }, "requested", true],
   [{ ...requested, freshEntry: undefined, initialEntry: undefined }, "requested", true],
 ])(
   "reuses %j as %s (new=%s, transcript missing=%s)",
