@@ -141,6 +141,61 @@ describe("elevenlabs speech provider", () => {
     expect(sentRequest().body).toHaveProperty("model_id", "eleven_flash_v2_5");
   });
 
+  it("forwards ordered pronunciation dictionary locators without rewriting the input", async () => {
+    const text = "Please pronounce OpenClaw and ElevenLabs.";
+    await provider.synthesize({
+      ...request,
+      text,
+      providerConfig: {
+        apiKey: "xi-test",
+        pronunciationDictionaryLocators: [
+          { pronunciationDictionaryId: " dict-first ", versionId: " version-a " },
+          { pronunciationDictionaryId: "dict-second", versionId: "version-b" },
+        ],
+      },
+    });
+
+    expect(sentRequest().body).toHaveProperty("text", text);
+    expect(sentRequest().body).toHaveProperty("pronunciation_dictionary_locators", [
+      { pronunciation_dictionary_id: "dict-first", version_id: "version-a" },
+      { pronunciation_dictionary_id: "dict-second", version_id: "version-b" },
+    ]);
+  });
+
+  it("omits pronunciation dictionary locators when absent or cleared with an empty list", async () => {
+    await provider.synthesize({ ...request, providerConfig: { apiKey: "xi-test" } });
+    expect(sentRequest().body).not.toHaveProperty("pronunciation_dictionary_locators");
+
+    fetchMock.mockReset().mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
+    await provider.synthesize({
+      ...request,
+      providerConfig: { apiKey: "xi-test", pronunciationDictionaryLocators: [] },
+    });
+    expect(sentRequest().body).not.toHaveProperty("pronunciation_dictionary_locators");
+  });
+
+  it("rejects malformed or oversized pronunciation dictionary locators before requests", async () => {
+    const invalidValues: unknown[] = [
+      "not-an-array",
+      [{ pronunciationDictionaryId: " ", versionId: "version-a" }],
+      [{ pronunciationDictionaryId: "dict", versionId: 7 }],
+      Array.from({ length: 4 }, (_, index) => ({
+        pronunciationDictionaryId: `dict-${index}`,
+        versionId: `version-${index}`,
+      })),
+    ];
+
+    for (const pronunciationDictionaryLocators of invalidValues) {
+      await expect(
+        provider.synthesize({
+          ...request,
+          providerConfig: { apiKey: "xi-test", pronunciationDictionaryLocators },
+        }),
+      ).rejects.toThrow(/pronunciationDictionaryLocators/);
+    }
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("validates ElevenLabs voice ID length and character rules", () => {
     const cases = [
       { value: "a1b2c3d4e5", expected: true },
@@ -226,5 +281,40 @@ describe("elevenlabs speech provider", () => {
     await release();
     await release();
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("forwards pronunciation dictionary locators through streaming synthesis", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+          },
+        }),
+        { headers: { "content-type": "audio/mpeg" } },
+      ),
+    );
+    const result = expectDefined(
+      await provider.streamSynthesize?.({
+        ...request,
+        text: "Stream this unchanged.",
+        providerConfig: {
+          apiKey: "xi-test",
+          pronunciationDictionaryLocators: [
+            { pronunciationDictionaryId: "dict-stream", versionId: "version-stream" },
+          ],
+        },
+      }),
+      "streamSynthesize result",
+    );
+    expect(sentRequest().url.pathname).toMatch(/\/stream$/);
+    expect(sentRequest().body).toHaveProperty("text", "Stream this unchanged.");
+    expect(sentRequest().body).toHaveProperty("pronunciation_dictionary_locators", [
+      { pronunciation_dictionary_id: "dict-stream", version_id: "version-stream" },
+    ]);
+    if (!result.release) {
+      throw new Error("stream release is unavailable");
+    }
+    await result.release();
   });
 });
