@@ -257,6 +257,11 @@ IDs come from `openclaw.plugin.json`, which can differ from the source directory
 name. The selected plugins must already be present in `dist/extensions`; run
 `pnpm build` first.
 
+Selected plugins follow the normal discovery entry contract. A plugin without
+`package.json` or an `openclaw.extensions` declaration uses its default index
+entry. Invalid or empty declarations still fail, and runtime and setup entries
+must be present in the compiled image.
+
 An omitted plugin must have an npm or ClawHub installation route in the existing
 official external catalogs. Unpublished core plugins must remain embedded; the
 error names the plugin to add. The repository's source-only dev/QA plugin class
