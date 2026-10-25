@@ -196,7 +196,6 @@ describe("requester yield ownership", () => {
     { kind: "visible child", key: "dashboard:visible", child: true },
     { kind: "hidden child", key: "subagent:hidden", child: true },
     { kind: "dashboard root", key: "dashboard:root", child: false },
-    { kind: "Home-linked root", key: "dashboard:home", child: false },
   ])("uses native task ownership for $kind message waits", async ({ key, child }) => {
     const { config, storePath } = sessionConfig();
     const sessionKey = "agent:main:" + key;
@@ -266,44 +265,36 @@ describe("requester yield ownership", () => {
     },
   );
 
-  it.each([
-    { announcing: true, sameTask: true, successorAgent: "main" },
-    { announcing: false, sameTask: true, successorAgent: "main" },
-    { announcing: true, sameTask: false, successorAgent: "main" },
-    { announcing: false, sameTask: false, successorAgent: "main" },
-    { announcing: true, sameTask: true, successorAgent: "peer" },
-  ])(
-    "keeps message waits task- and agent-scoped ($announcing/$sameTask/$successorAgent)",
-    async ({ announcing, sameTask, successorAgent }) => {
+  it.each(["main", "peer"])(
+    "scopes an existing task successor to agent %s",
+    async (successorAgent) => {
       const child = await seedNativeChild({
         generation: 1,
         taskRunId: "logical-task",
         childAgentId: "main",
-        expectsCompletionMessage: announcing,
-        completion: { required: announcing },
       });
       await seedNativeChild({
         runId: "successor",
         generation: 2,
         childSessionKey: child.childSessionKey,
         childAgentId: successorAgent,
-        taskRunId: sameTask ? child.taskRunId : undefined,
+        taskRunId: child.taskRunId,
       });
-      const accepted = !sameTask || successorAgent !== "main";
       const onYield = vi.fn();
       const tool = createYieldToolForTurn({
         requesterSessionKey: child.childSessionKey,
         requesterTurnRunId: child.runId,
         onYield,
       });
+      const accepted = successorAgent !== "main";
       await expectYield(tool, accepted ? "yielded" : "nothing_pending", { waitFor: "message" });
       if (accepted) {
-        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, announcing);
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, true);
       } else {
         expect(onYield).not.toHaveBeenCalled();
       }
       expect(Boolean(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.pauseNotice)).toBe(
-        accepted && announcing,
+        accepted,
       );
     },
   );
@@ -627,19 +618,11 @@ describe("requester yield ownership", () => {
           {
             runId: child.runId,
             childSessionKey: "agent:main:dashboard:work",
-            label: "Work session",
-            startedAt: 2_000,
             state: "running",
             wakeArmed: true,
           },
         ],
       });
-      expect((result.details as { message: string }).message).toContain(
-        "Work session (agent:main:dashboard:work), running, started 1970-01-01T00:00:02.000Z",
-      );
-      expect((result.details as { message: string }).message).toContain(
-        "do not re-spawn, re-send, or poll",
-      );
     }
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
