@@ -81,24 +81,17 @@ async function createFixture() {
   return { root, command, presetPath, modelPath, provider, prepare, embed };
 }
 
-it.each(["missing host", "duplicate preset", "different port", "direct model"])(
-  "leaves routers untouched for a configuration with %s",
-  async (kind) => {
-    const { prepare, presetPath, modelPath, provider } = await createFixture();
-    const args = provider.localService.args;
-    if (kind === "missing host") {
-      args.splice(0, 2);
-    } else if (kind === "duplicate preset") {
-      args.push("--models-preset", `${presetPath}.other`);
-    } else if (kind === "different port") {
-      args[3] = "19433";
-    } else {
-      args.splice(4, 2, "--model", modelPath);
-    }
-    await prepare();
-    expect(mocks.reap).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  ["missing host", (args: string[]) => args.splice(0, 2)],
+  ["duplicate preset", (args: string[]) => args.push("--models-preset", "other.ini")],
+  ["different port", (args: string[]) => args.splice(3, 1, "19433")],
+  ["direct model", (args: string[]) => args.splice(4, 2, "--model", "chat.gguf")],
+] as const)("leaves routers untouched for a configuration with %s", async (_kind, changeArgs) => {
+  const { prepare, provider } = await createFixture();
+  changeArgs(provider.localService.args);
+  await prepare();
+  expect(mocks.reap).not.toHaveBeenCalled();
+});
 
 it.each(["absolute", "relative", "equals"])("recovers %s before transport", async (kind) => {
   const { root, command, presetPath, provider, embed } = await createFixture();
