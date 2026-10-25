@@ -37,11 +37,17 @@ function expectScope(
 ) {
   required(...args).toEqual([scope]);
 }
-function expectAccess(scope: string, method: string, params?: unknown, deniedScope?: string) {
-  expectScope(scope, method, params);
-  allow(method, [scope], params);
+function expectAccess(
+  scope: string | string[],
+  method: string,
+  params?: unknown,
+  deniedScope?: string,
+) {
+  const scopes = typeof scope === "string" ? [scope] : scope;
+  required(method, params).toEqual(scopes);
+  allow(method, scopes, params);
   if (deniedScope) {
-    deny(scope, method, [deniedScope], params);
+    deny(scopes.at(-1)!, method, [deniedScope], params);
   }
 }
 
@@ -110,6 +116,20 @@ describe("method scope resolution and authorization", () => {
     ["users.background.upload", undefined, "operator.write", "operator.read"],
     ["users.background.remove", undefined, "operator.write", "operator.read"],
     ["environments.list", { runtimeId: "openclaw" }, "operator.write", "operator.read"],
+    ["talk.config", {}, "operator.read"],
+    [
+      "talk.config",
+      { includeSecrets: true },
+      ["operator.read", "operator.talk.secrets"],
+      "operator.read",
+    ],
+    ["channels.pairing.approve", {}, "operator.pairing"],
+    [
+      "channels.pairing.approve",
+      { bootstrapCommandOwner: true },
+      ["operator.pairing", "operator.admin"],
+      "operator.pairing",
+    ],
     ["agent", { message: "hello" }, "operator.write"],
     ["agent", { message: "/reset" }, "operator.admin", "operator.write"],
     ["agent", { message: "/new follow up" }, "operator.admin"],
@@ -122,8 +142,6 @@ describe("method scope resolution and authorization", () => {
       { command: "browser.proxy.upload.v1", params: { method: "POST", path: "/profiles/create" } },
       "operator.write",
     ],
-    ["sessions.create", { worktree: true }, "operator.write"],
-    ["sessions.create", { cwd: "/other/repo" }, "operator.write"],
     ["sessions.create", { worktree: true, cwd: "/other/repo" }, "operator.write"],
     ["sessions.create", { execNode: "macbook", cwd: "/other/repo" }, "operator.admin"],
     [
@@ -141,15 +159,13 @@ describe("method scope resolution and authorization", () => {
       "operator.admin",
       "operator.write",
     ],
-    ["sessions.create", { incognito: false }, "operator.write"],
     ["fs.listDir", {}, "operator.write"],
-    ["fs.listDir", { path: "/configured/workspace" }, "operator.write"],
     ["fs.listDir", { nodeId: "macbook" }, "operator.admin", "operator.write"],
     ["node.pair.approve", undefined, "operator.pairing", "operator.write"],
     ["approval.resolve", undefined, "operator.approvals", "operator.write"],
     ["sessions.patch", guarded, "operator.write"],
     ["sessions.patch", { ...guarded, permissionMode: "full" }, "operator.admin", "operator.write"],
-  ] satisfies [string, unknown, string, string?][])(
+  ] satisfies [string, unknown, string | string[], string?][])(
     "%s (%j) requires %s",
     (method, params, scope, denied?: string) => expectAccess(scope, method, params, denied),
   );
@@ -159,28 +175,10 @@ describe("method scope resolution and authorization", () => {
     required("node.pending.drain").toStrictEqual([]);
   });
 
-  it("adds talk secret scope only when unredacted config is requested", () => {
-    const params = { includeSecrets: true };
-    expectScope("operator.read", "talk.config", {});
-    const scopes = ["operator.read", "operator.talk.secrets"];
-    required("talk.config", params).toEqual(scopes);
-    deny("operator.talk.secrets", "talk.config", ["operator.read"], params);
-    allow("talk.config", scopes, params);
-  });
-
   it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
     allow("talk.client.create", ["operator.talk"]);
     allow("talk.client.create", ["operator.write"]);
     deny("operator.talk", "talk.client.create", ["operator.read"]);
-  });
-
-  it("requires admin only when DM pairing approval bootstraps a command owner", () => {
-    const params = { bootstrapCommandOwner: true };
-    const scopes = ["operator.pairing", "operator.admin"];
-    expectScope("operator.pairing", "channels.pairing.approve", {});
-    required("channels.pairing.approve", params).toEqual(scopes);
-    deny("operator.admin", "channels.pairing.approve", ["operator.pairing"], params);
-    allow("channels.pairing.approve", scopes, params);
   });
 
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {

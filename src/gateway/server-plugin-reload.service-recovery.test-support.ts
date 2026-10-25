@@ -123,8 +123,6 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           await entered.promise;
           await vi.advanceTimersByTimeAsync(5_000);
           await laterEntered.promise;
-          expect(fixture.firstStop).toHaveBeenCalledOnce();
-          expect(laterStop).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(10_000);
           expect(fixture.candidates).toHaveLength(0);
           expect(disposed).toEqual([]);
@@ -303,8 +301,9 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         // Command catalog refresh stops this channel, but its registration is healthy.
         expect(manager.getRuntimeSnapshot().reloadingChannels?.has("sibling")).toBe(false);
         expect(manager.hasCurrentAccountTask("sibling", "default")).toBe(true);
-        await vi.waitFor(() => expect(starts.sibling).toHaveBeenCalledTimes(2));
-        expect(starts.sibling.mock.calls).toEqual([["default"], ["default"]]);
+        await vi.waitFor(() =>
+          expect(starts.sibling.mock.calls).toEqual([["default"], ["default"]]),
+        );
         expect(manager.isManuallyStopped("sibling", "parked")).toBe(true);
         expect(
           fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling"),

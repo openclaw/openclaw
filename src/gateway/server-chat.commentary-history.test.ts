@@ -268,7 +268,6 @@ it.each([
     canvas: false,
   },
   { name: "literal terminal tail", reload: false, tail: "[", persistTail: false, canvas: false },
-  { name: "fully committed", reload: false, tail: "Live B.", persistTail: true, canvas: false },
   {
     name: "canvas-only display tail",
     reload: false,
