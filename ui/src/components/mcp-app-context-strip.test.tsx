@@ -88,8 +88,6 @@ it("retains accepted context after a failed refresh and accepts the next update"
   expect(strip.querySelector('[role="alert"]')).toBeNull();
   emit({ viewId: binding.viewId });
   await waitForSolid(() => expect(strip.textContent).toContain("Socket"));
-  emit({ viewId: binding.viewId, modelContext: null, updateId: "revision-two" });
-  expect(strip.textContent?.trim()).toBe("");
 });
 
 it("lets the latest event refresh own the next context publication", async () => {

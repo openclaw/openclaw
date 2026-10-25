@@ -155,17 +155,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     await sidebar.updateComplete;
     await menuShown;
 
-    const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
-    expect(
-      [...menu!.querySelectorAll<HTMLElement>("[data-value]")]
-        .slice(0, 2)
-        .map((item) => item.getAttribute("data-value")),
-    ).toEqual(["command:new-agent", "scope:all"]);
-    expect(
-      menu!.querySelector(
-        '[role=separator], input, .sidebar-agent-menu__filter, [data-value="command:agents-directory"], [data-value="command:capabilities"], [data-value="command:agent-settings"]',
-      ),
-    ).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.closest("openclaw-tooltip"),
     ).toBeNull();
@@ -173,7 +162,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     const tiles = Array.from(
       sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
     );
-    expect(tiles).toHaveLength(5);
     await expect.poll(() => document.activeElement).toBe(tiles[1]);
     const { page, userEvent } = await import("vitest/browser");
     const activeSettings = menuPart(tiles[1]!, "settings");

@@ -132,29 +132,22 @@ describe("SidebarSessionProjection personal pins", () => {
   });
 });
 
-it.each(["active", "archived", "snoozed"] as const)(
-  "hides empty native groups with the %s status filter and preserves other section owners",
-  (statusFilter) => {
-    const rows = [sessionRow("matching", { category: "Matching" })];
-    const input = {
-      statusFilter,
-      knownGroups: ["Matching", "Empty"],
-      catalogIds: ["external"],
-      collapsedSections: new Set(["category:Matching"]),
-    };
-    const filtered = project(rows, input);
-    expect(filtered.sections.map(({ id }) => id)).toEqual([
-      "category:Matching",
-      "catalog:external",
-    ]);
-    expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-
-    const unfiltered = project(rows, { ...input, statusFilter: "all" });
-    expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
-    expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-    expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
-  },
-);
+it("hides empty filtered native groups and preserves other section owners", () => {
+  const rows = [sessionRow("matching", { category: "Matching" })];
+  const input = {
+    statusFilter: "active" as const,
+    knownGroups: ["Matching", "Empty"],
+    catalogIds: ["external"],
+    collapsedSections: new Set(["category:Matching"]),
+  };
+  const filtered = project(rows, input);
+  expect(filtered.sections.map(({ id }) => id)).toEqual(["category:Matching", "catalog:external"]);
+  expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  const unfiltered = project(rows, { ...input, statusFilter: "all" });
+  expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
+  expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
+});
 
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };

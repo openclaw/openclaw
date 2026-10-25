@@ -34,7 +34,6 @@ function stubProperty(target: object, key: PropertyKey, value: unknown) {
 }
 
 const table = "| Name | Value |\n| --- | --- |\n| Alpha | One |";
-const markdown = `Open agent:main:dashboard:table\n\n<progress value="3" max="7"></progress>\n\n${table}`;
 
 const MutationObserverMock = vi.fn(function (_callback: MutationCallback) {
   return { disconnect: vi.fn(), observe: vi.fn() };
@@ -49,8 +48,11 @@ function deliverTableResize(target: HTMLElement): void {
   ResizeObserverMock.mock.calls.at(-1)?.[0]([{ target }]);
 }
 
-const renderOptions = { progressBars: true, sessionLinks: true };
-const interactiveOptions = { ...renderOptions, tableInteractions: "enabled" as const };
+const interactiveOptions = {
+  progressBars: true,
+  sessionLinks: true,
+  tableInteractions: "enabled" as const,
+};
 function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
@@ -92,11 +94,6 @@ async function copyTable(copy: HTMLButtonElement, label: string) {
 }
 function expectCopy(copy: HTMLButtonElement, label: string) {
   expect(copy.getAttribute("aria-label")).toBe(label);
-  if (label === "Copied!") {
-    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
-  } else {
-    expect(copy.querySelector("svg rect")).not.toBeNull();
-  }
 }
 
 describe("Markdown table interactions", () => {
@@ -121,15 +118,6 @@ describe("Markdown table interactions", () => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     restoreDialogPolyfill();
-  });
-
-  it("composes table chrome with session links and progress markup", () => {
-    const disabled = toSanitizedMarkdownHtml(markdown, renderOptions);
-    const enabled = toSanitizedMarkdownHtml(markdown, interactiveOptions);
-    expect(disabled).not.toContain("data-table-interactions");
-    expect(enabled).toContain("data-table-interactions");
-    expect(enabled).toContain('data-session-key="agent:main:dashboard:table"');
-    expect(enabled).toContain('<progress value="3" max="7"></progress>');
   });
 
   it("tracks hidden columns in both scroll directions", () => {

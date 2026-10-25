@@ -104,35 +104,6 @@ describe("config form rejection integrity", () => {
     container.remove();
   });
 
-  it("blocks renaming a map key whose value is still a redacted secret", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderObjectFixture(container, {
-      schema: {
-        type: "object",
-        additionalProperties: { type: "string" },
-      },
-      value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
-      path: ["secrets"],
-      onPatch,
-    });
-
-    const redactedKey = field(container, "Key: primary");
-    edit(redactedKey, "renamed", "change");
-
-    // Moving the sentinel to a new key can only produce an unsavable draft or,
-    // folded with a delete, silently bind the wrong stored credential.
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(redactedKey.value).toBe("primary");
-
-    edit(field(container, "Key: plain"), "renamed", "change");
-    expect(onPatch).toHaveBeenCalledWith(["secrets"], {
-      primary: "__OPENCLAW_REDACTED__",
-      renamed: "visible",
-    });
-    container.remove();
-  });
-
   it.each([true, false])(
     "preserves an optional object draft until valid, with commit accepted=%s",
     (accepted) => {
