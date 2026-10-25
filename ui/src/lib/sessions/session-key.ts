@@ -394,16 +394,25 @@ export function canArchiveSessionRow(
   return Boolean(row.sessionId?.trim() && !isProtectedSessionLifecycleKey(row, configuredMainKey));
 }
 
-/** Preserve Delete's prior all-idle-or-all-archived batch policy independently of Archive. */
+/**
+ * Preserve Delete's prior all-idle-or-all-archived batch policy independently of Archive.
+ * A model-selection-locked session also disqualifies either branch: the Gateway's delete
+ * owner rejects it before the archive-state check (`sessions-delete.ts`), so offering the
+ * action would only surface a confirmation the request can never satisfy.
+ */
 export function canDeleteSessionRows(
   rows: ReadonlyArray<{
     key: string;
     kind?: string;
     hasActiveRun?: boolean;
     archived?: boolean;
+    modelSelectionLocked?: boolean;
   }>,
   configuredMainKey: string,
 ): boolean {
+  if (rows.some((row) => row.modelSelectionLocked === true)) {
+    return false;
+  }
   return (
     rows.every((row) => row.archived === true) ||
     rows.every(

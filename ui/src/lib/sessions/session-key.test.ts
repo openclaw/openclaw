@@ -63,6 +63,25 @@ it.each([
   expect(canDeleteSessionRows(rows, "home")).toBe(deleteAllowed);
 });
 
+// The Gateway's delete owner refuses model-selection-locked sessions, so the UI must
+// not offer a Delete confirmation that can never succeed (adopted Codex harness rows).
+it.each([
+  ["idle unlocked", { key: "agent:main:work", modelSelectionLocked: false }, true],
+  ["idle locked", { key: "agent:main:work", modelSelectionLocked: true }, false],
+  [
+    "locked adopted harness row",
+    { key: "agent:main:harness:codex:supervision:abc", modelSelectionLocked: true },
+    false,
+  ],
+  [
+    "locked but archived",
+    { key: "agent:main:work", modelSelectionLocked: true, archived: true },
+    false,
+  ],
+] as const)("does not offer Delete for a %s row", (_name, row, deleteAllowed) => {
+  expect(canDeleteSessionRows([row], "home")).toBe(deleteAllowed);
+});
+
 it.each([
   ["agent:m:telegram:u:1:x", { agentId: "m", channel: "telegram", accountId: "u:1:x" }],
   ["Agent:main:telegram:user", null],
