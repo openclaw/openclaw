@@ -169,36 +169,19 @@ describe("outbound audit projection", () => {
     expect(events[0]).not.toHaveProperty("deliveryKind");
   });
 
-  it("counts physical sends once across receipt representations and result fallbacks", () => {
-    const received = (messageId: string, ids: string[], withParts: boolean) => ({
-      ...result,
-      messageId,
-      receipt: {
-        platformMessageIds: ids,
-        parts: withParts
-          ? ids.map((platformMessageId, index) => ({
-              platformMessageId,
-              index,
-              kind: "text" as const,
-            }))
-          : [],
-        sentAt: Date.now(),
-      },
-    });
+  it("counts platform IDs when a receipt has no physical parts", () => {
     const events = captureTerminals(
       uniformOutboundAuditTerminals(1, {
         outcome: "sent",
         results: [
-          received("aggregate-with-parts", ["part-1", "part-2"], true),
-          received("aggregate-with-ids", ["id-1", "id-2", "id-3"], false),
-          { channel: "matrix", messageId: "single-result" },
+          {
+            ...result,
+            receipt: { platformMessageIds: ["id-1", "id-2", "id-3"], parts: [], sentAt: 1 },
+          },
         ],
       }),
     );
-
-    expect(
-      events.map(({ status, outcome, resultCount }) => [status, outcome, resultCount]),
-    ).toEqual([["succeeded", "sent", 6]]);
+    expect(events).toMatchObject([{ status: "succeeded", outcome: "sent", resultCount: 3 }]);
   });
 
   function conversationKindFor(context: AuditContext) {

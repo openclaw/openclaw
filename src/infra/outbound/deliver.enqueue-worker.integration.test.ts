@@ -68,6 +68,14 @@ describe("enqueue publication custody through the real sender", () => {
     pending.push(outcome);
     return outcome;
   }
+  function watchEnqueued() {
+    const enqueued = vi.fn();
+    outboundDeliveryNotifications.onEnqueued = enqueued;
+    unsubscribe.push(() => {
+      outboundDeliveryNotifications.onEnqueued = () => {};
+    });
+    return enqueued;
+  }
   beforeEach(() => {
     stateDir = outbound.tmpDir();
   });
@@ -182,11 +190,7 @@ describe("enqueue publication custody through the real sender", () => {
   it("retains prepared media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
     const mediaUrl = await source();
     const send = installSender();
-    const enqueued = vi.fn();
-    outboundDeliveryNotifications.onEnqueued = enqueued;
-    unsubscribe.push(() => {
-      outboundDeliveryNotifications.onEnqueued = () => {};
-    });
+    const enqueued = watchEnqueued();
     const terminals = audit(true);
     const reply = heldReply();
     const delivery = deliverStructured({
@@ -222,11 +226,7 @@ describe("enqueue publication custody through the real sender", () => {
 
   it("releases media staging after native rollback and permits best-effort live sending", async () => {
     const mediaUrl = await source();
-    const enqueued = vi.fn();
-    outboundDeliveryNotifications.onEnqueued = enqueued;
-    unsubscribe.push(() => {
-      outboundDeliveryNotifications.onEnqueued = () => {};
-    });
+    const enqueued = watchEnqueued();
     rollback.enable();
     const send = installSender();
     const queued = vi.fn();

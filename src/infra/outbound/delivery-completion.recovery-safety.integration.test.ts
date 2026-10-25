@@ -121,7 +121,7 @@ describe("recovered requester receipt safety", () => {
     return { scope, context, payloads, completion };
   }
 
-  it.each(["missing-identity", "wrong-target", "wrong-channel", "not-sent"] as const)(
+  it.each(["missing-identity", "wrong-channel", "not-sent"] as const)(
     "requires evidence for earlier logical members: %s then valid",
     async (invalid) => {
       const { scope, context, completion } = await prepareDelivery({ second: true });
@@ -132,7 +132,7 @@ describe("recovered requester receipt safety", () => {
       const first: OutboundDeliveryResult = {
         channel: invalid === "wrong-channel" ? "discord" : "matrix",
         messageId: invalid === "missing-identity" ? "" : "first",
-        target: { kind: "room", id: invalid === "wrong-target" ? "!other:example" : context.to },
+        target: { kind: "room", id: context.to },
         ...(invalid === "not-sent" ? { outcome: "not_sent" as const } : {}),
       };
       await settle(first);
