@@ -315,7 +315,7 @@ export async function startWatcher(
     state,
     context,
     authenticator,
-    dispatchHookAgentTurn,
+    dispatch: dispatchHookAgentTurn,
     waitForCursor,
     startup,
     connectionFailure,
