@@ -42,7 +42,10 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
-import { createOperatorRecoveryFixture } from "../operator-run-recovery.test-support.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+} from "../operator-run-recovery.test-support.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import {
@@ -226,6 +229,7 @@ it.for([
     }
     const native = source === "recovered native operator";
     const isRecovered = source === "recovered operator" || native;
+    const device = pairedOperator();
     const recovery = await createOperatorRecoveryFixture({
       stateDir,
       context: fixture.context,
@@ -238,22 +242,7 @@ it.for([
         : undefined,
       localOperator: native,
       gatewayAccessGrant: revocation === "access grant revocation" ? accessGrant : undefined,
-      device: {
-        deviceId: "recovery-proof-device",
-        publicKey: "synthetic-recovery-proof-key",
-        roles: ["operator"],
-        approvedScopes: ["operator.admin"],
-        tokens: {
-          operator: {
-            token: "synthetic-recovery-proof-token",
-            role: "operator",
-            scopes: ["operator.admin"],
-            createdAtMs: 1,
-          },
-        },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      },
+      device,
     });
     const restored = isRecovered ? await recovery.restore() : undefined;
     const client =
@@ -315,7 +304,7 @@ it.for([
             async () => {
               if (revocation === "device token rotation") {
                 const respond = vi.fn();
-                const params = { deviceId: "recovery-proof-device", role: "operator" };
+                const params = { deviceId: device.deviceId, role: "operator" };
                 await expectDefined(
                   deviceHandlers["device.token.rotate"],
                   "rotation",

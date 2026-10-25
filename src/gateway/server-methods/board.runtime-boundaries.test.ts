@@ -54,7 +54,7 @@ const sessionTarget = { sessionKey: "session", agentId: "main" };
 const htmlWidget = (name: string, tools?: string[]) => ({
   sessionKey: "session",
   name,
-  content: { kind: "html", html: name },
+  content: { kind: "html" as const, html: name },
   declared: { tools },
 });
 const widgets = async (store: ReturnType<typeof createHarness>["store"]) =>
@@ -106,14 +106,20 @@ async function grantTools(tools: string[], harness = createHarness()) {
   return { ...harness, ticket: (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket };
 }
 
-function sessionBoard(sessionKey: string, sessionId: string, permissionMode?: "guarded") {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
+function sessionBoard(
+  sessionKey: string,
+  sessionId: string,
+  permissionMode?: "guarded",
+  env?: NodeJS.ProcessEnv,
+) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath: database.path },
     { sessionId, updatedAt: 1, ...(permissionMode ? { permissionMode } : {}) },
   );
   const store = new SqliteBoardStore({
     resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+    env,
   });
   return { database, store };
 }
@@ -193,19 +199,17 @@ describe("board gateway runtime boundaries", () => {
   });
 
   it("registers every contract method with its required scope", () => {
-    const scopes = {
-      "board.get": "operator.read",
-      "board.update": "operator.write",
-      "board.widget.put": "operator.write",
-      "board.widget.grant": "operator.approvals",
-      "board.widget.appView": "operator.read",
-      "board.event": "operator.write",
-      "board.prompt.authorize": "operator.read",
-      "board.data.read": "operator.read",
-      "board.action": "operator.write",
-    };
-    for (const [method, scope] of Object.entries(scopes)) {
-      expect(resolveCoreOperatorGatewayMethodScope(method)).toBe(scope);
+    for (const [scope, methods] of [
+      [
+        "operator.read",
+        ["board.get", "board.widget.appView", "board.prompt.authorize", "board.data.read"],
+      ],
+      ["operator.write", ["board.update", "board.widget.put", "board.event", "board.action"]],
+      ["operator.approvals", ["board.widget.grant"]],
+    ] as const) {
+      for (const method of methods) {
+        expect(resolveCoreOperatorGatewayMethodScope(method)).toBe(scope);
+      }
     }
   });
 
@@ -294,6 +298,10 @@ describe("board gateway runtime boundaries", () => {
       logGateway: { warn: vi.fn() },
     } as unknown as GatewayRequestContext;
     gatewayContext.resolveGatewayContext = () => gatewayContext;
+    const connection = {
+      connId: "board-authority-proof",
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    };
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
       let gatewayClient: GatewayWsClient | null = null;
@@ -303,11 +311,8 @@ describe("board gateway runtime boundaries", () => {
         if (request.method === "connect") {
           gatewayClient = {
             socket: gatewayTestTextTransport(socket),
-            connect: {
-              role: "operator",
-              scopes: ["operator.admin"],
-            } as GatewayWsClient["connect"],
-            connId: "board-authority-proof",
+            connect: connection.auth as GatewayWsClient["connect"],
+            connId: connection.connId,
             usesSharedGatewayAuth: false,
           };
           gatewayClients.add(gatewayClient);
@@ -315,9 +320,8 @@ describe("board gateway runtime boundaries", () => {
             socket,
             request.id,
             buildMinimalGatewayHelloOkPayload({
-              connId: "board-authority-proof",
+              ...connection,
               methods: ["board.widget.put"],
-              auth: { role: "operator", scopes: ["operator.admin"] },
             }),
           );
           return;
@@ -404,9 +408,7 @@ describe("board gateway runtime boundaries", () => {
       () =>
         runWithGatewayRootWorkAdmissionForTest(() =>
           harness.invoke("board.widget.put", {
-            sessionKey: "session",
-            name: "approval",
-            content: { kind: "html", html: "approval" },
+            ...htmlWidget("approval"),
             declared: { netOrigins: ["https://example.com"] },
           }),
         ),
@@ -468,17 +470,11 @@ describe("board gateway runtime boundaries", () => {
     expect(unicodeNotice.length).toBeLessThanOrEqual(500);
     expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
     expect(unicodeNotice).toMatch(/… on widget counter$/u);
-    await invoke("board.event", {
-      sessionKey,
-      widget: "counter",
-      payload: "x".repeat(1_000),
-    });
+    const event = (text: string) =>
+      invoke("board.event", { sessionKey, widget: "counter", payload: text });
+    await event("x".repeat(1_000));
     expect(peekSystemEvents(`agent:main:${sessionKey}`)[1]).toHaveLength(500);
-    const oversized = await invoke("board.event", {
-      sessionKey,
-      widget: "counter",
-      payload: "x".repeat(8_193),
-    });
+    const oversized = await event("x".repeat(8_193));
     expect(oversized.mock.calls[0]?.[0]).toBe(false);
   });
 
@@ -486,20 +482,8 @@ describe("board gateway runtime boundaries", () => {
     const sessionKey = "agent:main:board-reset-proof";
     const stateDir = tempDirs.make("openclaw-board-reset-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath: database.path },
-      { sessionId: "board-reset-proof", updatedAt: Date.now() },
-    );
-    const boardStore = new SqliteBoardStore({
-      resolveSession: () => ({ agentId: "main", sessionKey }),
-      env,
-    });
-    await boardStore.putWidget({
-      sessionKey,
-      name: "status",
-      content: { kind: "html", html: "ok" },
-    });
+    const { store: boardStore } = sessionBoard(sessionKey, "board-reset-proof", undefined, env);
+    await boardStore.putWidget({ ...htmlWidget("status"), sessionKey });
     const respond = vi.fn<RespondFn>();
     await sessionMutationHandlers["sessions.reset"]!({
       req: { type: "req", id: "reset", method: "sessions.reset", params: {} },
