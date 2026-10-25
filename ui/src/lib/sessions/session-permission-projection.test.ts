@@ -198,7 +198,32 @@ describe("permission projection across canonical session lists", () => {
     expect((await researchList)?.sessions[0]).toEqual(research);
   });
 
-  it("retires old permission reads and binds successor events before primary publication", async () => {
+  it("retires permission projections when a canonical list establishes a successor incarnation", async () => {
+    const original = row("agent:main:recreated");
+    const replacement = row(original.key, {
+      sessionId: "replacement-generation",
+      permissionMode: "workspace",
+      updatedAt: 5,
+    });
+    const pending = pendingList(sessionsResult([original], 1));
+    const { sessions, managed, event } = harness([
+      pending.fallback,
+      pending,
+      sessionsResult([replacement], 5),
+      sessionsResult([replacement], 6),
+    ]);
+    await sessions.refresh(primary);
+    const first = pending.track(sessions.list({ agentId: "main" }));
+    event({ ...original, updatedAt: 3, permissionMode: "full" });
+    await sessions.refreshList(scope);
+    event({ ...original, updatedAt: 99, permissionMode: "full" });
+    pending.resolve(pending.fallback);
+    expect((await first)?.sessions).toEqual([]);
+    expect(managed().result?.sessions).toEqual([replacement]);
+    expect((await sessions.list({ agentId: "main" }))?.sessions).toEqual([replacement]);
+  });
+
+  it("binds accepted successor events to their incarnation before primary publication", async () => {
     const original = row("agent:main:successor-events", { sessionId: "old-generation" });
     const successor = row(original.key, { sessionId: "successor-generation", updatedAt: 3 });
     const response = sessionsResult(
@@ -206,25 +231,16 @@ describe("permission projection across canonical session lists", () => {
       4,
     );
     const pending = pendingList(response);
-    const stale = pendingList(sessionsResult([original], 1));
-    const final = { ...successor, updatedAt: 5, permissionMode: "full" as const };
     const { sessions, rows, managed, event } = harness([
-      stale.fallback,
-      stale,
+      sessionsResult([original], 1),
       sessionsResult([successor], 3),
       pending,
-      sessionsResult([final], 6),
     ]);
     await sessions.refresh(primary);
-    const first = stale.track(sessions.list({ agentId: "main" }));
     event({ ...original, updatedAt: 2, permissionMode: "full" });
     await sessions.refreshList(scope);
     expect(rows()?.[0]?.sessionId).toBe(original.sessionId);
     expect(managed().result?.sessions[0]?.sessionId).toBe(successor.sessionId);
-    event({ ...original, updatedAt: 99, permissionMode: "full" });
-    stale.resolve(stale.fallback);
-    expect((await first)?.sessions).toEqual([]);
-    expect(managed().result?.sessions).toEqual([successor]);
     event({ ...successor, updatedAt: 4, permissionMode: "workspace" });
     expect(rows()?.[0]).toMatchObject({
       sessionId: successor.sessionId,
@@ -239,7 +255,6 @@ describe("permission projection across canonical session lists", () => {
     expect(sessions.state.loading).toBe(false);
     event({ ...original, updatedAt: 99, permissionMode: "guarded" });
     expect(rows()?.[0]).toMatchObject(expected);
-    expect((await sessions.list({ agentId: "main" }))?.sessions).toEqual([final]);
   });
 
   it.each([true, false])(

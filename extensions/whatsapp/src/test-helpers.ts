@@ -93,14 +93,16 @@ function resolveChannelContextVisibilityModeMock(params: {
 }
 
 // Match the current facade: session/group policy and dispatch moved to their SDK owners.
-vi.mock("./auto-reply/config.runtime.js", () => ({
+vi.mock("./auto-reply/config.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auto-reply/config.runtime.js")>()),
   getRuntimeConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
   resolveStorePath: resolveStorePathFallback,
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
 }));
 
-vi.mock("./inbound/runtime-api.js", () => ({
+vi.mock("./inbound/runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound/runtime-api.js")>()),
   DisconnectReason: { loggedOut: 401 },
   isJidGroup: (jid: string) => typeof jid === "string" && jid.endsWith("@g.us"),
   normalizeMessageContent: (message: unknown) => message,

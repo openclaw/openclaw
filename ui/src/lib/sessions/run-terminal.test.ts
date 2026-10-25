@@ -280,7 +280,8 @@ describe("terminal metadata ownership", () => {
     const previous = h.result();
     h.updates.mockClear();
     const changed = h.sessions.reconcileRunTerminal(terminal("new-run", status, 900));
-    expect(h.row()).toMatchObject({ ...timing, lastRunId: initial.lastRunId });
+    expect(h.row()).toMatchObject(timing);
+    expect(h.row()?.lastRunId).toBe(initial.lastRunId);
     if (same) {
       expect(h.row()?.abortedLastRun).toBe(initial.abortedLastRun);
       expect(h.row()?.lastRunError).toBe(initial.lastRunError);
@@ -322,9 +323,9 @@ describe("terminal metadata ownership", () => {
         hasActiveRun: false,
         activeRunIds: [],
         ...timing,
-        lastRunId,
         lastRunError: undefined,
       });
+      expect(h.row()?.lastRunId).toBe(lastRunId);
     },
   );
 });

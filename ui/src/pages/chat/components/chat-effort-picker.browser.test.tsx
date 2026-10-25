@@ -17,7 +17,7 @@ import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 let host: HTMLDivElement | undefined;
 let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | undefined;
-const query = <T extends Element = HTMLElement>(selector: string) =>
+const query = <T extends Element = HTMLElement>(selector: string): T =>
   host!.querySelector<T>(selector)!;
 const speed = (value: string) => query<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`);
 const summary = () => query("summary");
