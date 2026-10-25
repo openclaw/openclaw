@@ -877,6 +877,38 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("records failed tool cleanup on ordinary runs without changing the result", async () => {
+    const cleanup = vi.fn(async (_reason: string) => {
+      throw new Error("tool cleanup failed");
+    });
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    setCodexTestToolFactory(params, (options) => {
+      options?.registerRunCleanup?.(cleanup);
+      return [createRuntimeDynamicTool("message")];
+    });
+    const warning = vi.spyOn(embeddedAgentLog, "warn");
+    // No oneShotCliRun: an ordinary (long-lived) run.
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await awaitGateBeforeSettlement(
+      harness.waitForMethod("turn/start"),
+      run,
+      "Codex attempt settled before turn/start",
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("step=codex-dynamic-tool-cleanup error=Codex tool cleanup failed"),
+    );
+  });
+
   it("executes and reports the same materialized SecretRef credential", async () => {
     const { agentDir, params } = createRunFixture();
     const authProfileId = "openai:work";

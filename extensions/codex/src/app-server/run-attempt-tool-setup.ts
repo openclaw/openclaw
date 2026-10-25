@@ -300,7 +300,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         const errors = settled.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (params.oneShotCliRun && errors.length) {
+        // Every rejected cleanup reaches the diagnostic owner, not just
+        // one-shot CLI runs: the step records and logs the failure without
+        // replacing the attempt's result.
+        if (errors.length) {
           throw new AggregateError(errors, "Codex tool cleanup failed");
         }
       });
