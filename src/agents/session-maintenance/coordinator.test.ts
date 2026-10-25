@@ -100,16 +100,25 @@ it.each([false, true])(
         async () => {
           const caller = getGatewayToolCallerIdentity();
           expect(caller?.receiptAuthority?.()).toBe(true);
-          const owner = createTrackedOwner({ preemptible });
-          const work = owner.run(async () => {
-            expect(getGatewayToolCallerIdentity()).toBeUndefined();
-            expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-            await Promise.resolve();
-            owner.assertCurrent();
-            expect(getGatewayToolCallerIdentity()).toBeUndefined();
-            expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-            return "maintenance completed";
-          });
+          const owner = createOwner({ preemptible });
+          const work = owner.track(
+            (async () => {
+              const result = await owner.run(async () => {
+                expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+                await Promise.resolve();
+                owner.assertCurrent();
+                expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+                return "maintenance completed";
+              });
+              await owner.runCleanup(async () => {
+                expect(getGatewayToolCallerIdentity()).toBeUndefined();
+                expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+              });
+              return result;
+            })(),
+          );
           source.abort();
           await expect(work).resolves.toBe("maintenance completed");
           expect(getGatewayToolCallerIdentity()).toBe(caller);
@@ -155,6 +164,44 @@ it("aborts optional work before admitting foreground and waits for its actual cl
     await rejection;
   }
   s.check("optional:start cleanup:start cleanup:finish foreground:admit");
+});
+
+it("allows aborted cleanup to re-enter ownership without reopening publication authority", async () => {
+  const started = createDeferred();
+  const aborted = createDeferred();
+  const cleanupStarted = createDeferred();
+  const finishCleanup = createDeferred();
+  const owner = createOwner({ preemptible: true });
+  owner.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+  const work = owner.track(
+    (async () => {
+      await owner.run(async () => {
+        started.resolve();
+        await aborted.promise;
+      });
+      await owner.runCleanup(async () => {
+        await waitForSessionMaintenance(sessionKey);
+        expect(owner.assertCurrent).toThrow();
+        await expect(owner.run(async () => {})).rejects.toMatchObject({ name: "AbortError" });
+        cleanupStarted.resolve();
+        await finishCleanup.promise;
+      });
+    })(),
+  );
+  await started.promise;
+  let admitted = false;
+  const admission = beginForegroundSessionMaintenance(sessionKey).then((release) => {
+    admitted = true;
+    return release;
+  });
+  try {
+    await cleanupStarted.promise;
+    expect(admitted).toBe(false);
+  } finally {
+    finishCleanup.resolve();
+    (await admission)();
+    await work;
+  }
 });
 
 it("keeps optional work pending until every foreground reservation releases without blocking reads", async () => {

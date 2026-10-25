@@ -191,6 +191,8 @@ export type ContextEngineInfo = {
    *
    * Engines remain compatible by default unless the host explicitly opts into
    * background turn maintenance.
+   * Background maintenance is optional: any foreground turn may cancel it.
+   * Engines must settle their work and cleanup before yielding the session.
    */
   turnMaintenanceMode?: "foreground" | "background";
   /**
@@ -381,8 +383,12 @@ export interface ContextEngine {
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
     /**
-     * Optional caller cancellation for maintenance work that may block.
-     * Engines should reject promptly when this signal aborts.
+     * Caller cancellation for maintenance work that may block. Background
+     * maintenance is canceled when any foreground turn needs the session,
+     * not only voice consults. Host-provided LLM calls inherit this signal;
+     * engines must forward it to other blocking operations and check it before
+     * publication. Stop optional work, release claims/resources, and reject
+     * after actual cleanup; cancellation must not mark unfinished work complete.
      */
     abortSignal?: AbortSignal;
   }): Promise<ContextEngineMaintenanceResult>;

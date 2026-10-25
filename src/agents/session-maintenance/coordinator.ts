@@ -152,6 +152,14 @@ export function createSessionMaintenanceOwner(params: {
       throw createAbortError("Session maintenance owner is closed");
     }
   };
+  // Maintenance owns this session's work, never its launching turn's tool grants.
+  // Nested model reads must not wait on their own maintenance parent.
+  const enter = <T>(execute: () => Promise<T>) =>
+    withoutGatewayToolCallerIdentity(() =>
+      runOutsideOperatorToolGatewayAuthority(() =>
+        state.current.run(new Set([...ancestors, owner]), execute),
+      ),
+    );
   return {
     signal,
     done,
@@ -182,15 +190,15 @@ export function createSessionMaintenanceOwner(params: {
           // Queued controller admission is not a writer that its current turn must drain.
           owner.running = true;
         }
-        // Maintenance owns this session's work, never its launching turn's tool grants.
-        return withoutGatewayToolCallerIdentity(() =>
-          runOutsideOperatorToolGatewayAuthority(() =>
-            // Nested model reads must not wait on their own maintenance parent.
-            state.current.run(new Set([...ancestors, owner]), execute),
-          ),
-        );
+        return enter(execute);
       };
       return typeof work === "function" ? run(work) : work.admit(run);
+    },
+    // Cleanup retains ordering and ownership but must remain enterable after abort.
+    // It grants no write authority: publication still requires assertCurrent().
+    runCleanup: async <T>(run: () => Promise<T>): Promise<T> => {
+      await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
+      return enter(run);
     },
     track: <T>(work: Promise<T>): Promise<T> =>
       work.finally(() => {
