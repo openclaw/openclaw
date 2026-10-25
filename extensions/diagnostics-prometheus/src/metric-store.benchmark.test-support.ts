@@ -117,10 +117,10 @@ function memoryDelta(after: NodeJS.MemoryUsage, before: NodeJS.MemoryUsage) {
   };
 }
 
-async function measure(
+async function measure<T>(
   name: string,
   operations: number,
-  run: () => void | Promise<void>,
+  run: () => T | Promise<T>,
   profiled = true,
 ) {
   await phaseStart(name);
@@ -158,7 +158,7 @@ async function measure(
   const eventLoop = monitorEventLoopDelay({ resolution: 1 });
   eventLoop.enable();
   started = performance.now();
-  await run();
+  const result = await run();
   ended = performance.now();
   const used = process.cpuUsage(cpu);
   eventLoop.disable();
@@ -203,6 +203,7 @@ async function measure(
       p99Eligible: eventLoop.count >= 1000,
     },
   };
+  return result;
 }
 
 type Shape = {
@@ -512,17 +513,8 @@ async function measureHttp(
       ["prometheus.http", renderSamples, false],
       ["prometheus.http-allocation", allocationRenders, true],
     ] as const) {
-      let reply: Reply | undefined;
       const previousServed = served;
-      await measure(
-        name,
-        count,
-        async () => {
-          reply = await request(count);
-        },
-        profiled,
-      );
-      assert(reply);
+      const reply = await measure(name, count, () => request(count), profiled);
       assert.equal(served - previousServed, count);
       results[`${name}.client`] = {
         receivedBytes: reply.totalBytes,
