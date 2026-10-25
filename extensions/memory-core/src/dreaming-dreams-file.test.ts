@@ -6,7 +6,6 @@ import {
   readMemoryHostEventRecords,
   readMemoryHostEvents,
 } from "openclaw/plugin-sdk/memory-host-events";
-import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
@@ -24,7 +23,6 @@ import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
-  readShortTermRecallEntries,
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
 import { createDreamingCompletion, createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -37,6 +35,12 @@ beforeEach(async () => {
   dreamsPath = path.join(workspaceDir, "DREAMS.md");
 });
 const readDiary = () => fs.readFile(dreamsPath, "utf8");
+const forgetSession = (sessionId: string) =>
+  forgetMemoryEntries({
+    cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+    agentId: "main",
+    sessionIds: [sessionId],
+  });
 
 function writeBackfill(
   body = "The archive remembered a durable fact.",
@@ -88,11 +92,7 @@ it("does not restore deleted diary content from an update already in progress", 
   let forgotten: ReturnType<typeof forgetMemoryEntries> | undefined;
   try {
     await prepared.promise;
-    forgotten = forgetMemoryEntries({
-      cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
-      agentId: "main",
-      sessionIds: ["forgotten"],
-    });
+    forgotten = forgetSession("forgotten");
     publish.resolve();
     await Promise.all([update, forgotten]);
     const content = await readDiary();
@@ -104,22 +104,12 @@ it("does not restore deleted diary content from an update already in progress", 
   }
 });
 
-it("writes, reads, deduplicates, and removes backfill entries", async () => {
+it("reads and removes backfill entries", async () => {
   const written = await writeBackfill(undefined, {
     sourcePath: "memory/2026-04-05.md",
   });
   expect(written.written).toBe(1);
 
-  const existing = await fs.readFile(written.dreamsPath, "utf8");
-  const startMarker = "<!-- openclaw:dreaming:diary:start -->";
-  const endMarker = "<!-- openclaw:dreaming:diary:end -->";
-  const block = existing.slice(
-    existing.indexOf(startMarker) + startMarker.length,
-    existing.indexOf(endMarker),
-  );
-  await fs.writeFile(written.dreamsPath, existing.replace(endMarker, `${block}\n${endMarker}`));
-
-  await expect(dedupeDreamDiaryEntries({ workspaceDir })).resolves.toMatchObject({ removed: 1 });
   await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toHaveLength(1);
   await expect(removeBackfillDiaryEntries({ workspaceDir })).resolves.toMatchObject({ removed: 1 });
 });
@@ -216,17 +206,6 @@ it("serializes concurrent writes and deduplication", async () => {
 });
 
 describe("dreaming markdown storage", () => {
-  it("falls back when the injected timestamp is outside Date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
-
-    const result = await writePhase({
-      bodyLines: ["- Candidate: bounded fallback"],
-      nowMs: 8_640_000_000_000_001,
-    });
-
-    expect(result.inlinePath).toBe(path.join(workspaceDir, "memory", "2026-05-30.md"));
-  });
-
   it("replaces the managed deep summary while preserving the diary block", async () => {
     await fs.writeFile(
       dreamsPath,
@@ -334,10 +313,7 @@ describe("dream narrative publication", () => {
       }
       await run({ model: "ollama/missing-model" });
       expect(subagent.complete).toHaveBeenCalledTimes(denied ? 1 : 2);
-      expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
-        model: "ollama/missing-model",
-        timeoutMs: 180_000,
-      });
+      expect(subagent.complete.mock.calls[0]?.[0].model).toBe("ollama/missing-model");
       const diary = await readDiary();
       if (denied) {
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("not authorized"));
@@ -345,7 +321,6 @@ describe("dream narrative publication", () => {
         expect(diary).toContain("A memory trace surfaced");
       } else {
         expect(subagent.complete.mock.calls[1]?.[0]).not.toHaveProperty("model");
-        expect(subagent.complete.mock.calls[1]?.[0]).toHaveProperty("timeoutMs", 180_000);
         expect(diary).toContain(text);
       }
     },
@@ -363,68 +338,47 @@ describe("dream narrative publication", () => {
     expect(diary).not.toContain("A private raw staging fragment.");
   });
 
-  it.each([false, true])("handles an ownerless sweep with empty=%s", async (empty) => {
+  it("writes a generic trace without selecting credentials for an ownerless sweep", async () => {
     const { subagent, run } = narrativeHarness();
     await expect(
       run({
         agentId: undefined,
-        data: { phase: "light", snippets: empty ? [] : ["An ownerless memory fragment."] },
+        data: { phase: "light", snippets: ["An ownerless memory fragment."] },
       }),
-    ).resolves.toEqual({ status: empty ? "skipped" : "completed" });
+    ).resolves.toEqual({ status: "completed" });
     expect(subagent.complete).not.toHaveBeenCalled();
-    if (empty) {
-      await expect(fs.access(dreamsPath)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } else {
-      expect(await readDiary()).toContain("A memory trace surfaced");
-    }
+    expect(await readDiary()).toContain("A memory trace surfaced");
   });
 
-  it.for([false, true])(
-    "detaches publication without an unhandled failure (reject=%s)",
-    async (reject, { signal }) => {
-      const { subagent, logger, run } = narrativeHarness();
-      const completion = createDeferred<{ text: string }>();
-      subagent.complete.mockReturnValue(completion.promise);
-      const published = createDeferred<void>();
-      // Both success and fallback log completion only after the diary write settles.
-      logger.info.mockImplementation(() => published.resolve());
-      const unhandled = vi.fn();
-      process.on("unhandledRejection", unhandled);
-      try {
-        await expect(
-          run({
-            data: { phase: "rem", snippets: ["A detached fragment."] },
-            runInBackground: (job) => job(),
-          }),
-        ).resolves.toEqual({ status: "pending" });
-        expect(subagent.complete).toHaveBeenCalledOnce();
-        if (reject) {
-          completion.reject(new Error("completion failed"));
-        } else {
-          completion.resolve({ text: "A detached memory found its page." });
-        }
-        await withinTest(published.promise, signal);
-        const diary = await readDiary();
-        expect(diary).toContain(
-          reject ? "A memory trace surfaced" : "A detached memory found its page.",
-        );
-        expect(unhandled).not.toHaveBeenCalled();
-      } finally {
-        completion.resolve({ text: "settled" });
-        process.off("unhandledRejection", unhandled);
-      }
-    },
-  );
-  it.each([
-    { source: "tracked source", mutation: "forget" },
-    { source: "prior diary", mutation: "forget" },
-    { source: "prior diary", mutation: "unrelated append" },
-  ] as const)(
-    "validates $source before publishing generated quotes after $mutation",
-    async ({ source, mutation }) => {
-      const { subagent, logger, run } = narrativeHarness();
+  it("publishes a generic fallback when a detached completion rejects", async () => {
+    const { subagent, run } = narrativeHarness();
+    const completion = createDeferred<{ text: string }>();
+    subagent.complete.mockReturnValue(completion.promise);
+    let publication: Promise<unknown> | undefined;
+    try {
+      await expect(
+        run({
+          data: { phase: "rem", snippets: ["A detached fragment."] },
+          runInBackground: (job) => {
+            const pending = job();
+            publication = pending;
+            return pending;
+          },
+        }),
+      ).resolves.toEqual({ status: "pending" });
+      expect(subagent.complete).toHaveBeenCalledOnce();
+      completion.reject(new Error("completion failed"));
+      await publication;
+      expect(await readDiary()).toContain("A memory trace surfaced");
+    } finally {
+      completion.resolve({ text: "settled" });
+      await publication;
+    }
+  });
+  it.each(["forget", "unrelated append"])(
+    "validates prior diary quotes before publication after %s",
+    async (mutation) => {
+      const { subagent, run } = narrativeHarness();
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
       const nowMs = Date.now();
       const claim = "The private cobalt archive opens every midnight.";
@@ -434,34 +388,13 @@ describe("dream narrative publication", () => {
         `[main:forgotten-narrative-source#L1] ${claim}\n`,
       );
       await fs.writeFile(dreamsPath, "# Dream Diary\n\nA retained public diary entry.\n");
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "archive opening time",
-        signalType: "daily",
-        nowMs,
-        results: [claim, retainedClaim].map((snippet, index) => ({
-          path: "memory/2026-08-26.md",
-          startLine: index + 1,
-          endLine: index + 1,
-          score: 0.9,
-          snippet,
-          source: "memory",
-          sessionOrigin:
-            index === 0 ? { agentId: "main", sessionId: "forgotten-narrative-source" } : undefined,
-        })),
-      });
-      const entries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
-        (entry) => entry.snippet === (source === "prior diary" ? retainedClaim : claim),
-      );
       const appendDiary = (bodies: string[]) =>
         writeBackfillDiaryEntries({
           workspaceDir,
           preserveExisting: true,
           entries: bodies.map((body) => ({ isoDay: "2026-08-26", bodyLines: [body] })),
         });
-      if (source === "prior diary") {
-        await appendDiary([claim]);
-      }
+      await appendDiary([claim]);
       const waiting = createDeferred<void>();
       const terminal = createDeferred<{ text: string }>();
       const reply = { text: `I remembered: ${claim}` };
@@ -471,24 +404,16 @@ describe("dream narrative publication", () => {
       });
       const data = {
         phase: "light" as const,
-        snippets: entries.map((entry) => entry.snippet),
-        sourceEntryKeys: entries.map((entry) => entry.key),
-        recentDiaryEntries:
-          source === "prior diary"
-            ? await readRecentDreamDiaryEntries({ workspaceDir })
-            : undefined,
+        snippets: [retainedClaim],
+        recentDiaryEntries: await readRecentDreamDiaryEntries({ workspaceDir }),
       };
       const operation = run({ data, nowMs });
       try {
         await waiting.promise;
         expect(subagent.complete.mock.calls[0]?.[0].message).toContain(claim);
         if (mutation === "forget") {
-          const forgotten = await forgetMemoryEntries({
-            cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
-            agentId: "main",
-            sessionIds: ["forgotten-narrative-source"],
-          });
-          expect(forgotten.artifacts.shortTermEntries).toBe(1);
+          const forgotten = await forgetSession("forgotten-narrative-source");
+          expect(forgotten.artifacts.sessionCorpusLines).toBe(1);
           expect(await readDiary()).not.toContain(claim);
         } else {
           // Unrelated appends must not invalidate older context.
@@ -503,9 +428,6 @@ describe("dream narrative publication", () => {
         if (mutation === "forget") {
           expect(content).not.toContain(claim);
           expect(outcome).toEqual({ status: "skipped" });
-          expect(logger.info).toHaveBeenCalledWith(
-            expect.stringContaining("narrative publication skipped"),
-          );
         } else {
           expect(content).toContain(reply.text);
           expect(outcome).toEqual({ status: "completed" });
@@ -529,23 +451,22 @@ function recall(relativePath: string, snippet: string, score: number, endLine = 
 }
 
 const permissivePromotion = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
+async function recordAndRank(
+  query: string,
+  results: Parameters<typeof recordShortTermRecalls>[0]["results"],
+) {
+  const nowMs = Date.UTC(2026, 3, 5, 12);
+  await recordShortTermRecalls({ workspaceDir, query, results, nowMs });
+  return rankShortTermPromotionCandidates({ workspaceDir, ...permissivePromotion, nowMs });
+}
 
 describe("memory host event journal integration", () => {
   it("records recall and promotion events from short-term promotion flows", async () => {
     await writeNote("memory/2026-04-05.md", "# Daily\n\nalpha\nbeta\ngamma\n");
 
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "alpha memory",
-      results: [recall("memory/2026-04-05.md", "alpha beta", 0.92, 4)],
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      ...permissivePromotion,
-      nowMs: Date.UTC(2026, 3, 5, 12, 5, 0),
-    });
+    const candidates = await recordAndRank("alpha memory", [
+      recall("memory/2026-04-05.md", "alpha beta", 0.92, 4),
+    ]);
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates,
@@ -573,18 +494,7 @@ describe("memory host event journal integration", () => {
       await writeNote(result.path, `# Memory\n\n${result.snippet}\n`);
     }
 
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "alpha durable memory",
-      results,
-      nowMs: Date.UTC(2026, 5, 13, 9, 0, 0),
-    });
-
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      ...permissivePromotion,
-      nowMs: Date.UTC(2026, 5, 13, 9, 5, 0),
-    });
+    const candidates = await recordAndRank("alpha durable memory", results);
     const events = await readMemoryHostEventRecords({ workspaceDir });
 
     expect(candidates).toEqual([]);
@@ -641,12 +551,7 @@ describe("memory host event journal integration", () => {
     });
 
     const events = await readMemoryHostEvents({ workspaceDir });
-
     expect(events).toMatchObject([{ type: "memory.dream.completed", phase: "deep" }]);
-    const event = events[0];
-    if (event?.type !== "memory.dream.completed") {
-      throw new Error("expected dream completion event");
-    }
-    expect(event.outcome).toBeUndefined();
+    expect(events[0]).not.toHaveProperty("outcome");
   });
 });

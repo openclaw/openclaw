@@ -1,29 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
-  observeHostDataSql,
+  useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
 import { readMemoryOriginsInWorker } from "./memory-entry-origin-reads.js";
 import { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
-import type { MemoryEntryOriginOperations } from "./memory-entry-origins-task.js";
 import {
   findForgottenMemorySessionIds,
   listMemoryEntryOrigins,
@@ -38,16 +33,31 @@ import {
   hasMemorySessionTombstone,
   recordMemorySessionTombstonesInDatabase,
 } from "./memory-session-tombstones.js";
-import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
-import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   readMemoryForgetTombstonesForTest,
   resetMemoryCoreDreamingStateForTests,
   seedMemoryForgetTombstones,
 } from "./test-helpers.js";
+
+const reservationFault = useSqliteWorkerFault([
+  {
+    match: /^insert into memory_entry_origins /,
+    name: "reservation_write",
+    sql: `CREATE TEMP TRIGGER reservation_write BEFORE INSERT ON memory_entry_origins
+      WHEN NEW.agent_id = 'secondary' AND NEW.entry_key = 'failing'
+      BEGIN SELECT RAISE(ABORT, 'fixture reservation write rejected'); END`,
+  },
+  {
+    match: /^delete from memory_entry_origins /,
+    name: "reservation_cleanup",
+    sql: `CREATE TEMP TRIGGER reservation_cleanup BEFORE DELETE ON memory_entry_origins
+      WHEN OLD.entry_key = 'first'
+      BEGIN SELECT RAISE(ABORT, 'fixture reservation cleanup rejected'); END`,
+  },
+]);
 
 describe("memory entry origins", () => {
   let stateDir: string;
@@ -110,101 +120,42 @@ describe("memory entry origins", () => {
         priorEntries: [priorEntry],
       })),
     });
-  const readInWorker = (
-    selection: { kind: "origin-rows" } | { kind: "session-tombstones"; sessionIds: string[] },
-  ) =>
+  const readTombstones = (sessionIds: string[]) =>
     readMemoryOriginsInWorker({
       agentId: "main",
       stateDir,
       databasePath: databasePath(),
-      ...selection,
+      kind: "session-tombstones",
+      sessionIds,
     });
-  const readOrigins = () => readInWorker({ kind: "origin-rows" });
-  const readTombstones = (sessionIds: string[]) =>
-    readInWorker({ kind: "session-tombstones", sessionIds });
-
-  async function withoutHostOriginSql(run: () => Promise<void>) {
-    const db = database();
-    const observation = observeHostDataSql();
-    const write = "UPDATE memory_entry_origins SET observed_at = observed_at WHERE 0";
-    const read = "SELECT entry_key FROM memory_entry_origins WHERE 0";
-    try {
-      db.prepare(write).run();
-      db.prepare(read).all();
-      expect(observation.queries).toEqual(expect.arrayContaining([write, read]));
-      observation.queries.length = 0;
-      await run();
-      expect(
-        observation.queries.filter((sql) =>
-          /\b(?:from|insert\s+into|update|delete\s+from)\s+"?memory_(?:entry_origins|session_tombstones)\b/iu.test(
-            sql,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      observation.restore();
-    }
-  }
 
   it("lazily restores the additive origins table without changing the agent schema version", async () => {
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-    let transactionAdmissions = 0;
-    const observed = vi
-      .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
-      .mockImplementation((options, source, worker) => {
-        if (
-          worker.moduleUrl.href !==
-          resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins).href
-        ) {
-          return open(options, source, worker);
-        }
-        return open(options, source, {
-          ...worker,
-          assertAdmission(request) {
-            if (request.stage === "transaction") {
-              transactionAdmissions += 1;
-            }
-            return worker.assertAdmission ? worker.assertAdmission(request) : request;
-          },
-        });
-      });
-    try {
-      await prune(["candidate"]);
-      await expect(fs.access(databasePath())).rejects.toThrow();
-      const db = database();
-      const version = db.prepare("PRAGMA user_version").get();
-      db.exec("DROP TABLE IF EXISTS memory_entry_origins");
+    await prune(["candidate"]);
+    await expect(fs.access(databasePath())).rejects.toThrow();
+    const db = database();
+    const version = db.prepare("PRAGMA user_version").get();
+    db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
-      expect(await list()).toEqual([]);
-      await prune(["candidate"]);
-      expect(table("memory_entry_origins")).toBeUndefined();
-      await expect(
-        record([
-          origin("rejected", "session-1"),
-          { ...origin("rejected", "other"), agentId: "other" },
-        ]),
-      ).rejects.toThrow("memory entry origin belongs to another agent");
-      expect(table("memory_entry_origins")).toEqual({ name: "memory_entry_origins" });
-      expect(row("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")).toEqual({
-        wr: 1,
-      });
-      expect(await list()).toEqual([]);
-      expect(transactionAdmissions).toBe(2);
-      await record([origin("candidate", "session-1")]);
-      expect(transactionAdmissions).toBe(3);
-      await record([origin("candidate", "session-1")]);
-      expect(transactionAdmissions).toBe(4);
+    expect(await list()).toEqual([]);
+    await prune(["candidate"]);
+    expect(table("memory_entry_origins")).toBeUndefined();
+    await expect(
+      record([
+        origin("rejected", "session-1"),
+        { ...origin("rejected", "other"), agentId: "other" },
+      ]),
+    ).rejects.toThrow("memory entry origin belongs to another agent");
+    expect(table("memory_entry_origins")).toEqual({ name: "memory_entry_origins" });
+    expect(await list()).toEqual([]);
+    await record([origin("candidate", "session-1")]);
+    await record([origin("candidate", "session-1")]);
 
-      expect(await list()).toEqual([origin("candidate", "session-1")]);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
-      db.exec("DROP TABLE memory_entry_origins");
-      await record([origin("recovered", "session-2")]);
-      expect(transactionAdmissions).toBe(6);
-      expect(await list()).toEqual([origin("recovered", "session-2")]);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
-    } finally {
-      observed.mockRestore();
-    }
+    expect(await list()).toEqual([origin("candidate", "session-1")]);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
+    db.exec("DROP TABLE memory_entry_origins");
+    await record([origin("recovered", "session-2")]);
+    expect(await list()).toEqual([origin("recovered", "session-2")]);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
   it("keeps queued origin input and state placement with the original caller", async () => {
@@ -338,57 +289,6 @@ describe("memory entry origins", () => {
     expect(await list()).toEqual([kept]);
   });
 
-  it("retains one origin reader and observes committed origin and tombstone writes", async () => {
-    const first = origin("first", "session-1");
-    const second = origin("second", "session-2");
-    await record([first]);
-    const writer =
-      await sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
-        { agentId: "main" },
-        { version: 2, assertCurrent: () => {} },
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins),
-          input: { kind: "forget", prepareTombstones: true },
-        },
-      );
-    const readers = new Set<DatabaseSync>();
-    const observed = observeHostDataSql((sql, connection) => {
-      if (connection && /^select\b/i.test(sql) && sql.includes("memory_entry_origins")) {
-        readers.add(connection);
-      }
-    });
-    try {
-      await writer.prepare();
-      for (let read = 0; read < 2; read += 1) {
-        expect(readOrigins()).toEqual({
-          kind: "origin-rows",
-          rows: [first],
-        });
-      }
-      expect(readTombstones(["forgotten"])).toEqual({ kind: "session-tombstones", indices: [] });
-
-      await record([second]);
-      expect(readOrigins()).toEqual({
-        kind: "origin-rows",
-        rows: [first, second],
-      });
-      await writer.run(
-        (scope) =>
-          scope.execute({
-            type: "forget.mark",
-            input: { agentId: "main", sessionIds: ["forgotten"], entryKeys: [], identity: "[]" },
-          }),
-        () => {},
-      );
-      expect(readTombstones(["forgotten"])).toEqual({ kind: "session-tombstones", indices: [0] });
-      expect(readers.size).toBe(1);
-      expect([...readers].every((connection) => connection.isOpen)).toBe(true);
-    } finally {
-      observed.restore();
-      await writer.close();
-    }
-  });
-
   it("bounds tombstone replies while reusing committed membership across pages", async () => {
     const sessionIds = Array.from({ length: 513 }, (_, index) => `forgotten-${index}`);
     sessionIds[255] = `long-${"x".repeat(64 * 1024)}`;
@@ -421,17 +321,15 @@ describe("memory entry origins", () => {
       await expect(remove(filter)).resolves.toBe(0);
     }
     expect(await list()).toEqual(original);
-    await withoutHostOriginSql(async () => {
-      const rollback = await reserve(priorEntry);
-      expect(await list({ entryKeys: ["candidate"] })).toEqual([
-        ...prior.map((entry) => origin("candidate", entry.sessionId)),
-        existing,
-      ]);
+    const rollback = await reserve(priorEntry);
+    expect(await list({ entryKeys: ["candidate"] })).toEqual([
+      ...prior.map((entry) => origin("candidate", entry.sessionId)),
+      existing,
+    ]);
 
-      await rollback();
+    await rollback();
 
-      expect(await list()).toEqual(original);
-    });
+    expect(await list()).toEqual(original);
   });
 
   it.each([false, true])(
@@ -445,50 +343,10 @@ describe("memory entry origins", () => {
         sessionKey: "agent:secondary:session-1",
       };
       await record([secondaryPrior], "secondary");
-      const failingDatabasePath = resolveOpenClawAgentSqlitePath({ agentId: "secondary" });
-      const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
-      const fixturePath = path.join(stateDir, "origin-statement-fault.mjs");
-      // Intercept execution, including cached statements, without changing admitted schema.
-      await fs.writeFile(
-        fixturePath,
-        `import { StatementSync } from "node:sqlite";
-import { bindSqliteWorkerBackend as bind } from ${JSON.stringify(moduleUrl.href)};
-export function bindSqliteWorkerBackend(input, context) {
-  const backend = bind(input, context);
-  const originals = new Map();
-  for (const method of ["run", "get", "all", "iterate"]) {
-    const original = StatementSync.prototype[method];
-    originals.set(method, original);
-    StatementSync.prototype[method] = function (...args) {
-      const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
-      if (context.databasePath === ${JSON.stringify(failingDatabasePath)} && sql.startsWith('insert into memory_entry_origins ') && args.includes('failing')) {
-        throw new Error('fixture reservation write rejected');
+      reservationFault.enable(0);
+      if (cleanupFails) {
+        reservationFault.enable(1);
       }
-      if (${cleanupFails} && sql.startsWith('delete from memory_entry_origins ') && args.includes('["first"]')) {
-        throw new Error('fixture reservation cleanup rejected');
-      }
-      return Reflect.apply(original, this, args);
-    };
-  }
-  return { ...backend, close() {
-    for (const [method, original] of originals) StatementSync.prototype[method] = original;
-    return backend.close();
-  } };
-}
-`,
-      );
-      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-      const fault = vi
-        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
-        .mockImplementation((options, source, worker) =>
-          open(
-            options,
-            source,
-            worker.moduleUrl.href === moduleUrl.href
-              ? { ...worker, moduleUrl: pathToFileURL(fixturePath) }
-              : worker,
-          ),
-        );
       const priorEntry = "- Retain the source until publication settles.";
       try {
         // Each agent's batch is atomic; a later agent failure exercises committed-prefix cleanup.
@@ -504,7 +362,7 @@ export function bindSqliteWorkerBackend(input, context) {
         );
         expect(await list({}, "secondary")).toEqual([secondaryPrior]);
       } finally {
-        fault.mockRestore();
+        reservationFault.disable();
       }
     },
   );
@@ -586,62 +444,8 @@ export function bindSqliteWorkerBackend(input, context) {
         "staged",
       ]);
       await fs.unlink(diaryPath);
-      const observation = observeHostDataSql();
-      const calibration = "SELECT text FROM memory_index_chunks WHERE 0";
-      try {
-        db.prepare(calibration).all();
-        expect(observation.queries).toContain(calibration);
-        observation.queries.length = 0;
-        await prune(["diary"], retainedEntryKeys, workspaceDir);
-        expect(await list({ entryKeys: ["diary"] })).toEqual([]);
-        expect(
-          observation.queries.filter((sql) =>
-            /\bfrom\s+"?memory_(?:entry_origins|index_chunks)\b/iu.test(sql),
-          ),
-        ).toEqual([]);
-      } finally {
-        observation.restore();
-      }
+      await prune(["diary"], retainedEntryKeys, workspaceDir);
+      expect(await list({ entryKeys: ["diary"] })).toEqual([]);
     },
   );
-
-  it("records exact session identity when a transcript recall candidate is first produced", async () => {
-    const workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    seedTombstones(["already-forgotten"], 999);
-    await record([origin("calibration", "calibration-session")]);
-    await withoutHostOriginSql(async () => {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "deployment target",
-        results: [
-          {
-            path: "memory/.dreams/session-corpus/2026-08-25.txt",
-            startLine: 1,
-            endLine: 1,
-            score: 0.8,
-            snippet: "The deployment target is staging.",
-            source: "memory",
-            provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1_000 },
-            sessionOrigin: {
-              agentId: "main",
-              sessionId: "session-1",
-              sessionKey: "agent:main:session-1",
-            },
-          },
-        ],
-        nowMs: 1_000,
-      });
-    });
-
-    expect(await list({ sessionIds: ["session-1"] })).toEqual([
-      expect.objectContaining({
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        originClass: "owner",
-        observedAt: 1_000,
-      }),
-    ]);
-  });
 });

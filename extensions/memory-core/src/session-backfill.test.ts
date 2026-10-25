@@ -229,7 +229,9 @@ describe("runSessionBackfill", () => {
     ).toMatchObject(
       sources.map((source) => ({
         entryKey: entries[0]?.key,
+        agentId: "main",
         sessionId: source.sessionId,
+        sessionKey: `agent:main:session-backfill:${source.sessionId}`,
         originClass: source.originClass,
         observedAt: Date.parse(`2026-03-01T${source.hour}:00:00.000Z`),
       })),
@@ -249,12 +251,6 @@ describe("runSessionBackfill", () => {
     };
     seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "__dreaming_sessions__:2026-03-01",
-      results: [result],
-      signalType: "daily",
-    });
     await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_session_backfill__:2026-03-01",
