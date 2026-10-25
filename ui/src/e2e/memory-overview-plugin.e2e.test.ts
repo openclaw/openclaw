@@ -1,8 +1,8 @@
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Packaged Memory overview" });
 const pageOptions = {
@@ -12,7 +12,7 @@ const pageOptions = {
 } as const;
 function memoryFixture(config: Record<string, unknown>, hash: string) {
   return {
-    "config.get": configSnapshot(config, hash),
+    "config.get": sourceConfigSnapshot(config, hash),
     "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
     "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
     "doctor.memory.status": {

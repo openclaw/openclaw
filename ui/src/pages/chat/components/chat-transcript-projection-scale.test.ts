@@ -168,7 +168,7 @@ describe("transcript projection", () => {
     },
   );
 
-  it("renders browser previews in their own row outside the work summary", () => {
+  it("renders browser previews in their own row outside the work summary", async () => {
     const props = threadProps(
       "projection-browser-preview",
       "agent:main:dashboard:projection-browser-preview",
@@ -198,6 +198,9 @@ describe("transcript projection", () => {
     });
     const view = drawThread(props);
     view.draw();
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-browser-tab-card")).not.toBeNull(),
+    );
     const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card");
     const previews = card?.closest(".chat-group--turn-block");
     expect(card).not.toBeNull();
@@ -301,7 +304,7 @@ describe("transcript projection", () => {
       );
     view.draw();
     await view.settle();
-    expect(liveLabels()).toEqual(["Latest operation…"]);
+    await waitForSolid(() => expect(liveLabels()).toEqual(["Latest operation…"]));
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,
     );

@@ -181,6 +181,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !isCompactionReplayCheckpoint(recoveryAssistant.providerReplay) &&
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
+    !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =

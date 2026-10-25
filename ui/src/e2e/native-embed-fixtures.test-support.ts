@@ -11,6 +11,7 @@ import type {
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
+import { cronRuns } from "./cron-fixtures.test-support.ts";
 
 // WEB-1 uses the existing device contract; its macOS snapshot remains unchanged.
 export async function installExistingNativeDeviceSettings(page: Page): Promise<void> {
@@ -226,14 +227,7 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
       hasMore: false,
       nextOffset: null,
     }),
-    "cron.runs": {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    },
+    "cron.runs": cronRuns([]),
     "cron.status": {
       enabled: true,
       triggersEnabled: true,

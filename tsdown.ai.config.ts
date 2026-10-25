@@ -43,6 +43,9 @@ const config = {
     "internal/openai-responses-payload-policy":
       "packages/ai/src/internal/openai-responses-payload-policy.ts",
     "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
+    // Keep namespace helpers out of the deferred parser's entry chunk.
+    "internal/reasoning-tag-text-partitioner":
+      "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
@@ -50,6 +53,7 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
+
   copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
   platform: "node",
   target: "node22",

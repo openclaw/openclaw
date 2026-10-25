@@ -11,7 +11,10 @@ import {
   readResponsiveTableGeometry,
 } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
@@ -658,9 +661,7 @@ ${overflowTable}`,
 | \`src/ready.ts:2\` | ${targetKey} |`;
       const context = await suite.newBrowserContext({
         colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...createControlUiE2eContextOptions(),
       });
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);

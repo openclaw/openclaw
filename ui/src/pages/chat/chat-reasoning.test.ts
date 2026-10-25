@@ -483,7 +483,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   expect(worked()).toHaveLength(1);
   worked()[0]!.click();
   show();
-  expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
+  await waitForSolid(() => expect(rawDetails()?.getAttribute("aria-expanded")).toBe("false"));
   await waitForSolid(expectSteps);
   worked()[0]!.click();
   show();

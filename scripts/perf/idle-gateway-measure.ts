@@ -1,7 +1,7 @@
-// One real connected client, no application traffic after connect.
+// One real connected client; optional config reloads precede the idle window.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -40,6 +40,7 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     minutes: { type: "string", default: "10" },
     "settle-seconds": { type: "string", default: "60" },
+    "config-reloads": { type: "string", default: "0" },
     "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
@@ -76,6 +77,9 @@ const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
+const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
+const needsDevice = values.subscribe || configReloads > 0;
+const traceGc = configReloads === 0;
 const port = integer(values.port, "--port", 40000);
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
 if (port > 65535) {
@@ -116,7 +120,7 @@ writeFileSync(
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
           allowUsers: ["idle-measure"],
-          ...(values.subscribe
+          ...(needsDevice
             ? { deviceAutoApprove: { enabled: true, scopes: ["operator.read"] } }
             : {}),
         },
@@ -145,7 +149,7 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
 });
 const args = [
   ...gatewayBenchCpuProfileArgs(values["cpu-profile-dir"]),
-  "--trace-gc-nvp",
+  ...(traceGc ? ["--trace-gc-nvp"] : []),
   "--import",
   path.resolve("scripts/tsx.mjs"),
   "--import",
@@ -262,7 +266,7 @@ try {
   };
   const scopes = ["operator.read"];
   let device;
-  if (values.subscribe) {
+  if (needsDevice) {
     const { nonce, ts } = await Promise.race([
       challenge.promise,
       wait(12_000).then(() => {
@@ -314,6 +318,42 @@ try {
   }
   sqlPhase("settle");
   await wait(settleSeconds * 1000);
+  const reloads: Array<{ requests: number; elapsedMs: number }> = [];
+  for (let index = 0; index < configReloads; index++) {
+    sqlPhase(`reload-${index + 1}`);
+    const nextConfig: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    const level = nextConfig.logging?.level === "debug" ? "info" : "debug";
+    nextConfig.logging = { ...nextConfig.logging, level };
+    const started = performance.now();
+    const pendingPath = `${configPath}.pending`;
+    writeFileSync(pendingPath, JSON.stringify(nextConfig));
+    renameSync(pendingPath, configPath);
+    let requests = 0;
+    for (;;) {
+      const response = await client.request("config.get", {});
+      requests++;
+      const snapshot = response.payload;
+      if (!response.ok || !isRecord(snapshot)) {
+        throw new Error("Config reload observation failed");
+      }
+      if (
+        isRecord(snapshot.config) &&
+        isRecord(snapshot.config.logging) &&
+        snapshot.config.logging.level === level &&
+        typeof snapshot.configRevisionHash === "string" &&
+        snapshot.appliedConfigHash === snapshot.configRevisionHash
+      ) {
+        break;
+      }
+      if (performance.now() - started > 30_000) {
+        throw new Error("Config reload did not publish its applied revision");
+      }
+      await wait(100);
+    }
+    reloads.push({ requests, elapsedMs: performance.now() - started });
+    sqlPhase(`reload-settle-${index + 1}`);
+    await wait(1000);
+  }
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before Gateway readiness and settling completed");
@@ -371,13 +411,14 @@ try {
   if (!diagnostics || diagnostics.collectionErrors > 0) {
     throw new Error("Idle measurement has incomplete diagnostic accounting");
   }
-  const promotion = values.profile
-    ? undefined
-    : readGatewayGcTrace(
-        logPath,
-        values.allocations ? heapProfilePath : diagnosticsId,
-        values.allocations ? "heap" : "diagnostics",
-      );
+  const promotion =
+    values.profile || !traceGc
+      ? undefined
+      : readGatewayGcTrace(
+          logPath,
+          values.allocations ? heapProfilePath : diagnosticsId,
+          values.allocations ? "heap" : "diagnostics",
+        );
   writeFileSync(
     path.join(output, "result.json"),
     JSON.stringify(
@@ -389,6 +430,7 @@ try {
         fixture,
         minutes,
         settleSeconds,
+        reloads,
         subscribe: values.subscribe,
         channels: values.channels,
         sqlOutput,

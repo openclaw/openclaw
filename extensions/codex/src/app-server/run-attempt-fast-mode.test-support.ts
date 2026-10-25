@@ -11,6 +11,16 @@ import {
 import type { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { createCodexTestOAuthProfile } from "./test-support.js";
 
+function fastModeModel(supported: boolean, id = "catalog-alias") {
+  return {
+    ...createModelFixture(id),
+    model: "gpt-5.4-codex",
+    displayName: "Test model",
+    description: "Test model",
+    serviceTiers: supported ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }] : [],
+  };
+}
+
 type FastModeFixtures = {
   createRunPaths: () => { sessionFile: string; workspaceDir: string };
   writeExistingBinding: (
@@ -210,17 +220,7 @@ export function registerCodexFastModeTests({
         }
         if (method === "model/list") {
           return {
-            data: [
-              {
-                ...createModelFixture("catalog-alias"),
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                serviceTiers: supported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(supported)],
             nextCursor: null,
           };
         }
@@ -301,17 +301,7 @@ export function registerCodexFastModeTests({
       const harness = createResumeHarness("thread-existing", async (method) => {
         if (method === "model/list") {
           return {
-            data: [
-              {
-                ...createModelFixture("catalog-alias"),
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                serviceTiers: catalogSupported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(catalogSupported)],
           };
         }
         return undefined;
@@ -356,14 +346,7 @@ export function registerCodexFastModeTests({
     const harness = createResumeHarness("thread-existing", async (method) =>
       method === "model/list"
         ? {
-            data: [
-              {
-                ...createModelFixture("gpt-5.4-codex"),
-                displayName: "Test model",
-                description: "Test model",
-                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
-              },
-            ],
+            data: [fastModeModel(true, "gpt-5.4-codex")],
             nextCursor: null,
           }
         : undefined,

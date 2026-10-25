@@ -435,3 +435,21 @@ missed. The largest source-attributed native getter is `scrollHeight` from
 `ui/src/components/scroll-state-observer.ts:19` (107–199 ms sampled self time).
 The Online attempt returned to Sessions after reload and is excluded from these
 numbers; the fixture E2E opens Online explicitly to verify all 120 people.
+
+### Initial completed and active transcript
+
+Use `scripts/bench-control-ui-rich-boot.ts` to isolate first-screen transcript
+content from the larger inventory workload. It serves production bundles through
+the Gateway HTTP owner with synthetic RPC, starts with one completed tool run and
+one active answer, and records the first visible composer, completed answer, and
+active answer. It interleaves base, an identical base control, and head with cold
+HTTP caches, renderer thread CPU, host load, screenshots, and resource timing.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-rich-boot.ts \
+  --bundle-dir /path/to/base --compare-bundle-dir /path/to/head \
+  --pairs 20 --network-latency-ms 100 --output .artifacts/rich-boot-rtt
+```
+
+Omit network latency for localhost; a positive latency also applies 10 Mbps
+throughput. These results cover browser rendering, not provider latency.

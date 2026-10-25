@@ -8,6 +8,7 @@ import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-suppo
 import type { UsageProps } from "./types.ts";
 import { texts } from "./view-render.test-support.ts";
 import {
+  usageMessages,
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
@@ -462,14 +463,7 @@ describe("renderUsage", () => {
             usage: {
               ...visibleUsage,
               dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-              messageCounts: {
-                total: 2,
-                user: 1,
-                assistant: 1,
-                toolCalls: 0,
-                toolResults: 0,
-                errors: 0,
-              },
+              messageCounts: usageMessages(),
             },
           },
         ],

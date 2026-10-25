@@ -26,6 +26,7 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import * as sessionMessageRewrite from "../../config/sessions/session-message-rewrite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPassthroughEngineMethods } from "../../context-engine/context-engine.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../gateway/worker-environments/placement-test-fixtures.js";
@@ -429,9 +430,7 @@ describe("host-owned current admission annotation", () => {
               turnAdvancementIdempotency: "atomic-idempotent-v1",
             },
           },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
+          ...createPassthroughEngineMethods(),
           commitTurn,
         };
         const lease: ContextEngineLogicalTurnLease = {

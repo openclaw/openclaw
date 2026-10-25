@@ -1,3 +1,4 @@
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createAnthropicGuard, createOpenAiGuard, type FetchLike } from "./guard-adapters.js";
 import {
@@ -210,10 +211,4 @@ function openAiTextEnvelope(text: string) {
     status: "completed",
     output: [{ type: "message", content: [{ type: "output_text", text }] }],
   };
-}
-
-function jsonResponse(value: unknown): Response {
-  return new Response(JSON.stringify(value), {
-    headers: { "content-type": "application/json" },
-  });
 }

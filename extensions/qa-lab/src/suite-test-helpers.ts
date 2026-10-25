@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
+import type { QaEvidenceOccurrence } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource as Scenario } from "./scenario-catalog.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite-types.js";
 
@@ -27,6 +28,19 @@ export function makeQaSuiteTestLaunch(): Parameters<
     protocol: null,
     accountRef: null,
     proofClass: null,
+  };
+}
+
+export function makeQaSuiteTestOccurrence(id: string): QaEvidenceOccurrence {
+  return {
+    id,
+    parentCell: null,
+    scenario: null,
+    retryOf: null,
+    terminalStatus: "pass",
+    assertions: null,
+    launch: makeQaSuiteTestLaunch(),
+    receipts: [],
   };
 }
 

@@ -33,9 +33,7 @@ export async function settleFanOutDispatches(
   try {
     return await Promise.all(guarded.map((dispatch) => Promise.race([dispatch, deadline])));
   } finally {
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-    }
+    clearTimeout(deadlineTimer);
   }
 }
 

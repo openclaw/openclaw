@@ -1089,7 +1089,7 @@ src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
-src/agents/embedded-agent-helpers/images.ts	6
+src/agents/embedded-agent-helpers/images.ts	3
 src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	1
@@ -1614,7 +1614,6 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	1
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.ts	2
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
 src/config/mcp-config.ts	1

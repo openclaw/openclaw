@@ -533,8 +533,25 @@ describe("placement recovery session admission with persisted placements", () =>
       expectedGeneration: requested.generation,
       recoveryError: "finished fixture",
     });
+    const sibling = await placements.startDispatch({
+      ...REQUEST,
+      sessionId: "sibling",
+      sessionKey: "agent:main:sibling",
+    });
+    await placements.fail({
+      sessionId: sibling.sessionId,
+      expectedGeneration: sibling.generation,
+      recoveryError: "finished fixture",
+    });
+    let siblingAvailable = false;
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: root,
+      resolveWorkspace: async ({ sessionId }) => {
+        if (sessionId === sibling.sessionId && !siblingAvailable) {
+          throw new Error("fixture unavailable sibling workspace");
+        }
+        return { kind: "local", path: root };
+      },
       environmentGeneration: 3,
     });
     const coordinated = coordinate(harness);
@@ -553,6 +570,9 @@ describe("placement recovery session admission with persisted placements", () =>
       await providerEntered.promise;
       await coordinated.reconcileActive();
       expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+      siblingAvailable = true;
+      await coordinated.reconcileActive();
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
     } finally {
       releaseProvider.resolve();
       await dispatch;
@@ -564,44 +584,61 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
   });
 
-  it("retains the pending orphan pass after a transient workspace-resolution failure", async () => {
-    const root = support.testState.root;
-    await git(root, "init", "--quiet");
-    await fs.writeFile(path.join(root, "result.txt"), "retired workspace result");
-    await git(root, "add", "result.txt");
-    const tree = await git(root, "write-tree");
-    const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
-    await git(root, "update-ref", cleanupRef, tree);
-    const placements = createStore();
-    const idle = await placements.startDispatch({
-      ...REQUEST,
-      sessionId: "idle",
-      sessionKey: "agent:main:idle",
-    });
-    await placements.fail({
-      sessionId: idle.sessionId,
-      expectedGeneration: idle.generation,
-      recoveryError: "finished fixture",
-    });
-    let resolutionAttempts = 0;
-    const harness = await createHarness(support.testState.stateDb, placements, {
-      workspacePath: root,
-      resolveWorkspace: async () => {
-        resolutionAttempts += 1;
-        if (resolutionAttempts === 1) {
-          throw new Error("fixture transient workspace resolution failure");
-        }
-        return { kind: "local", path: root };
-      },
-    });
-    const coordinated = coordinate(harness);
-    await coordinated.reconcile("startup");
-    await coordinated.reconcileActive();
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
-    await coordinated.reconcileActive();
-    expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
-    expect(resolutionAttempts).toBe(2);
-  });
+  it.each([1, 10])(
+    "fairly retries %i unavailable startup workspaces without losing later recovery",
+    async (count) => {
+      const root = support.testState.root;
+      await git(root, "init", "--quiet");
+      const tree = await git(root, "write-tree");
+      const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orphan-claim"));
+      await git(root, "update-ref", cleanupRef, tree);
+      const placements = createStore();
+      const sessionIds = Array.from({ length: count }, (_, index) => `idle-${index}`);
+      for (const sessionId of sessionIds) {
+        const idle = await placements.startDispatch({
+          ...REQUEST,
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+        });
+        await placements.fail({
+          sessionId,
+          expectedGeneration: idle.generation,
+          recoveryError: "finished fixture",
+        });
+      }
+      const recoveredSession = sessionIds.at(-1);
+      let workspaceAvailable = false;
+      const attempts: string[] = [];
+      const harness = await createHarness(support.testState.stateDb, placements, {
+        resolveWorkspace: async ({ sessionId }) => {
+          attempts.push(sessionId);
+          if (!workspaceAvailable || sessionId !== recoveredSession) {
+            throw new Error("fixture transient workspace resolution failure");
+          }
+          return { kind: "local", path: root };
+        },
+      });
+      const coordinated = coordinate(harness);
+      await coordinated.reconcile("startup");
+      await coordinated.reconcileActive();
+      expect(attempts).toEqual(sessionIds);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe(cleanupRef);
+
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toEqual(sessionIds.slice(0, 8));
+      workspaceAvailable = true;
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toHaveLength(Math.min(count, 8));
+      expect(attempts).toContain(recoveredSession);
+      expect(await git(root, "for-each-ref", "--format=%(refname)", cleanupRef)).toBe("");
+      attempts.length = 0;
+      await coordinated.reconcileActive();
+      expect(attempts).toHaveLength(Math.min(count - 1, 8));
+      expect(attempts).not.toContain(recoveredSession);
+    },
+  );
 
   it("a real dispatch reaches device provisioning while another placement's teardown is stuck", async () => {
     const placements = createStore();

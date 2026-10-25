@@ -9,6 +9,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -438,12 +439,7 @@ suite.define(() => {
       const sessionKey = "agent:main:main";
       const otherSessionKey = "agent:main:accessory-peer";
       const draft = "Send through the canonical composer";
-      const boardSnapshot = {
-        sessionKey,
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-        widgets: [],
-      };
+      const boardSnapshot = board(sessionKey);
       const gateway = await mockPlugin(page, "one", {
         sessionKey,
         pluginAssetsRequireAuth: false,

@@ -633,18 +633,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const native = threadStartResult("recovered-native-thread");
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
-      respond: async (method) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
+      respond: createLifecycleRequest(async (method) => {
         if (method === "thread/resume") {
           return native;
         }
         throw new Error(`unexpected method: ${method}`);
-      },
+      }),
     });
     fixture.seed(native, { loaded: true, subscribed: false });
     const bindingStore = createCodexTestBindingStore();
@@ -687,13 +681,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const siblingId = "parallel-policy-b";
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
-      respond: async (method) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
+      respond: createLifecycleRequest(async (method) => {
         if (method === "thread/resume") {
           const reader = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
           try {
@@ -704,7 +692,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return threadStartResult(threadId);
         }
         throw new Error(`unexpected method: ${method}`);
-      },
+      }),
     });
     fixture.seed(threadStartResult(threadId));
     const siblingResponse = threadStartResult(siblingId);
@@ -791,13 +779,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       };
       const fixture = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
-        respond: async (method) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
+        respond: createLifecycleRequest(async (method) => {
           if (method === "thread/start") {
             return threadStartResult("warm-revoked");
           }
@@ -806,7 +788,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             return { apps: [{ id: "fixture-app", enabled: true, callable: true }] };
           }
           throw new Error(`unexpected method: ${method}`);
-        },
+        }),
       });
       const { client, request } = fixture;
       const abandonClient = vi.fn(async () => {});

@@ -1,6 +1,5 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
 
 type StartupState = {
   owner: AbortSignal;
@@ -63,6 +62,7 @@ export async function connectWithMcpStartupBackoff(
   connect: () => Promise<void>,
   recoveryRetryMs: number,
 ): Promise<void> {
+  const { redactMcpDiagnosticError } = await import("./mcp-error.js");
   // Serialize startup, not transport ownership: healthy sessions still connect independently.
   while (startups.get(key)?.pending) {
     await racePromiseWithAbortSignal(
