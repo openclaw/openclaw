@@ -1,9 +1,6 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { assert, describe, expect, it } from "vitest";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-import { visitModuleSpecifiers } from "../../scripts/lib/ts-guard-utils.mts";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
@@ -68,16 +65,8 @@ function utilityConfig(primary?: string): OpenClawConfig {
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
   it("does not directly load completion execution to select a configured route", () => {
-    const root = path.resolve(import.meta.dirname, "../..");
-    const entry = path.join(root, "src/system-agent/inference-route.ts");
-    using parser = createNativeTypeScriptParser({ cwd: root });
-    const [source] = parser.parseSourceFiles([
-      { fileName: entry, text: readFileSync(entry, "utf8") },
-    ]);
-    assert(source);
-    const specifiers: string[] = [];
-    visitModuleSpecifiers(source, ({ specifier }) => specifiers.push(specifier));
-    expect(specifiers).not.toContain("../agents/simple-completion-runtime.js");
+    const source = readFileSync(new URL("./inference-route.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("../agents/simple-completion-runtime.js");
   });
 
   it.each([false, true])("preserves implicit catalog @ IDs (ACP=%s)", async (acp) => {

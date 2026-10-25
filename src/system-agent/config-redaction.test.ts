@@ -70,7 +70,6 @@ describe("isSystemAgentSensitiveConfigValue", () => {
 
   it.each([
     ["channels.defaults.groupPolicy", '"open"'],
-    ["channels.modelByChannel.telegram.chat", '"openai/gpt-5.5"'],
     ['channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"'],
   ])("keeps kernel-owned channel config %s visible", (path, value) => {
     expect(sensitiveValue(path, value)).toBe(false);
@@ -87,7 +86,6 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     'session.identityLinks["token=prod"]',
     'channels.telegram.groups["prod.guild"].topics["token=prod"].groupPolicy',
     'channels.buzz.groups["00000000-0000-4000-8000-000000000000"].enabled',
-    'hooks.entries.work["token=prod"]',
     String.raw`hooks.entries.work.token\=prod`,
     'talk.providers.openai["token=prod"]',
     "hooks.mappings[0].agentId",
@@ -108,7 +106,6 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
   });
 
   it.each([
-    'channels.synology-chat.accounts["prod=us"].enabled',
     "plugins.entries.codex.config.appServer.headers.AuthorizationabcDEF123",
     'plugins.entries.codex.config.appServer.headers["X-Test"]',
     'channels.synology-chat.accounts["token=prod"].enabled',

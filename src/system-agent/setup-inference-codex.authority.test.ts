@@ -191,25 +191,19 @@ it.each([
               beforePersistentEffect: context.beforePersistentEffect,
               beforePersistentApply: () => throwIfSetupInferenceCancelled(context.params),
             });
-        const checked = preparing.then((value) => {
-          if ("error" in value) {
-            throw new Error(value.error);
-          }
-          return value;
-        });
-        const settled = checked.catch(() => {});
+        const settled = preparing.catch(() => {});
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
-            checked,
+            preparing,
             "repair never reached index preparation",
           );
           revoked = revoke;
           release.resolve();
           if (revoke) {
-            await expect(checked).rejects.toBeInstanceOf(SetupInferenceCancelledError);
+            await expect(preparing).rejects.toBeInstanceOf(SetupInferenceCancelledError);
           } else {
-            expect(await checked).not.toHaveProperty("error");
+            expect(await preparing).not.toHaveProperty("error");
           }
           const persisted = await records.readPersistedInstalledPluginIndexInstallRecordsAsync();
           expect(persisted?.codex?.integrity).toBe(

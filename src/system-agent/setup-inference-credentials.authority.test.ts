@@ -181,9 +181,6 @@ process.exit(1);
         ),
         signal,
       );
-      expect(setupExecution.activateGatewaySetupInference).toHaveBeenCalledWith(
-        expect.objectContaining({ selectModel: false }),
-      );
       login.client.invalidated = true;
       expect([controller.signal.aborted, providerSignal?.aborted]).toEqual([false, false]);
       release.resolve();

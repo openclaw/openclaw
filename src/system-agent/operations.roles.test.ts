@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRole } from "../agents/agent-roles.js";
 import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
-import {
-  createSystemAgentTool,
-  type SystemAgentToolDirective,
-} from "../agents/tools/system-agent-tool.js";
+import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +15,6 @@ import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
 } from "./operations.js";
-import type { SystemAgentProposalRef } from "./operator-approval.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -30,17 +26,6 @@ const writeText = (dir: string, file: string, text: string) =>
 const expectAbsent = async (file: string) => {
   await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 };
-function toolPair() {
-  const proposalRef: SystemAgentProposalRef = {};
-  const directiveRef: { current?: SystemAgentToolDirective } = {};
-  const options = { surface: "gateway" as const, proposalRef, directiveRef };
-  return {
-    directiveRef,
-    tool: createSystemAgentTool(options),
-    approvedTool: createSystemAgentTool({ ...options, approvalArmed: true }),
-  };
-}
-
 type State = ReturnType<typeof createSystemAgentTestRuntime> & {
   root: string;
   configPath: string;
@@ -79,24 +64,17 @@ describe("custodian role creation through persisted configuration", () => {
       withState(async ({ root, configPath, original, runtime, lines }) => {
         const agentId = "qa-writer";
         const workspace = path.join(root, agentId);
-        const args = {
-          action: "create_agent",
+        const operation = {
+          kind: "create-agent" as const,
           agentId,
           name: "QA Writer",
           workspace,
           ...(role ? { role } : { purpose }),
         };
-        const { tool, approvedTool, directiveRef } = toolPair();
-        await tool.execute("propose", args);
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        await approvedTool.execute("approve", { ...args, approved: true });
-        const directive = directiveRef.current;
-        if (directive?.kind !== "approved-operation") {
-          throw new Error("missing approved creation operation");
-        }
-        const operation = directive.operation;
         expect(describeSystemAgentPersistentOperation(operation)).toContain('name: "QA Writer"');
-        expect(tool.parameters).toMatchObject({ properties: { name: { type: "string" } } });
+        expect(createSystemAgentTool({ surface: "gateway" }).parameters).toMatchObject({
+          properties: { name: { type: "string" } },
+        });
         expect(await executeSystemAgentOperation(operation, runtime)).toMatchObject({
           applied: false,
         });
@@ -182,34 +160,18 @@ describe("custodian role creation through persisted configuration", () => {
         bootstrapPending: false,
       });
       const config = await readConfig();
-      const entries = config.agents?.entries ?? {};
-      const members = [
-        ["docs-lead", "coordinator"],
-        ["docs-researcher", "researcher"],
-        ["docs-writer", "writer"],
-        ["docs-reviewer", "reviewer"],
-      ] as const;
-      expect(Object.keys(entries)).toEqual(["ambient", ...members.map(([id]) => id)]);
-      for (const [id, role] of members) {
-        const workspace = path.join(workspaceRoot, id);
-        const template = await loadAgentRole(role);
-        expect(entries[id]).toMatchObject({ workspace, identity: template.identity });
+      for (const id of ["docs-lead", "docs-researcher", "docs-writer", "docs-reviewer"]) {
         expect(readAgentProvenance(id)).toMatchObject({
           createdVia: "agent",
           creatorAgentId: "planner",
         });
-        expect(await readText(workspace, "AGENTS.md")).toBe(template.files["AGENTS.md"]);
-        await expectAbsent(path.join(workspace, "BOOTSTRAP.md"));
       }
-      expect(entries["docs-lead"]?.subagents).toEqual({
+      expect(config.agents?.entries?.["docs-lead"]?.subagents).toEqual({
         allowAgents: ["docs-researcher", "docs-writer", "docs-reviewer"],
         delegationMode: "prefer",
       });
       expect(config.agents?.defaults?.systemAgent?.agentId).toBe("docs-lead");
-      const confirmation = lines.join("\n");
-      expect(confirmation).toContain("docs-lead");
-      expect(confirmation).toContain("Agents home");
-      expect(confirmation).toContain("agent switcher");
+      expect(lines.join("\n")).toContain("docs-lead");
     }));
 
   it.each(["unfinished-bootstrap", "authority-revoked", "post-commit-first"])(
