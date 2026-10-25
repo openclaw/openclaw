@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { AgentsListResult } from "../../api/types.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -13,14 +14,23 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 afterEach(cleanupSolid);
 
 it.each([true, false])(
   "retains the selection when catalog arrives before history (default: %s)",
   async (inherited) => {
-    const catalog = { models: [{ id: "saved", provider: "openai", name: "Saved model" }] };
+    const saved = { id: "saved", provider: "openai", name: "Saved model" };
+    const catalog = {
+      models: [saved, { id: "default", provider: "openai", name: "Default model" }],
+    };
+    const agentsList: AgentsListResult = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", model: { primary: inherited ? "openai/saved" : "openai/default" } }],
+    };
     const history = Promise.withResolvers<ChatHistoryResult>();
     const client = createTestGatewayClient(async (method) =>
       method === "models.list" ? catalog : method === "chat.startup" ? history.promise : {},
@@ -34,8 +44,20 @@ it.each([true, false])(
       sessionKey,
       connected: true,
       assistantAgentId: "main",
+      agentsList,
       chatMessagesBySession: new Map(),
     });
+    cacheChatSessionSnapshot(
+      state.chatMessagesBySession,
+      state,
+      { sessionKey },
+      {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: "session",
+        composer: saved,
+      },
+    );
     try {
       const pending = refreshPageChat(state, {
         startup: true,
@@ -43,6 +65,9 @@ it.each([true, false])(
         scheduleScroll: false,
       });
       await vi.waitFor(() => expect(state.chatModelCatalog).toEqual(catalog.models));
+      expect(
+        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })?.composer,
+      ).toEqual(saved);
       history.resolve({
         sessionId: "session",
         sessionInfo: {

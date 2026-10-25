@@ -197,9 +197,7 @@ export function renderChatPaneComposerControls(params: {
       component: ChatPaneModelControl,
       model: {
         snapshot:
-          state.connected &&
-          state.chatModelCatalogInitialized &&
-          (selectedSession?.model || agentDefaultModel || state.sessionsResult?.defaults.model)
+          state.connected && state.chatModelCatalogInitialized && selectedSession
             ? undefined
             : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
                 ?.composer ?? undefined),

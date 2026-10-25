@@ -31,6 +31,10 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
       return;
     }
     const session = selectedChatSessionRow(host);
+    // A catalog default cannot replace the selected session's unresolved model.
+    if (!session) {
+      return;
+    }
     const agents: AgentsListResult | null = host.agentsList;
     const selection = resolveChatModelSelectState({
       activeSession: session,
