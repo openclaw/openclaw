@@ -30,19 +30,17 @@ import {
 import { resolveManagedStreamMediaUrls } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { createStreamingReplyResolver } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const googleModel: Model<"google-generative-ai"> = {
+const googleModel = makeProviderModelFixture<"google-generative-ai">({
   id: "gemini-2.5-flash",
   name: "Gemini 2.5 Flash",
   api: "google-generative-ai",
   provider: "google",
   baseUrl: "https://example.invalid",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200000,
   maxTokens: 8192,
-};
+});
 const responsesModel: Model<"openai-responses"> = {
   ...googleModel,
   id: "gpt-5.5",
@@ -174,14 +172,10 @@ it.each(["no_change", "progress"] as const)(
     );
     onTestFinished(() => releaseAgentRunContext(runId, claim));
     const harness = createDeliveryHarness();
-    const message = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "The check completed with a useful result." }],
-    });
+    const text = "The check completed with a useful result.";
+    const message = makeAgentAssistantMessage({ content: [{ type: "text", text }] });
     harness.emit({ type: "message_start", message });
-    emitAssistantTextDelta({
-      emit: harness.emit,
-      delta: "The check completed with a useful result.",
-    });
+    emitAssistantTextDelta({ emit: harness.emit, delta: text });
     harness.emit({ type: "message_end", message });
     await harness.flush();
     expect(harness.delivered).toEqual([]);
@@ -528,31 +522,24 @@ it("keeps generic directive URLs separate from tool-owned managed media", () => 
   ).toEqual(["./managed.png"]);
 });
 
+const xmlText = "<tool_call>{}</tool_call>Visible\n";
 it.each([
-  [
-    "a held directive frame",
-    [
+  {
+    name: "a held directive frame",
+    frames: [
       { text: "<tool_call", delta: "<tool_call", held: true, expected: "" },
-      {
-        text: "<tool_call>{}</tool_call>Visible\n",
-        delta: ">{}</tool_call>Visible\n",
-        expected: "Visible",
-      },
+      { text: xmlText, delta: ">{}</tool_call>Visible\n", expected: "Visible" },
     ],
-  ],
-  [
-    "a source replacement",
-    [
+  },
+  {
+    name: "a source replacement",
+    frames: [
       { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
-      { text: "<tool_call>{}</tool_call>Visible\n", expected: "Visible" },
-      {
-        text: "<tool_call>{}</tool_call>Visible\ntail",
-        delta: "tail",
-        expected: "Visible\ntail",
-      },
+      { text: xmlText, expected: "Visible" },
+      { text: xmlText + "tail", delta: "tail", expected: "Visible\ntail" },
     ],
-  ],
-] as const)("retains raw XML projection across %s", (_name, frames) => {
+  },
+] as const)("retains raw XML projection across $name", ({ frames }) => {
   const resolve = createStreamingReplyResolver();
   let previousCleaned = "";
   for (const frame of frames) {

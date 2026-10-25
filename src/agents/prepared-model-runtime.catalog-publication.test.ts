@@ -89,6 +89,16 @@ function publish(config: OpenClawConfig) {
   });
 }
 
+function holdCatalogReply() {
+  const started = createDeferred();
+  const reply = createDeferred<ModelCatalogSnapshot>();
+  mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
+    started.resolve();
+    return reply.promise;
+  });
+  return { started: started.promise, reply };
+}
+
 // Worker replies are fresh objects, as across the real worker serialization boundary.
 function catalog(entry: ModelCatalogEntry | undefined = model): ModelCatalogSnapshot {
   const entries = entry ? [structuredClone(entry)] : [];
@@ -174,24 +184,32 @@ async function setup(preparedMap = false, profile?: AuthProfileCredential) {
 function persistProfile(profile: AuthProfileCredential) {
   const store = { version: 1, profiles: { "custom:synthetic": profile } };
   mocks.preparedAuthStore = store;
-  mocks.authStorage.getAll.mockReturnValue(
+  const credential =
     profile.type === "oauth"
       ? {
-          custom: {
-            type: "oauth",
-            access: profile.access,
-            refresh: profile.refresh,
-            expires: profile.expires,
-          },
+          type: "oauth" as const,
+          access: profile.access,
+          refresh: profile.refresh,
+          expires: profile.expires,
         }
-      : {
-          custom: {
-            type: "api_key",
-            key: profile.type === "token" ? profile.token! : profile.key!,
-          },
-        },
-  );
+      : { type: "api_key" as const, key: profile.type === "token" ? profile.token! : profile.key! };
+  mocks.authStorage.getAll.mockReturnValue({ custom: credential });
   saveAuthProfileStore(store, fixture.state.agentDir("default"));
+}
+
+function rotationProfile(kind: "oauth" | "token", rotated = false): AuthProfileCredential {
+  const suffix = rotated ? "after" : "before";
+  return kind === "oauth"
+    ? {
+        type: kind,
+        provider: "custom",
+        access: `synthetic-access-${suffix}`,
+        refresh: `synthetic-refresh-${suffix}`,
+        expires: 1_900_000_000_000 + (rotated ? 3_600_000 : 0),
+        accountId: "synthetic-account",
+        email: "synthetic@example.test",
+      }
+    : { type: kind, provider: "custom", token: `synthetic-token-${suffix}` };
 }
 
 beforeEach(() => {
@@ -370,6 +388,12 @@ describe("catalog publication session rows", () => {
         changes.push(event.modelFactsChanged);
       }
     });
+    const observeNative = () =>
+      owner.loadNativeModelCatalog!({
+        provider: model.provider,
+        modelId: model.id,
+        runtime: "synthetic-native",
+      });
     try {
       expect(owner.readFullModelCatalog?.()).toBeUndefined();
       expect(owner.modelCatalog.entries).toMatchObject([model]);
@@ -380,11 +404,7 @@ describe("catalog publication session rows", () => {
       expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
       changes.length = 0;
       for (let observation = 0; observation < 2; observation += 1) {
-        const unchanged = await owner.loadNativeModelCatalog!({
-          provider: model.provider,
-          modelId: model.id,
-          runtime: "synthetic-native",
-        });
+        const unchanged = await observeNative();
         expect(unchanged.entries).toMatchObject([model]);
         expect(changes).not.toContain(true);
       }
@@ -394,11 +414,7 @@ describe("catalog publication session rows", () => {
         nativeRuntime: "synthetic-native",
       };
       loadModelCatalog.mockResolvedValueOnce([nativeModel]);
-      const selected = await owner.loadNativeModelCatalog!({
-        provider: model.provider,
-        modelId: model.id,
-        runtime: "synthetic-native",
-      });
+      const selected = await observeNative();
       expect(selected.entries).toMatchObject([nativeModel]);
       expect(selected.routeVariants.find((entry) => !entry.nativeRuntime)).toMatchObject({
         provider: model.provider,
@@ -447,38 +463,13 @@ describe("catalog publication session rows", () => {
   it.each(["oauth", "token"] as const)(
     "adopts current model facts after persisted %s rotation",
     async (kind) => {
-      const profile: AuthProfileCredential =
-        kind === "oauth"
-          ? {
-              type: "oauth",
-              provider: "custom",
-              access: "synthetic-access-before",
-              refresh: "synthetic-refresh-before",
-              expires: 1_900_000_000_000,
-              accountId: "synthetic-account",
-              email: "synthetic@example.test",
-            }
-          : { type: "token", provider: "custom", token: "synthetic-token-before" };
       const { rows, list, currentOwner, readCatalog, initial, settleCatalog } = await setup(
         true,
-        profile,
+        rotationProfile(kind),
       );
       const previousOwner = await currentOwner();
-      const acquired = createDeferred();
-      const reply = createDeferred<ModelCatalogSnapshot>();
-      mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
-        acquired.resolve();
-        return reply.promise;
-      });
-      const rotated: AuthProfileCredential =
-        profile.type === "oauth"
-          ? {
-              ...profile,
-              access: "synthetic-access-after",
-              refresh: "synthetic-refresh-after",
-              expires: profile.expires + 3_600_000,
-            }
-          : { ...profile, token: "synthetic-token-after" };
+      const { started, reply } = holdCatalogReply();
+      const rotated = rotationProfile(kind, true);
       const publication =
         vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
       const unsubscribe = registerPreparedModelRuntimePublicationListener(publication);
@@ -489,7 +480,7 @@ describe("catalog publication session rows", () => {
         expect(owner).not.toBe(previousOwner);
         expect(() => previousOwner.readFullModelCatalog!()).toThrow();
         discovery = owner.loadFullModelCatalog!({ changedOnly: true });
-        await acquired.promise;
+        await started;
         // Settle the existing unavailable/static handoff before the discovery publication.
         await settleCatalog();
         await list();
@@ -538,17 +529,12 @@ describe("catalog publication session rows", () => {
       expect(rows.dirtyRowCount).toBe(0);
       expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
     };
-    const started = createDeferred();
-    const reply = createDeferred<ModelCatalogSnapshot>();
+    const { started, reply } = holdCatalogReply();
     const events = vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
     const unsubscribe = registerPreparedModelRuntimePublicationListener(events);
-    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
-      started.resolve();
-      return reply.promise;
-    });
     const pending = refresh();
     try {
-      await started.promise;
+      await started;
       await expectUnchanged();
       reply.resolve(catalog());
       await pending;
