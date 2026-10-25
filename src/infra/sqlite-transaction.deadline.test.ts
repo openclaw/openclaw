@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vitest";
-import {
-  sqliteMaintenanceFixture,
-  sqliteWriteGate,
-} from "./sqlite-maintenance-fixture.test-support.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
 import { runSqliteImmediateTransaction } from "./sqlite-transaction.js";
 
 const resources = sqliteMaintenanceFixture();
@@ -60,7 +58,7 @@ it.each(["prepare", "admit"] as const)("retains an eligible BEGIN delayed in %s"
   const beginDeadlineNs = 1_000_000_000n;
   let now = 0n;
   vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
-  const gate = sqliteWriteGate();
+  const gate = createEnteredGate();
   const calls = { prepare: 0, admit: 0 };
   const pending = runSqliteImmediateTransaction(
     db,

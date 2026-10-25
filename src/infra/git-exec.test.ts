@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -70,8 +71,7 @@ describe("Git ref mutation timing", () => {
   });
 
   it("attributes resolution, queue wait, callback work and trace context separately", async () => {
-    const holderEntered = createDeferred();
-    const releaseHolder = createDeferred();
+    const holderGate = createEnteredGate();
     const callbackEntered = createDeferred();
     const releaseCallback = createDeferred();
     const abort = new AbortController();
@@ -83,13 +83,10 @@ describe("Git ref mutation timing", () => {
     const result = { privateResult: "refs/private/result" };
     vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(false);
     vi.mocked(fs.realpath).mockResolvedValueOnce("/private/shared.git");
-    const holder = enqueueGitRefMutation("/private/holder", ".git", async () => {
-      holderEntered.resolve();
-      await releaseHolder.promise;
-    });
+    const holder = enqueueGitRefMutation("/private/holder", ".git", holderGate.wait);
     const pending: Promise<unknown>[] = [holder];
     try {
-      await holderEntered.promise;
+      await holderGate.entered;
       vi.mocked(diagnosticEvents.areDiagnosticsEnabledForProcess).mockReturnValue(true);
       vi.mocked(fs.realpath).mockImplementationOnce(async () => {
         clock += 25;
@@ -114,7 +111,7 @@ describe("Git ref mutation timing", () => {
       await nextTurn();
       expect(refLogs.info).not.toHaveBeenCalled();
       clock += 1_200;
-      releaseHolder.resolve();
+      holderGate.release();
       await callbackEntered.promise;
       abort.abort(new Error("cancelled after ref mutation started"));
       await nextTurn();
@@ -131,7 +128,7 @@ describe("Git ref mutation timing", () => {
       });
       expect(traces).toEqual([trace]);
     } finally {
-      releaseHolder.resolve();
+      holderGate.release();
       releaseCallback.resolve();
       await Promise.allSettled(pending);
     }

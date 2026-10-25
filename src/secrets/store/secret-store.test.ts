@@ -364,13 +364,14 @@ describe("secret store", () => {
     }
   });
 
-  it.each(["github-device", "github-oauth"] as const)(
+  it.each(["github-device", "github-oauth", undefined] as const)(
     "lists exact live %s records without materializing unrelated credentials",
     async (prefix) => {
       const now = Date.parse("2026-01-01T00:00:00.000Z");
       const insert = rawWriter(now);
       vi.useFakeTimers();
       vi.setSystemTime(now);
+      const selected = prefix ?? "github-device";
       const cases = [
         { accept: true },
         { created: now - 15 * 60_000 + 1, accept: true },
@@ -381,12 +382,12 @@ describe("secret store", () => {
         { kind: "env", accept: false },
         { allowedHosts: "[]", accept: false },
         { deleted: now, accept: false },
-        ...invalidGitHubNames(prefix).map((name) => ({ name, accept: false })),
+        ...invalidGitHubNames(selected).map((name) => ({ name, accept: false })),
       ];
       const fixtures = cases.map((entry, index) =>
         Object.assign(
           {
-            name: `${prefix}-${index.toString(16).padStart(32, "0")}`,
+            name: `${selected}-${index.toString(16).padStart(32, "0")}`,
             value: `synthetic-parity:${prefix}:${index}`,
           },
           entry,
@@ -395,21 +396,22 @@ describe("secret store", () => {
       for (const entry of fixtures.toReversed()) {
         insert(entry);
       }
-      const sibling = prefix === "github-device" ? "github-oauth" : "github-device";
+      const sibling = selected === "github-device" ? "github-oauth" : "github-device";
       insert({ name: `${sibling}-${"a".repeat(32)}`, value: `synthetic-sibling:${prefix}` });
       for (let index = 0; index < 64; index++) {
         insert({ name: `UNRELATED_${index}`, value: `synthetic-unrelated:${prefix}:${index}` });
       }
+      const expected = fixtures.filter((entry) => entry.accept).map((entry) => entry.name);
+      if (prefix === undefined) {
+        expected.push(`${sibling}-${"a".repeat(32)}`);
+      }
       expect((await listHiddenGitHubSecretRecords({ prefix })).map(({ name }) => name)).toEqual(
-        fixtures
-          .filter((entry) => entry.accept)
-          .map((entry) => entry.name)
-          .toSorted(),
+        expected.toSorted(),
       );
       for (const entry of fixtures) {
         expect(isRegistered(entry.value)).toBe(entry.accept);
       }
-      expect(isRegistered(`synthetic-sibling:${prefix}`)).toBe(false);
+      expect(isRegistered(`synthetic-sibling:${prefix}`)).toBe(prefix === undefined);
       expect(isRegistered(`synthetic-unrelated:${prefix}:0`)).toBe(false);
     },
   );

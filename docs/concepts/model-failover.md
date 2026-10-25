@@ -146,39 +146,32 @@ existing run deadline and cost limits still apply.
 
 ## Automatic cyber-policy escalation
 
-The embedded OpenClaw runtime retries one replay-safe OpenAI cyber-policy refusal on Daybreak
-Blue. This includes normal embedded turns using the ChatGPT-authenticated OpenAI Responses
-transport, not only Codex plugin sessions. That transport projects OpenAI's structured cyber-policy
-error into the refusal metadata used by this policy, from every terminal path it can arrive on: a
-non-OK HTTP body, a streamed `error` event, and a `response.failed` event. Generic refusal text
-without a structured cyber category remains terminal.
+A structured OpenAI cyber-policy refusal can trigger one **Access configuration retry**:
+OpenClaw keeps the same model, provider, runtime, account, effort, and speed, and retries
+with `access_programs: { cyber: "daybreak_blue" }`. This is not model failover and does
+not require a different model or a nonempty model fallback list. An exact model pin
+therefore remains in force.
 
-This policy route is turn-local: it does not change the selected session model and it does not send
-ordinary provider failures to Daybreak. Codex-backed sessions keep their separate plugin-owned
-policy described in [Codex harness runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation).
+The default `cyberFailover.mode: "auto"` applies only to a replay-safe refusal from the
+current attempt. Generic refusal text, other policy categories, cancellation, and
+attempts with committed side effects do not qualify. The selected account must advertise
+Blue for this model and runtime on its current route; an unknown or missing grant does
+not authorize a request. A turn already using Blue or Red is never retried or downgraded.
+Model names and retiring aliases are not evidence of entitlement.
 
-The default target is `openai/gpt-daybreak-blue-latest`. The retry runs only when all of these are
-true:
+The embedded Responses transport recognizes structured cyber refusals from HTTP error
+bodies, streamed `error` events, and `response.failed` events. Native Codex uses its
+[plugin-owned retry](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation)
+and validates the same account's native capabilities before `turn/start`.
 
-- the selected embedded attempt reports `provider_refusal` with provider `openai` and category
-  `cyber`;
-- the attempt's replay metadata proves that no tool or delivery side effect would be repeated;
-- the target differs from the model that was refused;
-- the selection is not strict; and
-- the feature is enabled.
+The retry is turn-local and does not save a new session model or Access setting. If it
+fails without committing work, the original refusal is preserved. If the retry commits
+work or is cancelled, its own result and receipts are retained. Recorded terminal stops
+and unclassified errors are not swallowed. An authorization denial temporarily suppresses
+further Blue attempts for that session/model/account without cooling down ordinary
+Standard requests.
 
-A strict selection stays strict. A locked model selection reaches the runner as an explicit empty
-fallback list, and this policy honors that the same way ordinary fallback does: the refusal remains
-terminal until the operator unlocks the selection.
-
-If the Daybreak attempt fails without committing work, OpenClaw preserves the original provider
-refusal instead of trying unrelated configured fallbacks. If the retry already executed a tool or
-delivered output before failing, its own result is kept instead, because its replay verdict,
-delivery evidence, and terminal receipt describe what actually ran. If the retry throws anything
-other than an ordinary failover-class error, that exception propagates unchanged: a recorded
-terminal stop prohibits replay, and an unclassified throw is how the fallback runner reports an
-attempt that already committed work. An authorization failure cools down that target for the
-current session before another cyber refusal checks it again.
+To disable automatic Access escalation:
 
 ```json5
 {
@@ -186,8 +179,7 @@ current session before another cyber refusal checks it again.
     defaults: {
       embeddedAgent: {
         cyberFailover: {
-          mode: "auto", // or "off"
-          model: "openai/gpt-daybreak-blue-latest",
+          mode: "off", // "auto" is the default
           cooloffMs: 600000,
         },
       },
@@ -196,8 +188,11 @@ current session before another cyber refusal checks it again.
 }
 ```
 
-General model fallback ordering is unchanged. A non-cyber refusal, a Codex/native-harness result,
-or any replay-unsafe attempt remains terminal under the existing refusal policy.
+The retired `cyberFailover.model` setting is removed by `openclaw doctor --fix`,
+which preserves `mode` and `cooloffMs`. Ordinary configured cross-model fallback remains
+separate and unchanged. The Blue/Red model aliases retire on October 28, 2026; choose an
+actual available model and let Access select the program rather than inventing an alias
+successor.
 
 ## Selection source policy
 

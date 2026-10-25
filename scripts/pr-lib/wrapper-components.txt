@@ -527,6 +527,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.config-tranche.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cron.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.cyber-failover.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.diagnostics.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.entries.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.gateway.ts
