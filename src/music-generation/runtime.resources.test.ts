@@ -61,9 +61,7 @@ function nativeFixture(
     configurable: true,
     value: { connections, started, resume, captureAsyncWorkTracker },
   });
-  cleanups.push(() => {
-    cleanupNativeFixture(key, connections);
-  });
+  cleanups.push(() => cleanupNativeFixture(key, connections));
   const plugin = writePlugin({
     dir,
     id,
@@ -118,21 +116,15 @@ module.exports = {
     }),
   );
   const config = pluginConfig(plugin);
-  return {
-    config,
-    plugin,
-    connections,
-    started,
-    resume,
-    run: (params: Partial<GenerateMusicParams> = {}) =>
-      generateMusic({
-        cfg: config,
-        prompt: "synthetic native resource proof",
-        modelOverride: `${alias}/fixture-model`,
-        autoProviderFallback: false,
-        ...params,
-      }),
-  };
+  const run = (params: Partial<GenerateMusicParams> = {}) =>
+    generateMusic({
+      cfg: config,
+      prompt: "synthetic native resource proof",
+      modelOverride: `${alias}/fixture-model`,
+      autoProviderFallback: false,
+      ...params,
+    });
+  return { config, plugin, connections, started, resume, run };
 }
 
 type NativeFixture = ReturnType<typeof nativeFixture>;

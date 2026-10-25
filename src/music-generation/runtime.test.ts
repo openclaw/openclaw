@@ -1,23 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentToolModelConfig } from "../config/types.agents-shared.js";
-import type { OpenClawConfig } from "../config/types.js";
 import type { GenerateMusicParams } from "./runtime-types.js";
 import { generateMusic } from "./runtime.js";
 import type { MusicGenerationProvider, MusicGenerationRequest } from "./types.js";
 
 let providers: MusicGenerationProvider[] = [];
-const warn = vi.hoisted(() => vi.fn());
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => ({
-      ...actual.createSubsystemLogger(subsystem),
-      ...(subsystem === "music-generation" ? { warn } : {}),
-    }),
-  };
-});
-const listProviders = vi.fn((_config?: OpenClawConfig) => providers);
+const listProviders = vi.fn(() => providers);
 const runtimeDeps: NonNullable<Parameters<typeof generateMusic>[1]> = {
   getProvider: (id) => providers.find((provider) => provider.id === id),
   listProviders,
@@ -71,14 +59,11 @@ async function checkOverrides(
 }
 beforeEach(() => {
   providers = [createProvider()];
-  warn.mockClear();
   listProviders.mockClear();
 });
 
 it("inherits the configured timeout", async () => {
-  await runGenerateMusic({
-    model: { primary: "music/track-v1", timeoutMs: 300_000 },
-  });
+  await runGenerateMusic({ model: { primary: "music/track-v1", timeoutMs: 300_000 } });
   expectRequest({ timeoutMs: 300_000 });
 });
 
@@ -87,12 +72,8 @@ it("skips provider discovery when fallback is disabled", async () => {
   expect(listProviders).not.toHaveBeenCalled();
 });
 
-it("falls back between detected providers and logs the failure", async () => {
-  const failure = {
-    provider: "google",
-    model: "model-a",
-    error: "missing audio data",
-  };
+it("falls back between detected providers and records the failure", async () => {
+  const failure = { provider: "google", model: "model-a", error: "missing audio data" };
   providers = [
     createProvider(failure.provider, {
       defaultModel: failure.model,
@@ -106,9 +87,6 @@ it("falls back between detected providers and logs the failure", async () => {
   const result = await runGenerateMusic({ cfg: {} });
   expect(result).toMatchObject({ provider: "minimax", model: "model-b" });
   expect(result.attempts).toEqual([failure]);
-  expect(warn).toHaveBeenCalledWith(
-    `music-generation candidate failed: ${failure.provider}/${failure.model}: ${failure.error}`,
-  );
 });
 
 it("rejects empty audio from every candidate", async () => {
@@ -121,10 +99,7 @@ it("rejects empty audio from every candidate", async () => {
   );
   await expect(
     runGenerateMusic({
-      model: {
-        primary: "empty-primary/track-v1",
-        fallbacks: ["empty-fallback/track-v2"],
-      },
+      model: { primary: "empty-primary/track-v1", fallbacks: ["empty-fallback/track-v2"] },
     }),
   ).rejects.toThrow(
     "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
@@ -173,9 +148,7 @@ it("applies model-specific lyric and instrumental limits", async () => {
     },
     {},
     { lyrics: "rise up", instrumental: true },
-    {
-      model: { primary: `music/${model}` },
-    },
+    { model: { primary: `music/${model}` } },
   );
 });
 
@@ -185,9 +158,8 @@ it("clamps duration and records normalization metadata", async () => {
   expectRequest({ durationSeconds: 30 });
   expect(result.ignoredOverrides).toStrictEqual([]);
   expect(result.normalization?.durationSeconds).toEqual({ requested: 45, applied: 30 });
-  expect(result.metadata).toMatchObject({
-    requestedDurationSeconds: 45,
-    normalizedDurationSeconds: 30,
+  expect(result).toMatchObject({
+    metadata: { requestedDurationSeconds: 45, normalizedDurationSeconds: 30 },
   });
 });
 
