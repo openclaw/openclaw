@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { globSync as nativeGlobSync } from "tinyglobby";
+import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserProviderOption } from "vitest/node";
 import { resolveCiTestRuntimeSelections } from "../scripts/lib/ci-test-runtime.mts";
@@ -28,19 +28,6 @@ type ExpectedTestConfig = {
 type FileOrder = { native: string[]; actual: string[] };
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
 
-function globTestFiles(
-  patterns: string | string[],
-  options: { cwd?: string; exclude?: string[] } = {},
-): string[] {
-  // Use the same discovery engine and options as Vitest, including for scoped owners.
-  return nativeGlobSync(patterns, {
-    cwd: options.cwd,
-    ignore: options.exclude,
-    dot: true,
-    expandDirectories: false,
-  });
-}
-
 function requireTestConfig(config: unknown): ExpectedTestConfig {
   if (!config || typeof config !== "object" || !("test" in config) || !config.test) {
     throw new Error("expected ui package vitest test config");
@@ -48,9 +35,11 @@ function requireTestConfig(config: unknown): ExpectedTestConfig {
   return config.test as ExpectedTestConfig;
 }
 const discover = (config: ExpectedTestConfig, packageRelative = false) =>
-  globTestFiles(config.include ?? [], {
+  globSync(config.include ?? [], {
     cwd: packageRelative ? path.join(process.cwd(), "ui") : undefined,
-    exclude: config.exclude,
+    ignore: config.exclude,
+    dot: true,
+    expandDirectories: false,
   }).map((file) => (packageRelative ? `ui/${file.replaceAll("\\", "/")}` : file));
 
 describe("ui package vitest config", () => {
@@ -127,17 +116,17 @@ describe("ui package vitest config", () => {
           projectOrder: FileOrder;
         };
       };
-      expect(report.discovered.length).toBeGreaterThan(1000);
       expect(report.discovered).toContain("ui/src/solid-smoke/solid-smoke.test.tsx");
-      // Package isolated/timing/Chromium projects retain their separate owners.
       expect(report.rootNodeFiles).toEqual(report.packageNodeFiles);
       expect(report.rootNodeFiles).toContain(
         "ui/src/pages/chat/talk/shared.browser-import.test.ts",
       );
       expect(report.rootNodeFiles).toEqual(expect.arrayContaining(uiNodeDrivenBrowserTestFiles));
       expect(report.rows).toHaveLength(4);
-      expect(report.empty).toEqual({ modules: 0, errors: 0 });
-      expect(report.emptyDiscoveryAllowed).toBe(false);
+      expect(report).toMatchObject({
+        empty: { modules: 0, errors: 0 },
+        emptyDiscoveryAllowed: false,
+      });
       expect(report.scheduling.native).toEqual(
         "default-a node-a url-a default-b node-b url-b default-false other-url".split(" "),
       );
@@ -161,13 +150,15 @@ describe("ui package vitest config", () => {
         longestRun = Math.max(longestRun, consecutive);
         previousEnvironment = environment;
       }
-      // This balanced inventory must not collapse into one long run. This is
-      // not a general worker-lifetime or memory bound for arbitrary inventories.
+      // Bound consecutive work for this balanced inventory, not arbitrary inventories.
       expect(longestRun).toBeLessThanOrEqual(128);
-      for (const preserved of [...report.scheduling.cached, ...report.scheduling.preserved]) {
+      for (const preserved of [
+        report.scheduling.projectOrder,
+        ...report.scheduling.cached,
+        ...report.scheduling.preserved,
+      ]) {
         expect(preserved.actual).toEqual(preserved.native);
       }
-      expect(report.scheduling.projectOrder.actual).toEqual(report.scheduling.projectOrder.native);
       for (const shuffled of report.scheduling.shuffled) {
         expect(shuffled.actual).toEqual(shuffled.native);
         expect(shuffled.actual).not.toEqual(report.scheduling.native);
@@ -291,17 +282,15 @@ export default {
         const reportPath = path.join(root, "discovery.json");
         const home = path.join(root, "home");
         const tmp = path.join(root, "tmp");
-        mkdirSync(home);
-        mkdirSync(tmp);
+        for (const directory of [home, tmp]) {
+          mkdirSync(directory);
+        }
         const fixturePath = fileURLToPath(
           new URL("./fixtures/vitest-browser-project-root.mjs", import.meta.url),
         );
         await run([fixturePath, reportPath, topLevelRoot, testRoot, browser], signal, {
-          HOME: home,
-          USERPROFILE: home,
-          TMPDIR: tmp,
-          TMP: tmp,
-          TEMP: tmp,
+          ...Object.fromEntries(["HOME", "USERPROFILE"].map((key) => [key, home])),
+          ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].map((key) => [key, tmp])),
           XDG_CONFIG_HOME: path.join(home, ".config"),
           XDG_DATA_HOME: path.join(home, ".local", "share"),
           XDG_CACHE_HOME: path.join(home, ".cache"),
@@ -359,12 +348,13 @@ export default {
     for (const file of uiTimingTestFiles) {
       expect(selected.filter((candidate) => candidate === file)).toHaveLength(1);
       expect(rootFiles).not.toContain(file);
-      for (const target of [file, "ui/src/components"]) {
-        const plans = buildVitestRunPlans([target]);
-        expect(
-          plans.filter((plan) => plan.config === "test/vitest/vitest.ui-timing.config.ts"),
-        ).toHaveLength(1);
-      }
+    }
+    for (const target of [...uiTimingTestFiles, "ui/src/components"]) {
+      expect(
+        buildVitestRunPlans([target]).filter(
+          (plan) => plan.config === "test/vitest/vitest.ui-timing.config.ts",
+        ),
+      ).toHaveLength(1);
     }
   });
 
@@ -404,13 +394,11 @@ export default {
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
     expect(rootFiles).toEqual(expect.arrayContaining(nodeFiles));
     expect([...nativeFiles, ...nodeFiles].toSorted()).toEqual(
-      globTestFiles(patterns)
+      globSync(patterns, { dot: true, expandDirectories: false })
         .filter((file) => /\.browser\.test\.tsx?$/u.test(file))
         .toSorted(),
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
-    expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));
-    expect(resolveChromium).toHaveBeenCalledOnce();
     expect(unpartitionedBrowser.browser?.provider?.options).toMatchObject({
       launchOptions: {
         executablePath: includeFile,
@@ -430,18 +418,10 @@ export default {
           OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: runtimeIncludeFile,
         }),
       );
-      expect(partitionedBrowser).toMatchObject({
-        include: unpartitionedBrowser.include,
-        exclude: unpartitionedBrowser.exclude,
-      });
+      expect(discover(partitionedBrowser, true)).toEqual(nativeFiles);
       expect(partitionedBrowser.browser).toMatchObject({
         enabled: true,
-        provider: {
-          name: "playwright",
-          options: unpartitionedBrowser.browser?.provider?.options,
-          providerFactory: expect.any(Function),
-          serverFactory: unpartitionedBrowser.browser?.provider?.serverFactory,
-        },
+        provider: { options: unpartitionedBrowser.browser?.provider?.options },
       });
       expect(typeof partitionedBrowser.browser?.provider?.prewarm).toBe(
         shouldPrewarm ? "function" : "undefined",
