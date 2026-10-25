@@ -269,7 +269,12 @@ it("configures the busy timeout before a doctor schema repair transaction", () =
   openDatabase(stateOptions);
   closeOpenClawStateDatabaseForTest();
 
-  const originalExec = DatabaseSync.prototype.exec;
+  const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+    | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+    | undefined;
+  if (!originalExec) {
+    throw new Error("DatabaseSync.exec descriptor is unavailable");
+  }
   const statements: string[] = [];
   vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
     this: DatabaseSync,

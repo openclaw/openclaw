@@ -24,7 +24,7 @@ function control<T extends HTMLElement = HTMLButtonElement>(
   root: ParentNode,
   name: string,
   value?: string,
-) {
+): T | null {
   return root.querySelector<T>(modelControlSelector(name, value));
 }
 
