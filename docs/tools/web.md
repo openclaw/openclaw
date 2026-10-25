@@ -588,7 +588,10 @@ provider, OpenClaw does not show the `x_search` prompt.
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape. Gemini treats `day` freshness as a recency hint; wider
   freshness values and explicit dates set Google Search grounding time ranges.
-  Perplexity behaves the same way when you use the Sonar/OpenRouter
+  Native Perplexity Search API requests must use either `freshness` or
+  `date_after`/`date_before`, not both. Combining them returns
+  `conflicting_time_filters` before sending a request; choose one time-filter mode.
+  Perplexity returns a synthesized answer when you use the Sonar/OpenRouter
   compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
   `model` or `OPENROUTER_API_KEY`); that path also drops `max_tokens` and
   `max_tokens_per_page` support.

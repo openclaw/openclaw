@@ -142,6 +142,11 @@ Total content budget (max 1000000).
 Per-page token limit.
 </ParamField>
 
+For the native Search API, use either `freshness` or an explicit date range
+(`date_after` and/or `date_before`). Combining them returns
+`conflicting_time_filters` before any provider request. Remove the explicit dates
+to keep the relative freshness window, or omit `freshness` to use the date range.
+
 For the legacy Sonar/OpenRouter compatibility path:
 
 - `query`, `count`, and `freshness` are accepted.
