@@ -11,6 +11,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -130,15 +131,7 @@ describe("remote workspace manifest script", () => {
     const rawManifest = serializeWorkerWorkspaceManifest({
       version: 1,
       baseCommit: null,
-      entries: [
-        {
-          path: "script.sh",
-          type: "file",
-          mode: 0o755,
-          size: original.byteLength,
-          sha256: createHash("sha256").update(original).digest("hex"),
-        },
-      ],
+      entries: [{ ...workspaceFile("script.sh", original), mode: 0o755 }],
     });
     const digest = createHash("sha256").update(rawManifest).digest("hex");
     const windowsScript = `Object.defineProperty(process, "platform", { value: "win32" });\n${REMOTE_WORKSPACE_MANIFEST_JS}`;
@@ -148,7 +141,7 @@ describe("remote workspace manifest script", () => {
     const published = await runWindows(["", "publish", digest], { input: rawManifest });
     expect(published).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
 
-    const capture = async () => await runWindows(["", "all", digest]);
+    const capture = () => runWindows(["", "all", digest]);
     expect(await capture()).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
 
     await fs.writeFile(file, "#!/bin/sh\necho changed\n");

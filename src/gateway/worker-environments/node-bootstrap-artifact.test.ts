@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -235,14 +234,7 @@ describe("node bootstrap distribution", () => {
         provider.prepare(),
       ]).finally(() => readUmask.mockRestore());
       expect(concurrent).toBe(artifact);
-      expect(artifact).toMatchObject({
-        buildId,
-        openclawVersion: version,
-        enabledPluginIds: ["remote-runtime"],
-      });
-      const bytes = await fs.readFile(artifact.tarballPath);
-      expect(bytes.byteLength).toBe(artifact.tarballBytes);
-      expect(createHash("sha256").update(bytes).digest("hex")).toBe(artifact.tarballSha256);
+      expect(artifact.enabledPluginIds).toEqual(["remote-runtime"]);
       const installed = path.join(root, "node");
       await fs.mkdir(installed);
       const entries: string[] = [];

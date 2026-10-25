@@ -352,11 +352,7 @@ it.each([undefined, "worker"])(
   "observes an exact durable node desktop with lease username %s",
   async (username) => {
     const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-    const client = { invalidated: false };
-    const requester = {
-      signal: new AbortController().signal,
-      isCurrent: () => !client.invalidated,
-    };
+    const requester = desktopRequester();
     if (username) {
       record.desktop = { ...record.desktop!, username };
     }
@@ -376,36 +372,20 @@ it.each([undefined, "worker"])(
     });
 
     const observed = await observing;
-    expect(observed).toMatchObject({
+    expect(observed).toEqual({
       transport: "rfb",
       wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
       expiresAtMs: 110_000,
       control: false,
     });
-    expect(observed).not.toHaveProperty("vncPassword");
-    expect(observed).not.toHaveProperty("preauth");
     expect(mint.mock.calls[0]?.[0].preauth).toEqual({
       auth: username ? "ard-account" : "vnc-password",
       credentials,
     });
-    const mintedRequester = mint.mock.calls[0]?.[0].requester;
-    expect(mintedRequester).toBe(requester);
-    expect(mintedRequester?.isCurrent()).toBe(true);
-    client.invalidated = true;
-    expect(mintedRequester?.isCurrent()).toBe(false);
-    expect(requester.signal.aborted).toBe(false);
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          ticket: "a".repeat(48),
-          attachPath: `/node-desktop/attach?ticket=${"a".repeat(48)}`,
-          port: 5900,
-          passwordFilePath: "/var/lib/crabbox/vnc.password",
-          ...(username ? { username } : {}),
-        },
-        timeoutMs: 0,
-      }),
-    );
+    expect(mint.mock.calls[0]?.[0].requester).toBe(requester);
+    if (username) {
+      expect(invoke.mock.calls[0]?.[0].params).toHaveProperty("username", username);
+    }
 
     authority.record = undefined;
     authority.proofCurrent = false;

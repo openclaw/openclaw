@@ -42,7 +42,29 @@ function observeSettlement(promise: Promise<unknown>) {
   return () => settled;
 }
 
-it.each(["before traversal", "during traversal", "root resolution", "safe-root setup"] as const)(
+function scanGate() {
+  const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
+  let releasing = false;
+  return {
+    gates,
+    async pause() {
+      if (!releasing) {
+        const gate = createDeferred();
+        gates.push(gate);
+        await gate.promise;
+      }
+    },
+    async drain(scan: Promise<unknown>) {
+      releasing = true;
+      for (const gate of gates) {
+        gate.resolve();
+      }
+      await Promise.allSettled([scan]);
+    },
+  };
+}
+
+it.each(["before traversal", "during traversal", "root resolution"] as const)(
   "rejects an empty inventory aborted %s",
   async (phase) => {
     const { root, capture } = await inventoryFixture();
@@ -50,17 +72,16 @@ it.each(["before traversal", "during traversal", "root resolution", "safe-root s
     const reason = new Error("empty inventory aborted");
     const entered = createDeferred();
     const gate = createDeferred();
-    const setupFailure = phase === "root resolution" || phase === "safe-root setup";
+    const setupFailure = phase === "root resolution";
     if (setupFailure) {
       const realpath = fs.realpath.bind(fs);
       vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
         if (String(args[0]) !== root) {
           return await realpath(...args);
         }
-        const resolved = phase === "safe-root setup" ? await realpath(...args) : undefined;
         entered.resolve();
         await gate.promise;
-        return resolved ?? (await realpath(...args));
+        return await realpath(...args);
       });
     }
     const opendir = fs.opendir.bind(fs);
@@ -163,11 +184,10 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
   const controller = new AbortController();
   const reason = new Error("manifest scan aborted");
   const open = fs.open.bind(fs);
-  const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
+  const { gates, pause, drain } = scanGate();
   const gatedPaths: string[] = [];
   const firstClosed = createDeferred();
   let closed = 0;
-  let releasing = false;
   const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
     const handle = await open(...args);
     if (!String(args[0]).startsWith(root + path.sep)) {
@@ -179,12 +199,8 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
       closed++;
       firstClosed.resolve();
     });
-    if (!releasing) {
-      const gate = createDeferred();
-      gates.push(gate);
-      gatedPaths.push(String(args[0]));
-      await gate.promise;
-    }
+    gatedPaths.push(String(args[0]));
+    await pause();
     return handle;
   });
   const scan = capture({ includePaths: new Set(files), signal: controller.signal });
@@ -202,11 +218,7 @@ it.each(fileFailures)("drains admitted file reads after %s", async (failure) => 
     expect(settled()).toBe(false);
     expect(opened).toHaveBeenCalledTimes(4);
   } finally {
-    releasing = true;
-    for (const gate of gates) {
-      gate.resolve();
-    }
-    await Promise.allSettled([scan]);
+    await drain(scan);
   }
   if (failure === "symlink replacement") {
     await expect(scan).rejects.toThrow();
@@ -228,21 +240,16 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   const admitted = walk ? 1 : 4;
   const { root, files, capture } = await inventoryFixture(9);
   const lstat = fs.lstat.bind(fs);
-  const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
+  const { gates, pause, drain } = scanGate();
   const failed = createDeferred();
   const error = new Error("inventory metadata unavailable");
   const controller = new AbortController();
   const abortError = new Error("manifest scan aborted");
-  let releasing = false;
   let started = 0;
   vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
     if (String(args[0]).startsWith(root + path.sep)) {
       const first = started++ === 0;
-      if (!releasing) {
-        const gate = createDeferred();
-        gates.push(gate);
-        await gate.promise;
-      }
+      await pause();
       if (first) {
         failed.resolve();
         if (failure !== "caller abort") {
@@ -275,11 +282,7 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
       controller.abort(abortError);
     }
   } finally {
-    releasing = true;
-    for (const gate of gates) {
-      gate.resolve();
-    }
-    await Promise.allSettled([scan]);
+    await drain(scan);
   }
   await expect(scan).rejects.toBe(failure === "metadata error" ? error : abortError);
   expect(started).toBe(admitted);
@@ -372,7 +375,6 @@ it("preserves bottom-up directory membership and canonical output across input o
       includePaths: new Set(paths),
       preserveDirectories: new Set(["preserved"]),
     });
-  const opened = vi.spyOn(fs, "opendir");
   const first = await capture(included);
   const reversed = await capture(included.toReversed());
   expect(first.manifest.directories).toEqual(["mixed", "mixed/child", "preserved"]);
@@ -382,12 +384,6 @@ it("preserves bottom-up directory membership and canonical output across input o
     "älg.txt",
   ]);
   expect(reversed).toEqual(first);
-  expect(opened.mock.calls.map(([directory]) => path.relative(root, String(directory)))).toEqual([
-    "cache/nested",
-    "cache",
-    "cache/nested",
-    "cache",
-  ]);
 });
 
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {

@@ -155,7 +155,7 @@ it.each([
     if (mode !== "plain") {
       await commitWorkspace(localPath, "base before attachments");
     }
-    const ownership = await createStagedInputOwnershipFixture(localPath);
+    await createStagedInputOwnershipFixture(localPath);
     const fixture = await runtimeFixture(root, "input", () => Date.now() + 60_000);
     const { owner, sessionId, ownerEpoch } = fixture;
     const actions = fixture.createActions();
@@ -176,31 +176,9 @@ it.each([
       expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
       const remoteFiles = workspaceFiles(remote);
-      for (const relative of ownership.ownedFiles) {
-        await remoteFiles.expect(relative, await fs.readFile(path.join(localPath, relative)));
-      }
-      const selectedProjectFile = (relative: string) =>
-        (mode === "plain" && !relative.endsWith(".pyc")) ||
-        (mode === "git-with-explicit-include" && relative === explicitlyIncluded);
-      for (const relative of ownership.unownedFiles) {
-        if (selectedProjectFile(relative)) {
-          await remoteFiles.expect(relative, await fs.readFile(path.join(localPath, relative)));
-        } else {
-          await expect
-            .soft(fs.stat(path.join(remote, relative)), relative)
-            .rejects.toMatchObject({ code: "ENOENT" });
-        }
-      }
-      // New ignored project files on the worker must not be promoted on return either.
+      // Initial inventory selection is covered by workspace-sync-tunnel.test.ts.
+      // Keep unowned targets here for the node reconciliation collision boundary.
       await createStagedInputOwnershipFixture(remote);
-      for (const relative of ownership.unownedFiles) {
-        await remoteFiles.write(relative, "worker project bytes\n");
-      }
-      const ordinaryOutput =
-        mode === "plain" ? `${stagedInputDirectory("a1".repeat(32))}/new-output.txt` : undefined;
-      if (ordinaryOutput) {
-        await remoteFiles.write(ordinaryOutput, "ordinary project output\n");
-      }
       let baseManifestRef = synced.manifestRef;
       const journal = reconciliationJournal((ref) => {
         baseManifestRef = ref;
@@ -274,17 +252,6 @@ it.each([
       await remoteFiles.write("unrelated-private.txt", "unselected ignored file\n");
 
       const assertRetained = async () => {
-        if (ordinaryOutput) {
-          await localFiles.expect(ordinaryOutput, "ordinary project output\n");
-        }
-        for (const relative of ownership.unownedFiles) {
-          await localFiles.expect(
-            relative,
-            selectedProjectFile(relative)
-              ? "worker project bytes\n"
-              : `fixture bytes: ${relative}\n`,
-          );
-        }
         for (const [relative, bytes] of expected) {
           // Assert Gateway bytes first: a successful upload alone did not prove retention.
           await localFiles.expect(relative, bytes);
