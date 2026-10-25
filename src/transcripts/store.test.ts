@@ -308,12 +308,13 @@ it("keeps selector and overview columns aligned on insert, replacement, and remo
 });
 
 it("keeps summary snapshot queries bound to the current session and persisted revision", async () => {
-  const first = session("summary-first");
-  const second = { ...session("summary-second"), title: "Second meeting" };
-  const later = session("summary-first", "2026-07-02T10:00:00.000Z");
-  await admit(first, ["First speech"]);
-  await admit(second, ["Second speech"]);
-  await admit(later, ["Next day speech"]);
+  const first = await admit(session("summary-first"), ["First speech"]);
+  const second = await admit({ ...session("summary-second"), title: "Second meeting" }, [
+    "Second speech",
+  ]);
+  const later = await admit(session("summary-first", "2026-07-02T10:00:00.000Z"), [
+    "Next day speech",
+  ]);
   const firstSnapshot = await expectSnapshot(first, ["First speech"]);
   await expectSnapshot(second, ["Second speech"]);
   await expectSnapshot(later, ["Next day speech"]);
@@ -350,8 +351,7 @@ it.each(["cancel", "consumer-error"] as const)("releases snapshots after %s", as
 it.each(["rewrite", "reset"] as const)(
   "isolates export snapshots from %s and appends",
   async (change) => {
-    const target = { ...session(), title: "Original meeting" };
-    await store.writeSession(target);
+    const target = await admit({ ...session(), title: "Original meeting" });
     const database = openOpenClawStateDatabase(databaseOptions());
     writeTransaction((db) => {
       for (let index = 0; index < 130; index++) {
@@ -512,7 +512,7 @@ it("bounds exact retry lookups to one caption ID without adding statements", asy
 });
 
 it("deduplicates exact retries but preserves same-id revisions", async () => {
-  const target = session();
+  const target = await admit();
   const interim = { id: "utterance-1", text: "draft" };
   const revisions: TranscriptUtterance[] = [
     interim,
@@ -529,7 +529,6 @@ it("deduplicates exact retries but preserves same-id revisions", async () => {
     { ...interim, metadata: { language: "en", confidence: 1 } },
     { ...interim, metadata: { confidence: 1, language: "en" } },
   ];
-  await store.writeSession(target);
   await appendEach(target, revisions, 2);
   await appendEach(target, revisions);
   await expect(store.readUtterancesForSession(target)).resolves.toEqual(
@@ -537,8 +536,7 @@ it("deduplicates exact retries but preserves same-id revisions", async () => {
   );
 
   for (const other of [session("other"), session(target.sessionId, "2026-07-02T10:00:00.000Z")]) {
-    await store.writeSession(other);
-    await store.appendUtteranceForSession(other, interim);
+    await admit(other, [interim]);
     await expect(store.readUtterancesForSession(other)).resolves.toEqual([
       { ...interim, sessionId: other.sessionId },
     ]);
@@ -561,7 +559,8 @@ it("does not treat SQLite's replacement of lone surrogates as an exact retry", a
   await expect(store.readUtterancesForSession(target)).resolves.toEqual(stored);
 });
 
-it.each(["standup"])("requires dated selectors for repeated %s", async (id) => {
+it("requires dated selectors for repeated sessions", async () => {
+  const id = "standup";
   await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
   await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
@@ -703,8 +702,7 @@ it("does not let a modified export block canonical session updates", async () =>
 });
 
 it("resolves descriptor exports through canonical SQLite identity", async () => {
-  const target = { ...session("canonical-export"), title: "Canonical title" };
-  await store.writeSession(target);
+  const target = await admit({ ...session("canonical-export"), title: "Canonical title" });
 
   const artifacts = await store.materializeSessionArtifacts(
     { ...target, title: "Stale title" },

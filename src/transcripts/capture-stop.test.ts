@@ -56,8 +56,7 @@ const expectDisabled = (tool: Pick<ReturnType<typeof captureTools>, "start">) =>
 type StopFailure = "returned" | "thrown";
 function retryingProvider(id: string, error: string, failure: StopFailure, reportStopped = false) {
   const requests: Start[] = [];
-  const registered = createDeferred();
-  const state = { subscribed: false, failing: true };
+  const state = { failing: true };
   const stop = vi.fn<NonNullable<Provider["stop"]>>(async ({ sessionId }) => {
     if (state.failing) {
       if (failure === "thrown") {
@@ -65,7 +64,6 @@ function retryingProvider(id: string, error: string, failure: StopFailure, repor
       }
       return { ok: false, error };
     }
-    state.subscribed = false;
     if (reportStopped) {
       await requests[0]!.onStatus?.({ active: false, sessionId });
     }
@@ -78,12 +76,10 @@ function retryingProvider(id: string, error: string, failure: StopFailure, repor
     stop,
     async start(request) {
       requests.push(request);
-      state.subscribed = true;
-      registered.resolve();
       return { ok: true, session: request.session };
     },
   };
-  return { provider, requests, registered, state, stop };
+  return { provider, requests, state, stop };
 }
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -103,7 +99,7 @@ describe("transcript provider cleanup custody", () => {
   ] as const)(
     "retains $owner cleanup after a $failure failure with provider $registryChange",
     async ({ owner, failure, registryChange }) => {
-      const { provider, requests, registered, state, stop } = retryingProvider(
+      const { provider, requests, state, stop } = retryingProvider(
         "cleanup-capture",
         "cleanup unavailable",
         failure,
@@ -122,11 +118,8 @@ describe("transcript provider cleanup custody", () => {
       const replacementStop = vi.fn(stopSuccessfully);
       try {
         if (owner !== "tool") {
-          service.start();
-          await registered.promise;
-          await vi.waitFor(async () =>
-            expect(await tool.status()).toMatchObject({ active: [{ sessionId: "notes" }] }),
-          );
+          await service.start().settled;
+          expect(await tool.status()).toMatchObject({ active: [{ sessionId: "notes" }] });
         } else {
           await tool.start({ providerId: provider.id, sessionId: "notes" });
         }
@@ -140,7 +133,6 @@ describe("transcript provider cleanup custody", () => {
         } else {
           await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
         }
-        expect.soft(state.subscribed).toBe(true);
         await expect.soft(tool.status()).resolves.toMatchObject({
           active: [{ sessionId: "notes", cleanupPending: true }],
           pendingFinalization: [],
@@ -160,7 +152,6 @@ describe("transcript provider cleanup custody", () => {
         await (owner !== "tool" ? service.stop() : tool.stop("notes"));
         expect.soft(stop).toHaveBeenCalledTimes(2);
         expect.soft(replacementStop).not.toHaveBeenCalled();
-        expect.soft(state.subscribed).toBe(false);
         await expect(tool.status()).resolves.toMatchObject({
           active: [],
           pendingFinalization: [],
