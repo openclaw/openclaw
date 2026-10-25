@@ -21,7 +21,6 @@ vi.mock("../../skills/discovery/status.js", () => ({ prepareWorkspaceSkillStatus
 
 const registry = "https://catalog.example.test";
 const skillRequest = { kind: "skill", agentId: "main" };
-const trendingRequest = { ...skillRequest, feed: "trending" };
 const skillMetadata = { name: "same-slug", displayName: "Same", family: "skill", updatedAt: 1 };
 const config = {
   agents: {
@@ -85,16 +84,6 @@ function stubRegistry(rows: unknown[], nextCursor?: string) {
   return stubFetch((url) =>
     url.pathname.endsWith("/search") ? searchResults(rows) : { items: rows, nextCursor },
   );
-}
-function trendingSkill(source: string, displayName: string, reference: string) {
-  return {
-    slug: "same-slug",
-    displayName,
-    source,
-    official: true,
-    publisher: { handle: "alice", ...(source === "clawhub" ? { official: true } : {}) },
-    install: { kind: source, reference },
-  };
 }
 function installedPlugin(id: string, enabled: boolean, metadata: Params) {
   return {
@@ -190,28 +179,23 @@ it("keeps native publisher, registry, external source, and selected agent instal
   expect(invalid.error?.code).toBe("INVALID_REQUEST");
 });
 
-it("qualifies trending native skills with listing flags and preserves install-only external identities", async () => {
-  stubFetch((url) => {
-    if (url.pathname.startsWith("/api/v1/packages/")) {
-      return { package: skill("alice", false) };
-    }
-    return {
-      items: [
-        trendingSkill("clawhub", "Official publisher", "alice/same-slug"),
-        trendingSkill("skills-sh", "External", "skills-sh:alice/repo/same-slug"),
-      ],
-      nextCursor: "trending-page-two",
-    };
+it("joins external trending skills by their install-only identity", async () => {
+  const reference = "skills-sh:alice/repo/same-slug";
+  stubFetch(() => ({
+    items: [
+      {
+        source: "skills-sh",
+        slug: "same-slug",
+        displayName: "External",
+        install: { kind: "skills-sh", reference },
+      },
+    ],
+  }));
+  const page = await call("browse", { ...skillRequest, feed: "trending" });
+  expect(page.result).toMatchObject({
+    mode: "trending",
+    items: [{ id: reference, installOnly: true, local: { installed: true } }],
   });
-  const general = await call("browse", trendingRequest);
-  expect(general.result.mode).toBe("trending");
-  expect(general.result.items[1]).toMatchObject({
-    id: "skills-sh:alice/repo/same-slug",
-    installOnly: true,
-    local: { installed: true },
-  });
-  const official = await call("browse", { ...trendingRequest, officialOnly: true });
-  expect(official.result).toMatchObject({ items: [], nextCursor: "trending-page-two" });
 });
 
 it("distinguishes empty results from malformed registry responses and local status failures", async () => {

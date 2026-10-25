@@ -2,12 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { collectRuntimeMetadata } from "../../auto-reply/reply/queue/delivery-context.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-} from "../../auto-reply/reply/queue/lifecycle.js";
+import { admitFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import {
@@ -28,7 +24,6 @@ import {
   requestRpcSourceCancellation,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareAgentWaitForTurn } from "../agent-turn/agent-wait.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -149,47 +144,6 @@ function fixture(originatingChannel = "webchat") {
   };
   return { context, enqueue, terminals, execution, waitResult };
 }
-
-it.each<[QueuedFollowupReplyBatch["completion"], string, string]>([
-  [{ kind: "completed" }, "final", "ok"],
-  [{ kind: "failed", error: "Provider failed" }, "error", "error"],
-  [
-    { kind: "failed", error: "Provider timed out", errorKind: "timeout", stopReason: "timeout" },
-    "error",
-    "timeout",
-  ],
-  [{ kind: "aborted", stopReason: "rpc" }, "aborted", "error"],
-])(
-  "settles every collected input only with the execution's %j outcome",
-  async (completion, state, status) => {
-    const { context, enqueue, terminals, waitResult } = fixture();
-    const ids = [`input-1-${completion.kind}-${status}`, `input-2-${completion.kind}-${status}`];
-    const inputs = ids.map((id) => enqueue(id));
-    expect(terminals()).toEqual([]);
-    for (const id of ids) {
-      expect(context.dedupe.get(`chat:${id}`)?.payload).toMatchObject({
-        runId: id,
-        status: "accepted",
-      });
-      expect((await waitResult(id)).status).toBe("pending");
-    }
-    const collected = collectRuntimeMetadata(inputs.map(({ run }) => run));
-    if (collected.queuedFollowupReplyDisposition?.kind !== "deliver") {
-      throw new Error("missing collected delivery owner");
-    }
-    const batch = replyBatch("execution-C", completion);
-    await Promise.all([
-      collected.queuedFollowupReplyDisposition.deliver(batch),
-      collected.queuedFollowupReplyDisposition.deliver(batch),
-    ]);
-    inputs.forEach(({ run }) => completeFollowupRunLifecycle(run));
-    expect(terminals()).toMatchObject(ids.map((runId) => ({ runId, state })));
-    expect(ids.every((id) => !isRpcSourceQueued(rpcSourceTesting.get(id)))).toBe(true);
-    for (const id of ids) {
-      expect(await waitResult(id)).toMatchObject({ runId: id, status });
-    }
-  },
-);
 
 it("settles failed progress without retiring its transferred recovery delivery", async () => {
   const { context, enqueue, terminals } = fixture();

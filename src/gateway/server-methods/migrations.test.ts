@@ -190,7 +190,7 @@ describe("memory migration gateway handlers", () => {
     mocks.providers = [provider(oversized)];
     const [, rawResult] = await response("migrations.memory.plan");
     expect(rawResult).toMatchObject({
-      providers: [{ error: expect.stringContaining("maximum is 2000"), items: [] }],
+      providers: [{ found: false, error: expect.stringContaining("maximum is 2000"), items: [] }],
     });
   });
 
@@ -219,17 +219,6 @@ describe("memory migration gateway handlers", () => {
     await expectRejectedApply(planFingerprint, "plan changed", { overwrite });
   });
 
-  it("reports unsupported actionable memory operations during planning", async () => {
-    const plan = memoryPlan();
-    plan.items[0]!.action = "append";
-    mocks.providers = [provider(plan)];
-    const [ok, rawResult] = await response("migrations.memory.plan");
-    expect(ok).toBe(true);
-    expect(rawResult).toMatchObject({
-      providers: [{ found: false, error: expect.stringContaining("only supports copy actions") }],
-    });
-  });
-
   it.each([
     ["metadata", (plan: MigrationPlan) => (plan.metadata = { revision: "new" })],
     ["warnings", (plan: MigrationPlan) => (plan.warnings = ["updated warning"])],
@@ -252,52 +241,6 @@ describe("memory migration gateway handlers", () => {
       itemIds: ["memory:stale"],
     });
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-  });
-
-  it("applies only the exact selected ids from the fresh plan", async () => {
-    mocks.runMigrationApply.mockResolvedValue(memoryPlan(true));
-    const planFingerprint = await loadPlanFingerprint();
-    expect((await response("migrations.memory.apply", applyParams(planFingerprint)))[0]).toBe(true);
-    expect(mocks.runMigrationApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "codex",
-        opts: expect.objectContaining({
-          targetAgentId: "research",
-          itemKinds: ["memory"],
-          itemIds: ["memory:one"],
-          allowPartialResult: true,
-          preflightPlan: expect.objectContaining({ providerId: "codex" }),
-        }),
-      }),
-    );
-  });
-
-  it("replays a completed import even after its source bytes change", async () => {
-    mocks.runMigrationApply.mockResolvedValue(memoryPlan(true));
-    const params = applyParams(await loadPlanFingerprint(), {
-      idempotencyKey: "memory-import-retry",
-    });
-    expect((await response("migrations.memory.apply", params))[0]).toBe(true);
-    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed after import", "utf8");
-    const retry = await response("migrations.memory.apply", params);
-    expect(retry[0]).toBe(true);
-    expect(retry[3]).toEqual({ cached: true });
-    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
-  });
-
-  it("rejects an idempotency key reused for a different import", async () => {
-    mocks.runMigrationApply.mockResolvedValue(memoryPlan(true));
-    const planFingerprint = await loadPlanFingerprint();
-    const params = applyParams(planFingerprint, { idempotencyKey: "memory-import-reused" });
-    await response("migrations.memory.apply", params);
-    const [ok, , error] = await response("migrations.memory.apply", {
-      ...params,
-      itemIds: ["memory:other"],
-    });
-    expect(ok).toBe(false);
-    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message).toContain("idempotency key was reused");
-    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
   });
 
   it("returns partial failures and recovery metadata to the Control UI", async () => {

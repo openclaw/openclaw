@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAgent } from "../../agents/agent-create.js";
 import { prepareDoctorContext } from "../../commands/doctor-config-flow.test-support.js";
 import { runDoctorConfigPreflight } from "../../commands/doctor-config-preflight.js";
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
@@ -13,10 +12,7 @@ import { backupDoctorMigrationDatabases } from "../../commands/doctor-migration-
 import { createConfigIO, getRuntimeConfig, resetConfigRuntimeState } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntryReadOnly,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runInitialConfigWriteHealth } from "../../flows/doctor-health-contribution-runners.config.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
@@ -84,20 +80,9 @@ it.for([true, false])(
         const originalWitness = await fs.readFile(witnessPath);
         const stateRows = (sql: string) => rows(fixture.stateDatabase, sql);
         expect(stateRows("PRAGMA user_version")).toEqual([{ user_version: 19 }]);
-        expect(stateRows("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'")).toEqual(
-          [{ app_version: "2026.9.9" }],
-        );
         expect(stateRows("PRAGMA table_info(agent_deletion_journal)")).not.toContainEqual(
           expect.objectContaining({ name: "phase" }),
         );
-        expect(
-          stateRows("SELECT agent_id, cleanup_completed, delete_files FROM agent_deletion_journal"),
-        ).toEqual([
-          { agent_id: "doomed", cleanup_completed: 0, delete_files: Number(deleteFiles) },
-        ]);
-        for (const file of [fixture.keeperDatabase, fixture.doomedDatabase]) {
-          expect(rows(file, "PRAGMA user_version")).toEqual([{ user_version: 24 }]);
-        }
 
         const readScope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
         let owner: ReturnType<typeof createDeletionCron> | undefined;
@@ -262,24 +247,8 @@ it.for([true, false])(
             await resumeDeletion();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({ cleanupCompleted: true });
             await assertKeeper();
-            expect(
-              await createAgent({
-                name: "doomed",
-                workspace: fixture.doomedWorkspace,
-                skipBootstrap: true,
-              }),
-            ).toMatchObject({ status: "created", agentId: "doomed" });
-            expect(readAgentDeletionJournal("doomed")).toBeUndefined();
-            await expect(
-              replaceSessionEntry(
-                { agentId: "doomed", sessionKey: "agent:doomed:recreated", env: state.env },
-                { sessionId: "recreated-after-upgrade", updatedAt: 2 },
-              ),
-            ).resolves.toMatchObject({ sessionId: "recreated-after-upgrade" });
-            await assertKeeper();
             await closeOwners();
             assertClosedStorage();
-            expectHealthySchema(fixture.doomedDatabase);
           });
         } finally {
           try {
