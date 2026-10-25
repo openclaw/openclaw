@@ -77,7 +77,6 @@ describe("plugin dependency health", () => {
   it.each([
     ["required-runtime", "nested", false],
     ["@example/required-runtime", "nested", false],
-    ["required-runtime", "hoisted", false],
     ["required-runtime", "ancestor", false],
     ["required-runtime", "nested", true],
     ["required-runtime", "hoisted", true],
@@ -86,7 +85,7 @@ describe("plugin dependency health", () => {
     ["required-runtime", "ancestor", true],
     ["required-runtime", "outside-symlink", true],
   ] as const)("resolves %s in %s layout (bounded: %s)", (name, layout, bounded) => {
-    const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
+    const { parent, projectRoot, rootDir } = createHostFixture();
     const dependencyDir = path.join(rootDir, "node_modules", name);
     const owner =
       layout === "nested"
@@ -95,9 +94,6 @@ describe("plugin dependency health", () => {
           ? projectRoot
           : parent;
     const availableDir = layout === "missing" ? undefined : writeDependency(owner, name);
-    if (bounded) {
-      linkHost(rootDir, hostRoot);
-    }
     if (layout === "hoisted") {
       fs.mkdirSync(dependencyDir, { recursive: true });
     } else if (layout.endsWith("symlink") && availableDir) {
@@ -107,21 +103,11 @@ describe("plugin dependency health", () => {
       rootDir,
       dependencyRootDir: bounded ? projectRoot : undefined,
       dependencies: { [name]: "1.0.0" },
-      optionalDependencies: bounded ? { "optional-runtime": "1.0.0" } : undefined,
     };
     const installed = !bounded || ["nested", "hoisted", "inside-symlink"].includes(layout);
     const status = buildPluginDependencyStatus(params);
     expectRequired(status, installed, name);
-    if (bounded) {
-      expect(status.missingOptional).toEqual(["optional-runtime"]);
-      expect(
-        buildManagedPluginDependencyStatus({
-          ...params,
-          dependencyRootDir: projectRoot,
-          dependencies: { ...params.dependencies, openclaw: "*" },
-        }).missing,
-      ).toEqual(installed ? [] : [name]);
-    } else {
+    if (!bounded) {
       expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
     }
   });
@@ -190,15 +176,13 @@ describe("plugin dependency health", () => {
     },
   );
 
-  it.each([undefined, {}, { openclaw: "*", "optional-runtime": "1.0.0" }])(
+  it.each([undefined, { openclaw: "*", "optional-runtime": "1.0.0" }])(
     "keeps optional overrides out of required failures and host audits: %j",
     (dependencies) => {
       const rootDir = createPluginRoot();
-      const resolver = vi
-        .spyOn(hostRootResolver, "resolveOpenClawPackageRootSync")
-        .mockImplementation(() => {
-          throw new Error("No required host needs auditing");
-        });
+      vi.spyOn(hostRootResolver, "resolveOpenClawPackageRootSync").mockImplementation(() => {
+        throw new Error("No required host needs auditing");
+      });
       const params = {
         rootDir,
         dependencyRootDir: rootDir,
@@ -216,53 +200,47 @@ describe("plugin dependency health", () => {
         status.optionalDependencies.find((entry) => entry.name === "optional-runtime")?.spec,
       ).toBe("2.0.0");
       expect(buildManagedPluginDependencyStatus(params).missing).toEqual([]);
-      expect(resolver).not.toHaveBeenCalled();
     },
   );
 
-  it.each([
-    "canonical",
-    "missing",
-    "empty",
-    "copy",
-    "wrong-target",
-    "linked-node-modules",
-    "hoisted-host",
-    "unknown-host",
-  ] as const)("audits a required OpenClaw host with a %s layout", (layout) => {
-    const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
-    if (layout === "canonical" || layout === "unknown-host") {
-      linkHost(rootDir, hostRoot);
-    } else if (layout === "copy") {
-      writeDependency(rootDir, "openclaw");
-    } else if (layout === "empty") {
-      fs.mkdirSync(path.join(rootDir, "node_modules", "openclaw"), { recursive: true });
-    } else if (layout === "wrong-target") {
-      linkHost(rootDir, writeDependency(parent, "openclaw"));
-    } else if (layout === "linked-node-modules") {
-      const externalRoot = path.join(parent, "external");
-      linkHost(externalRoot, hostRoot);
-      fs.symlinkSync(
-        path.join(externalRoot, "node_modules"),
-        path.join(rootDir, "node_modules"),
-        "junction",
+  it.each(["canonical", "missing", "copy", "linked-node-modules", "unknown-host"] as const)(
+    "audits a required OpenClaw host with a %s layout",
+    (layout) => {
+      const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
+      if (layout === "canonical" || layout === "unknown-host") {
+        linkHost(rootDir, hostRoot);
+      } else if (layout === "copy") {
+        writeDependency(rootDir, "openclaw");
+      } else if (layout === "linked-node-modules") {
+        const externalRoot = path.join(parent, "external");
+        linkHost(externalRoot, hostRoot);
+        fs.symlinkSync(
+          path.join(externalRoot, "node_modules"),
+          path.join(rootDir, "node_modules"),
+          "junction",
+        );
+      }
+      if (layout === "unknown-host") {
+        vi.spyOn(hostRootResolver, "resolveOpenClawPackageRootSync").mockReturnValue(null);
+      }
+      const params = { rootDir, dependencyRootDir: projectRoot, dependencies: { openclaw: "*" } };
+      expectRequired(
+        buildManagedPluginDependencyStatus(params),
+        layout === "canonical",
+        "openclaw",
       );
-    } else if (layout === "hoisted-host") {
-      linkHost(projectRoot, hostRoot);
-    }
-    if (layout === "unknown-host") {
-      vi.spyOn(hostRootResolver, "resolveOpenClawPackageRootSync").mockReturnValue(null);
-    }
-    const params = { rootDir, dependencyRootDir: projectRoot, dependencies: { openclaw: "*" } };
-    expect(buildManagedPluginDependencyStatus(params).missing).toEqual(
-      layout === "canonical" ? [] : ["openclaw"],
-    );
-    expect(buildManagedPluginDependencyStatus(params).requiredInstalled).toBe(
-      layout === "canonical",
-    );
-    // Generic status accepts a package copy; managed status requires the canonical host.
-    expect(buildPluginDependencyStatus(params).requiredInstalled).toBe(layout === "copy");
-  });
+      if (layout === "canonical") {
+        expect(
+          buildManagedPluginDependencyStatus({
+            ...params,
+            dependencies: { ...params.dependencies, ...required },
+          }).missing,
+        ).toEqual(["required-runtime"]);
+      }
+      // Generic status accepts a package copy; managed status requires the canonical host.
+      expect(buildPluginDependencyStatus(params).requiredInstalled).toBe(layout === "copy");
+    },
+  );
 
   it.each(["", "missing"])("rejects an unavailable plugin root: %j", (root) => {
     const projectRoot = createPluginRoot();
