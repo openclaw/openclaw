@@ -5,6 +5,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -50,6 +51,11 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
   await withActor(async (f) => {
+    const entry = f.nativeEntry()!;
+    f.writeEntry({
+      ...entry,
+      goal: buildCreatedSessionGoal(entry, { objective: "single adoption" }, 1),
+    });
     const initial = f.read();
     const command: Mutation = {
       type: "session.actor.adoptRun",
@@ -62,7 +68,10 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
         expectedState: buildRestartRecoveryExpectedState(initial.entry!),
         runId: "current-run",
         lifecycle: { startedAt: 2 },
-        reducers: [{ kind: "activity", updatedAt: 20 }],
+        reducers: [
+          { kind: "activity", updatedAt: 20 },
+          { kind: "goal-continuation", goalId: initial.entry!.goal!.id },
+        ],
       },
     };
     await f.prepare(command);
@@ -74,10 +83,18 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
       expect(f.mutate(command)).toMatchObject({
         kind: "committed",
         receipt: {
-          postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
+          postimage: {
+            entry: {
+              activeWriterRunId: "current-run",
+              startedAt: 2,
+              updatedAt: 20,
+              goal: { continuationTurns: 1 },
+            },
+          },
         },
       });
       expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
+      expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
       writes.counts.nodes = 0;
       writes.counts.windows = 0;
       f.restartActor();
@@ -86,6 +103,7 @@ it("persists run adoption and its reducers once, then skips an unchanged hydrate
         activeWriterRunId: "current-run",
         startedAt: 2,
         updatedAt: 20,
+        goal: { continuationTurns: 1 },
       });
       expect(
         f.mutate({
@@ -858,10 +876,14 @@ it("retains one oversized actor across competing small actors and replaces it wi
     const other = { ...f.target, sessionKey: "agent:main:byte-budget-other" };
     const companion = { ...f.target, sessionKey: "agent:main:byte-budget-companion" };
     runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
+      const entry = {
         sessionId: f.scope.sessionId,
         updatedAt: 1,
         label: largeLabel,
+      };
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...entry,
+        goal: buildCreatedSessionGoal(entry, { objective: "oversized adoption" }, 1),
       });
       writeSessionEntry(f.database, other.sessionKey, {
         sessionId: "byte-budget-other",
@@ -879,13 +901,19 @@ it("retains one oversized actor across competing small actors and replaces it wi
 
     const initial = f.read();
     const command: Mutation = {
-      type: "session.actor.patch",
+      type: "session.actor.adoptRun",
       input: {
         target: initial.target,
         expected: initial.version,
         commandId: "oversized-activity",
         phaseId: "terminal-accounting",
-        reducers: [{ kind: "activity", updatedAt: 2 }],
+        sessionId: f.scope.sessionId,
+        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        runId: "oversized-run",
+        reducers: [
+          { kind: "activity", updatedAt: 2 },
+          { kind: "goal-continuation", goalId: initial.entry!.goal!.id },
+        ],
       },
     };
     await f.prepare(command);
@@ -894,6 +922,8 @@ it("retains one oversized actor across competing small actors and replaces it wi
       throw new Error("Expected the oversized sole actor to commit without rehydration");
     }
     expect(committed.failure).toBeUndefined();
+    expect(committed.receipt.postimage.entry?.goal?.continuationTurns).toBe(1);
+    expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
     expect(f.reply()).toEqual({ kind: "committed" });
     expect(committed.receipt.afterVersion).toEqual({
       epoch: initial.version.epoch,
@@ -903,6 +933,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(current.version).toEqual(committed.receipt.afterVersion);
     expect(current.entry?.updatedAt).toBe(2);
     expect(current.entry?.label === largeLabel).toBe(true);
+    expect(current.entry?.goal?.continuationTurns).toBe(1);
 
     const competing = f.read(other);
     expect(f.read().version).toEqual(current.version);
@@ -913,10 +944,20 @@ it("retains one oversized actor across competing small actors and replaces it wi
 
     expect(
       f.mutate({
-        ...command,
-        input: { ...command.input, expected: current.version, commandId: "competing-activity" },
+        type: "session.actor.patch",
+        input: {
+          target: f.target,
+          expected: current.version,
+          commandId: "competing-activity",
+          phaseId: "terminal-accounting",
+          reducers: [
+            { kind: "activity", updatedAt: 2 },
+            { kind: "goal-continuation", goalId: current.entry!.goal!.id },
+          ],
+        },
       }).kind,
     ).toBe("committed");
+    expect(f.nativeEntry()?.goal?.continuationTurns).toBe(2);
 
     f.writeEntry(
       { sessionId: "byte-budget-companion", updatedAt: 2, label: largeLabel },
@@ -929,6 +970,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(rehydrated.version.epoch).not.toBe(current.version.epoch);
     expect(rehydrated.entry?.updatedAt).toBe(2);
     expect(rehydrated.entry?.label === largeLabel).toBe(true);
+    expect(rehydrated.entry?.goal?.continuationTurns).toBe(2);
     expect(f.read(other).version).toEqual(competing.version);
     expect(f.read(companion).version.epoch).not.toBe(secondOversized.version.epoch);
 

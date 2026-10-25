@@ -48,6 +48,7 @@ import {
 } from "./sqlite-temp-generation-schema.js";
 
 export type { SqliteSchemaFacts } from "./sqlite-schema-admission.js";
+export { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 export type {
   SqliteReadOperationRevision,
   SqliteReadScopeRevision,
@@ -335,7 +336,7 @@ function trackSchemaChanges(
           owner.transactionCatalogBound = true;
         }
       },
-      finish: (succeeded, abandoned) => {
+      finish: (succeeded, abandoned, noEffect) => {
         if (iterator && owner.unmanagedSnapshots.delete(iterator) && owner.iteratorFacts) {
           invalidate(owner);
           owner.iteratorFacts = false;
@@ -407,7 +408,7 @@ function trackSchemaChanges(
         );
         // A parked read cursor cannot retain custody of a settled sibling statement's write.
         if (owner.mutationDepth === 0 && !database.isTransaction) {
-          finishSqliteDatabaseWrite(database);
+          finishSqliteDatabaseWrite(database, noEffect);
         }
         // A control batch may open a transaction and read before returning, even on error.
         owner.transactionRead ||= database.isTransaction && Boolean(control && !control.single);
