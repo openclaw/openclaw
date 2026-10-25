@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
-import type { JSX } from "@solidjs/web";
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
+import { createComponent, createSignal, getOwner } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -63,46 +62,47 @@ async function settle() {
   }
 }
 
-function mountMedia<P extends { options: ImageRenderOptions }>(
-  component: (props: P) => JSX.Element,
-  initial: P,
-) {
-  let current = initial;
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const update = () => {
-    setRevision((value) => value + 1);
-    if (!getOwner()) {
-      flush();
-    }
-  };
-  const view = mountSolid(() =>
-    createComponent(
-      component,
-      merge(() => {
-        revision();
-        return { ...current, options: { ...current.options, mediaOwner: update } };
-      }),
-    ),
-  );
-  views.add(view);
-  subscribers.add(update);
-  return {
-    ...view,
-    update(next: Partial<P>) {
-      current = { ...current, ...next };
-      update();
-    },
-  };
-}
-
 function mount(
   item: AttachmentItem,
   options: ImageRenderOptions = {},
   onOpenSidebar?: (content: SidebarContent) => void,
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
-  const view = mountMedia(MessageAttachment, { item, options, onOpenSidebar, presentation });
-  return { ...view, replace: (next: AttachmentItem) => view.update({ item: next }) };
+  let current = item;
+  const propsForItem = (): { item: AttachmentItem; options: ImageRenderOptions } => ({
+    item: current,
+    options: { ...options, mediaOwner: update },
+  });
+  let setProps: (props: ReturnType<typeof propsForItem>) => void;
+  const update = () => {
+    setProps(propsForItem());
+    if (!getOwner()) {
+      flush();
+    }
+  };
+  const view = mountSolid(() => {
+    const [props, setCurrent] = createSignal(propsForItem(), { ownedWrite: true });
+    setProps = setCurrent;
+    return createComponent(MessageAttachment, {
+      get item() {
+        return props().item;
+      },
+      get options() {
+        return props().options;
+      },
+      onOpenSidebar,
+      presentation,
+    });
+  });
+  views.add(view);
+  subscribers.add(update);
+  return {
+    ...view,
+    replace(next: AttachmentItem) {
+      current = next;
+      update();
+    },
+  };
 }
 
 function fetchResponse(
@@ -293,18 +293,32 @@ function mountText(
   options: ImageRenderOptions = {},
   inlineComments = false,
 ) {
+  const [current, setCurrent] = createSignal(Array.isArray(item) ? item : [item]);
+  const [revision, setRevision] = createSignal(0);
   const open = vi.fn();
-  const view = mountMedia(AssistantAttachments, {
-    attachments: Array.isArray(item) ? item : [item],
-    options,
-    onOpenSidebar: open,
-    inlinePlayback: false,
-    inlineComments,
-  });
+  const update = () => setRevision((value) => value + 1);
+  const view = mountSolid(() =>
+    createComponent(AssistantAttachments, {
+      get attachments() {
+        return current();
+      },
+      get options() {
+        revision();
+        return { ...options, mediaOwner: update };
+      },
+      onOpenSidebar: open,
+      inlinePlayback: false,
+      inlineComments,
+    }),
+  );
+  views.add(view);
+  subscribers.add(update);
   return {
     ...view,
     open,
-    replace: (next: AttachmentItem) => view.update({ attachments: [next] }),
+    replace(next: AttachmentItem) {
+      setCurrent([next]);
+    },
   };
 }
 
