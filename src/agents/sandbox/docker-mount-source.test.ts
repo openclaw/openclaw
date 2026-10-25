@@ -32,6 +32,9 @@ const wireMount = {
   RW: true,
 };
 const inspected = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: "", code: 0 });
+const inspectContainer = (overrides = {}) =>
+  inspected({ Id: id, Mounts: [wireMount], ...overrides });
+const resolveNamespace = () => resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE);
 let target = 0;
 
 function translateSandboxMountSource(
@@ -59,11 +62,9 @@ beforeEach(() => {
     file === "/proc/sys/kernel/random/boot_id" ? "test-boot\n" : "0::/\n",
   );
   vi.mocked(fs.realpathSync).mockImplementation((file) => String(file));
-  vi.mocked(execContainer).mockImplementation(async (_engine, args) => ({
-    stdout: args[0] === "inspect" ? JSON.stringify({ Id: id, Mounts: [wireMount] }) : identity,
-    stderr: "",
-    code: 0,
-  }));
+  vi.mocked(execContainer).mockImplementation(async (_engine, args) =>
+    args[0] === "inspect" ? inspectContainer() : { stdout: identity, stderr: "", code: 0 },
+  );
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -72,10 +73,7 @@ afterEach(() => {
 
 describe("Docker source namespace", () => {
   it("proves a custom hostname on private cgroup v2 before accepting mounts, and shares the snapshot", async () => {
-    const [first, second] = await Promise.all([
-      resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE),
-      resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE),
-    ]);
+    const [first, second] = await Promise.all([resolveNamespace(), resolveNamespace()]);
     expect(first).toEqual(parseInspectedSandboxMounts([wireMount]));
     expect(second).toBe(first);
     expect(execContainer).toHaveBeenCalledTimes(2);
@@ -105,7 +103,7 @@ describe("Docker source namespace", () => {
           : "0::/\n",
     );
     vi.mocked(execContainer).mockRejectedValueOnce(new Error("No such container"));
-    await expect(resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE)).resolves.toHaveLength(1);
+    await expect(resolveNamespace()).resolves.toHaveLength(1);
     expect(vi.mocked(execContainer).mock.calls[1]?.[1].at(-1)).toBe(id);
   });
 
@@ -113,14 +111,12 @@ describe("Docker source namespace", () => {
     "rejects Docker --tmpfs at %s even when .Mounts only reports its bind ancestor",
     async (destination) => {
       vi.mocked(execContainer).mockResolvedValueOnce(
-        inspected({ Id: id, Mounts: [wireMount], Tmpfs: { [destination]: "rw,size=1m" } }),
+        inspectContainer({ Tmpfs: { [destination]: "rw,size=1m" } }),
       );
-      const mounts = await resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE);
-      expect(() =>
-        translateSandboxMountSource({
-          mounts: mounts!,
-        }),
-      ).toThrow(/unsupported (?:nested )?tmpfs mount/);
+      const mounts = await resolveNamespace();
+      expect(() => translateSandboxMountSource({ mounts: mounts! })).toThrow(
+        /unsupported (?:nested )?tmpfs mount/,
+      );
     },
   );
 
@@ -131,24 +127,24 @@ describe("Docker source namespace", () => {
         vi.mocked(execContainer).mockRejectedValueOnce(new Error("daemon unavailable"));
       } else if (failure === "invalid-id" || failure === "missing-mounts") {
         vi.mocked(execContainer).mockResolvedValueOnce(
-          inspected({
+          inspectContainer({
             Id: failure === "invalid-id" ? "short-id" : id,
             Mounts: failure === "missing-mounts" ? null : [wireMount],
           }),
         );
       } else {
         vi.mocked(execContainer)
-          .mockResolvedValueOnce(inspected({ Id: id, Mounts: [wireMount] }))
+          .mockResolvedValueOnce(inspectContainer())
           .mockResolvedValueOnce(
             inspected(
               failure === "wrong-boot" ? ["other-boot", "mnt:[123]"] : ["test-boot", "mnt:[456]"],
             ),
           );
       }
-      await expect(resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE)).rejects.toThrow(
+      await expect(resolveNamespace()).rejects.toThrow(
         "Connect Docker to the daemon that runs the Gateway",
       );
-      await expect(resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE)).resolves.toHaveLength(1);
+      await expect(resolveNamespace()).resolves.toHaveLength(1);
     },
   );
 
@@ -157,7 +153,7 @@ describe("Docker source namespace", () => {
     vi.mocked(fs.readFileSync).mockReturnValue(
       `1 2 0:1 / /var/lib/docker/overlay2/${id}/merged rw - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/${id}`,
     );
-    await expect(resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE)).resolves.toBeUndefined();
+    await expect(resolveNamespace()).resolves.toBeUndefined();
     await expect(resolveDockerSourceNamespace(PODMAN_SANDBOX_ENGINE)).resolves.toBeUndefined();
     expect(execContainer).not.toHaveBeenCalled();
   });
@@ -172,7 +168,6 @@ describe("managed source translation", () => {
     for (const suffix of ["a\\b", "a/b"]) {
       expect(
         translateSandboxMountSource({
-          readOnly: false,
           source: `/gateway/${suffix}/leaf`,
           allowedRoots: [`/gateway/${suffix}`],
           mounts,
@@ -186,12 +181,9 @@ describe("managed source translation", () => {
       wireMount,
       { ...wireMount, Source: "/host/special skills", Destination: "/gateway/workspace/skills" },
     ]);
-    expect(
-      translateSandboxMountSource({
-        source: "/gateway/workspace/skills/demo",
-        mounts,
-      }),
-    ).toBe("/host/special skills/demo");
+    expect(translateSandboxMountSource({ source: "/gateway/workspace/skills/demo", mounts })).toBe(
+      "/host/special skills/demo",
+    );
     expect(() =>
       translateSandboxMountSource({
         source: "/gateway/workspace-other",
