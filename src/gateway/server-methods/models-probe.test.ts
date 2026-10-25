@@ -75,6 +75,13 @@ function target(
   return { provider: "openai", label: "env", source: "profile", status: "ok", ...overrides };
 }
 
+function modelConfig(
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
+  writer?: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string],
+): OpenClawConfig {
+  return { agents: { defaults, ...(writer ? { entries: { main: {}, writer } } : {}) } };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listAgentIds.mockReturnValue(["main", "writer"]);
@@ -105,17 +112,10 @@ it("returns typed selection-required when agentId is omitted", async () => {
 });
 
 it("normalizes providers, trims profiles, and clamps the timeout", async () => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.6", fallbacks: ["openai/gpt-5.5"] },
-        utilityModel: {
-          primary: "openai/gpt-5.6-luna",
-          fallbacks: ["local/backup"],
-        },
-      },
-    },
-  };
+  const cfg = modelConfig({
+    model: { primary: "openai/gpt-5.6", fallbacks: ["openai/gpt-5.5"] },
+    utilityModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["local/backup"] },
+  });
   await probe({ provider: " OpenAI ", profileId: " work ", timeoutMs: 1 }, cfg);
   expect(mocks.runAuthProbes).toHaveBeenCalledWith({
     cfg,
@@ -147,14 +147,10 @@ it("probes the default agent without a configured model when agentId is empty", 
 });
 
 it("probes an explicit configured agent", async () => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        utilityModel: { primary: "openai/small", fallbacks: ["openai/default-backup"] },
-      },
-      entries: { main: {}, writer: { utilityModel: { fallbacks: ["openai/writer-backup"] } } },
-    },
-  };
+  const cfg = modelConfig(
+    { utilityModel: { primary: "openai/small", fallbacks: ["openai/default-backup"] } },
+    { utilityModel: { fallbacks: ["openai/writer-backup"] } },
+  );
   await probe({ provider: "openai", agentId: "Writer" }, cfg);
   expectProbe({
     agentId: "writer",
@@ -208,16 +204,14 @@ it.each([
     expected: ["qwen/qwen-plus", "qwen/qwen-backup", "qwen/qwen-flash", "local/small"],
   },
 ])("uses the selected agent's model policy for $name", async ({ agent, expected }) => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: { primary: "openai/default", fallbacks: ["openai/backup"] },
-        utilityModel: { primary: "openai/small", fallbacks: ["local/utility-backup"] },
-        models: { "openai/default": { alias: "fast" } },
-      },
-      entries: { main: {}, writer: agent },
+  const cfg = modelConfig(
+    {
+      model: { primary: "openai/default", fallbacks: ["openai/backup"] },
+      utilityModel: { primary: "openai/small", fallbacks: ["local/utility-backup"] },
+      models: { "openai/default": { alias: "fast" } },
     },
-  };
+    agent,
+  );
   const { respond } = await probe({ provider: "qwen", agentId: "writer" }, cfg);
   expectProbe({ agentId: "writer", modelCandidates: expected });
   expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
