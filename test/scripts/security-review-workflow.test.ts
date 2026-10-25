@@ -797,10 +797,13 @@ describe("security review ownership", () => {
       ".gitignore",
       "docs/gateway/secrets.md",
     ].map((path) => ({ path, owners: [] })),
-    {
-      path: ".github/workflows/openclaw-npm-release.yml",
-      owners: ["@openclaw/openclaw-release-managers"],
-    },
+    ...[
+      ".github/workflows/openclaw-npm-release.yml",
+      "docs/reference/RELEASING.md",
+      "scripts/openclaw-npm-publish.sh",
+      "scripts/openclaw-npm-release-check.ts",
+      "scripts/release-check.ts",
+    ].map((path) => ({ path, owners: ["@openclaw/release-managers-openclaw"] })),
   ])("keeps the designated review authority for $path", ({ path, owners }) => {
     expect(ownersFor(path)).toEqual(owners);
   });
