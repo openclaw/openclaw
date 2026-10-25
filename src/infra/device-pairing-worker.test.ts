@@ -129,6 +129,7 @@ beforeEach(async () => {
         deviceId: "paired-rich",
         publicKey: "synthetic-original-key",
         displayName: "Synthetic device",
+        browserOrigin: "https://fixture.invalid",
         roles: ["operator", "node"],
         scopes: ["operator.read"],
         approvedScopes: ["operator.read"],
