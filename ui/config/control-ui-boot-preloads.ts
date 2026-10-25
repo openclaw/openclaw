@@ -54,7 +54,34 @@ export function collectControlUiBootAssets(
     collectControlUiStaticAssets(bundle, chunk.fileName, initial);
   }
   const routes = { chat: new Set(initial), new: new Set(initial) };
+  const interactions = { chat: new Set<string>(), new: new Set<string>() };
   const login = new Set(initial);
+  // Browser admission signs before the shell can become interactive. Download
+  // the signer first without evaluating it or requesting its dynamic fallback.
+  for (const chunk of chunks) {
+    if (
+      Object.keys(chunk.modules).some(
+        (id) => controlUiBootManifestKey(id) === "ui/src/lib/nodes/device-signing.runtime.ts",
+      )
+    ) {
+      for (const assets of Object.values(routes)) {
+        collectControlUiStaticAssets(bundle, chunk.fileName, assets);
+      }
+    }
+  }
+  for (const [route, entry] of [
+    ["chat", "ui/src/pages/chat/route-entry.ts"],
+    ["new", "ui/src/pages/new-session/new-session-page-entry.ts"],
+  ] as const) {
+    const chunk = chunks.find((candidate) =>
+      [candidate.facadeModuleId, ...Object.keys(candidate.modules)].some(
+        (id) => id && controlUiBootManifestKey(id) === entry,
+      ),
+    );
+    if (chunk) {
+      collectControlUiStaticAssets(bundle, chunk.fileName, routes[route]);
+    }
+  }
   for (const chunk of chunks) {
     // Optimized dynamic imports can live inside a shared chunk without a facade.
     const entries = chunk.facadeModuleId ? [chunk.facadeModuleId] : Object.keys(chunk.modules);
@@ -76,22 +103,28 @@ export function collectControlUiBootAssets(
             return route === "new";
           }
           const owner = controlUiBootEntryRoute(id);
+          return owner === "shared" || owner === route;
+        })
+      ) {
+        collectControlUiStaticAssets(bundle, chunk.fileName, routes[route]);
+      }
+      if (
+        entries.some((id) => {
+          const key = controlUiBootManifestKey(id);
           return (
-            owner === "shared" ||
-            owner === route ||
             sharedInteractionEntries.has(key) ||
             (route === "chat" && chatInteractionEntries.has(key))
           );
         })
       ) {
-        collectControlUiStaticAssets(bundle, chunk.fileName, routes[route]);
+        collectControlUiStaticAssets(bundle, chunk.fileName, interactions[route]);
       }
     }
   }
   // Grouping can emit dynamic re-export facades that the ungrouped capture did
   // not need. They introduce no code beyond the measured graph, but a warm
   // import still requests their URL (for example, a sidebar controller).
-  for (const assets of [...Object.values(routes), login]) {
+  for (const assets of [...Object.values(routes), ...Object.values(interactions), login]) {
     let added;
     do {
       added = false;
@@ -109,7 +142,16 @@ export function collectControlUiBootAssets(
       }
     } while (added);
   }
-  return { initial, ...routes, login };
+  const interactionOnly = { chat: new Set<string>(), new: new Set<string>() };
+  for (const route of ["chat", "new"] as const) {
+    for (const file of interactions[route]) {
+      if (!routes[route].has(file)) {
+        interactionOnly[route].add(file);
+        routes[route].add(file);
+      }
+    }
+  }
+  return { initial, ...routes, login, interactionOnly };
 }
 
 export function controlUiBootPreloadsPlugin(): Plugin {
@@ -136,19 +178,27 @@ export function controlUiBootPreloadsPlugin(): Plugin {
             .map((file) => ({
               tag: "link",
               attrs: file.endsWith(".css")
-                ? { rel: "preload", as: "style", crossorigin: "", href: `./${file}` }
+                ? {
+                    rel: "preload",
+                    as: "style",
+                    crossorigin: "",
+                    ...(assets.interactionOnly[route].has(file) ? { fetchpriority: "low" } : {}),
+                    href: `./${file}`,
+                  }
                 : {
                     rel: "modulepreload",
                     crossorigin: "",
-                    // Keep signing and the composer ahead of other Chat content.
-                    ...(route === "chat" &&
-                    bundle[file]?.type === "chunk" &&
-                    bundle[file].name.startsWith("control-ui-boot-chat") &&
-                    Object.keys(bundle[file].modules).every(
-                      (id) =>
-                        controlUiBootManifestKey(id) !==
-                        "ui/src/pages/chat/components/chat-composer.tsx",
-                    )
+                    // Interaction hints must not occupy HTTP/1 connections
+                    // ahead of signing or first-screen route dependencies.
+                    ...(assets.interactionOnly[route].has(file) ||
+                    (route === "chat" &&
+                      bundle[file]?.type === "chunk" &&
+                      bundle[file].name.startsWith("control-ui-boot-chat") &&
+                      Object.keys(bundle[file].modules).every(
+                        (id) =>
+                          controlUiBootManifestKey(id) !==
+                          "ui/src/pages/chat/components/chat-composer.tsx",
+                      ))
                       ? { fetchpriority: "low" }
                       : {}),
                     href: `./${file}`,

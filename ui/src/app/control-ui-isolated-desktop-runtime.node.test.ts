@@ -142,12 +142,13 @@ it.each([false, true])(
       expect(hints.find((hint) => hint.includes(shared!.fileName))).not.toContain(
         'fetchpriority="low"',
       );
+      expect(hints.find((hint) => hint.includes(interactionChunk!.fileName))).toContain(
+        'fetchpriority="low"',
+      );
       if (route === "chat") {
         const chatHint = hints.find((hint) => hint.includes(chatChunk!.fileName));
         expect(chatHint).toBeDefined();
         expect(chatHint?.includes('fetchpriority="low"')).toBe(!hasComposer);
-      } else {
-        expect(routeHints).not.toContain('fetchpriority="low"');
       }
     }
     const desktopChunk = isolated.chunks.find((chunk) => chunk.exports.includes("default"));
@@ -200,12 +201,13 @@ it.each([false, true])(
   },
 );
 
-it("preloads shared and route-owned views without evaluating them", async () => {
+it("prioritizes signing and route dependencies over unevaluated interaction hints", async () => {
   const root = tempDirs.make("control-ui-renderer-preloads-");
   const local = (name: string) => path.join(root, name);
   const modulePath = (name: string) => fileURLToPath(new URL(name, import.meta.url));
   const commonDependency = local("renderer-dependency.js");
   const placementDependency = local("placement-dependency.js");
+  const signingFallback = local("signing-fallback.js");
   const entries = {
     online: modulePath("../components/app-sidebar-online.tsx"),
     catalog: modulePath("../components/mcp-app-catalog-view.tsx"),
@@ -213,16 +215,20 @@ it("preloads shared and route-owned views without evaluating them", async () => 
     context: modulePath("../components/solid/mcp-app-context-strip-view.tsx"),
     placement: modulePath("./session-placement-startup.runtime.ts"),
     creator: modulePath("../pages/claws/creator-review-view.tsx"),
+    signer: modulePath("../lib/nodes/device-signing.runtime.ts"),
+    chat: modulePath("../pages/chat/route-entry.ts"),
   };
   const aliases: Record<string, string> = {
     "fixture:common": commonDependency,
     "fixture:placement-dependency": placementDependency,
+    "fixture:signing-fallback": signingFallback,
   };
   const sources: Record<string, string> = {
     [commonDependency]:
       'globalThis.preloadBuildFixture.events.push("common"); export const value = "common";',
     [placementDependency]:
       'globalThis.preloadBuildFixture.events.push("placement-dependency"); export const value = "placement";',
+    [signingFallback]: 'export const value = "fallback";',
   };
   for (const [name, id] of Object.entries(entries)) {
     aliases[`fixture:${name}`] = id;
@@ -231,6 +237,9 @@ it("preloads shared and route-owned views without evaluating them", async () => 
       globalThis.preloadBuildFixture.events.push(${JSON.stringify(name)});
       export const value = dependency;`;
   }
+  sources[entries.signer] = `globalThis.preloadBuildFixture.events.push("signer");
+    export const value = "signer";
+    export const fallback = () => import("fixture:signing-fallback");`;
   await fs.writeFile(local("package.json"), '{"type":"module"}');
   await fs.writeFile(
     local("index.html"),
@@ -284,13 +293,31 @@ it("preloads shared and route-owned views without evaluating them", async () => 
     return chunk!;
   };
   const commonChunks = [entries.online, commonDependency].map((id) => chunkFor(id).fileName);
+  const signerChunk = chunkFor(entries.signer).fileName;
+  const chatChunk = chunkFor(entries.chat).fileName;
   const placementChunks = [entries.placement, placementDependency].map(
     (id) => chunkFor(id).fileName,
   );
   const html = await fs.readFile(local("dist/index.html"), "utf8");
-  expect(routePreloads(html, "chat").toSorted()).toEqual([...new Set(commonChunks)].toSorted());
+  const chatPreloads = routePreloads(html, "chat");
+  expect(chatPreloads.toSorted()).toEqual(
+    [...new Set([signerChunk, chatChunk, ...commonChunks])].toSorted(),
+  );
   expect(routePreloads(html, "new").toSorted()).toEqual(
-    [...new Set([...commonChunks, ...placementChunks])].toSorted(),
+    [...new Set([signerChunk, ...commonChunks, ...placementChunks])].toSorted(),
+  );
+  expect(chatPreloads[0]).toBe(signerChunk);
+  expect(chatPreloads.indexOf(chatChunk)).toBeLessThan(
+    chatPreloads.indexOf(chunkFor(entries.online).fileName),
+  );
+  const links = [...html.matchAll(/<link[^>]+>/gu)].map((match) => match[0]);
+  const linkFor = (file: string) => links.find((link) => link.includes(`href="./${file}"`));
+  expect(linkFor(chunkFor(entries.online).fileName)).toContain('fetchpriority="low"');
+  expect(linkFor(chunkFor(commonDependency).fileName)).not.toContain("fetchpriority");
+  expect(linkFor(signerChunk)).not.toContain("fetchpriority");
+  expect(html).not.toContain(chunkFor(signingFallback).fileName);
+  expect(html.split('<template data-openclaw-route-preloads="chat">')[0]).not.toContain(
+    signerChunk,
   );
   expect(html).not.toContain(chunkFor(entries.creator).fileName);
   for (const entry of [entries.catalog, entries.resources, entries.context]) {
