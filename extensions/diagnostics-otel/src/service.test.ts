@@ -415,11 +415,11 @@ function firstSpanEndTime(name: string): unknown {
 }
 
 function firstCounterAddCall(name: string): [unknown, Record<string, unknown>?] {
-  const counter = telemetryState.counters.get(name);
-  if (!counter) {
+  const metric = telemetryState.counters.get(name);
+  if (!metric) {
     throw new Error(`Expected counter ${name}`);
   }
-  return mockCall(counter.add) as [unknown, Record<string, unknown>?];
+  return mockCall(metric.add) as [unknown, Record<string, unknown>?];
 }
 
 function lastHistogramRecord(name: string) {
