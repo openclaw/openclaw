@@ -243,6 +243,6 @@ it.each([
     notDispatched,
     withOutcome({ version: 1, phase: "after-token-response", outcome: "unknown" }),
   ],
-] as const)("rejects provider facts: %s", (_name, facts, cause) => {
+] as const)("rejects provider facts: %s", (_name, facts, cause?: unknown) => {
   expect(isTransientOAuthRefreshFailure(withOutcome(facts, cause))).toBe(false);
 });

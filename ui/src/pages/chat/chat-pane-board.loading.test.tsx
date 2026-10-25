@@ -17,7 +17,11 @@ import {
   mountBoardPanel,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -40,7 +44,7 @@ type BoardTestPane = HTMLElement & {
 
 type BoardSnapshot = BoardProvider["snapshot$"]["value"];
 type Cleanup = { before?: () => void; after?: () => Promise<void> };
-const transcript = {
+const transcript: ChatSessionSnapshot = {
   messages: [{ role: "assistant", content: "Retained conversation" }],
   sessionId: "retained-session",
   pagination: { hasMore: false },

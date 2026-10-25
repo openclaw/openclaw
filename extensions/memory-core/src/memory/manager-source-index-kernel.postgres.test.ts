@@ -11,7 +11,10 @@ import {
   encodeMemoryEmbedding,
   isPostgresSqlConnection,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  openNodeSqliteDatabase,
+  runSqliteImmediateTransactionSync,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
@@ -111,7 +114,7 @@ it.skipIf(!connection)(
           value,
           value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index]! })),
         );
-      db.runTransaction(() => {
+      runSqliteImmediateTransactionSync(db, () => {
         write();
         markMemoryVectorIndexClean(db);
       });
@@ -141,14 +144,14 @@ it.skipIf(!connection)(
       try {
         value.entry.hash = "second";
         value.now = 200;
-        db.runTransaction(write);
+        runSqliteImmediateTransactionSync(db, write);
       } finally {
         events.unsubscribe(observe);
       }
       expect(parameterCounts.every((count) => count < 65_535)).toBe(true);
       expectUnchanged();
       expect(() =>
-        db.runTransaction(() => {
+        runSqliteImmediateTransactionSync(db, () => {
           value.chunks = value.chunks.slice(0, 1);
           value.embeddings = [[0, 1, 0]];
           write();
@@ -207,7 +210,9 @@ it.skipIf(!connection).each([
         now: 200,
         vectorReady: true,
       };
-      db.runTransaction(() => new MemorySourceIndexKernel(db, state).replaceRows(header, rows));
+      runSqliteImmediateTransactionSync(db, () =>
+        new MemorySourceIndexKernel(db, state).replaceRows(header, rows),
+      );
       expect(
         db
           .prepare(`SELECT c.text, c.updated_at, encode(c.embedding, 'hex') AS canonical_embedding,
@@ -235,7 +240,7 @@ it.skipIf(!connection).each([
           supersedes_key: "latest-source",
         },
       ]);
-      db.runTransaction(() =>
+      runSqliteImmediateTransactionSync(db, () =>
         new MemorySourceIndexKernel(db, state).replaceGroup(
           ["earlier-header", "latest-header"].map((hash) => ({
             header: { ...header, entry: { ...header.entry, hash }, delta: true },
