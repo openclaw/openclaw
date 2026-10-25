@@ -1,6 +1,7 @@
 /* Absolutely palette; selected by index.html and app/theme.ts. */
 
 :root[data-theme="absolutely"] {
+  --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
   /*
    * Accent — terracotta clay on warm graphite
    *
@@ -88,6 +89,7 @@
 }
 
 :root[data-theme="absolutely-light"] {
+  --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
   /*
    * Accent — burnt clay on ivory paper
    *

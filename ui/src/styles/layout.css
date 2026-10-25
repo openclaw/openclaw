@@ -1062,7 +1062,7 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   min-height: 100%;
   overflow: visible;
-  border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
+  border-inline-end: var(--shell-divider-size) solid var(--resize-handle-rest-color);
   transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
