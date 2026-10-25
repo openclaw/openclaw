@@ -96,16 +96,6 @@ const server = createServer((req, res) => {
       client: {
         connId: "synthetic-scrape",
         usesSharedGatewayAuth: false,
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send() {},
-          close() {},
-          terminate() {},
-          on() {},
-          off() {},
-          once() {},
-        },
         connect: {
           minProtocol: 3,
           maxProtocol: 3,
