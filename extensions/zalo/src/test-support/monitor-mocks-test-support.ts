@@ -118,14 +118,11 @@ export function setLifecycleRuntimeCore(
 }
 
 export async function loadCachedLifecycleMonitorModule(key: string): Promise<MonitorModule> {
-  const cached =
-    cachedMonitorModules.get(key) ??
-    (async () => {
-      installLifecycleModuleMocks();
-      return (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
-    })();
-  cachedMonitorModules.set(key, cached);
-  return await cached;
+  if (!cachedMonitorModules.has(key)) {
+    installLifecycleModuleMocks();
+    cachedMonitorModules.set(key, import(`${monitorModuleUrl}?t=${key}`) as Promise<MonitorModule>);
+  }
+  return await cachedMonitorModules.get(key)!;
 }
 
 export async function startWebhookLifecycleMonitor(params: {
@@ -180,10 +177,7 @@ export async function startWebhookLifecycleMonitor(params: {
   }
 
   return {
-    abort,
-    registry,
     route,
-    run,
     runtime,
     waitForIdle: waitForLifecycleIngressIdle,
     stop: async () => {

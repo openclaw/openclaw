@@ -1,10 +1,10 @@
-import { request as httpRequest } from "node:http";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
+import type { monitorZaloProvider } from "../monitor.js";
 import type { ResolvedZaloAccount } from "../types.js";
 import { getUpdatesMock, loadCachedLifecycleMonitorModule } from "./monitor-mocks-test-support.js";
 
@@ -96,42 +96,12 @@ export function createImageUpdate(params?: {
 }
 
 export function createImageLifecycleCore() {
-  const core = createPluginRuntimeMock({
-    channel: {
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
-      },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/zalo-sessions.json"),
-        recordInboundSession: vi.fn(async () => undefined),
-      },
-      media: {
-        readRemoteMediaBuffer: vi.fn(async () => ({
-          buffer: Buffer.from("image-bytes"),
-          contentType: "image/jpeg",
-        })),
-        saveRemoteMedia: vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
-          id: "zalo-photo.jpg",
-          path: "/tmp/zalo-photo.jpg",
-          size: Buffer.byteLength("image-bytes"),
-          contentType: "image/jpeg",
-        })),
-        saveMediaBuffer: vi.fn(async () => ({
-          path: "/tmp/zalo-photo.jpg",
-          contentType: "image/jpeg",
-        })) as Channel["media"]["saveMediaBuffer"],
-      },
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-          async () => undefined,
-        ) as unknown as Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      commands: {
-        shouldComputeCommandAuthorized: vi.fn(() => false),
-        isControlCommandMessage: vi.fn(() => false),
-      },
-    },
+  const core = createPluginRuntimeMock();
+  vi.mocked(core.channel.media.saveRemoteMedia).mockResolvedValue({
+    id: "zalo-photo.jpg",
+    path: "/tmp/zalo-photo.jpg",
+    size: Buffer.byteLength("image-bytes"),
+    contentType: "image/jpeg",
   });
   const buildContext = vi.mocked(core.channel.inbound.buildContext).getMockImplementation()!;
   const finalizeInboundContextMock = vi.mocked(core.channel.reply.finalizeInboundContext);
@@ -175,35 +145,6 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-async function postWebhookUpdate(params: {
-  baseUrl: string;
-  path: string;
-  secret: string;
-  payload: Record<string, unknown>;
-}) {
-  const url = new URL(params.path, params.baseUrl);
-  const body = JSON.stringify(params.payload);
-  return await new Promise<number>((resolve, reject) => {
-    const req = httpRequest(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          "x-bot-api-secret-token": params.secret,
-        },
-      },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.end(body);
-  });
-}
-
 export async function replayLifecycleWebhook(
   monitor: {
     route: { handler: Parameters<typeof withServer>[0] };
@@ -213,25 +154,26 @@ export async function replayLifecycleWebhook(
   waitBeforeReplay = false,
   settle = monitor.waitForIdle,
 ) {
-  await withServer(
-    (req, res) => {
-      monitor.route.handler(req, res);
-    },
-    async (baseUrl) => {
-      const params = {
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-      };
-      const first = await postWebhookUpdate(params);
-      if (waitBeforeReplay) {
-        await monitor.waitForIdle();
-      }
-      expect([first, await postWebhookUpdate(params)]).toEqual([200, 200]);
-      await settle();
-    },
-  );
+  await withServer(monitor.route.handler, async (baseUrl) => {
+    const post = async () => {
+      const response = await fetch(`${baseUrl}/hooks/zalo`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-bot-api-secret-token": "supersecret",
+        },
+        body: JSON.stringify(payload),
+      });
+      await response.arrayBuffer();
+      return response.status;
+    };
+    const first = await post();
+    if (waitBeforeReplay) {
+      await monitor.waitForIdle();
+    }
+    expect([first, await post()]).toEqual([200, 200]);
+    await settle();
+  });
 }
 
 export async function withStoppedMonitor<T extends { stop: () => Promise<void> }>(
@@ -259,17 +201,13 @@ export function queueLifecycleUpdate(
 export async function startPollingLifecycleMonitor(
   cacheKey: string,
   setup: Partial<LifecycleMonitorSetupParams> = {},
-  options: Pick<
-    Parameters<
-      Awaited<ReturnType<typeof loadCachedLifecycleMonitorModule>>["monitorZaloProvider"]
-    >[0],
-    "token" | "fetcher" | "statusSink"
-  > = { token: "zalo-token" },
+  options: Pick<Parameters<typeof monitorZaloProvider>[0], "token" | "fetcher" | "statusSink"> = {
+    token: "zalo-token",
+  },
 ) {
   const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(cacheKey);
   const abort = new AbortController();
   const runtime = createRuntimeEnv();
-  const started = Date.now();
   const run = monitorZaloProvider({
     ...createLifecycleMonitorSetup({ accountId: "default", dmPolicy: "open", ...setup }),
     runtime,
@@ -277,10 +215,7 @@ export async function startPollingLifecycleMonitor(
     ...options,
   });
   return {
-    abort,
-    run,
     runtime,
-    started,
     stop: async () => {
       abort.abort();
       await run;
