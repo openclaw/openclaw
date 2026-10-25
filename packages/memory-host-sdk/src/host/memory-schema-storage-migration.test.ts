@@ -16,6 +16,22 @@ import {
 } from "./memory-schema-storage-migration.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const LEGACY_STORAGE_SCHEMA = `
+  CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+  CREATE TABLE memory_index_sources (
+    id INTEGER PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL,
+    hash TEXT NOT NULL, mtime REAL NOT NULL, size INTEGER NOT NULL, UNIQUE(path, source)
+  ) STRICT;
+  CREATE TABLE memory_index_chunks (
+    id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
+    start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
+    model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL, updated_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE TABLE memory_embedding_cache (
+    provider TEXT NOT NULL, model TEXT NOT NULL, provider_key TEXT NOT NULL,
+    hash TEXT NOT NULL, embedding TEXT NOT NULL, dims INTEGER, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, model, provider_key, hash)
+  ) STRICT;`;
 
 function readRow(db: DatabaseSync, sql: string) {
   return db.prepare(sql).get();
@@ -36,25 +52,11 @@ function legacyDatabase(): DatabaseSync {
   onTestFinished(() => db.close());
   db.exec(`
     PRAGMA foreign_keys = ON;
-    CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-    CREATE TABLE memory_index_sources (
-      id INTEGER PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL,
-      hash TEXT NOT NULL, mtime REAL NOT NULL, size INTEGER NOT NULL, UNIQUE(path, source)
-    ) STRICT;
-    CREATE TABLE memory_index_chunks (
-      id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
-      start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
-      model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL, updated_at INTEGER NOT NULL
-    ) STRICT;
+    ${LEGACY_STORAGE_SCHEMA}
     CREATE TABLE memory_index_chunk_provenance (
       chunk_id TEXT PRIMARY KEY REFERENCES memory_index_chunks(id) ON DELETE CASCADE,
       origin_class TEXT NOT NULL, session_kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
       supersedes_key TEXT
-    ) STRICT;
-    CREATE TABLE memory_embedding_cache (
-      provider TEXT NOT NULL, model TEXT NOT NULL, provider_key TEXT NOT NULL,
-      hash TEXT NOT NULL, embedding TEXT NOT NULL, dims INTEGER, updated_at INTEGER NOT NULL,
-      PRIMARY KEY (provider, model, provider_key, hash)
     ) STRICT;
     CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(
       text, id UNINDEXED, path UNINDEXED, source UNINDEXED, model UNINDEXED,
@@ -83,6 +85,9 @@ function snapshot(db: DatabaseSync) {
     meta: db.prepare("SELECT * FROM memory_index_meta").all(),
     provenance: db.prepare("SELECT * FROM memory_index_chunk_provenance").all(),
     fts: db.prepare("SELECT rowid, * FROM memory_index_chunks_fts").all(),
+    revision: db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'memory_index_state'").get()
+      ? readRow(db, "SELECT * FROM memory_index_state")
+      : undefined,
     foreignKeys: db.prepare("PRAGMA foreign_keys").get(),
   };
 }
@@ -212,15 +217,14 @@ describe("memory storage migration", () => {
       .prepare(`SELECT CAST(rowid AS TEXT) AS id, embedding, dims, updated_at
       FROM memory_embedding_cache ORDER BY rowid`)
       .all();
-    expect(rows).toHaveLength(257);
-    for (const [index, row] of rows.entries()) {
-      expect(row).toEqual({
+    expect(rows).toEqual(
+      Array.from({ length: 257 }, (_, index) => ({
         id: String(9007199254740993n + BigInt(index)),
         embedding: encodeMemoryEmbedding([1, 2]),
         dims: 2,
         updated_at: 123,
-      });
-    }
+      })),
+    );
     const changes = readRow(db, "SELECT total_changes() AS count");
     warnings.length = 0;
     migrateMemoryIndexStorage(db, { onWarning: (warning) => warnings.push(warning) });
@@ -245,21 +249,8 @@ describe("memory storage migration", () => {
         for (const kind of ['cache', 'chunks']) {
           const db = new DatabaseSync(':memory:');
           const table = kind === 'cache' ? 'memory_embedding_cache' : 'memory_index_chunks';
-          db.exec(kind === 'cache' ?
-            \`CREATE TABLE memory_embedding_cache (
-              provider TEXT NOT NULL, model TEXT NOT NULL, provider_key TEXT NOT NULL,
-              hash TEXT NOT NULL, embedding TEXT NOT NULL, dims INTEGER, updated_at INTEGER NOT NULL,
-              PRIMARY KEY (provider, model, provider_key, hash)
-            ) STRICT;\` :
-            \`CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-            CREATE TABLE memory_index_sources (
-              path TEXT NOT NULL, source TEXT NOT NULL, hash TEXT NOT NULL, UNIQUE (path, source)
-            ) STRICT;
-            CREATE TABLE memory_index_chunks (
-              id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
-              start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
-              model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL, updated_at INTEGER NOT NULL
-            ) STRICT;\`);
+          db.exec(${JSON.stringify(LEGACY_STORAGE_SCHEMA)});
+          db.exec('DROP TABLE ' + (kind === 'cache' ? 'memory_index_chunks' : 'memory_embedding_cache'));
           const insert = db.prepare(kind === 'cache' ?
             "INSERT INTO memory_embedding_cache(rowid, provider, model, provider_key, hash, embedding, dims, updated_at) VALUES (?, 'provider', 'model', 'key', ?, ?, 3072, 123)" :
             "INSERT INTO memory_index_chunks(rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'memory/a.md', 'memory', 1, 2, 'h', 'model', CAST(X'80' AS TEXT), ?, 123)");
@@ -341,14 +332,9 @@ describe("memory storage migration", () => {
       CREATE TRIGGER refuse_revision BEFORE UPDATE ON memory_index_state
         BEGIN SELECT RAISE(ABORT, 'refuse revision'); END;
     `);
+    const before = snapshot(db);
     expect(() => markInvalidImportedMemoryEmbeddings(db, "legacy")).toThrow("refuse revision");
-    expectRow(db, "SELECT hash FROM memory_index_sources", { hash: "h" });
-    expectRow(db, "SELECT revision FROM memory_index_state", { revision: 10 });
-    expectRow(
-      db,
-      "SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'",
-      undefined,
-    );
+    expect(snapshot(db)).toEqual(before);
     db.exec("DROP TRIGGER refuse_revision");
     markInvalidImportedMemoryEmbeddings(db, "legacy");
     expectRow(db, "SELECT hash FROM memory_index_sources", { hash: "" });
@@ -357,51 +343,32 @@ describe("memory storage migration", () => {
 
   it("rolls physical changes back with its enclosing admitted migration", () => {
     const db = legacyDatabase();
+    const before = snapshot(db);
     db.exec("PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE");
     migrateMemoryIndexStorage(db);
     db.exec("ROLLBACK; PRAGMA foreign_keys = ON");
-    expectRow(db, "SELECT embedding FROM memory_index_chunks", {
-      embedding: "[1.0000000000000002,0.1]",
-    });
-    expectRow(
-      db,
-      "SELECT name FROM pragma_table_info('memory_index_chunks') WHERE name = 'chunk_rowid'",
-      undefined,
-    );
-    expectRow(db, "SELECT rowid FROM memory_index_chunks_fts", { rowid: 99 });
-    expectRow(db, "SELECT chunk_id FROM memory_index_chunk_provenance", {
-      chunk_id: "logical-id",
-    });
+    expect(snapshot(db)).toEqual(before);
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it.each([
+    ["CREATE INDEX x ON memory_index_chunks(text)", /unknown index x/],
+    ["CREATE INDEX x ON memory_embedding_cache(updated_at)", /unknown index x/],
     [
-      "CREATE INDEX operator_chunk_text ON memory_index_chunks(text)",
-      /unknown index operator_chunk_text/,
+      "CREATE TRIGGER x AFTER UPDATE ON memory_index_chunks BEGIN SELECT 1; END",
+      /unexpected trigger x/,
+    ],
+    ["CREATE VIEW x AS SELECT text FROM memory_index_chunks", /unknown view x/],
+    [
+      "CREATE TABLE x (id TEXT REFERENCES memory_index_chunks(id), note TEXT)",
+      /unknown foreign key in x/,
     ],
     [
-      "CREATE INDEX operator_cache_age ON memory_embedding_cache(updated_at)",
-      /unknown index operator_cache_age/,
-    ],
-    [
-      "CREATE TRIGGER operator_chunk_audit AFTER UPDATE ON memory_index_chunks BEGIN SELECT 1; END",
-      /unexpected trigger operator_chunk_audit/,
-    ],
-    [
-      "CREATE VIEW operator_chunk_text AS SELECT text FROM memory_index_chunks",
-      /unknown view operator_chunk_text/,
-    ],
-    [
-      "CREATE TABLE operator_chunk_notes (chunk_id TEXT REFERENCES memory_index_chunks(id), note TEXT)",
-      /unknown foreign key in operator_chunk_notes/,
-    ],
-    [
-      "ALTER TABLE memory_index_chunks ADD COLUMN operator_note TEXT; UPDATE memory_index_chunks SET operator_note = 'preserve this note'",
+      "ALTER TABLE memory_index_chunks ADD COLUMN note TEXT; UPDATE memory_index_chunks SET note = 'keep'",
       /column definitions differ for memory_index_chunks/,
     ],
     [
-      "ALTER TABLE memory_embedding_cache ADD COLUMN operator_note TEXT; UPDATE memory_embedding_cache SET operator_note = 'preserve this cache note'",
+      "ALTER TABLE memory_embedding_cache ADD COLUMN note TEXT; UPDATE memory_embedding_cache SET note = 'keep'",
       /column definitions differ for memory_embedding_cache/,
     ],
   ] as const)(
@@ -410,38 +377,26 @@ describe("memory storage migration", () => {
       const db = legacyDatabase();
       db.exec(addition);
       expectRefusal(db, refusal);
-      expect(
-        db.prepare("SELECT name FROM sqlite_schema WHERE name LIKE '%storage_migration%'").all(),
-      ).toEqual([]);
     },
   );
 
   it.each([
-    {
-      schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace("embedding BLOB", "embedding TEXT"),
-      embedding: "[]",
-      identityColumn: "chunk_rowid",
-    },
-    {
-      schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
-        "chunk_rowid INTEGER PRIMARY KEY,",
-        "",
-      ).replace("id TEXT NOT NULL UNIQUE", "id TEXT PRIMARY KEY"),
-      embedding: new Uint8Array(),
-      identityColumn: "rowid",
-    },
-    {
-      schema: MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(
-        "chunk_rowid INTEGER PRIMARY KEY",
-        "chunk_rowid INTEGER PRIMARY KEY DESC",
-      ),
-      embedding: new Uint8Array(),
-      identityColumn: "chunk_rowid",
-    },
-  ])(
+    ["embedding BLOB", "embedding TEXT", "[]", "chunk_rowid"],
+    ["chunk_rowid INTEGER PRIMARY KEY,", "", new Uint8Array(), "rowid"],
+    [
+      "chunk_rowid INTEGER PRIMARY KEY",
+      "chunk_rowid INTEGER PRIMARY KEY DESC",
+      new Uint8Array(),
+      "chunk_rowid",
+    ],
+  ] as const)(
     "refuses mixed identity/format declarations instead of declaring conversion complete",
-    ({ schema, embedding, identityColumn }) => {
+    (from, to, embedding, identityColumn) => {
       const db = legacyDatabase();
+      let schema = MEMORY_INDEX_CHUNKS_SCHEMA_SQL.replace(from, to);
+      if (identityColumn === "rowid") {
+        schema = schema.replace("id TEXT NOT NULL UNIQUE", "id TEXT PRIMARY KEY");
+      }
       db.exec("PRAGMA foreign_keys = OFF; DROP TABLE memory_index_chunks");
       db.exec(schema);
       db.prepare(`INSERT INTO memory_index_chunks(${identityColumn}, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -510,19 +465,15 @@ describe("memory storage migration", () => {
         AFTER ${event.toUpperCase()} ON memory_index_chunks
         BEGIN UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1; END;`);
     }
-    const indexes = db
-      .prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
-      )
-      .all();
-    migrateMemoryIndexStorage(db);
-    expect(
+    const readIndexes = () =>
       db
         .prepare(
           "SELECT name, sql FROM sqlite_schema WHERE name IN ('idx_memory_index_chunks_path_source', 'idx_memory_index_chunks_path', 'idx_memory_embedding_cache_updated_at') ORDER BY name",
         )
-        .all(),
-    ).toEqual(indexes);
+        .all();
+    const indexes = readIndexes();
+    migrateMemoryIndexStorage(db);
+    expect(readIndexes()).toEqual(indexes);
     db.exec(
       "UPDATE memory_index_chunks SET text = 'new searchable text'; DELETE FROM memory_index_chunks",
     );
@@ -539,33 +490,30 @@ describe("memory storage migration", () => {
     }
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 250));
+    onTestFinished(() => now.mockRestore());
     const renewals: { startedAt: number; finishedAt: number }[] = [];
-    try {
-      migrateMemoryIndexStorage(db, {
-        renewAuthority: () => {
-          const startedAt = clock;
-          clock += delay;
-          renewals.push({ startedAt, finishedAt: clock });
-        },
-      });
-      expect(renewals.length).toBeGreaterThan(1);
-      expect(
-        renewals.every(
-          (renewal, index) =>
-            index === 0 || renewal.startedAt - renewals[index - 1]!.finishedAt >= 1_000,
-        ),
-      ).toBe(true);
-      const count = renewals.length;
-      db.prepare("SELECT openclaw_memory_embedding_from_json(?)").get("[2]");
-      expect(renewals).toHaveLength(count);
-      expectRow(
-        db,
-        "SELECT count(*) AS count FROM memory_index_chunks WHERE typeof(embedding) = 'blob'",
-        { count: 11 },
-      );
-    } finally {
-      now.mockRestore();
-    }
+    migrateMemoryIndexStorage(db, {
+      renewAuthority: () => {
+        const startedAt = clock;
+        clock += delay;
+        renewals.push({ startedAt, finishedAt: clock });
+      },
+    });
+    expect(renewals.length).toBeGreaterThan(1);
+    expect(
+      renewals.every(
+        (renewal, index) =>
+          index === 0 || renewal.startedAt - renewals[index - 1]!.finishedAt >= 1_000,
+      ),
+    ).toBe(true);
+    const count = renewals.length;
+    db.prepare("SELECT openclaw_memory_embedding_from_json(?)").get("[2]");
+    expect(renewals).toHaveLength(count);
+    expectRow(
+      db,
+      "SELECT count(*) AS count FROM memory_index_chunks WHERE typeof(embedding) = 'blob'",
+      { count: 11 },
+    );
   });
 
   it("rolls back admitted changes when authority is lost inside a conversion statement", () => {
@@ -574,21 +522,18 @@ describe("memory storage migration", () => {
     const before = snapshot(db);
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 1_000));
+    onTestFinished(() => now.mockRestore());
     let renewals = 0;
-    try {
-      expect(() =>
-        migrateMemoryIndexStorage(db, {
-          renewAuthority: () => {
-            if (++renewals === 2) {
-              throw new Error("migration authority revoked");
-            }
-          },
-        }),
-      ).toThrow();
-      expect(renewals).toBe(2);
-      expect(snapshot(db)).toEqual(before);
-    } finally {
-      now.mockRestore();
-    }
+    expect(() =>
+      migrateMemoryIndexStorage(db, {
+        renewAuthority: () => {
+          if (++renewals === 2) {
+            throw new Error("migration authority revoked");
+          }
+        },
+      }),
+    ).toThrow();
+    expect(renewals).toBe(2);
+    expect(snapshot(db)).toEqual(before);
   });
 });

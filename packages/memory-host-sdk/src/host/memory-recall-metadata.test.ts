@@ -151,15 +151,8 @@ it.each<[string, string | null, number, number, number]>([
 
 it("stores recall metadata in a rollback-safe additive table", () => {
   using db = new DatabaseSync(":memory:");
-  db.exec(`
-        CREATE TABLE memory_index_chunks (
-          id TEXT PRIMARY KEY, path TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, hash TEXT NOT NULL,
-          model TEXT NOT NULL, text TEXT NOT NULL, embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        ) STRICT;
-      `);
-  db.exec("BEGIN IMMEDIATE");
+  ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+  db.exec(`DROP TABLE ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}; BEGIN IMMEDIATE`);
   ensureMemoryRecallMetadataSchema(db);
   db.exec("ROLLBACK");
   expect(
