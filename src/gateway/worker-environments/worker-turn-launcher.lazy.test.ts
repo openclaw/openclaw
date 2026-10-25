@@ -246,7 +246,9 @@ it("does not load worker execution for a local turn", async () => {
   const load = () => {
     throw new Error("worker execution loaded for local turn");
   };
+  // mock-isolation: Fail on import to prove local turns do not load worker execution.
   vi.doMock("./worker-turn-execution.js", load);
+  // mock-isolation: Fail on import to prove local turns do not load worker finalization.
   vi.doMock("./workspace-result-finalize.js", load);
   const request = fixture.workerTurnRequest("run-local-lazy");
   await expect(
@@ -260,6 +262,7 @@ it("loads the sandbox only for eligible placement requests", async () => {
   const load = vi.fn(() => {
     throw failure;
   });
+  // mock-isolation: Observe the import boundary without initializing a real sandbox.
   vi.doMock("./placement-sandbox.js", load);
   const provider = createProvider();
   using prepared = await provider.prepareSandbox({ ...sandboxRequest(), agentId: "other" });

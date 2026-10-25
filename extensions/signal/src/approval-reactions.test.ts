@@ -13,6 +13,7 @@ import * as signalRuntime from "./runtime.js";
 const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const resolveApproval = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Resolve approvals offline without loading the Gateway client.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolveApproval,
 }));
