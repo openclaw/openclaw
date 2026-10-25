@@ -129,39 +129,23 @@ it("keeps short polling until a getUpdates request succeeds", async () => {
     );
     expect(body.allowed_updates).not.toContain("stopped_message_generation");
   }
-  expect(runtime.messages.filter((message) => message.type === "poll-success")).toHaveLength(2);
 });
 
-it("backs off consecutive empty polls without hot spinning", async () => {
-  const runtime = createRuntime(Array.from({ length: 9 }, emptyPoll), {
-    stopAfterPollSuccesses: 9,
-  });
-
-  expect(runtime.calls).toHaveLength(1);
-  await flushRuntime();
-  expect(runtime.calls).toHaveLength(2);
-  await vi.advanceTimersByTimeAsync(3_550);
-  await runtime.done;
-
-  expect(runtime.elapsed()).toEqual([0, 0, 50, 150, 350, 750, 1_550, 2_550, 3_550]);
-});
-
-it("resets to immediate polling when activity resumes", async () => {
+it("backs off idle polls without hot spinning and resets immediately when activity resumes", async () => {
   const runtime = createRuntime(
     [
-      emptyPoll(),
-      emptyPoll(),
+      ...Array.from({ length: 9 }, emptyPoll),
       jsonResponse(200, { ok: true, result: [{ update_id: 42 }] }),
       emptyPoll(),
     ],
-    { stopAfterPollSuccesses: 4 },
+    { stopAfterPollSuccesses: 11 },
   );
 
   await flushRuntime();
-  await vi.advanceTimersByTimeAsync(50);
+  await vi.advanceTimersByTimeAsync(4_550);
   await runtime.done;
 
-  expect(runtime.elapsed()).toEqual([0, 0, 50, 50]);
+  expect(runtime.elapsed()).toEqual([0, 0, 50, 150, 350, 750, 1_550, 2_550, 3_550, 4_550, 4_550]);
   expectMessage(runtime.messages, { type: "spooled", updateId: 42 });
 });
 

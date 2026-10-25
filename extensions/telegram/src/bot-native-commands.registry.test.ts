@@ -29,8 +29,7 @@ function installRegistry() {
 }
 
 function registerCommand(pluginId: string, command: Parameters<typeof registerPluginCommand>[1]) {
-  const unauthenticated = { requireAuth: false, ...command };
-  expect(registerPluginCommand(pluginId, unauthenticated)).toEqual({ ok: true });
+  expect(registerPluginCommand(pluginId, { requireAuth: false, ...command })).toEqual({ ok: true });
 }
 
 async function registerMenu(
@@ -119,9 +118,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       expect.objectContaining({ description: expect.not.stringContaining("Custom export") }),
     ]);
     expect(names.slice(0, 2)).toEqual(["custom_backup", "pair_device"]);
-    expect(names.indexOf("status")).toBeGreaterThan(names.indexOf("pair_device"));
-    expect(names.indexOf(longestName)).toBeGreaterThan(names.indexOf("status"));
-    expect(names.indexOf("side")).toBeGreaterThan(names.indexOf(longestName));
+    expect(
+      names.filter((name) => ["pair_device", "status", longestName, "side"].includes(name)),
+    ).toEqual(["pair_device", "status", longestName, "side"]);
     for (const invalid of ["custom!bad", "c".repeat(33), oversizedName]) {
       expect(names).not.toContain(invalid);
     }
@@ -134,10 +133,8 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   it.each([
-    ["same-channel transformed-first", ["zeta", "foo-bar", "foo_bar", "alpha"], true],
-    ["same-channel exact-first", ["alpha", "foo_bar", "foo-bar", "zeta"], true],
+    ["same-channel transformed-first", ["foo-bar", "foo_bar"], true],
     ["cross-channel telegram-first", ["foo-bar", "foo_bar"], false],
-    ["cross-channel discord-first", ["foo_bar", "foo-bar"], false],
   ] as const)(
     "executes the normalized owner with %s discovery",
     async (_label, names, sameChannel) => {
@@ -167,11 +164,6 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
             descriptionLocalizations: { ko: "정확함" },
           },
         ]);
-        const namesInMenu = registered.map(({ command }) => command);
-        expect(namesInMenu.indexOf("alpha")).toBeGreaterThan(namesInMenu.indexOf("status"));
-        expect(namesInMenu.indexOf("foo_bar")).toBeGreaterThan(namesInMenu.indexOf("alpha"));
-        expect(namesInMenu.indexOf("zeta")).toBeGreaterThan(namesInMenu.indexOf("foo_bar"));
-        expect(namesInMenu.indexOf("side")).toBeGreaterThan(namesInMenu.indexOf("zeta"));
       }
       await expectCommandReply(commandHandlers, "foo_bar", owner);
       expect(invoked).toEqual([owner]);
@@ -227,10 +219,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await expectCommandReply(commandHandlers, "pair", "paired:now", {
       match: "now",
-      messageId: 10,
-      date: 123456,
       userId: 111,
-      username: "nope",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

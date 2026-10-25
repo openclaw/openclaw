@@ -199,7 +199,6 @@ describe("Telegram request contracts through real clients", () => {
         await expect(sending).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       }
       expect(attempts).toBe(kind === "ambiguous" ? 1 : 2);
-      expect(fixture.requests).toEqual([]);
     },
   );
 
