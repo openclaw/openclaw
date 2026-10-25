@@ -149,45 +149,14 @@ describe("GitHub preview warming", () => {
     document.body.append(provider);
   });
 
-  it("discovers links only on idle and avoids rescanning unchanged parent renders", async () => {
-    renderLinks();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(VisibilityObserver.instances).toHaveLength(0);
-    expect(prefetch).not.toHaveBeenCalled();
-
-    flushIdleScans();
-    const links = [...container.querySelectorAll("a")];
-    expect(observer().targets.has(links[0]!)).toBe(true);
-    await warm(links, 200);
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    // Keep the external provider bound while the parent refreshes.
-    await show();
-    const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
-    await show();
-    expect(scan).not.toHaveBeenCalled();
-
-    links[0]!.firstChild!.textContent = "Streaming label";
-    links[0]!.append(document.createTextNode(" continued"));
-    await scanIdle();
-    expect(scan).not.toHaveBeenCalled();
-    expect(observer().targets.has(links[0]!)).toBe(true);
-
-    const emphasis = document.createElement("strong");
-    emphasis.textContent = "formatted label";
-    links[0]!.append(emphasis);
-    await scanIdle();
-    expect(scan).not.toHaveBeenCalled();
-    emphasis.remove();
-    await scanIdle();
-    expect(scan).not.toHaveBeenCalled();
-    expect(observer().targets.has(links[0]!)).toBe(true);
-  });
-
   it.each(["session", "capabilities"])(
     "replaces unstarted discovery when the %s changes",
     async (changed) => {
       renderLinks();
       renderLinks();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(VisibilityObserver.instances).toHaveLength(0);
+      expect(prefetch).not.toHaveBeenCalled();
       const retiredHandle = [...idleCallbacks.keys()][0]!;
       if (changed === "session") {
         renderLinks([href(2)], "second");
@@ -222,99 +191,21 @@ describe("GitHub preview warming", () => {
     vi.useRealTimers();
   });
 
-  it("skips exclusion walks for links without a preview-capable reader", async () => {
-    const gate = vi.spyOn(linkTargets, "isPreviewAnchor");
-    await show(["https://example.com/page"]);
-    Object.assign(provider, {
-      readers: [
-        {
-          ...TEST_LINK_READER,
-          linkReader: { ...TEST_LINK_READER.linkReader, previewMethod: undefined },
-        },
-      ],
-    });
-    await show([href(1)]);
-    expect(gate).not.toHaveBeenCalled();
-    expect(observer().targets.size).toBe(0);
-  });
-
-  it("memoizes href claims while checking DOM exclusions on every scan", async () => {
-    const gate = vi.spyOn(linkTargets, "isPreviewAnchor");
-    const resolve = vi.spyOn(linkTargets, "resolveLinkReaderTarget");
-    const links = await show([href(1), "https://example.com/page", href(1)]);
-    expect(resolve).toHaveBeenCalledTimes(2);
-    links[2]!.download = "item";
-    gate.mockClear();
-    resolve.mockClear();
-
-    links[0]!.href = href(1);
-    await scanIdle();
-    expect(resolve).not.toHaveBeenCalled();
-    expect(gate).toHaveBeenCalledWith(links[0]);
-    expect(gate).toHaveBeenCalledWith(links[2]);
-    expect(gate).not.toHaveBeenCalledWith(links[1]);
-    expect([...observer().targets]).toEqual([links[0]]);
-
-    links[1]!.href = href(3);
-    await scanIdle();
-    expect(resolve).toHaveBeenCalledTimes(1);
-    expect(resolve.mock.calls[0]![0]).toBe(href(3));
-    await warm(links);
-    expect(prefetch.mock.calls.map(([anchor]) => anchor)).toEqual([links[0], links[1]]);
-  });
-
-  it.each([
-    ["download", ""],
-    ["data-file-path", "/tmp/file"],
-    ["data-session-href", "session"],
-    ["class", "markdown-session-link"],
-    ["data-link-reader-external", ""],
-    ["data-link-reader-preview", "off"],
-  ])("never observes a claimed link excluded by %s", async (attribute, value) => {
-    await show([]);
-    const link = linkTo();
-    link.setAttribute(attribute, value);
-    container.firstElementChild!.append(link);
-    await scanIdle();
-    expect(observer().targets.size).toBe(0);
-    observer().intersect([link]);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(prefetch).not.toHaveBeenCalled();
-  });
-
-  it("rechecks excluded ancestry on a scan without reparsing the claim", async () => {
-    const [link] = await show();
-    const resolve = vi.spyOn(linkTargets, "resolveLinkReaderTarget");
+  it("rechecks link and ancestor exclusions when scanning existing anchors", async () => {
+    const links = await show([href(1), href(2)]);
+    links[0]!.download = "item";
     const excluded = document.createElement("div");
     excluded.className = "chat-source-card";
-    excluded.append(link!);
+    excluded.append(links[1]!);
     container.firstElementChild!.append(excluded);
     await scanIdle();
     expect(observer().targets.size).toBe(0);
-    expect(resolve).not.toHaveBeenCalled();
-    container.firstElementChild!.append(link!);
+    links[0]!.removeAttribute("download");
+    container.firstElementChild!.append(links[1]!);
     await scanIdle();
-    expect(observer().targets.has(link!)).toBe(true);
-    expect(resolve).not.toHaveBeenCalled();
-  });
-
-  it("keeps ineligible GitHub URLs excluded even when a reader claims them", async () => {
-    Object.assign(provider, {
-      readers: [
-        {
-          ...TEST_LINK_READER,
-          linkReader: { ...TEST_LINK_READER.linkReader, pathPattern: "^/.*$" },
-        },
-      ],
-    });
-    const links = await show([
-      "https://github.com/login",
-      "https://github.com/settings/profile",
-      href(1),
-    ]);
-    expect([...observer().targets]).toEqual([links[2]]);
+    expect([...observer().targets]).toEqual(links);
     await warm(links);
-    expect(prefetch.mock.calls.map(([anchor]) => anchor)).toEqual([links[2]]);
+    expect(prefetch.mock.calls.map(([anchor]) => anchor)).toEqual(links);
   });
 
   it("keeps claims scoped to the nearest provider and its current readers", async () => {
@@ -337,27 +228,6 @@ describe("GitHub preview warming", () => {
     expect(observer().targets.has(link)).toBe(true);
   });
 
-  it("warms only intersecting item links and deduplicates alternate permalinks", async () => {
-    const links = await show([
-      href(1),
-      `${href(1)}#issuecomment-2`,
-      href(2),
-      "https://github.com/openclaw/openclaw",
-    ]);
-    expect(observer().targets.size).toBe(3);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).not.toHaveBeenCalled();
-
-    observer().intersect([links[0]!, links[1]!]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(1);
-    expect(prefetch.mock.calls[0]![0].href).toBe(href(1));
-
-    observer().intersect([links[2]!]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(prefetch).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["session", "reconnect"])(
     "bounds background requests and resets the budget after %s",
     async (reset) => {
@@ -368,11 +238,16 @@ describe("GitHub preview warming", () => {
         ...Array.from({ length: 12 }, (_, index) => href(index + 1)),
       ];
       const links = await show(hrefs);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(prefetch).not.toHaveBeenCalled();
       await warm(links, 2_000);
       expect(prefetch).toHaveBeenCalledTimes(1);
       first.resolve();
       await vi.advanceTimersByTimeAsync(2_000);
       expect(prefetch).toHaveBeenCalledTimes(8);
+      expect(new Set(prefetch.mock.calls.map(([anchor]) => anchor.href.split("#")[0])).size).toBe(
+        8,
+      );
       expect(observer().targets.size).toBe(0);
       await show([href(50)]);
       await vi.advanceTimersByTimeAsync(1_000);

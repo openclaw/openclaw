@@ -71,7 +71,7 @@ describe("AppSidebar automatic list scope replacement", () => {
     });
     const response = sessionsResult([archivedRow], 1);
     const pending = deferred<ReturnType<typeof sessionsResult>>();
-    const { sidebar, context, provider, sessions } = await mountSessionRoster((params) =>
+    const { sidebar, sessions } = await mountSessionRoster((params) =>
       params.archived === true
         ? pending.promise
         : params.archived === "all"
@@ -85,8 +85,6 @@ describe("AppSidebar automatic list scope replacement", () => {
       expect(sidebar.textContent).toContain(archivedRow.displayName);
 
       const framesClock = createFrameClock();
-      const frames = framesClock.frames;
-
       vi.stubGlobal("requestAnimationFrame", framesClock.request);
       vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
@@ -104,20 +102,12 @@ describe("AppSidebar automatic list scope replacement", () => {
       );
       pending.resolve(response);
       await published.promise;
-      const pendingFrames = [...frames.values()];
-      frames.clear();
-      for (const callback of pendingFrames) {
-        callback(performance.now());
-      }
+      framesClock.flush(performance.now());
       await settleLitElement(sidebar);
       expect(sidebar.textContent).toContain(archivedRow.displayName);
     } finally {
       unsubscribe?.();
       pending.resolve(response);
-      provider.remove();
-      context.connectionBootstrap.reset();
-      sessions.dispose();
-      vi.useRealTimers();
     }
   });
 
@@ -138,7 +128,7 @@ describe("AppSidebar automatic list scope replacement", () => {
     );
     let roots = [previousParent];
     const parents: unknown[] = [];
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
+    const { sidebar, context, sessions } = await mountSessionRoster(
       (params) => {
         if (params.spawnedBy) {
           parents.push(params.spawnedBy);
@@ -151,104 +141,87 @@ describe("AppSidebar automatic list scope replacement", () => {
       },
       ({ key }) => ({ session: [...roots, ...children].find((row) => row.key === key) ?? null }),
     );
-    try {
-      context.connectionBootstrap.setForegroundRoute(undefined);
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = previousParent.key;
-      await settleLitElement(sidebar);
-      expect(parents).toEqual([]);
+    context.connectionBootstrap.setForegroundRoute(undefined);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = previousParent.key;
+    await settleLitElement(sidebar);
+    expect(parents).toEqual([]);
 
-      roots = [previousParent, nextParent, mainParent];
-      sidebar.sessionKey = nextParent.key;
-      await sessions.refresh({ agentId: "main", force: true });
-      await settleLitElement(sidebar);
-      expect(parents).toEqual([]);
-      expect(childToggle(sidebar, previousParent.key)?.getAttribute("aria-expanded")).toBe("false");
+    roots = [previousParent, nextParent, mainParent];
+    sidebar.sessionKey = nextParent.key;
+    await sessions.refresh({ agentId: "main", force: true });
+    await settleLitElement(sidebar);
+    expect(parents).toEqual([]);
+    expect(childToggle(sidebar, previousParent.key)?.getAttribute("aria-expanded")).toBe("false");
 
-      context.connectionBootstrap.setForegroundRoute(null);
-      await waitForFast(() =>
-        expect(parents).toEqual(expect.arrayContaining([nextParent.key, mainParent.key])),
-      );
-      await settleLitElement(sidebar);
-      expect(parents).toHaveLength(2);
-      expect(sidebar.sessionData.childSessionRowsByParent[previousParent.key]).toBeUndefined();
-      expect(sidebar.sessionData.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
-        mainParent.childSessions![0],
-      );
-      const expand = childToggle(sidebar, nextParent.key);
-      expect(expand?.getAttribute("aria-expanded")).toBe("true");
-      expect(sidebar.textContent).toContain(`${nextParent.key} child`);
-      expect(parents).toHaveLength(2);
-    } finally {
-      provider.remove();
-      context.connectionBootstrap.reset();
-      sessions.dispose();
-    }
+    context.connectionBootstrap.setForegroundRoute(null);
+    await waitForFast(() =>
+      expect(parents).toEqual(expect.arrayContaining([nextParent.key, mainParent.key])),
+    );
+    await settleLitElement(sidebar);
+    expect(parents).toHaveLength(2);
+    expect(sidebar.sessionData.childSessionRowsByParent[previousParent.key]).toBeUndefined();
+    expect(sidebar.sessionData.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
+      mainParent.childSessions![0],
+    );
+    const expand = childToggle(sidebar, nextParent.key);
+    expect(expand?.getAttribute("aria-expanded")).toBe("true");
+    expect(sidebar.textContent).toContain(`${nextParent.key} child`);
+    expect(parents).toHaveLength(2);
   });
 
-  it.each([false, true])(
-    "loads selected filtered rosters before chat readiness (automatic first: %s)",
-    async (automaticFirst) => {
-      vi.useFakeTimers();
-      const previous = deferred<ReturnType<typeof sessionsResult>>();
-      const targets: unknown[] = [];
-      let mainReads = 0;
-      const archived = (agentId: string, label: string) =>
-        sessionsResult(
-          [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
-          1,
-        );
-      const { sidebar, context, provider, sessions } = await mountSessionRoster((params) => {
-        if (params.archived !== true) {
-          return sessionsResult([], 0);
-        }
-        targets.push(params.agentId);
-        if (params.agentId === "research") {
-          return previous.promise;
-        }
-        return archived("main", `Main archived ${++mainReads}`);
-      });
-      try {
-        sidebar.connected = true;
-        await settleLitElement(sidebar);
-        sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
-        await vi.advanceTimersByTimeAsync(0);
-        await settleLitElement(sidebar);
-        expect(sidebar.textContent).toContain("Main archived 1");
-
-        context.connectionBootstrap.setForegroundRoute("agent:research:pending");
-        if (automaticFirst) {
-          context.agentSelection.set("main");
-        }
-        context.agentSelection.set("research", { background: automaticFirst });
-        await settleLitElement(sidebar);
-        await vi.advanceTimersByTimeAsync(50);
-        if (automaticFirst) {
-          expect(targets).toEqual(["main"]);
-          expect(sidebar.textContent).not.toContain("Main archived 1");
-          context.connectionBootstrap.setForegroundRoute(null);
-          await vi.advanceTimersByTimeAsync(50);
-        }
-        expect(targets).toEqual(["main", "research"]);
-        context.connectionBootstrap.setForegroundRoute("agent:main:pending");
-        context.agentSelection.set("main");
-        await settleLitElement(sidebar);
-        await vi.advanceTimersByTimeAsync(50);
-        previous.resolve(archived("research", "Stale Research archived"));
-        await advance(sidebar);
-
-        expect(sidebar.textContent).not.toContain("Stale Research archived");
-        expect(targets).toEqual(["main", "research", "main"]);
-        expect(sidebar.textContent).toContain("Main archived 2");
-      } finally {
-        previous.resolve(sessionsResult([], 0));
-        provider.remove();
-        context.connectionBootstrap.reset();
-        sessions.dispose();
-        vi.useRealTimers();
+  it("queues automatic filtered rosters but loads deliberate selection before chat readiness", async () => {
+    vi.useFakeTimers();
+    const previous = deferred<ReturnType<typeof sessionsResult>>();
+    const targets: unknown[] = [];
+    let mainReads = 0;
+    const archived = (agentId: string, label: string) =>
+      sessionsResult(
+        [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
+        1,
+      );
+    const { sidebar, context } = await mountSessionRoster((params) => {
+      if (params.archived !== true) {
+        return sessionsResult([], 0);
       }
-    },
-  );
+      targets.push(params.agentId);
+      if (params.agentId === "research") {
+        return previous.promise;
+      }
+      return archived("main", `Main archived ${++mainReads}`);
+    });
+    try {
+      sidebar.connected = true;
+      await settleLitElement(sidebar);
+      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+      await vi.advanceTimersByTimeAsync(0);
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent).toContain("Main archived 1");
+
+      context.connectionBootstrap.setForegroundRoute("agent:research:pending");
+      context.agentSelection.set("main");
+      context.agentSelection.set("research", { background: true });
+      await settleLitElement(sidebar);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(targets).toEqual(["main"]);
+      expect(sidebar.textContent).not.toContain("Main archived 1");
+      context.connectionBootstrap.setForegroundRoute(null);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(targets).toEqual(["main", "research"]);
+      context.connectionBootstrap.setForegroundRoute("agent:main:pending");
+      context.agentSelection.set("main");
+      await settleLitElement(sidebar);
+      await vi.advanceTimersByTimeAsync(50);
+      previous.resolve(archived("research", "Stale Research archived"));
+      await advance(sidebar);
+
+      expect(sidebar.textContent).not.toContain("Stale Research archived");
+      expect(targets).toEqual(["main", "research", "main"]);
+      expect(sidebar.textContent).toContain("Main archived 2");
+    } finally {
+      previous.resolve(sessionsResult([], 0));
+    }
+  });
 
   it.each(["research", "main"])(
     "loads the next active parent's children when its agent is %s",
@@ -267,7 +240,7 @@ describe("AppSidebar automatic list scope replacement", () => {
       const previous = deferred<ReturnType<typeof sessionsResult>>();
       const parents: unknown[] = [];
       let primaryReads = 0;
-      const { sidebar, context, provider, sessions } = await mountSessionRoster(
+      const { sidebar, context, sessions } = await mountSessionRoster(
         (params) => {
           if (params.spawnedBy) {
             parents.push(params.spawnedBy);
@@ -330,9 +303,6 @@ describe("AppSidebar automatic list scope replacement", () => {
         expect(parents).toEqual([mainParent, researchParent]);
       } finally {
         previous.resolve(sessionsResult([], 0));
-        provider.remove();
-        sessions.dispose();
-        vi.useRealTimers();
       }
     },
   );

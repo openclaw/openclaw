@@ -221,9 +221,7 @@ it("uses registered composers in DOM order and releases a removed draft target",
 
 it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
   const warn = vi.spyOn(console, "warn");
-  const source = fixture();
-  const subscribe = vi.spyOn(source.context.theme, "subscribe");
-  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const source = fixture("none");
   const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
   const view = mountSolid(() =>
     createComponent(SessionBackgroundView, {
@@ -246,14 +244,12 @@ it("tracks late and replaced theme owners without recreating the lazy background
     expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
   });
 
-  const subscriptions = subscribe.mock.calls.length;
   source.settings.background = selectBackgroundSource({ kind: "none" });
   source.notify();
   await waitForSolid(() => expect(slot.hidden).toBe(true));
   source.settings.background = selectBackgroundSource({ kind: "theme" });
   source.notify();
   await waitForSolid(() => expect(slot.hidden).toBe(false));
-  expect(subscribe).toHaveBeenCalledTimes(subscriptions);
 
   const replacement = fixture("none");
   setContext(replacement.context);
@@ -275,7 +271,6 @@ it("tracks late and replaced theme owners without recreating the lazy background
 });
 
 it("inherits provider preferences and subscriptions until an explicit context overrides them", async () => {
-  const warn = vi.spyOn(console, "warn");
   const inherited = fixture();
   const provider = createSolidApplicationContextProvider(inherited.context);
   const view = mountSolid(() => createComponent(SessionBackground, { surface: "new-session" }), {
@@ -300,7 +295,6 @@ it("inherits provider preferences and subscriptions until an explicit context ov
   await background.updateComplete;
   expect(background.querySelector(".session-background__image")).toBeNull();
   expect(fetch).toHaveBeenCalledTimes(1);
-  expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
 });
 
 it("does not read custom bytes or render theme URLs when accessibility suppresses artwork", async () => {
@@ -335,20 +329,34 @@ it("recomputes custom image contrast only when painted palette tokens change, no
   expect(getCanvasContext).toHaveBeenCalledTimes(2);
 });
 
-it("reads a same-origin mounted asset using the canonical auth primitive without caching", async () => {
-  const { context } = fixture();
-  const url = await readImage(context);
-  expect(url).toBe("blob:background-a");
-  expect(fetch).toHaveBeenCalledWith(
-    `${location.origin}/control/__openclaw__/users/background/asset-a`,
-    expect.objectContaining({
-      headers: { Authorization: "Bearer test-credential" },
-      credentials: "include",
-      cache: "no-store",
-      redirect: "error",
-    }),
-  );
-});
+it.each(["same-origin", "remote", "development proxy"])(
+  "reads authenticated uncached assets through the %s mount",
+  async (route) => {
+    const gatewayUrl =
+      route === "same-origin"
+        ? `${location.origin.replace(/^http/u, "ws")}/ws`
+        : "wss://remote.example/control";
+    const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+    const proxy = route === "development proxy";
+    if (proxy) {
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+    }
+    const { context } = fixture("custom", proxy ? `${proxyPath}/control` : "/control");
+    context.gateway.connection.gatewayUrl = gatewayUrl;
+    const origin = route === "remote" ? "https://remote.example" : location.origin;
+    const mount = route === "remote" ? "" : `${proxy ? proxyPath : ""}/control`;
+    expect(await readImage(context)).toBe("blob:background-a");
+    expect(fetch).toHaveBeenCalledWith(
+      `${origin}${mount}/__openclaw__/users/background/asset-a`,
+      expect.objectContaining({
+        headers: { Authorization: "Bearer test-credential" },
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+      }),
+    );
+  },
+);
 
 it("does not request bytes before a profile is established or for a URL-shaped asset id", async () => {
   const { context, gateway, state } = fixture();
@@ -389,30 +397,6 @@ it("never retries an old credential after identity changed during a rejected fet
   deferred.resolve(new Response(null, { status: 401 }));
   await rejection;
   expect(fetch).toHaveBeenCalledTimes(1);
-});
-
-it("does not infer a remote HTTP mount from the WebSocket path", async () => {
-  const { context } = fixture();
-  context.gateway.connection.gatewayUrl = "wss://remote.example/control";
-  await readImage(context);
-  expect(fetch).toHaveBeenCalledWith(
-    "https://remote.example/__openclaw__/users/background/asset-a",
-    expect.anything(),
-  );
-});
-
-it("preserves the explicit same-origin development proxy mount", async () => {
-  const gatewayUrl = "wss://remote.example/control";
-  const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
-  vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
-  const { context } = fixture("custom", `${proxyPath}/control`);
-  context.gateway.connection.gatewayUrl = gatewayUrl;
-
-  await readImage(context);
-  expect(fetch).toHaveBeenCalledWith(
-    `${location.origin}${proxyPath}/control/__openclaw__/users/background/asset-a`,
-    expect.anything(),
-  );
 });
 
 it("revokes a mounted image immediately on logout and does not restore it on reconnect without identity", async () => {

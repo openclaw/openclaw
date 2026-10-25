@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
-import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
 import {
   makeCapabilities,
   makeMenu,
@@ -109,35 +108,27 @@ function animationFrame() {
 }
 
 describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
-  it("overdraws a plain fixed menu inside the nav with the resizer divider (the bug shape)", async () => {
-    await useDesktopViewport();
-    const { nav, divider } = mountShell();
-    const menu = createSortMenu();
-    nav.append(menu);
-
-    expect(hitTestOnDivider(menu, divider)).toBe(divider);
-  });
-
   it("paints a plain menu hosted in openclaw-menu-surface above the resizer divider", async () => {
     await useDesktopViewport();
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
     const nearby: boolean[] = [];
     const distant: boolean[] = [];
-    onTestFinished(
-      subscribeNativeOverlayOcclusion(
-        (occluded) => nearby.push(occluded),
-        () => new DOMRect(300, 100, 200, 400),
-      ),
-    );
-    onTestFinished(
-      subscribeNativeOverlayOcclusion(
-        (occluded) => distant.push(occluded),
-        () => new DOMRect(900, 100, 300, 400),
-      ),
-    );
+    for (const [events, bounds] of [
+      [nearby, new DOMRect(300, 100, 200, 400)],
+      [distant, new DOMRect(900, 100, 300, 400)],
+    ] as const) {
+      onTestFinished(
+        subscribeNativeOverlayOcclusion(
+          (occluded) => events.push(occluded),
+          () => bounds,
+        ),
+      );
+    }
     const { nav, divider } = mountShell();
     const surface = document.createElement("openclaw-menu-surface");
     const menu = createSortMenu();
+    nav.append(menu);
+    expect(hitTestOnDivider(menu, divider)).toBe(divider);
     surface.append(menu);
     nav.append(surface);
 
@@ -356,29 +347,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await hoverBackground(skills, attachmentHover);
     });
 
-    it("uses platform hover for library actions", async () => {
-      mountMenu(
-        {
-          id: "library-menu-test",
-          label: "Library",
-          items: composerLibraryMenuItems({
-            result: null,
-            loading: false,
-            busy: false,
-            error: "Library unavailable",
-            notice: null,
-            canWrite: false,
-            onReload: () => {},
-            onRead: () => {},
-            onActivate: () => {},
-          }),
-        },
-        host,
-      );
-      await openMenu(host);
-      await hoverBackground(query(host, '[data-value="library-reload"]'), highlight);
-    });
-
     it("matches session menu geometry and theme inside browser cards", async () => {
       const view = mountSolid(() => (
         <BrowserTabCardHost
@@ -466,6 +434,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await userEvent.keyboard("{Home}");
       await expect.poll(() => document.activeElement).toBe(neutral);
       await expect.poll(() => getComputedStyle(neutral).backgroundColor).toBe(highlight);
+      await hoverBackground(neutral, highlight);
       await hoverBackground(disabled, "rgba(0, 0, 0, 0)");
       const dangerHighlight = colorSwatch("var(--danger-subtle)", danger);
       expect(dangerHighlight).not.toBe(highlight);
