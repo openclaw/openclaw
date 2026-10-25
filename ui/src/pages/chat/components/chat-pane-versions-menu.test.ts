@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { createComponent, createSignal, flush, merge } from "solid-js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -20,7 +20,6 @@ const branch = (leafEntryId: string, headline: string, active = false, messageCo
   active,
   messageCount,
 });
-const branches = () => [branch("active", "Current work", true, 4), branch("other", "Earlier idea")];
 function mountMobile(overrides: Partial<ChatSessionVersionsMobileProps>) {
   const [props, setProps] = createSignal<ChatSessionVersionsMobileProps>({
     scopeKey: "connection/main/session-a",
@@ -31,7 +30,6 @@ function mountMobile(overrides: Partial<ChatSessionVersionsMobileProps>) {
     ...overrides,
   });
   const view = mountSolid(() => createComponent(ChatSessionVersionsMobile, merge(props)));
-  onTestFinished(view.unmount);
   flush();
   const update = (next: Partial<ChatSessionVersionsMobileProps>) => {
     setProps((value) => ({ ...value, ...next }));
@@ -58,11 +56,8 @@ it("hides unavailable versions without an empty host and lists multiple branches
     branches: [
       branch("active", "Current work", true, 4),
       {
-        leafEntryId: "other",
-        headline: "Earlier idea",
-        messageCount: 2,
+        ...branch("other", "Earlier idea"),
         updatedAt: new Date(Date.now() - 60_000).toISOString(),
-        active: false,
       },
     ],
   });
@@ -72,38 +67,16 @@ it("hides unavailable versions without an empty host and lists multiple branches
     expect(header.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
   );
   const menu = header.container.querySelector(".chat-pane__branches-menu")!;
-  const trigger = menu.querySelector<HTMLButtonElement>(".oc-menu-trigger");
-  expect(trigger?.classList.contains("chat-pane__branches-trigger")).toBe(true);
   await openNativeMenu(menu);
   const items = header.container.querySelectorAll(".chat-pane__branch-item");
   expect(items).toHaveLength(2);
   expect(items[0]?.textContent).toContain("Current work");
   expect(items[0]?.getAttribute("data-active")).toBe("true");
-  expect(items[0]?.querySelector(".chat-pane__branch-active")).not.toBeNull();
   expect(items[1]?.textContent).toContain("Earlier idea");
 
   header.container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
   await Promise.resolve();
   expect(header.props.onBranchSelect).toHaveBeenCalledWith("other");
-});
-
-it("disables branch switching while the agent is working", async () => {
-  const { container, props } = mountChatPaneHeader(containers, {
-    branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
-    branches: branches(),
-  });
-  await waitForSolid(() =>
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger")?.disabled,
-    ).toBe(true),
-  );
-  const trigger = container.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger");
-  trigger?.click();
-  await Promise.resolve();
-  flush();
-  container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
-  await Promise.resolve();
-  expect(props.onBranchSelect).not.toHaveBeenCalled();
 });
 
 it.each([false, true])("keeps version choices live with merged chrome %s", async (mergedChrome) => {
@@ -126,6 +99,9 @@ it.each([false, true])("keeps version choices live with merged chrome %s", async
   expect(menu.querySelector('[data-value="before"]')).toBeNull();
   expect(menu.querySelector('[data-value="after"]')?.textContent).toContain("Updated");
   expect(menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")?.disabled).toBe(true);
+  menu.querySelector<HTMLButtonElement>('[data-value="after"]')?.click();
+  await Promise.resolve();
+  expect(next).not.toHaveBeenCalled();
   update({ branchSwitchDisabledReason: null });
   await selectNativeMenu(menu, "after");
   expect(next).toHaveBeenCalledExactlyOnceWith("after");

@@ -28,9 +28,11 @@ async function controls(overrides: Partial<Props>) {
       { id: "high", label: "High" },
     ],
   };
-  const onModelSelect = vi.fn(async () => true);
-  const onThinkingSelect = vi.fn(async () => true);
-  const onFastModeSelect = vi.fn(async () => true);
+  const actions = {
+    onModelSelect: vi.fn(async () => true),
+    onThinkingSelect: vi.fn(async () => true),
+    onFastModeSelect: vi.fn(async () => true),
+  };
   const props: Props = {
     activeRunId: null,
     connected: true,
@@ -46,9 +48,7 @@ async function controls(overrides: Partial<Props>) {
     selectedSession,
     thinkingSession: selectedSession,
     sessionsResult: sessions,
-    onModelSelect,
-    onThinkingSelect,
-    onFastModeSelect,
+    ...actions,
     ...overrides,
   };
   const [current, setCurrent] = createSignal(props);
@@ -57,7 +57,7 @@ async function controls(overrides: Partial<Props>) {
     container.querySelector<T>(selector);
   const required = <T extends HTMLElement = HTMLElement>(selector: string) =>
     expectDefined(query<T>(selector), selector);
-  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  const picker = required<HTMLDetailsElement>(".chat-controls__effort-picker");
   picker.open = true;
   picker.dispatchEvent(new Event("toggle"));
   flush();
@@ -71,15 +71,19 @@ async function controls(overrides: Partial<Props>) {
   return {
     container,
     update,
-    onModelSelect,
-    onThinkingSelect,
-    onFastModeSelect,
+    ...actions,
     query,
+    picker,
     model: required("[data-chat-model-select]"),
     option: required<HTMLButtonElement>('[data-chat-model-option="example/other"]'),
     effort: required("[data-chat-thinking-select]"),
     slider: required<HTMLInputElement>("[data-chat-thinking-slider]"),
     speed: required<HTMLButtonElement>("[data-chat-speed-option=on]"),
+    changeThinking() {
+      const slider = required<HTMLInputElement>("[data-chat-thinking-slider]");
+      slider.value = "0";
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    },
   };
 }
 
@@ -94,8 +98,7 @@ it.each([
   view.option.click();
   expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
   expect(view.slider.disabled).toBe(false);
-  view.slider.value = "0";
-  view.slider.dispatchEvent(new Event("change", { bubbles: true }));
+  view.changeThinking();
   expect(view.onThinkingSelect).toHaveBeenCalledWith("low", "main");
   expect(view.speed.disabled).toBe(false);
   view.speed.click();
@@ -112,18 +115,17 @@ it.each([
     effortMutationDisabledReason: "Read only",
   },
 ])("retains $name guards during an active response", async (guard) => {
-  const { model, option, slider, onModelSelect, onThinkingSelect } = await controls({
+  const view = await controls({
     ...guard,
     activeRunId: "active-run",
     stream: "Working",
   });
-  expect(model.getAttribute("aria-disabled")).toBe("true");
-  expect(slider.disabled).toBe(true);
-  option.click();
-  slider.value = "0";
-  slider.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(onModelSelect).not.toHaveBeenCalled();
-  expect(onThinkingSelect).not.toHaveBeenCalled();
+  expect(view.model.getAttribute("aria-disabled")).toBe("true");
+  expect(view.slider.disabled).toBe(true);
+  view.option.click();
+  view.changeThinking();
+  expect(view.onModelSelect).not.toHaveBeenCalled();
+  expect(view.onThinkingSelect).not.toHaveBeenCalled();
 });
 
 it("retires and restores an unavailable context-window control with its access guard", async () => {
@@ -143,7 +145,7 @@ it("retires and restores an unavailable context-window control with its access g
     view.query<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled;
   expect(disabled()).toBe(true);
   view.update({ contextWindowTarget: { contextWindows: [] } });
-  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  expect(view.query("[data-chat-context-window-toggle]")).toBeNull();
   view.update({ contextWindowTarget });
   expect(disabled()).toBe(true);
 });
@@ -191,17 +193,15 @@ it("updates model selection against a retained and replaced catalog", async () =
 
 it("keeps known effort visible but disabled until the same connection returns", async () => {
   const view = await controls({});
-  const picker = view.container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   expect(view.effort.textContent).toContain("High");
   view.update({ connected: false, modelCatalogState: { hasSnapshot: true, status: "offline" } });
-  expect(picker.getAttribute("aria-hidden")).toBe("false");
-  expect(picker.hasAttribute("inert")).toBe(false);
+  expect(view.picker.getAttribute("aria-hidden")).toBe("false");
+  expect(view.picker.hasAttribute("inert")).toBe(false);
   expect(view.effort.textContent).toContain("High");
   expect(view.effort.getAttribute("aria-disabled")).toBe("true");
   expect(view.slider.disabled).toBe(true);
   expect(view.speed.disabled).toBe(true);
-  view.slider.value = "0";
-  view.slider.dispatchEvent(new Event("change", { bubbles: true }));
+  view.changeThinking();
   view.speed.click();
   expect(view.onThinkingSelect).not.toHaveBeenCalled();
   expect(view.onFastModeSelect).not.toHaveBeenCalled();
@@ -217,37 +217,25 @@ it.each([
 ])("does not expose effort without an admitted catalog snapshot: %j", async (modelCatalogState) => {
   const view = await controls({});
   view.update({ connected: false, modelCatalog: [], modelCatalogState });
-  const picker = view.container.querySelector(".chat-controls__effort-picker")!;
-  expect(picker.getAttribute("aria-hidden")).toBe("true");
-  expect(picker.hasAttribute("inert")).toBe(true);
+  expect(view.picker.getAttribute("aria-hidden")).toBe("true");
+  expect(view.picker.hasAttribute("inert")).toBe(true);
 });
 
 it("does not invent reasoning options for an offline non-reasoning model", async () => {
   const view = await controls({});
+  const nonReasoning = { thinkingLevels: [], thinkingDefault: "off" };
   const selectedSession = {
-    key: "main",
-    kind: "direct" as const,
-    updatedAt: 1,
-    model: "plain",
-    modelProvider: "example",
-    thinkingLevels: [],
-    thinkingDefault: "off",
+    ...createSessionsListResult({ model: "plain", modelProvider: "example" }).sessions[0]!,
+    ...nonReasoning,
   };
   view.update({
     connected: false,
     modelCatalog: [
-      {
-        id: "plain",
-        name: "Plain",
-        provider: "example",
-        reasoning: false,
-        thinkingLevels: [],
-        thinkingDefault: "off",
-      },
+      { id: "plain", name: "Plain", provider: "example", reasoning: false, ...nonReasoning },
     ],
     modelCatalogState: { hasSnapshot: true, status: "offline" },
     selectedSession,
     thinkingSession: selectedSession,
   });
-  expect(view.container.querySelector("[data-chat-thinking-select]")).toBeNull();
+  expect(view.query("[data-chat-thinking-select]")).toBeNull();
 });
