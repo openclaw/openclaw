@@ -181,7 +181,7 @@ export function createSessionRowAncestorReads(owner: {
   prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
   prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
-  retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
+  retainRows: () => { update: (ids: readonly string[]) => void; release: () => void };
   describe: SessionRowReadView["describe"];
   inOwnerContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
   placementFacts: ReturnType<typeof createSessionRowPlacementProjection>;
@@ -242,7 +242,7 @@ export function createSessionRowAncestorReads(owner: {
             ]);
           }
         : queries;
-      const archivedRows = owner.retainArchiveRows();
+      const pinnedRows = owner.retainRows();
       // Reserve priority before topology can release both this request and a bulk drain.
       const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
@@ -260,7 +260,7 @@ export function createSessionRowAncestorReads(owner: {
               owner.lookup,
               selected,
               (targets) => {
-                archivedRows.update(
+                pinnedRows.update(
                   targets.flatMap((query) => {
                     if (
                       isIncognitoSessionKey(
@@ -274,7 +274,7 @@ export function createSessionRowAncestorReads(owner: {
                       return [];
                     }
                     const row = owner.lookup(query);
-                    return row?.entry?.archivedAt !== undefined ? [records.identity(row)] : [];
+                    return row ? [records.identity(row)] : [];
                   }),
                 );
                 if (owner.membership.needsPreparation(() => targets)) {
@@ -312,7 +312,7 @@ export function createSessionRowAncestorReads(owner: {
         throw new Error("Session row projection is no longer active");
       } finally {
         releaseExactPreparation();
-        archivedRows.release();
+        pinnedRows.release();
       }
     },
   };

@@ -49,8 +49,8 @@ import * as projectionWork from "./session-projection-work.js";
 import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { ready } from "./session-row-projection-record.js";
+import { isColdSessionRow } from "./session-row-projection-residency.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import { watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
 import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
@@ -635,7 +635,7 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             agentId: "main",
             sessionId: "accepted-archive-1",
           })[0]!;
-          expect(isColdArchivedSessionRow(suffix)).toBe(true);
+          expect(isColdSessionRow(suffix)).toBe(true);
           expect(suffix.pendingDatabaseFacts?.entry.updatedAt).toBe(2);
           expect(projection.dirtyRowCount).toBe(1);
           if (transcriptOnly) {
@@ -659,7 +659,7 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             const watermark = readSessionTranscriptWatermark(suffixScope);
             expect(watermark).not.toEqual(previousWatermark);
             expect(suffix.pendingDatabaseFacts).toBeUndefined();
-            expect(isColdArchivedSessionRow(suffix)).toBe(true);
+            expect(isColdSessionRow(suffix)).toBe(true);
             expect(ready(suffix)).toBe(false);
             inputs.mockRestore();
             clock.mockRestore();
@@ -739,7 +739,7 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
   await withAcceptedSuffix(
     async ({ projection, suffix, scope, query, entry, resume }) => {
       const label = "current archive";
-      expect(isColdArchivedSessionRow(suffix)).toBe(false);
+      expect(isColdSessionRow(suffix)).toBe(false);
       // Equal timestamps still require the keyed reader to consume the owner's newer publication.
       replaceSessionEntrySync(scope, { ...entry, label });
       expect(suffix.pendingDatabaseFacts).toBeUndefined();
@@ -755,7 +755,7 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
       expect(current.pendingDatabaseFacts).toBeUndefined();
       expect(current.entry).toMatchObject({ updatedAt: entry.updatedAt, label });
       expect(current.materialized.source.entry).toBe(current.entry);
-      expect(isColdArchivedSessionRow(current)).toBe(false);
+      expect(isColdSessionRow(current)).toBe(false);
       expect(current.materialized.row.label).toBe(label);
       expect(projection.dirtyRowCount).toBe(0);
     },
@@ -1013,7 +1013,7 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     await resume();
     expect(projection.materializedCount).toBe(count);
     const cold = projection.findBySessionId({ agentId: "main", sessionId: entry.sessionId })[0]!;
-    expect(isColdArchivedSessionRow(cold)).toBe(true);
+    expect(isColdSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
     expect(projection.dirtyRowCount).toBe(0);
     await withReadySessionRows(

@@ -148,13 +148,14 @@ export function createSessionRowProjectionRevisions(
       }
     },
     replace(previous: Row | undefined, row: Row) {
+      const parentsChanged = !previous || !isDeepStrictEqual(previous.parents, row.parents);
       if (
         !previous ||
         !row.sharingEntry ||
         previous.generation !== row.generation ||
         previous.entry?.sessionId !== row.entry?.sessionId ||
         previous.entry?.lifecycleRevision !== row.entry?.lifecycleRevision ||
-        !isDeepStrictEqual(previous.parents, row.parents)
+        parentsChanged
       ) {
         taskPublication = undefined;
       }
@@ -163,7 +164,14 @@ export function createSessionRowProjectionRevisions(
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
         previous.entry !== row.entry;
-      invalidate(changed);
+      if (
+        changed ||
+        parentsChanged ||
+        previous?.sharingEntry !== row.sharingEntry ||
+        previous?.membership !== row.membership
+      ) {
+        invalidate(changed);
+      }
       publishFacts(row);
       if (changed) {
         publishSelection(row);

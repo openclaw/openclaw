@@ -136,7 +136,6 @@ export async function searchProjectedSessionTranscripts(params: {
     const published = await withReadySessionRows(
       projection,
       () => {
-        projection.setArchivePageSize(matchedRows.size);
         return [...matchedRows].map((row) => ({
           agentId: row.agentId,
           key: row.key,

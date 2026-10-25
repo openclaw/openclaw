@@ -11,7 +11,7 @@ import { buildSessionListRowMetadataContext } from "./session-utils-projection.j
 
 const cfg = { agents: { entries: { main: {} } } };
 const noop = () => {};
-const archive = { demote: (row: records.Row) => row, forget: noop };
+const residency = { acquire: (row: records.Row) => row };
 
 const original: SessionEntry = {
   sessionId: "session",
@@ -52,7 +52,7 @@ it("reuses search fields across equal reads and timestamp changes, but refreshes
         remove: noop,
         put: noop,
         markRelated: noop,
-        archive,
+        residency,
       })!;
     };
     try {
@@ -114,7 +114,7 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
       remove: noop,
       put,
       markRelated: noop,
-      archive,
+      residency,
     };
     const acquire = (candidate: records.Row, storedEntry: SessionEntry) =>
       records.acquireSessionRowEntry({ ...acquisition, row: candidate, storedEntry });
@@ -138,7 +138,7 @@ it("keeps accepted facts and sharing revisions when database reads return equal 
 it("preserves deep change detection for entry metadata and unordered parent membership", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = buildSessionListRowMetadataContext({ now: 1 });
-    const acquisition = { cfg, context, remove: noop, put: noop, archive };
+    const acquisition = { cfg, context, remove: noop, put: noop, residency };
     const variants: SessionEntry[] = [
       original,
       structuredClone(original),
