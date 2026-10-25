@@ -63,25 +63,34 @@ describe("ModelSetupPage catalog icons", () => {
 
   it("redacts initial detection failures and recovers through Retry", async () => {
     const { context, request, runtimeConfig } = createContext();
-    request.mockRejectedValueOnce(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
-    request.mockResolvedValue(detection);
+    const initial = createDeferred<SystemAgentSetupDetectResult>();
+    const retry = createDeferred<SystemAgentSetupDetectResult>();
+    request.mockReturnValueOnce(initial.promise).mockReturnValueOnce(retry.promise);
     const page = createPage(context);
     page.routeData = { firstRun: false };
     document.body.append(page);
     mountModelSetupPage(page);
-
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    const heading = page.querySelector(".model-setup__intro h1");
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    initial.reject(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
     await waitForFast(() => {
       expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
       expect(page.textContent).not.toContain("sk-1234567890abcdef");
     });
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
     [...page.querySelectorAll<HTMLButtonElement>(".model-setup .btn")]
       .find((button) => button.textContent?.trim() === "Retry")
       ?.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
+    retry.resolve(detection);
     await waitForFast(() => {
       expect(page.querySelector('[data-prepare-choice="llama-cpp"]')).not.toBeNull();
       expect(page.querySelector('[role="alert"]')).toBeNull();
     });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
     runtimeConfig.dispose();
   });
 
@@ -160,11 +169,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
     expect(page.textContent).not.toContain("Connection verified");
-    expect(request).not.toHaveBeenCalledWith(
-      "openclaw.setup.activate.start",
-      expect.anything(),
-      expect.anything(),
-    );
+    expect(callsFor(request, "openclaw.setup.activate.start")).toHaveLength(0);
   });
 
   it("config.set flushes a pending config draft before activation review and refreshes afterward", async () => {
@@ -229,11 +234,7 @@ describe("ModelSetupPage catalog icons", () => {
     configSet.resolve({ hash: "hash-2" });
 
     await waitForText(page, "Model setup request failed.");
-    expect(request).not.toHaveBeenCalledWith(
-      "openclaw.setup.auth.start",
-      expect.anything(),
-      expect.anything(),
-    );
+    expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(0);
     runtimeConfig.dispose();
   });
 
@@ -241,7 +242,8 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request, runtimeConfig } = createContext();
     const order: string[] = [];
     let nextCount = 0;
-    let releaseProgress: ((value: unknown) => void) | undefined;
+    const progress = createDeferred<{ done: true; status: "done" }>();
+    const progressStarted = createDeferred();
     request.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         order.push("config.get");
@@ -260,9 +262,8 @@ describe("ModelSetupPage catalog icons", () => {
         });
       }
       if (method === "wizard.next") {
-        return await new Promise((resolve) => {
-          releaseProgress = resolve;
-        });
+        progressStarted.resolve();
+        return progress.promise;
       }
       if (method === "wizard.cancel") {
         return { status: "running" };
@@ -278,7 +279,7 @@ describe("ModelSetupPage catalog icons", () => {
       authOptions: [authOption("provider-auth")],
     });
     authButton(page, "provider-auth")?.click();
-    await vi.waitFor(() => expect(releaseProgress).toBeTypeOf("function"));
+    await progressStarted.promise;
 
     const competingMutation = runtimeConfig.runExternalMutation(async () => {
       order.push("competing-mutation");
@@ -293,7 +294,7 @@ describe("ModelSetupPage catalog icons", () => {
     await Promise.resolve();
     expect(order).not.toContain("competing-mutation");
 
-    releaseProgress?.({ done: true, status: "done" });
+    progress.resolve({ done: true, status: "done" });
     await competingMutation;
     expect(order.indexOf("competing-mutation")).toBeGreaterThan(order.indexOf("config.get"));
     runtimeConfig.dispose();

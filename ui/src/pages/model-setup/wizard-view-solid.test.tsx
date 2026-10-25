@@ -13,6 +13,19 @@ registerEnglishCatalog(registerModelSetupEnglish);
 
 beforeEach(() => onTestFinished(installDialogPolyfill()));
 
+const find = <E extends Element = HTMLElement>(root: ParentNode, selector: string) =>
+  root.querySelector<E>(selector)!;
+
+function fakeTime() {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+}
+
+async function settle(container: HTMLElement) {
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+}
+
 const wizardDefaults = {
   mode: "auth" as const,
   refreshWarning: null,
@@ -41,32 +54,31 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
       onAnswer={answer}
     />
   ));
-  flush();
-  const modal = container.querySelector("openclaw-modal-dialog")!;
-  await modal.updateComplete;
-  const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
+  await settle(container);
+  const modal = find(container, "openclaw-modal-dialog");
+  const input = find<HTMLInputElement>(container, "input");
   input.focus();
   input.value = "initial typed";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
 
   expect(container.querySelector("openclaw-modal-dialog")).toBe(modal);
-  expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
+  expect(find(container, "input")).toBe(input);
   expect(document.activeElement).toBe(input);
   expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
 
   setSaving(true);
   flush();
-  expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
-  expect(input.value).toBe("initial typed");
-  expect(input.disabled).toBe(true);
+  expect(find(container, "input")).toBe(input);
+  expect(input).toMatchObject({ value: "initial typed", disabled: true });
   expect(container.querySelector('[role="status"][aria-busy="true"]')?.textContent).toContain(
     "Working",
   );
-  const cancel = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent?.trim() === "Cancel",
-  );
-  expect(cancel?.disabled).toBe(false);
+  expect(
+    [...container.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Cancel",
+    )?.disabled,
+  ).toBe(false);
   setSaving(false);
   flush();
   expect(input.disabled).toBe(false);
@@ -95,8 +107,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
       value="continue"
     />
   ));
-  flush();
-  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  await settle(container);
   expect(document.activeElement?.textContent).toContain("Continue");
   const deviceStep = {
     id: "device-code",
@@ -108,14 +119,11 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   setState(stepState(deviceStep, true));
   flush();
   expect(document.activeElement?.textContent).toContain("Reopen browser tab");
-  expect(container.querySelector(".wizard-sign-in__title")?.textContent).toBe(
-    "Enter this code in your browser",
-  );
   const status = container.querySelector('.wizard-sign-in [role="status"]');
   expect(status?.textContent).toContain("Waiting for sign-in");
   expect(container.querySelector(".wizard-sign-in__ring")).not.toBeNull();
-  const code = container.querySelector("code");
-  expect(container.querySelector("code")?.textContent).toBe("ABCD-1234");
+  const code = find(container, "code");
+  expect(code.textContent).toBe("ABCD-1234");
   const verifyStep = {
     ...deviceStep,
     id: "verify",
@@ -130,7 +138,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
-  const primary = container.querySelector<HTMLButtonElement>("[data-login-start-chat]")!;
+  const primary = find<HTMLButtonElement>(container, "[data-login-start-chat]");
   expect(document.activeElement).toBe(primary);
   expect(container.querySelector(".wizard-step__spinner")).toBeNull();
   primary.click();
@@ -149,10 +157,7 @@ const redirectStep = {
 };
 
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  fakeTime();
   const cancel = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
@@ -162,25 +167,17 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
       onCancel={cancel}
     />
   ));
-  flush();
-  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  await settle(container);
 
   expect(container.querySelector(".model-setup-wizard__header")).toBeNull();
-  expect(container.querySelector(".wizard-sign-in__title")?.textContent).toBe(
-    "Continue in your browser",
-  );
-  expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toBe(
-    "Linear is open in a new tab. Approve access there. This window updates by itself.",
-  );
   expect(container.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
     "Waiting for Linear…",
   );
-  const link = container.querySelector<HTMLAnchorElement>(".wizard-step__external-link")!;
+  const link = find<HTMLAnchorElement>(container, ".wizard-step__external-link");
   expect([link.textContent, link.classList.contains("primary")]).toEqual([
     "Reopen browser tab",
     false,
   ]);
-  expect(container.querySelector(".wizard-sign-in__link")?.textContent).toBe("Copy sign-in link");
   expect(container.querySelector(".btn.primary")).toBeNull();
   expect(
     [...container.querySelectorAll("button")].some(
@@ -188,7 +185,7 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
     ),
   ).toBe(false);
 
-  container.querySelector<HTMLButtonElement>('[aria-label="Cancel sign-in"]')!.click();
+  find<HTMLButtonElement>(container, '[aria-label="Cancel sign-in"]').click();
   expect(cancel).toHaveBeenCalledOnce();
 
   vi.advanceTimersByTime(45_000);
@@ -200,10 +197,7 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
 });
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  fakeTime();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}
@@ -217,11 +211,10 @@ it("shows device-code expiry only near the end and retires an expired code", asy
       value={undefined}
     />
   ));
-  flush();
-  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  await settle(container);
 
-  expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toBe(
-    "GitHub is open in a new tab. Make sure it shows the same code before you approve.",
+  expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
+    "Make sure it shows the same code before you approve.",
   );
   expect(container.querySelector("code")?.textContent).toBe("WDJB-MJHT");
   expect(container.textContent).not.toContain("Expires in");

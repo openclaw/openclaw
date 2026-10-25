@@ -21,7 +21,6 @@ import {
 } from "./model-setup-first-run.test-support.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
-import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 const inventory: SystemAgentSetupDetectResult = {
   ...detection,
@@ -42,37 +41,6 @@ describe("Model setup refresh continuity", () => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("retries an initial detection failure without losing the page controls", async () => {
-    const { context, request } = createFirstRunContext();
-    const initial = createDeferred<SystemAgentSetupDetectResult>();
-    const retry = createDeferred<SystemAgentSetupDetectResult>();
-    request
-      .mockImplementationOnce(() => initial.promise)
-      .mockImplementationOnce(() => retry.promise);
-    const page = createPage(context);
-    page.routeData = { firstRun: false };
-    document.body.append(page);
-    mountModelSetupPage(page);
-    await waitForFast(() => expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(1));
-    const heading = page.querySelector(".model-setup__intro h1");
-    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
-    initial.reject(new Error("Detection failed. Try again."));
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Detection failed"),
-    );
-    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Retry")!
-      .click();
-    await waitForFast(() => expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(2));
-    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
-    await waitForFast(() => expect(page.querySelector(".model-setup__loading")).not.toBeNull());
-    retry.resolve(inventory);
-    await waitForFast(() => expect(page.querySelector(".model-setup__manual")).not.toBeNull());
-    expect(page.querySelector('[role="alert"]')).toBeNull();
-    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
   });
 
   it("keeps editable drafts and focus through a failed rescan and its retry", async () => {
@@ -342,31 +310,51 @@ describe("Model setup refresh continuity", () => {
     }
   });
 
-  it("clears the old owner's draft and ignores its late rescan", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    const { page } = await mountDetection(context, client, inventory, false);
-    await selectManualProvider(page, "fixture-key");
-    setInput(page, manualInput, "old-owner-draft");
-    const pending = createDeferred<SystemAgentSetupDetectResult>();
-    request
-      .mockImplementationOnce(async () => pending.promise)
-      .mockResolvedValue({ ...inventory, workspace: "/new-owner" });
-    scanButton(page).click();
-    await page.updateComplete;
-    publishGatewaySnapshot({
-      ...snapshot,
-      hello: {
-        ...snapshot.hello,
-        auth: { ...snapshot.hello.auth, recoveryScope: "replacement-owner" },
-      },
-    });
-    await waitForFast(() =>
-      expect(page.querySelector<HTMLInputElement>(manualInput)?.value).toBe(""),
-    );
-    pending.resolve({ ...inventory, configuredModel: "fixture/stale-model" });
-    await page.updateComplete;
-    await Promise.resolve();
-    expect(page.textContent).not.toContain("stale-model");
-    expect(page.querySelector<HTMLInputElement>(manualInput)?.value).toBe("");
-  });
+  it.each(["scope", "revision"])(
+    "clears drafts and ignores late rescans after owner %s changes",
+    async (change) => {
+      const { context, client, request, snapshot, publishGatewaySnapshot } =
+        createFirstRunContext();
+      const nativeInput = ".model-setup__native-discovery input";
+      const fresh = {
+        ...inventory,
+        nativeSessionCatalogPreferenceRequired: true,
+        nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
+      };
+      const { page } = await mountDetection(context, client, fresh, change === "revision");
+      page.querySelector<HTMLInputElement>(nativeInput)!.click();
+      await selectManualProvider(page, "fixture-key");
+      setInput(page, manualInput, "old-owner-draft");
+      const pending = createDeferred<SystemAgentSetupDetectResult>();
+      request
+        .mockImplementationOnce(async () => pending.promise)
+        .mockResolvedValue({ ...fresh, workspace: "/new-owner" });
+      scanButton(page).click();
+      await page.updateComplete;
+      if (change === "revision") {
+        Object.assign(context.gateway, {
+          connectionRevision: context.gateway.connectionRevision + 1,
+        });
+        publishGatewaySnapshot({ ...snapshot });
+      } else {
+        publishGatewaySnapshot({
+          ...snapshot,
+          hello: {
+            ...snapshot.hello,
+            auth: { ...snapshot.hello.auth, recoveryScope: "replacement-owner" },
+          },
+        });
+      }
+      await waitForFast(() =>
+        expect(page.querySelector<HTMLInputElement>(manualInput)?.value).toBe(""),
+      );
+      pending.resolve({ ...inventory, configuredModel: "fixture/stale-model" });
+      await page.updateComplete;
+      await Promise.resolve();
+      expect(page.textContent).not.toContain("stale-model");
+      expect(page.querySelector<HTMLInputElement>(manualInput)?.value).toBe("");
+      expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
+      expect(page.querySelector("[data-selected]")).toBeNull();
+    },
+  );
 });

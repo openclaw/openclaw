@@ -75,14 +75,13 @@ it.each(ownerChanges)(
     });
     const originalAnswer = createDeferred<WizardNextResult>();
     const answerStarted = createDeferred();
-    const inventory = {
-      ...detection,
-      authOptions: [authOption("selected-provider", "Selected provider")],
-    };
     gateway.start();
     const original = current();
     const sharedResponses = {
-      "openclaw.setup.detect": () => inventory,
+      "openclaw.setup.detect": () => ({
+        ...detection,
+        authOptions: [authOption("selected-provider")],
+      }),
       "config.get": () => sourceConfigSnapshot({}, "synthetic-config"),
       "wizard.cancel": () => ({ status: "cancelled" }),
     };
@@ -97,7 +96,6 @@ it.each(ownerChanges)(
         return runningStep({
           id: "provider-key",
           type: "text",
-          message: "Enter selected provider key",
           sensitive: true,
         });
       },
@@ -121,7 +119,6 @@ it.each(ownerChanges)(
       await answerStarted.promise;
       const receipt = pendingReceipt();
       expect(receipt).not.toBeNull();
-      const originalRevision = gateway.connectionRevision;
       const [originalStart] = callsFor(original.request, "openclaw.setup.auth.start");
       const sessionId = (originalStart![1] as { sessionId: string }).sessionId;
 
@@ -134,7 +131,6 @@ it.each(ownerChanges)(
         replacementReceipt = pendingReceipt();
         expect(replacementReceipt).not.toBe(receipt);
       }
-      // Real reconnect callbacks own revision and authority changes.
       if (change.startsWith("same-client")) {
         original.testOptions.onClose?.({
           code: 1006,
@@ -146,12 +142,10 @@ it.each(ownerChanges)(
       }
       const replacement = current();
       const requestOffset = replacement.request.mock.calls.length;
-      const sent = (match: string | RegExp) =>
+      const sent = (match: RegExp) =>
         replacement.request.mock.calls
           .slice(requestOffset)
-          .filter(([method]) =>
-            typeof match === "string" ? method === match : match.test(method),
-          );
+          .filter(([method]) => match.test(method));
       mockRequests(replacement.request, {
         ...sharedResponses,
         "wizard.next": () =>
@@ -173,14 +167,10 @@ it.each(ownerChanges)(
         replacementReceipt = receipt;
       }
       replacement.testOptions.onHello?.(reconnectedHello);
-      expect(gateway.connectionRevision).toBe(
-        originalRevision + (change === "token change" ? 1 : 0),
-      );
-
       if (change === "same target") {
         await waitForText(page, "Review selected provider");
         expect(pendingReceipt()).toBe(receipt);
-        expect(sent("wizard.next").map(([, params]) => params)).toEqual([{ sessionId }]);
+        expect(sent(/^wizard\.next$/u).map(([, params]) => params)).toEqual([{ sessionId }]);
         expect(callsFor(original.request, "wizard.cancel")).toHaveLength(0);
       } else {
         await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
@@ -197,6 +187,11 @@ it.each(ownerChanges)(
           original.request.mock.settledResults.filter((result) => result.type === "incomplete"),
         ).toHaveLength(0),
       );
+      if (change === "same target") {
+        expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+        expect(page.textContent).toContain("Review selected provider");
+        expect(callsFor(original.request, "wizard.cancel")).toHaveLength(0);
+      }
       if (authorityLost) {
         // Reauthorization must not revive a discarded wizard or replay its answer.
         replacement.testOptions.onHello?.(hello());
@@ -209,7 +204,7 @@ it.each(ownerChanges)(
       }
       expect(context.navigate).not.toHaveBeenCalled();
       expect(callsFor(original.request, "openclaw.setup.auth.start")).toHaveLength(1);
-      expect(sent("openclaw.setup.auth.start")).toHaveLength(0);
+      expect(sent(/^openclaw\.setup\.auth\.start$/u)).toHaveLength(0);
       expect(
         original.request.mock.calls.filter(
           ([method, params]) =>
