@@ -55,6 +55,14 @@ export async function agentsSetIdentityCommand(opts: {
   const avatarRaw = normalizeOptionalString(opts.avatar);
   const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
 
+  // An explicit blank flag must not silently fall back to the workspace identity.
+  if (typeof opts.identityFile === "string" && !opts.identityFile.trim()) {
+    throwExpectedCliError("--identity-file must not be blank");
+  }
+  if (typeof opts.workspace === "string" && !opts.workspace.trim()) {
+    throwExpectedCliError("--workspace must not be blank");
+  }
+
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
