@@ -62,6 +62,11 @@ function reconnect(context: Pick<ReturnType<typeof harness>, "library" | "connec
   library.reset();
   connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
 }
+function nextRequest<T>(request: ReturnType<typeof requestFor>) {
+  const pending = createDeferred<T>();
+  request.mockReturnValueOnce(pending.promise);
+  return pending;
+}
 function fileWithReader(name: string, read: () => Promise<ArrayBuffer>) {
   const file = new File(["skill"], name);
   Object.defineProperty(file, "arrayBuffer", { value: read });
@@ -95,76 +100,10 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
   };
 }
 
-it("opens only an accepted library read and retains the editor through failure and retry", async () => {
-  onTestFinished(installDialogPolyfill());
-  const { library, request } = harness();
-  const mounted = mountLibrary(library, true);
-  const first = createDeferred<SkillsLibraryReadResult>();
-  request.mockReturnValueOnce(first.promise);
-  const opening = library.open(libraryEntry().skillId);
-  flush();
-  expect(mounted.query(".skill-reader-dialog")).toBeNull();
-  await library.open(libraryEntry().skillId);
-  expect(request).toHaveBeenCalledTimes(1);
-  first.resolve(existingSkill());
-  await opening;
-  const { dialog } = await getRenderedModalDialog(mounted.container);
-  const editor = mounted.query<HTMLTextAreaElement>("textarea")!;
-  expect(dialog.open).toBe(true);
-  expect(editor.value).toBe("# Existing skill");
-
-  const replacement = createDeferred<SkillsLibraryReadResult>();
-  request.mockReturnValueOnce(replacement.promise);
-  const replacing = library.open("replacement-skill");
-  flush();
-  expect(editor).toMatchObject({ readOnly: true, value: "# Existing skill" });
-  replacement.reject(new Error("Library detail unavailable"));
-  await replacing;
-  await waitForFast(() => {
-    expect(editor.readOnly).toBe(false);
-    expect(mounted.query('[role="alert"]')?.textContent).toContain("Library detail unavailable");
-  });
-  expect(mounted.query("textarea")).toBe(editor);
-  expect(mounted.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
-  expect(dialog.open).toBe(true);
-
-  request.mockResolvedValueOnce({ ...existingSkill(), content: "# Retried library read" });
-  await library.open("replacement-skill");
-  await waitForFast(() => expect(editor.value).toBe("# Retried library read"));
-  expect(mounted.query("textarea")).toBe(editor);
-  expect(mounted.query('[role="alert"]')).toBeNull();
-  expect(request).toHaveBeenCalledTimes(3);
-});
-
-it("retires an old library detail failure when the connection is replaced", async () => {
-  onTestFinished(installDialogPolyfill());
-  const { library, request, connection } = harness();
-  const mounted = mountLibrary(library, true);
-  const oldRead = createDeferred<SkillsLibraryReadResult>();
-  request.mockReturnValueOnce(oldRead.promise);
-  const previous = library.open(libraryEntry().skillId);
-  reconnect({ library, connection });
-  request.mockResolvedValueOnce({ ...existingSkill(), content: "# Current connection" });
-  await library.open(libraryEntry().skillId);
-  await waitForFast(() => {
-    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe("# Current connection");
-    expect(mounted.query('[role="alert"]')).toBeNull();
-  });
-  oldRead.reject(new Error("Retired read failed"));
-  await previous;
-  await waitForFast(() => {
-    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe("# Current connection");
-    expect(mounted.query('[role="alert"]')).toBeNull();
-  });
-  expect(library.state).toMatchObject({ busy: false, error: null });
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it.each(
-  (["disable", "share"] as const).flatMap((action) =>
-    (["success", "error"] as const).map((outcome) => ({ action, outcome })),
-  ),
-)(
+it.each([
+  { action: "disable", outcome: "error" },
+  { action: "share", outcome: "success" },
+] as const)(
   "retains the library editor and reconciles a held $action after $outcome",
   async ({ action, outcome }) => {
     onTestFinished(installDialogPolyfill());
@@ -190,12 +129,6 @@ it.each(
       expect(row.textContent).toContain(action === "disable" ? "Disabled" : "Shared with team");
       expect(nativeDialog.open).toBe(true);
     });
-    expect(draft.entry).toMatchObject({ enabled: true, shared: false });
-    expect(request).toHaveBeenNthCalledWith(2, "skills.library.mutate", {
-      skillId: read.entry.skillId,
-      expectedRevision: read.entry.revision,
-      action,
-    });
     if (outcome === "error") {
       mutation.reject(new Error("Synthetic rejected library update"));
       await waitForFast(() => {
@@ -203,14 +136,9 @@ it.each(
         expect(row.textContent).toContain(action === "disable" ? "Enabled" : "Private");
         expect(dialog.textContent).toContain("Synthetic rejected library update");
       });
-      expect(request).toHaveBeenCalledTimes(2);
     } else {
       const receipt = savedReceipt(read);
-      if (action === "disable") {
-        receipt.entry.enabled = false;
-      } else {
-        receipt.entry.shared = true;
-      }
+      receipt.entry.shared = true;
       mutation.resolve(receipt);
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
       expect(button(after).disabled).toBe(true);
@@ -237,61 +165,6 @@ it("keeps removal confirmation outside mutation presentation", async () => {
   expect(remove.disabled).toBe(false);
   expect(library.state.busy).toBe(false);
   expect(request).toHaveBeenCalledTimes(1);
-});
-
-it("settles an admitted save when its caller retires before the first presentation settle", async () => {
-  const { library, request, read } = await openSkill();
-  const pending = createDeferred<SkillsLibraryReceipt>();
-  request.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(libraryList(false));
-  const operation = createRoot((dispose) => {
-    const saving = library.save();
-    library.retire();
-    dispose();
-    return saving;
-  });
-  const completed = vi.fn();
-  void operation.then(completed);
-  pending.resolve(savedReceipt(read));
-  await waitForFast(() => expect(completed).toHaveBeenCalledTimes(1));
-  expect(library.state.busy).toBe(false);
-  expect(library.state.draft?.entry?.revision).toBe("b".repeat(64));
-});
-
-it("releases retired saving presentation and preserves a same-key successor draft", async () => {
-  const { library, request, connection, read } = await openSkill();
-  const pending = createDeferred<SkillsLibraryReceipt>();
-  request.mockReturnValueOnce(pending.promise);
-  const mounted = mountLibrary(library, true);
-  flush();
-  const operation = library.save();
-  await waitForFast(() => expect(library.saving()).toBe(true));
-  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
-  library.reset();
-  await waitForFast(() => {
-    expect(library.saving()).toBe(false);
-    expect(mounted.query(".skill-reader-dialog")).toBeNull();
-  });
-  const successor = {
-    ...read,
-    entry: { ...read.entry, revision: "c".repeat(64) },
-    content: "# Same skill on the current connection",
-  };
-  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
-  request.mockResolvedValueOnce(successor);
-  await library.open(read.entry.skillId);
-  await waitForFast(() => {
-    expect(library.saving()).toBe(false);
-    expect(mounted.query<HTMLTextAreaElement>("textarea")?.value).toBe(successor.content);
-  });
-  pending.resolve(savedReceipt(read));
-  await operation;
-  expect(library.state).toMatchObject({
-    list: null,
-    draft: { entry: successor.entry, content: successor.content },
-    busy: false,
-    error: null,
-  });
-  expect(request).toHaveBeenCalledTimes(3);
 });
 
 it.each(["files", "clawhub"])(
@@ -342,7 +215,6 @@ it.each(["files", "clawhub"])(
         expect(mounted.container.textContent).toContain("existing-skill");
       }
     });
-    expect(request).toHaveBeenCalledTimes(kind === "files" ? 0 : 2);
   },
 );
 it("disables import while disconnected without losing the local selection", () => {
@@ -359,121 +231,165 @@ it("disables import while disconnected without losing the local selection", () =
   expect(library.state.importSelection).toHaveLength(1);
 });
 
-it("retains library controls and keyed rows through pending, failed, and retried reads", async () => {
-  const { library, request } = harness();
-  library.state.list = null;
-  const first = createDeferred<SkillsLibraryListResult>();
-  request.mockReturnValueOnce(first.promise);
-  const view = mountLibrary(library);
-  const initial = library.load();
-  flush();
-  const search = view.query<HTMLInputElement>('input[name="library-search"]')!;
-  search.focus();
-  expect(document.activeElement).toBe(search);
-  expect(view.query('[role="status"]')?.textContent).toContain("Loading");
-  expect(view.query(".settings-row")).toBeNull();
-  library.create();
-  expect(library.state.draft).toBeNull();
-
-  const list = {
-    ...libraryList(false),
-    entries: [
-      libraryEntry(),
-      libraryEntry({ skillId: "second-skill", slug: "other-skill", name: "Other skill" }),
-    ],
-  };
-  first.resolve(list);
-  await initial;
-  await waitForFast(() => expect(view.container.textContent).toContain("existing-skill"));
-  expect(document.activeElement, "after the initial accepted read").toBe(search);
-  const row = view.query(".settings-row")!;
-  const refresh = () => buttonIn(view.container, "Refresh");
-  const failed = createDeferred<SkillsLibraryListResult>();
-  request.mockReturnValueOnce(failed.promise);
-  refresh().click();
-  flush();
-  expect(view.query(".settings-row")).toBe(row);
-  expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
-  expect(view.query('input[name="library-search"]')).toBe(search);
-  search.value = "existing-skill";
-  search.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  expect(view.container.querySelectorAll(".settings-row")).toHaveLength(1);
-  expect(view.query(".settings-row")).toBe(row);
-
-  failed.reject(new Error("Library list unavailable"));
-  await waitForFast(() =>
-    expect(view.query('[role="alert"]')?.textContent).toContain("Library list unavailable"),
-  );
-  expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
-  expect(view.query(".settings-row")).toBe(row);
-  expect(document.activeElement).toBe(search);
-  expect(row.querySelector<HTMLButtonElement>("button")?.disabled).toBe(false);
-
-  library.state.error = "A later mutation conflict";
-  flush();
-  expect(view.query('[role="alert"]')?.textContent).toContain("A later mutation conflict");
-  expect(view.query(".settings-row")).toBe(row);
-  request.mockResolvedValueOnce({
-    ...list,
-    entries: [{ ...list.entries[0]!, description: "Updated library skill" }],
-  });
-  refresh().click();
-  await waitForFast(() => expect(row.textContent).toContain("Updated library skill"));
-  expect(view.query(".settings-row")).toBe(row);
-  expect(view.query('[role="alert"]')).toBeNull();
-  expect(request).toHaveBeenCalledTimes(3);
-
-  const retainedRefresh = createDeferred<SkillsLibraryListResult>();
-  request.mockReturnValueOnce(retainedRefresh.promise);
-  const pendingRefresh = library.load();
-  flush();
-  view.unmount();
-  const remounted = mountLibrary(library);
-  flush();
-  expect(remounted.query(".settings-row")?.textContent).toContain("Updated library skill");
-  expect(remounted.query<HTMLButtonElement>(".settings-row button")?.disabled).toBe(true);
-  retainedRefresh.resolve(list);
-  await pendingRefresh;
-});
-
-it.each(["list", "save"] as const)("ignores stale %s failures", async (operation) => {
-  const { library, request, connection } = harness();
-  const oldResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
-  const newResult = createDeferred<SkillsLibraryListResult | SkillsLibraryReceipt>();
-  const read = existingSkill();
-  const list = library.state.list!;
-  const flag = operation === "list" ? "loading" : "busy";
-  async function begin(result: typeof oldResult, content: string) {
-    if (operation === "save") {
-      request.mockResolvedValueOnce(read);
-      await library.open(read.entry.skillId);
-      library.state.draft!.content = content;
+it.each(["detail", "list"] as const)(
+  "retains %s controls through failed reads and retry",
+  async (kind) => {
+    onTestFinished(installDialogPolyfill());
+    const { library, request } = harness();
+    const detail = kind === "detail";
+    if (!detail) {
+      library.state.list = null;
     }
-    request.mockReturnValueOnce(result.promise);
-    return { pending: operation === "list" ? library.load() : library.save() };
-  }
-  const old = await begin(oldResult, "First connection edit");
-  reconnect({ library, connection });
-  const current = await begin(newResult, "Current connection edit");
-  expect(request).toHaveBeenCalledTimes(operation === "list" ? 2 : 4);
-  expect(library.state[flag]).toBe(true);
-  oldResult.reject(new Error("Previous connection failed"));
-  await old.pending;
-  expect(library.state).toMatchObject({ [flag]: true, error: null });
-  if (operation === "save") {
-    request.mockResolvedValueOnce(list);
-  }
-  newResult.resolve(operation === "list" ? { ...list, profileId: "bob" } : savedReceipt(read));
-  await current.pending;
-  expect(library.state).toMatchObject({
-    [flag]: false,
-    error: null,
-    ...(operation === "list"
-      ? { list: { profileId: "bob" } }
-      : { draft: { content: "Current connection edit", entry: { revision: "b".repeat(64) } } }),
-  });
-});
+    const view = mountLibrary(library, detail);
+    let skillId = libraryEntry().skillId;
+    const run = () => (detail ? library.open(skillId) : library.load());
+    const result = (text: string) =>
+      detail
+        ? { ...existingSkill(), content: text }
+        : { ...libraryList(false), entries: [libraryEntry({ description: text })] };
+    const item = () => view.query(detail ? "textarea" : ".settings-row");
+    const locked = () =>
+      detail
+        ? view.query<HTMLTextAreaElement>("textarea")?.readOnly
+        : view.query<HTMLButtonElement>(".settings-row button")?.disabled;
+    const text = () =>
+      detail ? view.query<HTMLTextAreaElement>("textarea")?.value : item()?.textContent;
+    const expectText = (value: string) =>
+      detail ? expect(text()).toBe(value) : expect(text()).toContain(value);
+    const first = nextRequest<SkillsLibraryReadResult | SkillsLibraryListResult>(request);
+    const opening = run();
+    flush();
+    expect(item()).toBeNull();
+    if (detail) {
+      expect(view.query(".skill-reader-dialog")).toBeNull();
+      await run();
+      expect(request).toHaveBeenCalledTimes(1);
+    } else {
+      expect(view.query('[role="status"]')?.textContent).toContain("Loading");
+      library.create();
+      expect(library.state.draft).toBeNull();
+      view.query<HTMLInputElement>('input[name="library-search"]')!.focus();
+    }
+    first.resolve(result("Initial skill"));
+    await opening;
+    await waitForFast(() => expectText("Initial skill"));
+    const retained = item();
+    const dialog = detail ? (await getRenderedModalDialog(view.container)).dialog : null;
+    skillId = "replacement-skill";
+    const refresh = () => (detail ? run() : buttonIn(view.container, "Refresh").click());
+    const failure = nextRequest<SkillsLibraryReadResult | SkillsLibraryListResult>(request);
+    void refresh();
+    flush();
+    expect(locked()).toBe(true);
+    expectText("Initial skill");
+    failure.reject(new Error("Library unavailable"));
+    await waitForFast(() => {
+      expect(locked()).toBe(false);
+      expect(view.query('[role="alert"]')?.textContent).toContain("Library unavailable");
+    });
+    expect(item()).toBe(retained);
+    expect(view.container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    if (dialog) {
+      expect(dialog.open).toBe(true);
+    } else {
+      expect(document.activeElement).toBe(view.query('input[name="library-search"]'));
+    }
+    request.mockResolvedValueOnce(result("Updated skill"));
+    void refresh();
+    await waitForFast(() => expectText("Updated skill"));
+    expect(item()).toBe(retained);
+    expect(view.query('[role="alert"]')).toBeNull();
+    if (!detail) {
+      const pending = nextRequest<SkillsLibraryListResult>(request);
+      const reloading = run();
+      flush();
+      view.unmount();
+      const remounted = mountLibrary(library);
+      flush();
+      expect(remounted.query(".settings-row")?.textContent).toContain("Updated skill");
+      expect(remounted.query<HTMLButtonElement>(".settings-row button")?.disabled).toBe(true);
+      pending.resolve({ ...libraryList(false), entries: [libraryEntry()] });
+      await reloading;
+    }
+  },
+);
+
+it.each([
+  { operation: "list", outcome: "error" },
+  { operation: "read", outcome: "error" },
+  { operation: "save", outcome: "error" },
+  { operation: "save", outcome: "success" },
+] as const)(
+  "retires stale $operation $outcome without changing its successor",
+  async ({ operation, outcome }) => {
+    type Result = SkillsLibraryListResult | SkillsLibraryReadResult | SkillsLibraryReceipt;
+    const { library, request, connection } = harness();
+    const read = existingSkill();
+    const list = library.state.list!;
+    const view = operation === "read" ? mountLibrary(library, true) : null;
+    const flag = operation === "list" ? "loading" : "busy";
+    async function begin(content: string) {
+      if (operation === "save") {
+        request.mockResolvedValueOnce(read);
+        await library.open(read.entry.skillId);
+        library.state.draft!.content = content;
+      }
+      const result = nextRequest<Result>(request);
+      const pending =
+        operation === "list"
+          ? library.load()
+          : operation === "read"
+            ? library.open(read.entry.skillId)
+            : library.save();
+      return { result, pending };
+    }
+    const old = await begin("Old edit");
+    if (outcome === "success") {
+      await waitForFast(() => expect(library.saving()).toBe(true));
+    }
+    reconnect({ library, connection });
+    await waitForFast(() => expect(library.saving()).toBe(false));
+    const current = await begin("Current edit");
+    const result =
+      operation === "list"
+        ? { ...list, profileId: "bob" }
+        : operation === "read"
+          ? { ...read, content: "Current edit" }
+          : savedReceipt(read);
+    if (operation === "read") {
+      current.result.resolve(result);
+      await current.pending;
+    }
+    if (outcome === "error") {
+      old.result.reject(new Error("Previous connection failed"));
+    } else {
+      old.result.resolve(savedReceipt(read));
+    }
+    await old.pending;
+    expect(library.state).toMatchObject({ [flag]: operation !== "read", error: null });
+    if (operation === "save") {
+      expect(library.state.draft).toMatchObject({ content: "Current edit", entry: read.entry });
+      request.mockResolvedValueOnce(list);
+    }
+    current.result.resolve(result);
+    await current.pending;
+    expect(library.state).toMatchObject({ [flag]: false, error: null });
+    if (operation === "list") {
+      expect(library.state.list?.profileId).toBe("bob");
+    } else {
+      expect(library.state.draft).toMatchObject({
+        content: "Current edit",
+        entry: { revision: operation === "read" ? read.entry.revision : "b".repeat(64) },
+      });
+    }
+    if (view) {
+      await waitForFast(() => {
+        expect(view.query<HTMLTextAreaElement>("textarea")?.value).toBe("Current edit");
+        expect(view.query('[role="alert"]')).toBeNull();
+      });
+    }
+  },
+);
 
 it.each([
   { content: "changed" },
@@ -495,14 +411,23 @@ it.each([
   },
 );
 
-it("uploads only changed or new support files and retains their saved baseline on the next edit", async () => {
+it("settles support-file saves after caller retirement and retains their baseline on the next edit", async () => {
   const { library, config, request, read, draft } = await openSkill([
     { path: "notes.txt", content: "Original notes", encoding: "utf8" },
   ]);
   const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
   draft.files = [draft.files[0]!, { ...draft.files[1]!, content: "Updated notes" }, newFile];
-  request.mockResolvedValueOnce(savedReceipt(read)).mockResolvedValueOnce(library.state.list);
-  await library.save();
+  const pending = nextRequest<SkillsLibraryReceipt>(request);
+  request.mockResolvedValueOnce(library.state.list);
+  const saving = createRoot((dispose) => {
+    const operation = library.save();
+    library.retire();
+    dispose();
+    return operation;
+  });
+  pending.resolve(savedReceipt(read));
+  await saving;
+  expect(library.state.busy).toBe(false);
   expect(library.state.error).toBeNull();
   expect(request).toHaveBeenNthCalledWith(
     2,

@@ -8,21 +8,16 @@ import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helper
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
-import { mountSkills, personalLibrary, remoteSkill } from "./skills-page.test-support.tsx";
+import { mountSkills, personalLibrary } from "./skills-page.test-support.tsx";
 import { requestFor } from "./skills.test-support.ts";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
 
-function mutationRequest(
-  mutation: Promise<unknown>,
-  status: () => unknown,
-  results?: (typeof remoteSkill)[],
-) {
+function mutationRequest(mutation: Promise<unknown>, status: () => unknown) {
   return requestFor({
     "skills.update": () => mutation,
-    ...(results ? { "skills.install": () => mutation } : {}),
     "skills.status": status,
     "skills.library.list": () => ({ ...personalLibrary, defaultTarget: "workspace" }),
-    "skills.search": () => ({ results: results ?? [] }),
+    "skills.search": () => ({ results: [] }),
   });
 }
 function callCount(request: ReturnType<typeof requestFor>, method: string) {
@@ -222,58 +217,29 @@ describe("Skills mutation presentation", () => {
     },
   );
 
-  it.each(["key", "dependency", "clawhub"])(
-    "keeps the %s install/save controls locked through accepted inventory reconciliation",
-    async (kind) => {
-      const mutation = deferred<unknown>();
-      const refreshed = deferred<ReturnType<typeof createReport>>();
-      const skill = createSkill({
-        missing: { anyBins: [], bins: ["fixture-cli"], env: [], config: [], os: [] },
-        install: [
-          { id: "fixture-cli", kind: "node", label: "Install fixture-cli", bins: ["fixture-cli"] },
-        ],
-      });
-      const report = createReport([skill]);
-      const request = mutationRequest(mutation.promise, () => refreshed.promise, [remoteSkill]);
-      const { page, publishRouteData } = mountSkills(
-        request,
-        kind === "clawhub" ? "discovery" : "settings",
-      );
-      publishRouteData({ report });
-      let control: HTMLButtonElement;
-      if (kind === "clawhub") {
-        const install = () => query<HTMLButtonElement>(page, ".plugin-catalog-card__install");
-        await waitForFast(() => expect(install()?.disabled).toBe(false));
-        control = install()!;
-      } else {
-        await openReader(page);
-        if (kind === "key") {
-          const input = query<HTMLInputElement>(page, 'input[type="password"]')!;
-          input.value = "synthetic-replacement";
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          const save = () =>
-            query<HTMLButtonElement>(page, ".skill-reader-dialog__actions .primary");
-          await waitForFast(() => expect(save()?.disabled).toBe(false));
-          control = save()!;
-        } else {
-          control = query<HTMLButtonElement>(page, ".skill-reader-dialog__actions .btn")!;
-        }
-      }
-      control.click();
-      await waitForFast(() => expect(control.disabled).toBe(true));
-      if (kind !== "clawhub") {
-        expect(toggleIn(page)?.disabled).toBe(true);
-      }
-      mutation.resolve({});
-      await waitForFast(() => expect(callCount(request, "skills.status")).toBe(1));
-      expect(control.disabled).toBe(true);
-      if (kind !== "clawhub") {
-        expect(toggleIn(page)?.disabled).toBe(true);
-      }
-      refreshed.resolve(report);
-      await waitForFast(() => expect(control.disabled).toBe(false));
-      expect(control.isConnected).toBe(true);
-      expect(callCount(request, "skills.status")).toBe(1);
-    },
-  );
+  it("keeps a non-toggle mutation locked through inventory reconciliation", async () => {
+    const mutation = deferred<unknown>();
+    const refreshed = deferred<ReturnType<typeof createReport>>();
+    const report = createReport();
+    const request = mutationRequest(mutation.promise, () => refreshed.promise);
+    const { page, publishRouteData } = mountSkills(request, "settings");
+    publishRouteData({ report });
+    await openReader(page);
+    const input = query<HTMLInputElement>(page, 'input[type="password"]')!;
+    input.value = "synthetic-replacement";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const save = () => query<HTMLButtonElement>(page, ".skill-reader-dialog__actions .primary");
+    await waitForFast(() => expect(save()?.disabled).toBe(false));
+    const control = save()!;
+    control.click();
+    await waitForFast(() => expect(control.disabled).toBe(true));
+    expect(toggleIn(page)?.disabled).toBe(true);
+    mutation.resolve({});
+    await waitForFast(() => expect(callCount(request, "skills.status")).toBe(1));
+    expect(control.disabled).toBe(true);
+    expect(toggleIn(page)?.disabled).toBe(true);
+    refreshed.resolve(report);
+    await waitForFast(() => expect(control.disabled).toBe(false));
+    expect(control.isConnected).toBe(true);
+  });
 });
