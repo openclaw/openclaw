@@ -19,26 +19,16 @@ function buildConfig(
 ): OpenClawConfig {
   return {
     channels: {
-      slack: {
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-        ...channelOverrides,
-        execApprovals,
-      },
+      slack: { botToken: "xoxb-test", appToken: "xapp-test", ...channelOverrides, execApprovals },
     },
-  } as OpenClawConfig;
+  };
 }
 
 const availability = slackApprovalCapability.nativeRuntimeAsync!.availability;
-function shouldHandle(
-  cfg: OpenClawConfig,
-  request: ExecApprovalRequestPayload,
-  accountId?: string,
-) {
+function shouldHandle(cfg: OpenClawConfig, request: ExecApprovalRequestPayload) {
   return availability.shouldHandle({
     approvalKind: "exec",
     cfg,
-    accountId,
     request: { id: "req-1", request, createdAtMs: 0, expiresAtMs: 1000 },
   });
 }
@@ -56,14 +46,16 @@ function withOwners(ownerAllowFrom: string[], enabled: true | "auto" = true): Op
 
 describe("slack exec approvals", () => {
   it("requires explicit enablement even when owner approvers resolve", () => {
-    expect(clientEnabled(buildConfig())).toBe(false);
-    expect(clientEnabled(buildConfig({ enabled: true }))).toBe(false);
-    expect(clientEnabled(buildConfig({ approvers: ["U123"] }))).toBe(false);
     expect(
-      clientEnabled({ ...buildConfig(), commands: { ownerAllowFrom: ["slack:U123OWNER"] } }),
-    ).toBe(false);
-    expect(clientEnabled(buildConfig({ enabled: "auto", approvers: ["U123"] }))).toBe(true);
-    expect(clientEnabled(buildConfig({ enabled: false, approvers: ["U123"] }))).toBe(false);
+      [
+        buildConfig(),
+        buildConfig({ enabled: true }),
+        buildConfig({ approvers: ["U123"] }),
+        { ...buildConfig(), commands: { ownerAllowFrom: ["slack:U123OWNER"] } },
+        buildConfig({ enabled: "auto", approvers: ["U123"] }),
+        buildConfig({ enabled: false, approvers: ["U123"] }),
+      ].map(clientEnabled),
+    ).toEqual([false, false, false, false, true, false]);
   });
 
   it.each(["execApprovals", "execApprovals.enabled"] as const)(
@@ -175,12 +167,8 @@ describe("slack exec approvals", () => {
       "user:C123CHANNEL",
       "<@C123CHANNEL>",
     ];
-    for (const id of valid) {
-      expect(normalizeSlackApproverId(id), id).toBe("U123OWNER");
-    }
-    for (const id of invalid) {
-      expect(normalizeSlackApproverId(id), id).toBeUndefined();
-    }
+    expect(valid.map(normalizeSlackApproverId)).toEqual(valid.map(() => "U123OWNER"));
+    expect(invalid.map(normalizeSlackApproverId)).toEqual(invalid.map(() => undefined));
   });
 
   it("applies agent and session filters to request handling", async () => {

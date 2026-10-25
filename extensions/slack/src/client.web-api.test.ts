@@ -140,30 +140,23 @@ describe("Slack Web API routing", () => {
     });
   });
 
-  it("retries two transient startup auth failures", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("request timed out"))
-      .mockRejectedValueOnce(new Error("connection reset"))
-      .mockResolvedValueOnce(authResponse());
-    const client = createSlackStartupAuthClient("startup-fixture", { fetch: fetchMock as never });
-
-    await expect(client.auth.test()).resolves.toMatchObject(authResult);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("retries startup auth after a rate limit", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(rateLimited("0"))
-      .mockResolvedValueOnce(authResponse());
-    const client = createSlackStartupAuthClient("rate-limited-fixture", {
-      fetch: fetchMock as never,
-    });
-
-    await expect(client.auth.test()).resolves.toMatchObject(authResult);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
+  it.each(["transient failures", "rate limit"])(
+    "retries startup auth after %s",
+    async (failure) => {
+      const fetchMock = vi.fn();
+      if (failure === "transient failures") {
+        fetchMock
+          .mockRejectedValueOnce(new Error("request timed out"))
+          .mockRejectedValueOnce(new Error("connection reset"));
+      } else {
+        fetchMock.mockResolvedValueOnce(rateLimited("0"));
+      }
+      fetchMock.mockResolvedValueOnce(authResponse());
+      const client = createSlackStartupAuthClient("startup-fixture", { fetch: fetchMock as never });
+      await expect(client.auth.test()).resolves.toMatchObject(authResult);
+      expect(fetchMock).toHaveBeenCalledTimes(failure === "transient failures" ? 3 : 2);
+    },
+  );
 
   it("aborts a stalled-header lookup after one request", async () => {
     const requests: SlackApiRequest[] = [];
