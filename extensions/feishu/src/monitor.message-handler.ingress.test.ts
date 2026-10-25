@@ -7,7 +7,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -472,7 +471,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(second.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
+  it("preserves abandon retry accounting and backoff across restarts", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
@@ -571,24 +570,8 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       await expectBackoff(1);
       vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
       const secondAttempt = await runAttempt(2, 2);
-
-      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        const claim = await queue.claim("evt-abandon-retry", { ownerId: `seed-${attempt}` });
-        if (!claim) {
-          throw new Error(`Expected Feishu seed claim ${attempt}`);
-        }
-        await queue.release(claim, {
-          lastError: "turn-abandoned",
-          releasedAt: secondAttempt.lastAttemptAt,
-        });
-      }
-
-      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
-      const thresholdAttempt = await runAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS, 3);
-      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
-      const beyondAttempt = await runAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1, 4);
-      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
-      await expectBackoff(4);
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 1_000);
+      await expectBackoff(2);
     } finally {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });

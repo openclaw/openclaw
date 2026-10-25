@@ -115,39 +115,27 @@ async function sendMedia(ctx: SendContext) {
   });
 }
 
-const sendRoutes = [
-  {
-    name: "native card text",
-    send: (ctx: SendContext) => preferredTextSend()({ ...ctx, text: CARD }),
-  },
-  {
-    name: "payload card",
-    send: (ctx: SendContext) =>
-      required(feishuPlugin.outbound?.sendPayload)({ ...ctx, payload: { text: CARD } }),
-  },
-  ...(
-    [
-      { action: "send", card: false },
-      { action: "thread-reply", card: true },
-    ] as const
-  ).map(({ action, card }) => ({
-    name: `generic ${action}${card ? " card" : " text"}`,
-    send: (ctx: SendContext) => {
-      return required(feishuPlugin.actions?.handleAction)({
-        channel: "feishu",
-        action,
-        cfg: ctx.cfg,
-        params: {
-          to: ctx.to,
-          text: card ? CARD : ctx.text,
-          ...(action === "thread-reply" ? { messageId: "om_parent" } : {}),
-        },
-        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
-      });
+const sendRoutes = ["native card", "payload card", "send", "thread-reply"] as const;
+function sendRoute(route: (typeof sendRoutes)[number], ctx: SendContext) {
+  if (route === "native card") {
+    return preferredTextSend()({ ...ctx, text: CARD });
+  }
+  if (route === "payload card") {
+    return required(feishuPlugin.outbound?.sendPayload)({ ...ctx, payload: { text: CARD } });
+  }
+  return required(feishuPlugin.actions?.handleAction)({
+    channel: "feishu",
+    action: route,
+    cfg: ctx.cfg,
+    params: {
+      to: ctx.to,
+      text: route === "thread-reply" ? CARD : ctx.text,
+      ...(route === "thread-reply" ? { messageId: "om_parent" } : {}),
     },
-  })),
-];
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+  });
+}
 
 function errorCauses(error: unknown) {
   return collectErrorGraphCandidates(error, (current) => [current.cause]);
@@ -179,8 +167,8 @@ afterAll(() => {
 
 describe("Feishu delivery authority through the registered adapter and Lark transport", () => {
   it.each(sendRoutes)(
-    "stops $name when the sender retires during token preparation",
-    async ({ send }) => {
+    "stops %s when the sender retires during token preparation",
+    async (route) => {
       await withFeishuTransport(async (fixture) => {
         const started = fixture.gate();
         const release = fixture.gate();
@@ -192,21 +180,20 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           }
           return false;
         });
-        const result = fixture.track(
-          send({
-            ...sender,
-            cfg: fixture.cfg,
-            to: TARGET,
-            text: "A retired sender must not deliver this message.",
-          }).then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
+        const rejected = expect(
+          fixture.track(
+            sendRoute(route, {
+              ...sender,
+              cfg: fixture.cfg,
+              to: TARGET,
+              text: "A retired sender must not deliver this message.",
+            }),
           ),
-        );
+        ).rejects.toBeInstanceOf(Error);
         await started.promise;
         sender.retire();
         release.resolve();
-        expect(await result).toHaveProperty("error");
+        await rejected;
         expect(requestPaths(fixture)).toEqual([AUTH_PATH]);
         expect(sender.onPlatformSendDispatch).not.toHaveBeenCalled();
       });

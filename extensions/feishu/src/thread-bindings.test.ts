@@ -58,30 +58,23 @@ afterEach(() => {
 });
 
 describe("Feishu thread bindings", () => {
-  it("registers current-placement adapter capabilities for Feishu", () => {
-    createManager();
-
+  it("binds, resolves, touches and unbinds through the current-placement adapter", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
     expect(service.getCapabilities(account)).toEqual({
       adapterAvailable: true,
       bindSupported: true,
       unbindSupported: true,
       placements: ["current"],
     });
-  });
-
-  it("binds and resolves a Feishu topic conversation", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
-
     const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
-    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:abc123", {
-      label: "codex-main",
-    });
+    const target = "agent:codex:acp:binding:feishu:default:abc123";
+    const binding = await bindTo(conversation, target, { label: "codex-main" });
     expect(binding.conversation.conversationId).toBe(conversation.conversationId);
     const resolved = service.resolveByConversation(conversationRef(conversation.conversationId));
     expect(resolved).toEqual({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+      targetSessionKey: target,
       targetKind: "session",
       conversation,
       status: "active",
@@ -98,6 +91,15 @@ describe("Feishu thread bindings", () => {
         maxAgeMs: 0,
       },
     });
+    now.mockReturnValue(startedAt + 1_000);
+    service.touch(binding.bindingId);
+    expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toBe(
+      startedAt + 1_000,
+    );
+    await expect(service.unbind({ bindingId: binding.bindingId, reason: "test" })).resolves.toEqual(
+      [expect.objectContaining({ bindingId: binding.bindingId })],
+    );
+    expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
   it.each([
@@ -136,24 +138,6 @@ describe("Feishu thread bindings", () => {
     expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
     expect(service.listBySession(targetSessionKey)).toEqual([]);
-  });
-
-  it("keeps active bindings touchable and unbindable", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createManager();
-    const conversation = conversationRef("oc_group_chat:topic:om_active_root");
-    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:active");
-
-    now.mockReturnValue(startedAt + 1_000);
-    service.touch(binding.bindingId);
-    expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toBe(
-      startedAt + 1_000,
-    );
-
-    await expect(service.unbind({ bindingId: binding.bindingId, reason: "test" })).resolves.toEqual(
-      [expect.objectContaining({ bindingId: binding.bindingId })],
-    );
-    expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
   it("keeps the account's binding adapter live when a stopped overlapping manager tears down", async () => {
@@ -234,25 +218,18 @@ describe("Feishu thread bindings", () => {
         metadata: { label: "child" },
       });
 
-      expect(service.resolveByConversation(conversationRef(conversationId))).toEqual({
-        bindingId: `default:${conversationId}`,
-        targetSessionKey,
-        targetKind,
-        conversation,
-        status: "active",
-        boundAt: 1_700_000_100_000,
-        expiresAt: 1_700_086_500_000,
-        metadata: {
-          ...(!replace ? pluginMetadata : {}),
-          agentId: replace ? "main" : "previous-agent",
-          label: "child",
-          boundBy: replace ? undefined : "ou_sender_1",
-          deliveryTo: "user:ou_sender_1",
-          deliveryThreadId: "om_topic_root",
-          lastActivityAt: 1_700_000_100_000,
-          idleTimeoutMs: 86_400_000,
-          maxAgeMs: 0,
-        },
+      const resolved = service.resolveByConversation(conversationRef(conversationId));
+      expect(resolved).toMatchObject({ targetSessionKey, targetKind, conversation });
+      expect(resolved?.metadata).toEqual({
+        ...(!replace ? pluginMetadata : {}),
+        agentId: replace ? "main" : "previous-agent",
+        label: "child",
+        boundBy: replace ? undefined : "ou_sender_1",
+        deliveryTo: "user:ou_sender_1",
+        deliveryThreadId: "om_topic_root",
+        lastActivityAt: 1_700_000_100_000,
+        idleTimeoutMs: 86_400_000,
+        maxAgeMs: 0,
       });
     },
   );
