@@ -197,6 +197,26 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("accepts a progress final acknowledgement that arrives after finalize starts", async () => {
+    const stream = makeAcknowledgedStream();
+    const { promise, resolve } = Promise.withResolvers<{ id: string } | undefined>();
+    stream.close.mockReturnValueOnce(promise);
+    const ctrl = makeController(stream, { msteamsConfig: progressConfig });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    const firstEmission = stream.emit.mock.calls[0]?.[0] as { text?: string } | string;
+    const acknowledgedText = typeof firstEmission === "string" ? firstEmission : firstEmission.text;
+    const finalization = ctrl.finalize();
+    stream.acknowledge(acknowledgedText ?? "");
+    resolve(undefined);
+
+    await expect(finalization).resolves.toEqual({
+      ...acknowledged,
+      content: "**Status**",
+      logicalContent: "# Status",
+    });
+  });
+
   it.each(["settled", "canceled"] as const)("ignores progress after %s", async (phase) => {
     const stream = makeStream();
     stream.canceled = phase === "canceled";
