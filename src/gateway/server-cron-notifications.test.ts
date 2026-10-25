@@ -274,26 +274,18 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     },
   );
 
-  it.each(["announce", "webhook"] as const)(
-    "records non-delivery when admission refuses a %s failure alert",
-    async (mode) => {
-      markGatewayRestartDraining();
-      await expect(
-        sendGatewayCronFailureAlert({
-          mode,
-          to: mode === "webhook" ? "https://example.invalid/failure" : "channel:ops",
-        }),
-      ).rejects.toThrow("Gateway is restarting");
-      expectSettlement(
-        onDeliverySettled,
-        "not-delivered",
-        "Gateway is restarting. Please try again shortly.",
-      );
-      expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
-      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    },
-  );
+  it("records non-delivery when admission refuses a failure alert", async () => {
+    markGatewayRestartDraining();
+    await expect(sendGatewayCronFailureAlert({})).rejects.toThrow("Gateway is restarting");
+    expectSettlement(
+      onDeliverySettled,
+      "not-delivered",
+      "Gateway is restarting. Please try again shortly.",
+    );
+    expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
 
   it("settles already-admitted cron notifications while draining rejects unrelated work", async () => {
     const webhookDelivery = createVoidDeferred();

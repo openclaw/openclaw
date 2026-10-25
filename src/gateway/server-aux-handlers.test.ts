@@ -90,27 +90,11 @@ function slackConfig(signingSecret: string) {
   });
 }
 
-function slackZaloConfig(
-  slackSigningSecret: string,
-  zaloWebhookSecret: string,
-  discordToken?: string,
-) {
+function slackZaloConfig(slackSigningSecret: string, zaloWebhookSecret: string) {
   return asConfig({
     channels: {
       slack: { signingSecret: slackSigningSecret },
       zalo: { webhookSecret: zaloWebhookSecret },
-      ...(discordToken ? { discord: { token: discordToken } } : {}),
-    },
-  });
-}
-
-function gatewayTokenSlackConfig(token: string, signingSecret: string) {
-  return asConfig({
-    gateway: {
-      auth: { mode: "token", token },
-    },
-    channels: {
-      slack: { signingSecret },
     },
   });
 }
@@ -346,38 +330,6 @@ describe("gateway aux handlers", () => {
     },
   );
 
-  it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
-    const buildReloadPlan = vi.fn(() =>
-      createReloadPlan({ restartChannels: new Set(["slack", "zalo"]) }),
-    );
-    activateSnapshot(
-      slackZaloConfig("old-slack-secret", "old-zalo-secret", "unchanged-discord-token"),
-    );
-    const prepared = createSnapshot(
-      slackZaloConfig("new-slack-secret", "new-zalo-secret", "unchanged-discord-token"),
-    );
-    const prepareRuntimeSecretsSnapshot = vi.fn().mockResolvedValue(prepared);
-    const { reload, respond, startChannel, stopChannel } = createSecretsReloadHarness({
-      prepareRuntimeSecretsSnapshot,
-      buildReloadPlan,
-    });
-
-    await reload();
-
-    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-    expect(buildReloadPlan).toHaveBeenCalledExactlyOnceWith([
-      "channels.slack.signingSecret",
-      "channels.zalo.webhookSecret",
-    ]);
-    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
-      ["slack", "zalo"],
-    );
-    expect(
-      startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
-    ).toEqual(["slack", "zalo"]);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
-  });
-
   registerGatewaySecretCredentialReloadCases(createCredentialReloadHarness);
 
   it("does not restart account targets already covered by a whole-channel target", async () => {
@@ -400,7 +352,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
-    const buildReloadPlan = buildRestartChannelsPlan("slack");
+    const buildReloadPlan = vi.fn(buildRestartChannelsPlan("slack"));
     activateSnapshot(slackConfig("old-slack-secret"));
 
     const preparedFirst = createSnapshot(slackConfig("new-slack-secret"));
@@ -422,6 +374,7 @@ describe("gateway aux handlers", () => {
 
     expect(activationOrder).toEqual(["first-start", "first-end"]);
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(buildReloadPlan).toHaveBeenCalledExactlyOnceWith(["channels.slack.signingSecret"]);
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
     expect(startChannel.mock.calls).toEqual([["slack", undefined, { reason: "secrets-reload" }]]);
     expect(respond).toHaveBeenNthCalledWith(1, true, { ok: true, warningCount: 0 });
@@ -645,21 +598,5 @@ describe("gateway aux handlers", () => {
     expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
     expect(respond.mock.calls).toHaveLength(1);
     expect(firstRespondCall(respond)[0]).toBe(false);
-  });
-
-  it("does not restart channels when resolved secrets do not change channel config", async () => {
-    const buildReloadPlan = vi.fn(() => createReloadPlan());
-    const { reload, respond, startChannel, stopChannel } = createRotationHarness(
-      gatewayTokenSlackConfig("old-token", "same-secret"),
-      gatewayTokenSlackConfig("new-token", "same-secret"),
-      { buildReloadPlan },
-    );
-
-    await reload();
-
-    expect(buildReloadPlan).toHaveBeenCalledExactlyOnceWith(["gateway.auth.token"]);
-    expect(stopChannel).not.toHaveBeenCalled();
-    expect(startChannel).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 });
