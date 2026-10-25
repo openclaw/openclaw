@@ -70,7 +70,7 @@ if (values.child) {
         metrics: getSessionRowSelectionMetrics().materialization,
       });
     } else if (message === "stop") {
-      void server.close().then(() => process.disconnect());
+      void server.close().then(() => process.disconnect?.());
     }
   });
   process.send({ ready: true, availableParallelism: availableParallelism() });

@@ -26,18 +26,21 @@ type SessionRowSelectionMetric = {
 
 const rowSelections = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionRowSelectionMetrics"),
-  () => ({
-    counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
-    resets: 0,
-    materialization: {
-      created: 0,
-      reused: 0,
-      rebuilt: 0,
-      skipped: 0,
-      deepComparisons: 0,
-      sampledFirstDifferences: {} as Record<string, number>,
-    },
-  }),
+  () => {
+    const sampledFirstDifferences: Record<string, number> = {};
+    return {
+      counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
+      resets: 0,
+      materialization: {
+        created: 0,
+        reused: 0,
+        rebuilt: 0,
+        skipped: 0,
+        deepComparisons: 0,
+        sampledFirstDifferences,
+      },
+    };
+  },
 );
 
 /** Keep caller attribution bounded and free of session, agent, or request identities. */

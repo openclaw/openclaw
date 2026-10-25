@@ -32,6 +32,7 @@ export function materializeSessionRowIfChanged(
     ) &&
     previous
   ) {
+    // SAFETY: materializeSessionRow owns this source shape; these are its enumerable field keys.
     const field = (Object.keys(next.source) as (keyof typeof next.source)[]).find(
       (key) => !isDeepStrictEqual(previous.source[key], next.source[key]),
     );

@@ -137,6 +137,7 @@ export function reuseSessionRowChildLinks(
       const before = previous[index]!;
       return (
         key === before.key &&
+        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
         (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
           (field) =>
             entry[field] === before.entry[field] ||
