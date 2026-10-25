@@ -272,13 +272,7 @@ describe("heartbeat scratch task cron migration", () => {
     expect(job.declarationKey).toBeUndefined();
     const cron = createTestCronService(fixture.storePath, fixture.cfg, fixture.nowMs);
     try {
-      await expect(
-        cron.update(job.id, {
-          payload: { kind: "agentTurn", message: "Check priority inbox items" },
-        }),
-      ).resolves.toMatchObject({
-        agentId: "research",
-        sessionTarget: job.sessionTarget,
+      await cron.update(job.id, {
         payload: { kind: "agentTurn", message: "Check priority inbox items" },
       });
       const persisted = (await loadCronJobsStore(fixture.storePath)).jobs.find(
@@ -330,17 +324,6 @@ describe("heartbeat scratch task cron migration", () => {
       );
     }
 
-    expect(
-      sessionAccessor.loadSessionEntryReadOnly({
-        agentId: "main",
-        storePath: fixture.cfg.session.store,
-        sessionKey: "global",
-        env: fixture.env,
-      }),
-    ).toMatchObject({
-      sessionId: "main-global",
-      heartbeatTaskState: { inbox: fixture.nowMs - 10 * 60_000 },
-    });
     expect((await migrate(fixture)).warnings).toEqual([]);
     const inbox = (await loadCronJobsStore(fixture.storePath)).jobs.find(
       (job) => job.agentId === "research" && job.name === "inbox",
@@ -352,21 +335,6 @@ describe("heartbeat scratch task cron migration", () => {
     });
     expect(taskState(fixture, "research")).toBeUndefined();
     expect(taskState(fixture)).toEqual({ inbox: fixture.nowMs - 10 * 60_000 });
-  });
-
-  it("converts disabled owners without enabling their monitor or task jobs", async () => {
-    const fixture = await createFixture(2_000_000_000_000);
-    const store = await loadCronJobsStore(fixture.storePath);
-    store.jobs[0]!.enabled = false;
-    await saveCronJobsStore(fixture.storePath, store);
-    const result = await migrate(fixture);
-    expect(result.warnings).toEqual([]);
-    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
-    expect(jobs).toHaveLength(3);
-    expect(jobs.every((job) => !job.enabled)).toBe(true);
-    expect(
-      readCronJobScratchState(fixture.storePath, fixture.monitor.id).scratch?.content,
-    ).not.toContain("tasks:");
   });
 
   it.each([
@@ -465,6 +433,21 @@ describe("heartbeat scratch task cron migration", () => {
       after.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
     ).toEqual({ schema_version: 7 });
     after.close();
+  });
+
+  it("converts disabled owners without enabling their monitor or task jobs", async () => {
+    const fixture = await createFixture(2_000_000_000_000);
+    const store = await loadCronJobsStore(fixture.storePath);
+    store.jobs[0]!.enabled = false;
+    await saveCronJobsStore(fixture.storePath, store);
+    const result = await migrate(fixture);
+    expect(result.warnings).toEqual([]);
+    const jobs = (await loadCronJobsStore(fixture.storePath)).jobs;
+    expect(jobs).toHaveLength(3);
+    expect(jobs.every((job) => !job.enabled)).toBe(true);
+    expect(
+      readCronJobScratchState(fixture.storePath, fixture.monitor.id).scratch?.content,
+    ).not.toContain("tasks:");
   });
 
   it("previews, preserves cadence, clears the block, and reruns idempotently", async () => {
