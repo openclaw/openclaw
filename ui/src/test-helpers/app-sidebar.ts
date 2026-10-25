@@ -212,53 +212,52 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     notify,
     archiveProvenance,
   );
+  const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsUpdate = vi.fn<SessionCapability["groupsUpdate"]>(async () => "completed");
+  const create = vi.fn(() => Promise.resolve("agent:main:fork"));
+  const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
+    Promise.resolve(successfulSessionPatch(key)),
+  );
   const deleteSession = vi.fn((): Promise<SessionDeleteResult> =>
     Promise.resolve({ deleted: false }),
   );
-  const mocks = {
-    groupsPut: vi.fn(async (): Promise<SessionGroupMutationResult> => "completed"),
-    groupsRename: vi.fn(async (): Promise<SessionGroupMutationResult> => "completed"),
-    groupsDelete: vi.fn(async (): Promise<SessionGroupMutationResult> => "completed"),
-    groupsUpdate: vi.fn<SessionCapability["groupsUpdate"]>(async () => "completed"),
-    create: vi.fn(async () => "agent:main:fork"),
-    patch: vi.fn(async (key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
-      successfulSessionPatch(key),
-    ),
-    deleteMany: vi.fn<SessionCapability["deleteMany"]>(async () => ({
+  const deleteMany = vi.fn<SessionCapability["deleteMany"]>(() =>
+    Promise.resolve({
       deleted: [],
       errors: [],
       preservedWorktrees: [],
-    })),
-    refresh: vi.fn(async (_options?: Parameters<SessionCapability["refresh"]>[0]) => undefined),
-    refreshReplacement: vi.fn(async () => state.result),
-    reconcileMutation: vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
-      status: "refreshed",
-    })),
-    patchMany: vi.fn(
-      async (
-        targets: SessionsPatchManyParams["targets"],
-        _patch: SessionsPatchManyParams["patch"],
-      ): Promise<SessionsPatchManyResult> => ({
-        outcomes: targets.map((target) => ({
-          ok: true,
-          key: target.key,
-          ...(target.agentId ? { agentId: target.agentId } : {}),
-        })),
-      }),
-    ),
-    subscribeMessages: vi.fn(async (key: string, options?: { agentId?: string | null }) => ({
-      key,
-      agentId: options?.agentId ?? null,
-    })),
-    unsubscribeMessages: vi.fn(
-      async (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => undefined,
-    ),
-    list: vi.fn(
-      async (
-        _options?: Parameters<SessionCapability["list"]>[0],
-      ): Promise<SessionsListResult | null> => state.result,
-    ),
-  };
+    }),
+  );
+  const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
+    Promise.resolve(),
+  );
+  const refreshReplacement = vi.fn(() => Promise.resolve(state.result));
+  const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
+    status: "refreshed",
+  }));
+  const patchMany = vi.fn(
+    async (
+      targets: SessionsPatchManyParams["targets"],
+      _patch: SessionsPatchManyParams["patch"],
+    ): Promise<SessionsPatchManyResult> => ({
+      outcomes: targets.map((target) => ({
+        ok: true,
+        key: target.key,
+        ...(target.agentId ? { agentId: target.agentId } : {}),
+      })),
+    }),
+  );
+  const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
+    Promise.resolve({ key, agentId: options?.agentId ?? null }),
+  );
+  const unsubscribeMessages = vi.fn(
+    (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
+  );
+  const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
+    Promise.resolve<SessionsListResult | null>(state.result),
+  );
   const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
     const result = reconcileSessionHistory(state.result, row, defaults, options);
     if (result === state.result) {
@@ -329,12 +328,20 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsLoad: () => Promise.resolve(),
     groupsStatus: () => "ready",
     groupsInvalidate: () => undefined,
-    ...mocks,
+    groupsPut,
+    groupsRename,
+    groupsDelete,
+    groupsUpdate,
+    create,
+    patch,
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,
     assignOwner,
+    patchMany,
     deletionState: () => undefined,
     delete: deleteSession,
+    deleteMany,
+    list,
     listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
       if (usesPrimarySessionList(scope)) {
         return {
@@ -352,7 +359,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       scopedSessions!.observeList(...args),
     refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
       if (usesPrimarySessionList(options)) {
-        return mocks.refresh(options);
+        return refresh(options);
       }
       return scopedSessions!.refreshList(options);
     },
@@ -371,8 +378,13 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     inheritRow: (...args: Parameters<SessionCapability["inheritRow"]>) =>
       scopedSessions!.inheritRow(...args),
     projectRows: (rows: readonly GatewaySessionRow[]) => scopedSessions!.projectRows(rows),
+    refresh,
     invalidate: (...args: Parameters<SessionCapability["invalidate"]>) =>
       scopedSessions!.invalidate(...args),
+    refreshReplacement,
+    reconcileMutation,
+    subscribeMessages,
+    unsubscribeMessages,
   } as unknown as SessionCapability;
   let boundGateway: ApplicationGateway | null = null;
   let boundSelection: ApplicationContext["agentSelection"] | null = null;
@@ -399,7 +411,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           }
           if (method === "sessions.patchMany") {
             const { targets, patch: sessionPatch } = params as SessionsPatchManyParams;
-            return (await mocks.patchMany(targets, sessionPatch)) as T;
+            return (await patchMany(targets, sessionPatch)) as T;
           }
           if (method !== "sessions.list") {
             return client.request<T>(method, params);
@@ -410,7 +422,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           if (!archived && usesPrimarySessionList(options)) {
             return state.result as T;
           }
-          return (await mocks.list({
+          return (await list({
             ...options,
             ...(archived ? { archivedFilter: archived === true ? "archived" : "all" } : {}),
           })) as T;
@@ -441,9 +453,22 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   };
   return {
     sessions,
-    ...mocks,
+    groupsPut,
+    groupsRename,
+    groupsDelete,
+    groupsUpdate,
+    create,
+    patch,
+    patchMany,
     deleteSession,
+    deleteMany,
+    list,
     reconcile,
+    refresh,
+    refreshReplacement,
+    reconcileMutation,
+    subscribeMessages,
+    unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;

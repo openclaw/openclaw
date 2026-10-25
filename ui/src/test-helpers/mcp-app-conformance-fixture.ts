@@ -326,10 +326,21 @@ export function appHtml(appModuleUrl: string): string {
 <button id="send-message">Send message</button>
 <button id="request-teardown">Request teardown</button>
 <output id="initialized">pending</output>
-${"capabilities ping tools input result app-tool model-tool resource context-update message teardown isolation host-theme host-variables computed-theme"
-  .split(" ")
-  .map((id) => `<output id="${id}"></output>`)
-  .join("\n")}
+<output id="capabilities"></output>
+<output id="ping"></output>
+<output id="tools"></output>
+<output id="input"></output>
+<output id="result"></output>
+<output id="app-tool"></output>
+<output id="model-tool"></output>
+<output id="resource"></output>
+<output id="context-update"></output>
+<output id="message"></output>
+<output id="teardown"></output>
+<output id="isolation"></output>
+<output id="host-theme"></output>
+<output id="host-variables"></output>
+<output id="computed-theme"></output>
 <script type="module">
 import {
   App,
