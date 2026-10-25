@@ -4,30 +4,19 @@ import test from "node:test";
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { startTelegramTestApiProxy, telegramTestApiPath } from "./telegram-test-api-proxy.mjs";
 
-async function startProxy(t, options) {
-  const proxy = await startTelegramTestApiProxy(options);
-  t.after(() => proxy.close());
-  return proxy;
-}
-
-const ok = (result) => Response.json(result === undefined ? { ok: true } : { ok: true, result });
-const post = (proxy, method, body) =>
-  fetch(`${proxy.apiRoot}/bot123:ABC/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-
 async function listen(server) {
-  await new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   return `http://127.0.0.1:${address.port}`;
 }
 
-test("rejects paths outside the Bot API", () => {
+test("inserts the Test Server segment after the bot token", () => {
+  assert.equal(telegramTestApiPath("/bot123:ABC/getUpdates"), "/bot123:ABC/test/getUpdates");
+  assert.equal(
+    telegramTestApiPath("/file/bot123:ABC/photos/file.jpg"),
+    "/file/bot123:ABC/test/photos/file.jpg",
+  );
   assert.throws(() => telegramTestApiPath("/healthz"), /invalid Bot API path/u);
 });
 
@@ -54,14 +43,12 @@ test("proxies method, query, headers, and body to the Test Server path", async (
   const previousDispatcher = getGlobalDispatcher();
   const dispatcher = new Agent({ allowH2: false });
   setGlobalDispatcher(dispatcher);
-  const proxy = await startProxy(t, { upstream });
+  const proxy = await startTelegramTestApiProxy({ upstream });
   t.after(async () => {
     await proxy.close();
     setGlobalDispatcher(previousDispatcher);
     await dispatcher.close();
-    await new Promise((resolve) => {
-      upstreamServer.close(resolve);
-    });
+    await new Promise((resolve) => upstreamServer.close(resolve));
   });
   const response = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage?chat_id=42`, {
     method: "POST",
@@ -79,13 +66,47 @@ test("proxies method, query, headers, and body to the Test Server path", async (
   });
 });
 
+test("drains every pending Test Server update", async (t) => {
+  const offsets = [];
+  const upstreamServer = http.createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      offsets.push(JSON.parse(body).offset);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ ok: true, result: offsets.length === 1 ? [{ update_id: 7 }] : [] }),
+      );
+    });
+  });
+  const upstream = await listen(upstreamServer);
+  const proxy = await startTelegramTestApiProxy({ upstream });
+  t.after(async () => {
+    await proxy.close();
+    await new Promise((resolve) => upstreamServer.close(resolve));
+  });
+
+  await proxy.drainUpdates("123:ABC");
+
+  assert.deepEqual(offsets, [0, 8]);
+  const rows = proxy.getRequestLog();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].method, "getUpdates");
+  assert.equal(rows[0].updates, 1);
+  assert.equal(rows[0].status, 200);
+  assert.ok(rows[0].doneAt >= rows[0].at);
+});
+
 function startDrainProxy(t, responses) {
   let now = 1_000_000;
   t.mock.method(Date, "now", () => now);
   const diagnostic = t.mock.method(console, "error", () => {});
   const offsets = [];
   const sleeps = [];
-  return startProxy(t, {
+  return startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
       offsets.push(JSON.parse(await new Response(init.body).text()).offset);
       const [status, body] = responses[Math.min(offsets.length, responses.length) - 1];
@@ -99,6 +120,7 @@ function startDrainProxy(t, responses) {
       now += ms;
     },
   }).then((proxy) => {
+    t.after(() => proxy.close());
     return { proxy, offsets, sleeps, diagnostic };
   });
 }
@@ -182,11 +204,14 @@ test("drain fails immediately on a non-retryable status", async (t) => {
 });
 
 test("proxy close cancels a pending retry_after wait", async (t) => {
-  const diagnosed = Promise.withResolvers();
-  t.mock.method(console, "error", diagnosed.resolve);
+  let waiting;
+  const diagnosed = new Promise((resolve) => {
+    waiting = resolve;
+  });
+  t.mock.method(console, "error", () => waiting());
   let upstreamRequests = 0;
   // Default sleep: a 60 s retry_after must not outlive teardown or keep the process alive.
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async () => {
       upstreamRequests += 1;
       return new Response('{"ok":false,"error_code":429,"parameters":{"retry_after":60}}', {
@@ -194,9 +219,10 @@ test("proxy close cancels a pending retry_after wait", async (t) => {
       });
     },
   });
+  t.after(() => proxy.close());
 
   const drained = proxy.drainUpdates("123:ABC");
-  await diagnosed.promise;
+  await diagnosed;
   await proxy.close();
 
   await assert.rejects(drained, /Telegram Test Server proxy closed/u);
@@ -208,7 +234,7 @@ test("drain abandons a stalled attempt at the budget deadline", async (t) => {
   t.mock.method(Date, "now", () => now);
   const diagnostic = t.mock.method(console, "error", () => {});
   let upstreamRequests = 0;
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
       upstreamRequests += 1;
       if (upstreamRequests === 1) {
@@ -227,6 +253,7 @@ test("drain abandons a stalled attempt at the budget deadline", async (t) => {
       now += ms + 999;
     },
   });
+  t.after(() => proxy.close());
 
   await assert.rejects(
     proxy.drainUpdates("123:ABC"),
@@ -246,10 +273,11 @@ test("drain abandons a stalled attempt at the budget deadline", async (t) => {
 
 test("logs only nonempty getUpdates counts and preserves response bytes", async (t) => {
   let payload;
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async () =>
       new Response(payload, { headers: { "content-type": "application/json" } }),
   });
+  t.after(() => proxy.close());
   const bodies = [
     '{ "ok": true, "result": [{"update_id":123,"message":{"text":"private text","chat":{"id":4242}}},{"update_id":124}] }\n',
     '{"ok":true,"result":[]}',
@@ -259,13 +287,23 @@ test("logs only nonempty getUpdates counts and preserves response bytes", async 
   ];
   for (const body of bodies) {
     payload = body;
-    const response = await post(proxy, "getUpdates", '{"offset":123,"timeout":0}');
+    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"offset":123,"timeout":0}',
+    });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), body);
   }
   const rows = proxy.getRequestLog();
   assert.equal(rows.length, 1);
-  assert.doesNotMatch(JSON.stringify(rows), /123:ABC|private text|"(?:text|chat)"/u);
+  assert.deepEqual(Object.keys(rows[0]).toSorted(), [
+    "at",
+    "doneAt",
+    "method",
+    "status",
+    "updates",
+  ]);
   assert.equal(rows[0].method, "getUpdates");
   assert.equal(rows[0].updates, 2);
   assert.equal(rows[0].status, 200);
@@ -278,11 +316,10 @@ test("holds one upstream-accepted method response until explicit release", async
     response.end(JSON.stringify({ ok: true }));
   });
   const upstream = await listen(upstreamServer);
-  const proxy = await startProxy(t, { upstream });
+  const proxy = await startTelegramTestApiProxy({ upstream });
   t.after(async () => {
-    await new Promise((resolve) => {
-      upstreamServer.close(resolve);
-    });
+    await proxy.close();
+    await new Promise((resolve) => upstreamServer.close(resolve));
   });
   proxy.holdNextResponse({ method: "sendMessage", skip: 1 });
   await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, { method: "POST", body: "first" });
@@ -297,11 +334,12 @@ test("holds one upstream-accepted method response until explicit release", async
       return body;
     });
   const held = await proxy.waitForHeldResponse("sendMessage", 1_000);
-  await new Promise((resolve) => {
-    setImmediate(resolve);
-  });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(bodySettled, false);
-  assert.equal(held.ordinal, 2);
+  assert.deepEqual(
+    { method: held.method, ordinal: held.ordinal },
+    { method: "sendMessage", ordinal: 2 },
+  );
   assert.equal(proxy.getRequestLog().at(-1).doneAt, undefined);
   proxy.releaseHeldResponse();
   assert.deepEqual(await heldBody, { ok: true });
@@ -311,12 +349,15 @@ test("holds one upstream-accepted method response until explicit release", async
 
 test("rejects only the selected matching request before forwarding and then resumes", async (t) => {
   const forwarded = [];
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
       forwarded.push(JSON.parse(await new Response(init.body).text()).text);
-      return ok();
+      return new Response('{"ok":true}', {
+        headers: { "content-type": "application/json" },
+      });
     },
   });
+  t.after(() => proxy.close());
   proxy.rejectNextRequest({ method: "sendMessage", bodyIncludes: "FINAL", skip: 1 });
   for (const [method, text, expectedStatus] of [
     ["editMessageText", "FINAL from another method", 200],
@@ -325,7 +366,11 @@ test("rejects only the selected matching request before forwarding and then resu
     ["sendMessage", "FINAL rejected", 400],
     ["sendMessage", "FINAL next request", 200],
   ]) {
-    const response = await post(proxy, method, { text });
+    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
     assert.equal(response.status, expectedStatus);
     assert.equal((await response.json()).ok, expectedStatus === 200);
   }
@@ -336,8 +381,11 @@ test("rejects only the selected matching request before forwarding and then resu
     "FINAL next request",
   ]);
   assert.deepEqual(
-    proxy.getRequestRejectionEvents().map((event) => event.upstreamForwarded),
-    [false],
+    proxy.getRequestRejectionEvents().map(({ method, upstreamForwarded }) => ({
+      method,
+      upstreamForwarded,
+    })),
+    [{ method: "sendMessage", upstreamForwarded: false }],
   );
 });
 
@@ -345,12 +393,13 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   // Chat ID digits may also appear in legitimate timing fields.
   t.mock.method(Date, "now", () => 1790301001001);
   const forwarded = [];
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
       forwarded.push(JSON.parse(await new Response(init.body).text()).text);
-      return ok();
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
     },
   });
+  t.after(() => proxy.close());
   proxy.rejectNextRequest({
     method: "sendMessage",
     bodyIncludes: "FINAL",
@@ -359,7 +408,11 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   });
   const statuses = [];
   for (const text of ["preview", "FINAL", "FINAL", "FINAL"]) {
-    const response = await post(proxy, "sendMessage", { text });
+    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
     const body = await response.json();
     statuses.push([response.status, body.parameters?.retry_after]);
   }
@@ -371,17 +424,33 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   ]);
   assert.deepEqual(forwarded, ["preview", "FINAL"]);
   proxy.rejectNextRequest({ method: "sendMessage", retryAfter: 0 });
-  const bare = await post(proxy, "sendMessage", { text: "bare" });
+  const bare = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "bare" }),
+  });
   const bareBody = await bare.json();
   assert.equal(bare.status, 429);
   assert.equal(bareBody.parameters, undefined);
-
-  await post(proxy, "sendMessage", { chat_id: -1001, text: "group" });
+  assert.deepEqual(
+    proxy.getRequestLog().map(({ method }) => method),
+    Array(5).fill("sendMessage"),
+  );
+  await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: -1001, text: "group" }),
+  });
   assert.equal(proxy.getRequestLog().at(-1).chat, "group");
   for (const event of proxy.getRequestLog()) {
     assert.equal(typeof event.at, "number");
     assert.ok(event.doneAt >= event.at);
-    assert.doesNotMatch(JSON.stringify(event), /123:ABC|FINAL|preview|bare|"chat_id"/u);
+    assert.deepEqual(
+      Object.keys(event).toSorted(),
+      event.chat === undefined
+        ? ["at", "doneAt", "method", "status"]
+        : ["at", "chat", "doneAt", "method", "status"],
+    );
   }
   assert.deepEqual(
     proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
@@ -393,47 +462,64 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
   );
 });
 
-test("file downloads bypass method controls without consuming their rejection", async (t) => {
+test("forwards file downloads before, during, and after a one-shot rejection", async (t) => {
   const upstreamPaths = [];
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (url) => {
       upstreamPaths.push(new URL(url).pathname);
-      return new Response("synthetic-file-bytes");
+      return new Response("synthetic-file-bytes", { status: 200 });
     },
   });
+  t.after(() => proxy.close());
+  const filePath = "/file/bot123:ABC/photos/current.jpg";
   const download = async () => {
-    const response = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
+    const response = await fetch(`${proxy.apiRoot}${filePath}`);
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "synthetic-file-bytes");
   };
-  proxy.holdNextResponse({ method: "file" });
+
   await download();
-  assert.deepEqual(proxy.getResponseHoldEvents(), []);
-  proxy.rejectNextRequest({ method: "file" });
-  await download();
-  assert.deepEqual(proxy.getRequestRejectionEvents(), []);
   proxy.rejectNextRequest({ method: "sendMessage" });
   await download();
-  const rejected = await post(proxy, "sendMessage", {});
+  const rejected = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
+    method: "POST",
+    body: "{}",
+  });
   assert.equal(rejected.status, 400);
   await download();
-  assert.deepEqual(upstreamPaths, Array(4).fill("/file/bot123:ABC/test/photos/current.jpg"));
+  assert.deepEqual(upstreamPaths, Array(3).fill("/file/bot123:ABC/test/photos/current.jpg"));
   assert.equal(proxy.getRequestRejectionEvents().length, 1);
   assert.deepEqual(
     proxy.getRequestLog().map(({ method }) => method),
-    ["file", "file", "file", "sendMessage", "file"],
+    ["file", "file", "sendMessage", "file"],
   );
   for (const event of proxy.getRequestLog()) {
-    assert.doesNotMatch(JSON.stringify(event), /123:ABC|current.jpg|synthetic-file-bytes/u);
+    assert.deepEqual(Object.keys(event).toSorted(), ["at", "doneAt", "method", "status"]);
     assert.ok(event.doneAt >= event.at);
   }
+});
+
+test("file timing rows never match response holds or request rejections", async (t) => {
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => new Response("synthetic-file-bytes"),
+  });
+  t.after(() => proxy.close());
+  proxy.holdNextResponse({ method: "file" });
+  const heldControl = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
+  assert.deepEqual(proxy.getResponseHoldEvents(), []);
+  assert.equal(await heldControl.text(), "synthetic-file-bytes");
+  proxy.rejectNextRequest({ method: "file" });
+  const rejectedControl = await fetch(`${proxy.apiRoot}/file/bot123:ABC/photos/current.jpg`);
+  assert.equal(rejectedControl.status, 200);
+  assert.equal(await rejectedControl.text(), "synthetic-file-bytes");
+  assert.deepEqual(proxy.getRequestRejectionEvents(), []);
 });
 
 test("getFile timing ends when the streamed response finishes", async (t) => {
   let now = 100;
   t.mock.method(Date, "now", () => now);
   let stream;
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async () =>
       new Response(
         new ReadableStream({
@@ -444,6 +530,7 @@ test("getFile timing ends when the streamed response finishes", async (t) => {
         }),
       ),
   });
+  t.after(() => proxy.close());
   const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getFile`);
   assert.deepEqual(proxy.getRequestLog(), [{ method: "getFile", at: 100, status: 200 }]);
   now = 200;
@@ -454,63 +541,92 @@ test("getFile timing ends when the streamed response finishes", async (t) => {
   ]);
 });
 
-for (const phase of ["upstream-fetch", "response-stream"]) {
-  test(`records and redacts ${phase} failures`, async (t) => {
-    const privateDetail = "synthetic-private-upstream-detail";
-    const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
-    const diagnostic = t.mock.method(console, "error", () => {});
-    const proxy = await startProxy(t, {
-      fetchImpl: async () => {
-        if (phase === "upstream-fetch") {
-          throw new TypeError(privateDetail, { cause });
-        }
-        return new Response(
+test("records completion timing on upstream and response-stream errors", async (t) => {
+  t.mock.method(console, "error", () => {});
+  for (const [expectedStatus, fetchImpl] of [
+    [
+      502,
+      async () => {
+        throw new Error("synthetic upstream failure");
+      },
+    ],
+    [
+      200,
+      async () =>
+        new Response(
           new ReadableStream({
             start(controller) {
-              controller.error(new Error(privateDetail));
+              controller.error(new Error("synthetic stream failure"));
             },
           }),
-        );
-      },
-    });
+        ),
+    ],
+  ]) {
+    const proxy = await startTelegramTestApiProxy({ fetchImpl });
+    t.after(() => proxy.close());
     const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getFile`);
-    assert.equal(response.status, phase === "upstream-fetch" ? 502 : 200);
-    assert.deepEqual(await response.json(), {
-      ok: false,
-      description: "Telegram Test Server proxy failed.",
-    });
+    assert.equal(response.status, expectedStatus);
+    assert.equal((await response.json()).ok, false);
     const [event] = proxy.getRequestLog();
     assert.ok(event.doneAt >= event.at);
-    assert.equal(diagnostic.mock.calls.length, 1);
-    const line = diagnostic.mock.calls[0].arguments[0];
-    assert.equal(typeof line, "string");
-    assert.deepEqual(JSON.parse(line), {
-      event: "telegram_test_api_proxy_failure",
-      phase,
-      method: "getFile",
-      errorClass: phase === "upstream-fetch" ? "TypeError" : "Error",
-      errorCode: phase === "upstream-fetch" ? "ECONNRESET" : "unknown",
-    });
-    assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
+  }
+});
+
+test("reports upstream failures without exposing exception details or bot tokens", async (t) => {
+  const privateDetail = "synthetic-private-upstream-detail";
+  const cause = Object.assign(new Error(privateDetail), { code: "ECONNRESET" });
+  const diagnostic = t.mock.method(console, "error", () => {});
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => {
+      throw new TypeError(privateDetail, { cause });
+    },
   });
-}
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/deleteWebhook`, {
+    method: "POST",
+    body: "{}",
+  });
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    description: "Telegram Test Server proxy failed.",
+  });
+  assert.equal(diagnostic.mock.calls.length, 1);
+  const line = diagnostic.mock.calls[0]?.arguments[0];
+  assert.equal(typeof line, "string");
+  assert.deepEqual(JSON.parse(line), {
+    event: "telegram_test_api_proxy_failure",
+    phase: "upstream-fetch",
+    method: "deleteWebhook",
+    errorClass: "TypeError",
+    errorCode: "ECONNRESET",
+  });
+  assert.doesNotMatch(line, /123:ABC|synthetic-private/u);
+});
 
 test("getUpdates preserves the caller offset after upstream failure and closes without failure noise", async (t) => {
   const diagnostic = t.mock.method(console, "error", () => {});
   const offsets = [];
   const cause = Object.assign(new Error("synthetic-private /bot123:ABC"), { code: "ECONNRESET" });
+  let upstreamStarted;
   let upstreamAborted = false;
-  const started = Promise.withResolvers();
-  const proxy = await startProxy(t, {
+  const started = new Promise((resolve) => {
+    upstreamStarted = resolve;
+  });
+  const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
       offsets.push(JSON.parse(await new Response(init.body).text()).offset);
       if (offsets.length === 1) {
         throw new TypeError("synthetic-private upstream failure", { cause });
       }
       if (offsets.length === 2) {
-        return ok([{ update_id: 123 }]);
+        return new Response('{"ok":true,"result":[{"update_id":123}]}', {
+          headers: { "content-type": "application/json" },
+        });
       }
-      started.resolve();
+      upstreamStarted();
       return await new Promise((_resolve, reject) => {
         init.signal.addEventListener(
           "abort",
@@ -523,7 +639,13 @@ test("getUpdates preserves the caller offset after upstream failure and closes w
       });
     },
   });
-  const poll = (offset) => post(proxy, "getUpdates", { offset, timeout: 30 });
+  t.after(() => proxy.close());
+  const poll = (offset) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getUpdates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ offset, timeout: 30 }),
+    });
   const failed = await poll(123);
   assert.equal(failed.status, 502);
   assert.deepEqual(await failed.json(), {
@@ -534,7 +656,7 @@ test("getUpdates preserves the caller offset after upstream failure and closes w
   assert.equal(recovered.status, 200);
   assert.deepEqual(await recovered.json(), { ok: true, result: [{ update_id: 123 }] });
   const request = poll(124).catch(() => undefined);
-  await started.promise;
+  await started;
   await proxy.close();
   await request;
   assert.deepEqual(offsets, [123, 123, 124]);
@@ -563,21 +685,23 @@ test("lease revocation blocks every later Bot API request", async (t) => {
       resolve(leaseError);
     };
   });
-  const proxy = await startProxy(t, {
+  const proxy = await startTelegramTestApiProxy({
     leaseHealth: {
       assertHealthy: () => {
-        if (!healthy) {
-          throw leaseError;
-        }
+        if (!healthy) throw leaseError;
       },
       whenUnhealthy,
     },
     fetchImpl: async () => {
       upstreamRequests += 1;
-      return ok();
+      return new Response('{"ok":true}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     },
   });
 
+  t.after(() => proxy.close());
   // Revocation destroys existing sockets; the later request needs a fresh connection.
   const before = await fetch(`${proxy.apiRoot}/bot123:ABC/getMe`, {
     headers: { connection: "close" },
@@ -585,9 +709,7 @@ test("lease revocation blocks every later Bot API request", async (t) => {
   assert.equal(before.status, 200);
   assert.deepEqual(await before.json(), { ok: true });
   revoke();
-  await new Promise((resolve) => {
-    setImmediate(resolve);
-  });
+  await new Promise((resolve) => setImmediate(resolve));
   const after = await fetch(`${proxy.apiRoot}/bot123:ABC/sendMessage`, {
     method: "POST",
     body: "{}",

@@ -13,36 +13,25 @@ import {
 import { setTtsMaxLength } from "./tts-settings-writes.js";
 
 const tempDirs = createTempDirTracker();
-let home: string;
-let prefsPath: string;
-beforeEach(() => {
-  home = tempDirs.make("openclaw-tts-config-");
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("USERPROFILE", home);
-  vi.stubEnv("OPENCLAW_HOME", undefined);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
-  vi.stubEnv("OPENCLAW_TTS_PREFS", undefined);
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
-  prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
-  mkdirSync(path.dirname(prefsPath), { recursive: true });
-});
 afterAll(tempDirs.cleanup);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
-function writePrefs(tts: Record<string, unknown>, stateDir = path.join(home, ".openclaw")) {
-  const file = path.join(stateDir, "settings", "tts.json");
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ tts }));
-  return file;
-}
-
 describe("shouldAttemptTtsPayload", () => {
+  let prefsPath: string;
+
+  beforeEach(() => {
+    prefsPath = path.join(tempDirs.make("openclaw-tts-config-"), "tts.json");
+    vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
+  });
+
   const attempt = (
     params: Omit<Parameters<typeof shouldAttemptTtsPayload>[0], "preparedTtsPreferences">,
   ) => shouldAttemptTtsPayload({ preparedTtsPreferences: {}, ...params });
+  const writePrefs = (tts: Record<string, unknown>) =>
+    writeFileSync(prefsPath, JSON.stringify({ tts }));
 
   it("warns for malformed optional preferences but keeps missing files quiet", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -56,6 +45,14 @@ describe("shouldAttemptTtsPayload", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("Repair the file or its permissions");
   });
 
+  it("refuses a preference update without overwriting unread existing settings", () => {
+    const malformed = '{"tts":{"provider":"custom",';
+    writeFileSync(prefsPath, malformed);
+
+    expect(() => setTtsMaxLength(prefsPath, 2000)).toThrow("Repair the file or its permissions");
+    expect(readFileSync(prefsPath, "utf8")).toBe(malformed);
+  });
+
   it("creates missing preferences and preserves settings during ordinary updates", () => {
     setTtsMaxLength(prefsPath, 1800);
     expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({ tts: { maxLength: 1800 } });
@@ -67,18 +64,34 @@ describe("shouldAttemptTtsPayload", () => {
     });
   });
 
-  it.each([
-    [{ auto: "off" }, { auto: "off" }, "always", true],
-    [{ auto: "off" }, { auto: "off" }, "off", false],
-    [{ auto: "off" }, { enabled: true }, undefined, true],
-    [{ enabled: true }, { auto: "off" }, undefined, false],
-  ] satisfies Array<[TtsConfig, Record<string, unknown>, string | undefined, boolean]>)(
-    "prioritizes session, preferences, then config: %j / %j / %s",
-    (tts, prefs, ttsAuto, expected) => {
-      writePrefs(prefs);
-      expect(attempt({ cfg: { tts }, ttsAuto })).toBe(expected);
-    },
-  );
+  it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
+    expect(
+      attempt({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        channelId: "webchat",
+        accountId: "dashboard",
+      }),
+    ).toBe(false);
+  });
+
+  it("honors session auto state before prefs and config", () => {
+    writePrefs({ auto: "off" });
+    const cfg = { tts: { auto: "off" } } as OpenClawConfig;
+
+    expect(attempt({ cfg, ttsAuto: "always" })).toBe(true);
+    expect(attempt({ cfg, ttsAuto: "off" })).toBe(false);
+  });
+
+  it("uses local prefs before config auto mode", () => {
+    const cfg = { tts: { auto: "off" } } as OpenClawConfig;
+
+    writePrefs({ enabled: true });
+    expect(attempt({ cfg })).toBe(true);
+
+    writePrefs({ auto: "off" });
+    expect(attempt({ cfg: { tts: { enabled: true } } })).toBe(false);
+  });
 
   it("uses per-agent TTS auto and mode overrides", () => {
     const cfg = {
@@ -93,7 +106,6 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   it("merges channel and account TTS overrides after agent overrides", () => {
-    const voice = (name: string) => ({ providers: { openai: { voice: name } } });
     const cfg = {
       tts: {
         auto: "off",
@@ -101,11 +113,18 @@ describe("shouldAttemptTtsPayload", () => {
         provider: "openai",
         providers: { openai: { model: "gpt-4o-mini-tts", voice: "alloy" } },
       },
-      agents: { entries: { reader: { tts: voice("nova") } } },
+      agents: { entries: { reader: { tts: { providers: { openai: { voice: "nova" } } } } } },
       channels: {
         feishu: {
           tts: { auto: "always" },
-          accounts: { EnglishBot: { tts: { mode: "all", ...voice("shimmer") } } },
+          accounts: {
+            EnglishBot: {
+              tts: {
+                mode: "all",
+                providers: { openai: { voice: "shimmer" } },
+              },
+            },
+          },
         },
       },
     } as OpenClawConfig;
@@ -143,6 +162,23 @@ describe("shouldAttemptTtsPayload", () => {
 });
 
 describe("resolveStatusTtsSnapshot", () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = tempDirs.make("openclaw-tts-status-");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+  });
+
+  function writePrefs(tts: Record<string, unknown>, stateDir = path.join(home, ".openclaw")) {
+    const prefsPath = path.join(stateDir, "settings", "tts.json");
+    mkdirSync(path.dirname(prefsPath), { recursive: true });
+    writeFileSync(prefsPath, JSON.stringify({ tts }));
+    return prefsPath;
+  }
+
   function expectStatus(
     tts: TtsConfig,
     details: Partial<NonNullable<ReturnType<typeof resolveStatusTtsSnapshot>>>,
@@ -181,9 +217,15 @@ describe("resolveStatusTtsSnapshot", () => {
       "sanitized custom endpoint",
       "openai",
       {
+        displayName: "NeuTTS local",
         baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+        model: "neutts-nano",
+        voice: "clara",
       },
       {
+        displayName: "NeuTTS local",
+        model: "neutts-nano",
+        voice: "clara",
         baseUrl: "http://127.0.0.1:18801/v1",
         customBaseUrl: true,
       },
@@ -213,7 +255,8 @@ describe("resolveStatusTtsSnapshot", () => {
   });
 
   it("uses provider metadata for local provider prefs overrides", () => {
-    vi.stubEnv("OPENCLAW_TTS_PREFS", writePrefs({ auto: "always", provider: "edge" }));
+    const prefsPath = writePrefs({ auto: "always", provider: "edge" });
+    vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
     expectStatus(
       {
         auto: undefined,

@@ -7,6 +7,7 @@ import {
   type DeliverFn,
   drainPendingDeliveriesCore,
   recoverPendingDeliveries,
+  withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
 import {
@@ -19,21 +20,30 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 const RECOVERY_REPLAY_SPACING_MS = 250;
+const stubCfg = {};
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const migrateLegacyPendingOutboundDeliveriesMock = vi.hoisted(() =>
+  vi.fn(async () => ({ moved: 0, skipped: 0, remaining: 0 })),
+);
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 vi.mock("./channel-resolution.js", () => ({
-  resolveOutboundChannelMessageAdapter: vi.fn(),
+  resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 vi.mock("./delivery-queue-migration.js", () => ({
-  migrateLegacyPendingOutboundDeliveries: async () => ({ moved: 0, skipped: 0, remaining: 0 }),
+  migrateLegacyPendingOutboundDeliveries: migrateLegacyPendingOutboundDeliveriesMock,
 }));
 
 describe("drainPendingDeliveriesCore for reconnect", () => {
   let tmpDir: string;
   const fixtures = installDeliveryQueueTmpDirHooks();
+  let log = createRecoveryLog();
   const deliver = vi.fn<DeliverFn>();
   const pending = () => loadPendingDeliveries(tmpDir);
+  function expectInfo(logger: typeof log, message: string) {
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(message));
+  }
   const selectEntry: Parameters<typeof drainPendingDeliveriesCore>[0]["selectEntry"] = (entry) => ({
     match: entry.channel === "directchat" && entry.accountId === "acct1",
     bypassBackoff: entry.lastError?.includes(NO_LISTENER_ERROR),
@@ -47,8 +57,10 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       ...overrides,
     });
   }
-  const options = () => ({ cfg: {}, log: createRecoveryLog(), stateDir: tmpDir, deliver });
-  const recover = () => recoverPendingDeliveries(options());
+  const options = () => ({ cfg: stubCfg, log, stateDir: tmpDir, deliver });
+  function recover(recoveryLog = createRecoveryLog()) {
+    return recoverPendingDeliveries({ ...options(), log: recoveryLog });
+  }
   function drainAll(overrides: Partial<Parameters<typeof drainPendingDeliveriesCore>[0]> = {}) {
     return drain({
       drainKey: "gateway:outbound",
@@ -93,6 +105,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
+    log = createRecoveryLog();
     deliver.mockReset().mockResolvedValue(undefined);
     sleepMock.mockReset().mockResolvedValue(undefined);
   });
@@ -115,6 +128,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       ...options(),
       drainKey: "reef:default",
       logLabel: "Reef reconnect drain",
+      log: createRecoveryLog(),
       selectEntry: (entry) => ({
         match: entry.channel === "reef" && entry.accountId === "default",
         bypassBackoff: true,
@@ -167,6 +181,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     const draining = drainAll({ shouldContinue: () => shouldContinue });
     try {
       await Promise.race([first.entered, draining]);
+      expect(deliver).toHaveBeenCalledOnce();
     } finally {
       shouldContinue = false;
       first.release();
@@ -182,6 +197,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     await failDelivery(id, NO_LISTENER_ERROR, tmpDir);
     const before = readQueuedEntry(tmpDir, id);
     await drain();
+    expect(deliver).toHaveBeenCalledTimes(1);
     const after = readQueuedEntry(tmpDir, id);
     expect(after).toMatchObject({
       retryCount: Number(before.retryCount) + 1,
@@ -191,11 +207,25 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(after.lastAttemptAt).toBeGreaterThanOrEqual(Number(before.lastAttemptAt ?? 0));
   });
 
+  it("second concurrent call is skipped (concurrency guard)", async () => {
+    const blocked = blockDelivery();
+    await enqueue({}, { retryCount: 0, lastError: NO_LISTENER_ERROR });
+    const first = drain();
+    try {
+      await drain();
+      expectInfo(log, "already in progress");
+    } finally {
+      blocked.release();
+      await first;
+    }
+  });
+
   it("shares replay pacing between reconnect and startup drains", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     const controlledSleep = controlNextRecoverySleep(sleepMock);
+    const startupLog = createRecoveryLog();
     const deliveryTimes: number[] = [];
     const first = blockDelivery(
       () => deliveryTimes.length === 1,
@@ -206,16 +236,18 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     }
     const reconnectDrain = drain();
     await first.entered;
-    const startupRecovery = recover();
+    const startupRecovery = recover(startupLog);
     first.release();
     await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
     expect(deliver).toHaveBeenCalledTimes(1);
     controlledSleep.release();
     await Promise.all([reconnectDrain, startupRecovery]);
+    expect(deliver).toHaveBeenCalledTimes(2);
     expect(deliveryTimes).toEqual([startedAt, startedAt + RECOVERY_REPLAY_SPACING_MS]);
   });
 
   it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
+    const startupLog = createRecoveryLog();
     const blocker = blockDelivery(({ to }) => to === "+1000");
     await enqueue(
       {
@@ -226,7 +258,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       { retryCount: 0, enqueuedAt: 1 },
     );
     await enqueue({}, { retryCount: 0, enqueuedAt: 2 });
-    const startupRecovery = recover();
+    const startupRecovery = recover(startupLog);
     try {
       await Promise.race([blocker.entered, startupRecovery]);
       expect(deliver).toHaveBeenCalledWith(
@@ -239,6 +271,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     }
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(deliver.mock.calls.filter(([entry]) => entry.to === "+1555")).toHaveLength(1);
+    expectInfo(startupLog, "Recovery skipped for delivery");
   });
   it("recomputes backoff bypass after rereading the claimed entry", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -265,6 +298,20 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       },
     });
     expect(deliver).not.toHaveBeenCalled();
-    expect((await pending()).map((entry) => entry.id)).toEqual([id]);
+    expectInfo(log, "not ready for retry yet");
+  });
+
+  it("skips entries that an in-flight live delivery has actively claimed", async () => {
+    // #70386: reconnect must share the live sender's active claim.
+    const id = await enqueue();
+    const claimResult = await withActiveDeliveryClaim(id, async () => {
+      await drain();
+      await drain();
+      expect(deliver).not.toHaveBeenCalled();
+      expect(log.info).not.toHaveBeenCalled();
+    });
+    expect(claimResult.status).toBe("claimed");
+    await drain();
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 });

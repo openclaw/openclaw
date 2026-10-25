@@ -204,7 +204,8 @@ describe("legacy usage-cost cache cleanup", () => {
       const root = tempDirs.make("openclaw-usage-cost-sqlite-doctor-");
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
-      const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
+      const secondDatabase = openOpenClawAgentDatabase({ agentId: "worker", env });
+      const databases = [firstDatabase, secondDatabase];
       for (const database of databases) {
         seedCacheRows(database.db, true);
       }
@@ -220,7 +221,7 @@ describe("legacy usage-cost cache cleanup", () => {
       await maybeRepairLegacyRuntimeFiles(true, env);
       noted(failure === "inspection" ? "EACCES" : "pruning rejected", "Doctor warnings");
       expect(firstDatabase.db.prepare(query).all()).toEqual(before);
-      expect(cacheRows(databases[1].db)).toEqual([
+      expect(cacheRows(secondDatabase.db)).toEqual([
         { key: "keep", scope: "other", value_json: "{}", blob: null },
         ...retainedRows,
       ]);

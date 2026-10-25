@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,10 +9,14 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -19,7 +24,8 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { speechResourceFixture } from "./tts-resource-fixture.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import type { SpeechTelephonySynthesisRequest } from "./provider-types.js";
 import { synthesizeSpeech, synthesizeTalkSpeech } from "./tts-synthesis.js";
 import { textToSpeechTelephony } from "./tts-telephony.js";
 
@@ -31,11 +37,13 @@ function createNativeSpeechFixture(
   reject = false,
   order = 10,
 ) {
-  const fixture = speechResourceFixture(id);
-  const { key, prefsPath } = fixture;
+  const dir = makePluginLoaderTempDir();
+  const key = `__openclaw_speech_resources_${path.basename(dir)}`;
   const connections: Array<{
+    databasePath: string;
     database: DatabaseSync;
     disposals: number;
+    requests: SpeechTelephonySynthesisRequest[];
   }> = [];
   const callbacks: { onResolveConfig?: () => void; trackTail?: boolean } = {};
   const tails: Promise<void>[] = [];
@@ -48,20 +56,24 @@ function createNativeSpeechFixture(
     synthesizeResume: createDeferredCore(),
     pcm,
     callbacks,
+    dir,
     tailStarted: createDeferredCore(),
     tailResume: createDeferredCore(),
     trackAsyncWork,
     tails,
   };
-  const { plugin, cfg } = fixture.install(
-    state,
-    `const { DatabaseSync } = require("node:sqlite");
+  Object.defineProperty(globalThis, key, { configurable: true, value: state });
+  const plugin = writePlugin({
+    dir,
+    id,
+    body: `const { DatabaseSync } = require("node:sqlite");
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const state = globalThis[${JSON.stringify(key)}];
   const registrationVoice = api.pluginConfig?.voiceId;
-  const database = new DatabaseSync(":memory:");
+  const databasePath = require("node:path").join(state.dir, "speech-" + state.connections.length + ".sqlite");
+  const database = new DatabaseSync(databasePath);
   database.exec("CREATE TABLE fixture (value INTEGER); INSERT INTO fixture VALUES (42)");
-  const connection = { database, disposals: 0 };
+  const connection = { databasePath, database, disposals: 0, requests: [] };
   state.connections.push(connection);
   const read = () => database.prepare("SELECT value FROM fixture").get().value;
   api.lifecycle.registerRuntimeLifecycle({ id: "speech-resource", dispose() {
@@ -93,7 +105,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       };
     },
     async synthesizeTelephony(request) {
-      read(); state.synthesizeStarted.resolve();
+      connection.requests.push(request); read(); state.synthesizeStarted.resolve();
       await state.synthesizeResume.promise; read();
       if (state.callbacks.trackTail) {
         state.tails.push(state.trackAsyncWork(async () => {
@@ -105,12 +117,22 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     },
   });
 } };`,
-    {
+  });
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: {
       type: "object",
       additionalProperties: false,
       properties: { voiceId: { type: "string" } },
     },
-  );
+  });
+  const cfg: OpenClawConfig = {
+    plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+    tts: { provider: id, providers: { [id]: {} } },
+  };
+  const prefsPath = path.join(dir, "prefs.json");
+  fs.writeFileSync(prefsPath, "{}");
   const resume = () => {
     state.prepareResume.resolve();
     state.synthesizeResume.resolve();
@@ -124,7 +146,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     state,
     run: (options: Partial<Parameters<typeof synthesize>[0]> = {}) =>
       synthesize({ text: "native speech", cfg, prefsPath, timeoutMs: 12345, ...options }),
-    withEnvironment: fixture.run,
+    withEnvironment: (run: () => Promise<void>) =>
+      withEnvAsync(
+        {
+          OPENCLAW_HOME: dir,
+          OPENCLAW_STATE_DIR: dir,
+          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
+        },
+        run,
+      ),
     resume,
     cleanup() {
       resume();
@@ -133,7 +163,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           database.close();
         }
       }
-      fixture.close();
+      Reflect.deleteProperty(globalThis, key);
     },
   };
 }
@@ -175,7 +205,10 @@ async function withFixtures(
   run: () => Promise<void>,
 ) {
   try {
-    await fixtures[0].withEnvironment(run);
+    await fixtures[0].withEnvironment(async () => {
+      useNoBundledPlugins();
+      await run();
+    });
   } finally {
     fixtures.forEach((fixture) => fixture.cleanup());
   }
@@ -227,6 +260,9 @@ describe.each([
             );
             expect(outcome.value?.providerVoice).toBe("native-voice");
           }
+          expect(fixture.state.connections.flatMap((entry) => entry.requests)).toMatchObject([
+            { timeoutMs: 12345 },
+          ]);
           expectDisposed([fixture]);
         } finally {
           fixture.resume();
@@ -237,10 +273,13 @@ describe.each([
   );
 });
 
-// All three entry points above use the same request-selection and attempt owners.
-describe("provider selection and ownership", () => {
+// Talk shares the buffered request owner; settlement above covers its separate entry point.
+describe.each([
+  ["telephony", textToSpeechTelephony],
+  ["buffered speech", synthesizeSpeech],
+] as const)("%s provider selection and ownership", (_surface, synthesize) => {
   const createFixture = (id = "native-speech", reject = false, order = 10) =>
-    createNativeSpeechFixture(synthesizeSpeech, id, reject, order);
+    createNativeSpeechFixture(synthesize, id, reject, order);
   it.each(["managed", "managed-config", "raw"] as const)(
     "retains the %s host through setup and synthesis",
     async (owner) => {
@@ -303,6 +342,7 @@ describe("provider selection and ownership", () => {
       expect(result.success).toBe(true);
       expect(result.provider).toBe("catalog-voice");
       expect(result.attemptedProviders).toEqual(["override-voice", "catalog-voice"]);
+      expect(preferred.state.connections.flatMap((entry) => entry.requests).length).toBe(0);
       expectDisposed(fixtures);
     });
   });
@@ -324,6 +364,7 @@ describe("provider selection and ownership", () => {
       const second = await catalog.run({ cfg, timeoutMs: undefined });
       expect(second.success).toBe(false);
       expect(second.attemptedProviders).toEqual(["catalog-voice"]);
+      expect(override.state.connections.flatMap((entry) => entry.requests).length).toBe(1);
       expectDisposed([catalog, override]);
     });
   });
@@ -389,6 +430,10 @@ describe("provider selection and ownership", () => {
         expect(result.error).toBeUndefined();
         expect(result.value?.success).toBe(true);
         expectDisposed([fixture]);
+        for (const entry of fixture.state.connections) {
+          using reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
+          expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
+        }
       } finally {
         fixture.resume();
         await pending;
@@ -399,9 +444,9 @@ describe("provider selection and ownership", () => {
 });
 
 function createPreparationFixture() {
+  const dir = makePluginLoaderTempDir();
   const id = "native-speech-preparation";
-  const fixture = speechResourceFixture(id);
-  const { key } = fixture;
+  const key = `__openclaw_speech_preparation_${path.basename(dir)}`;
   const connections: Array<{
     database: DatabaseSync;
     disposals: number;
@@ -426,13 +471,16 @@ function createPreparationFixture() {
     consumedVoices,
     receivedOverrides,
     trackAsyncWork,
+    dir,
   };
-  const { cfg } = fixture.install(
-    state,
-    `const { DatabaseSync } = require("node:sqlite");
+  Object.defineProperty(globalThis, key, { configurable: true, value: state });
+  const plugin = writePlugin({
+    dir,
+    id,
+    body: `const { DatabaseSync } = require("node:sqlite");
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const state = globalThis[${JSON.stringify(key)}];
-  const database = new DatabaseSync(":memory:");
+  const database = new DatabaseSync(require("node:path").join(state.dir, "preparation-" + state.connections.length + ".sqlite"));
   database.exec("CREATE TABLE fixture(value INTEGER); INSERT INTO fixture VALUES(42)");
   const read = () => database.prepare("SELECT value FROM fixture").get().value;
   const connection = { database, disposals: 0, cleanups: 0,
@@ -465,8 +513,16 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     }
   });
 } };`,
-  );
-  cfg.tts = { ...cfg.tts, modelOverrides: { allowProvider: true } };
+  });
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: { type: "object" },
+  });
+  const cfg: OpenClawConfig = {
+    plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
+    tts: { provider: id, providers: { [id]: {} }, modelOverrides: { allowProvider: true } },
+  };
   const host = new LegacyPluginSdkResourceHost();
   const runtime = createPluginRuntime();
   const text = `Hello [[tts:provider=${id}-alias voice=fixture]]`;
@@ -479,7 +535,19 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     prepare: () => runtime.tts.prepareTtsRequest({ cfg, text }),
     async runTest(this: void, run: () => Promise<void>) {
       try {
-        await fixture.run(() => host.run(run), true);
+        await withEnvAsync(
+          {
+            OPENCLAW_HOME: dir,
+            OPENCLAW_STATE_DIR: dir,
+            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
+            OPENCLAW_TTS_PREFS: path.join(dir, "prefs.json"),
+          },
+          () =>
+            host.run(async () => {
+              useNoBundledPlugins();
+              await run();
+            }),
+        );
       } finally {
         tailResume.resolve();
         await Promise.allSettled(tails);
@@ -494,7 +562,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               database.close();
             }
           }
-          fixture.close();
+          Reflect.deleteProperty(globalThis, key);
         }
       }
     },

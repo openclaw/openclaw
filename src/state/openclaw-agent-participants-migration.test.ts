@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
+import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sqlite-recover-report.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -18,7 +19,6 @@ import {
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { LEGACY_PARTICIPANTS_SCHEMA } from "./openclaw-agent-schema-history.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
-import { expectRow, expectRows, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 
 const sessionKey = "agent:main:participant-migration";
 
@@ -50,12 +50,8 @@ function migrate(
   );
 }
 function expectHealthy(database: ReturnType<typeof openNodeSqliteDatabase>) {
-  expectRows(database, "PRAGMA foreign_key_check", []);
-  expectRow(database, "PRAGMA integrity_check", { integrity_check: "ok" });
-}
-
-function legacyHuman(source: string | null) {
-  return { type: "legacy", actorType: "human", source };
+  expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
 }
 
 describe("participant identity migration", () => {
@@ -72,6 +68,48 @@ describe("participant identity migration", () => {
       expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
+    });
+  });
+
+  it("repairs a v17 canonical index without quarantining the original database", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { db, path: databasePath } = await historicalStore(state);
+      db.exec(`
+        INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
+          VALUES ('participant-proof', 'preserved', '{"ok":true}', 100, 1);
+        DROP INDEX idx_agent_cache_expiry;
+        CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
+      `);
+      requireNativeSqliteDatabase(db).enableDefensive?.(false);
+      db.exec(`PRAGMA writable_schema = ON;
+        UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
+          WHERE name = 'idx_agent_cache_expiry';
+        PRAGMA writable_schema = OFF;`);
+      const schemaVersion = db.prepare("PRAGMA schema_version").get()?.schema_version;
+      db.exec(`PRAGMA schema_version = ${Number(schemaVersion) + 1};`);
+      closeOpenClawAgentDatabasesForTest();
+      const result = await recoverDoctorSessionSqliteTargets({
+        env: state.env,
+        targets: [{ agentId: "main", storePath: databasePath }],
+        validateTarget: async () => {
+          throw new Error("Unexpected failed migration manifest");
+        },
+      });
+      expect(result.targets[0]?.corruptRecovery).toBeUndefined();
+      expect(
+        result.totals.issues,
+        JSON.stringify(result.targets.flatMap((target) => target.issues)),
+      ).toBe(0);
+      using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        database
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = 'participant-proof'")
+          .get(),
+      ).toEqual({ value_json: '{"ok":true}' });
+      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
     });
   });
 
@@ -114,23 +152,27 @@ describe("participant identity migration", () => {
             database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
           ).toEqual(before);
           expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
-          expectRows(
-            database,
-            "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
-            [
-              {
-                actor_id: "profile",
-                contribution_count: 2,
-                first_prompted_at: 30,
-                last_prompted_at: 50,
-              },
-            ],
-          );
-          expectRows(
-            database,
-            "SELECT name FROM sqlite_schema WHERE name = 'session_participants_identity_migration'",
-            [],
-          );
+          expect(
+            database
+              .prepare(
+                "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
+              )
+              .all(),
+          ).toEqual([
+            {
+              actor_id: "profile",
+              contribution_count: 2,
+              first_prompted_at: 30,
+              last_prompted_at: 50,
+            },
+          ]);
+          expect(
+            database
+              .prepare(
+                "SELECT name FROM sqlite_schema WHERE name = 'session_participants_identity_migration'",
+              )
+              .all(),
+          ).toEqual([]);
           expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
           expectHealthy(database);
         } finally {
@@ -163,32 +205,56 @@ describe("participant identity migration", () => {
       const { db, path: databasePath } = await historicalStore(state, entry);
       db.exec(LEGACY_PARTICIPANTS_SCHEMA);
       const kinds = [
-        ["agent", "agent", "helper", { type: "agent" }, true],
-        ["human", "channel", "same-id", legacyHuman("channel"), true],
-        ["human", null, "same-id-unknown", legacyHuman(null), false],
-        ["human", "profile", "", legacyHuman("profile"), false],
-      ] as const;
-      for (const [type, source, id] of kinds) {
+        {
+          type: "agent",
+          source: "agent",
+          id: "helper",
+          namespace: { type: "agent" },
+          knownTime: true,
+        },
+        {
+          type: "human",
+          source: "channel",
+          id: "same-id",
+          namespace: { type: "legacy", actorType: "human", source: "channel" },
+          knownTime: true,
+        },
+        {
+          type: "human",
+          source: null,
+          id: "same-id-unknown",
+          namespace: { type: "legacy", actorType: "human", source: null },
+          knownTime: false,
+        },
+        {
+          type: "human",
+          source: "profile",
+          id: "",
+          namespace: { type: "legacy", actorType: "human", source: "profile" },
+          knownTime: false,
+        },
+      ];
+      for (const kind of kinds) {
         db.prepare("INSERT INTO session_participants VALUES (?, ?, ?, ?, 2, 30, 50)").run(
           sessionKey,
-          type,
-          id,
-          source,
+          kind.type,
+          kind.id,
+          kind.source,
         );
       }
       closeOpenClawAgentDatabasesForTest();
       using database = openNodeSqliteDatabase(databasePath);
       await migrate(database, databasePath, state.env);
-      for (const [_type, _source, id, namespace, knownTime] of kinds) {
+      for (const kind of kinds) {
         expect(
-          database.prepare("SELECT * FROM session_participants WHERE actor_id = ?").get(id),
+          database.prepare("SELECT * FROM session_participants WHERE actor_id = ?").get(kind.id),
         ).toEqual({
           session_key: sessionKey,
-          actor_id: id,
-          identity_namespace: JSON.stringify(namespace),
+          actor_id: kind.id,
+          identity_namespace: JSON.stringify(kind.namespace),
           contribution_count: 2,
-          first_prompted_at: knownTime ? 30 : null,
-          last_prompted_at: knownTime ? 50 : null,
+          first_prompted_at: kind.knownTime ? 30 : null,
+          last_prompted_at: kind.knownTime ? 50 : null,
         });
       }
       expect(
@@ -203,22 +269,28 @@ describe("participant identity migration", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const entry = { sessionId: "migration-session", updatedAt: 123 };
         const { db, path: databasePath } = await historicalStore(state, entry);
-        let schema = LEGACY_PARTICIPANTS_SCHEMA;
-        if (shape === "original") {
-          schema = schema.replace("  actor_source TEXT,\n", "");
-        }
-        if (shape === "original" || shape === "source") {
-          schema = schema.replace("  contribution_count INTEGER,\n", "");
-        }
-        db.exec(schema);
+        db.exec(`
+          CREATE TABLE session_participants (
+            session_key TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            ${shape !== "original" ? "actor_source TEXT," : ""}
+            ${shape === "count" || shape === "null-count" ? "contribution_count INTEGER," : ""}
+            first_prompted_at INTEGER NOT NULL,
+            last_prompted_at INTEGER NOT NULL,
+            PRIMARY KEY (session_key, actor_type, actor_id),
+            FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+          ) STRICT;
+        `);
         db.prepare(`INSERT INTO session_participants VALUES (
           ?, 'human', 'historical-profile',
           ${shape !== "original" ? "'profile'," : ""}
           ${shape === "count" ? "2," : shape === "null-count" ? "NULL," : ""}
           30, 50
         )`).run(sessionKey);
-        const entryQuery = "SELECT entry_json FROM session_nodes WHERE session_key = ?";
-        const originalEntry = readRow(db, entryQuery, sessionKey);
+        const originalEntry = db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey);
         closeOpenClawAgentDatabasesForTest();
         using database = openNodeSqliteDatabase(databasePath);
         await migrate(database, databasePath, state.env);
@@ -227,7 +299,7 @@ describe("participant identity migration", () => {
           expect.objectContaining({
             identity_namespace:
               shape === "original"
-                ? JSON.stringify(legacyHuman(null))
+                ? JSON.stringify({ type: "legacy", actorType: "human", source: null })
                 : JSON.stringify({ type: "profile" }),
             actor_id: "historical-profile",
             contribution_count: shape === "count" ? 2 : 1,
@@ -241,7 +313,11 @@ describe("participant identity migration", () => {
         expect(
           database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
         ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        expectRow(database, entryQuery, originalEntry, sessionKey);
+        expect(
+          database
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey),
+        ).toEqual(originalEntry);
         expectHealthy(database);
         ensureOpenClawAgentDatabaseSchema(database, {
           agentId: "main",

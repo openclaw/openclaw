@@ -155,7 +155,7 @@ describe("registerCodexSessionCli", () => {
       const output = await runCli(["continue", "thread-1"], {
         agent: "JarVis",
         host: "gateway:local:source-a",
-        json,
+        ...(json ? { json: true } : {}),
       });
       expectGateway(
         "continue",

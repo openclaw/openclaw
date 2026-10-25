@@ -90,7 +90,7 @@ function mockPreviousConfig(config: OpenClawConfig): void {
   readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
 }
 
-async function runWrite(
+function prepareWrite(
   method: string,
   raw: unknown,
   params: Record<string, unknown> = {},
@@ -98,18 +98,49 @@ async function runWrite(
     Parameters<typeof createConfigHandlerHarness>[0]
   >["contextOverrides"],
 ) {
-  const harness = createConfigHandlerHarness({
+  return createConfigHandlerHarness({
     method,
     params: {
       baseHash: "base-hash",
-      raw: JSON.stringify(raw),
+      raw: typeof raw === "string" ? raw : JSON.stringify(raw),
       ...params,
     },
     contextOverrides,
   });
-  await expectDefined(configHandlers[method], method)(harness.options);
+}
+
+async function runWrite(...args: Parameters<typeof prepareWrite>) {
+  const harness = prepareWrite(...args);
+  await expectDefined(configHandlers[args[0]], args[0])(harness.options);
   await flushConfigHandlerMicrotasks();
   return harness;
+}
+
+const ttsConfig: OpenClawConfig = {
+  tts: {
+    providers: {
+      elevenlabs: {
+        apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+      },
+    },
+  },
+};
+function mockDegradedTts(reason: string) {
+  mockPreviousConfig({});
+  prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
+    config: ttsConfig,
+    degradedOwners: [
+      {
+        ownerKind: "capability",
+        ownerId: "tts",
+        state: "unavailable",
+        degradationState: "cold",
+        paths: ["tts.providers.elevenlabs.apiKey"],
+        refKeys: ["env:default:ELEVENLABS_API_KEY"],
+        reason,
+      },
+    ],
+  });
 }
 
 afterEach(() => vi.clearAllMocks());
@@ -218,31 +249,8 @@ describe("config shared auth disconnects", () => {
 
   it("rejects non-retryable SecretRef degradation before config writes", async () => {
     const reason = "secret provider policy denied resolution";
-    const config: OpenClawConfig = {
-      tts: {
-        providers: {
-          elevenlabs: {
-            apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
-          },
-        },
-      },
-    };
-    mockPreviousConfig({});
-    prepareSecretsRuntimeSnapshotMock.mockResolvedValueOnce({
-      config,
-      degradedOwners: [
-        {
-          ownerKind: "capability",
-          ownerId: "tts",
-          state: "unavailable",
-          degradationState: "cold",
-          paths: ["tts.providers.elevenlabs.apiKey"],
-          refKeys: ["env:default:ELEVENLABS_API_KEY"],
-          reason,
-        },
-      ],
-    });
-    const { respond } = await runWrite("config.set", config);
+    mockDegradedTts(reason);
+    const { respond } = await runWrite("config.set", ttsConfig);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expectRpcError(respond, { message: expect.stringContaining(reason) });
   });

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
+import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -6,7 +8,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { installQueueTestPlugin, useOutboundFixture } from "./deliver.custody.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
-import { markFinal, seedRecoverySession } from "./delivery-completion.shard-test-support.js";
+import { seedRecoverySession } from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
@@ -93,8 +95,9 @@ describe("recovered requester receipt safety", () => {
     }
   }
 
-  async function prepareDelivery(
+  async function prepare(
     options: {
+      refreshSuccessor?: boolean;
       payloads?: Array<{ text: string }>;
       second?: boolean;
     } = {},
@@ -105,11 +108,46 @@ describe("recovered requester receipt safety", () => {
       lifecycleRevision: "lifecycle-a",
       restartRecoveryDeliveryContext: context,
     });
-    await markFinal(scope, entry, payloads, context);
-    const completion = resolvePendingFinalDeliveryCompletion(payloads);
-    if (!completion) {
-      throw new Error("missing completion");
+    const admission = prepareAgentCommandExecutionIdentity({
+      opts: { message: "finish the admitted task" },
+      prepared: {
+        cfg: {},
+        runId: "run-a",
+        sessionAgentId: "main",
+        sessionId: entry.sessionId,
+        sessionEntry: entry,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+      },
+      ingress: { kind: "system", boundary: "receipt-safety-test", state: "present" },
+      lifecycleGeneration: "test-generation",
+    });
+    if (options.refreshSuccessor) {
+      await patchSessionEntryCore(scope, () => ({
+        restartRecoveryDeliveryRunId: "run-b",
+        restartRecoveryDeliverySourceRunId: "source-b",
+      }));
+      // Match onCommitted publication: the cached entry and authoritative row both become B.
+      Object.assign(entry, loadSessionEntry(scope));
     }
+    let marker;
+    try {
+      marker = await persistPendingFinalDeliveryMarker({
+        ...scope,
+        deliver: true,
+        sessionEntry: entry,
+        sessionStore: { [scope.sessionKey]: entry },
+        admittedRecoverySource: admission.pendingFinalRecoverySource,
+        suppressVisibleSessionEffects: false,
+        sessionReboundDuringRun: false,
+        payloads,
+        deliveryContext: context,
+        runOwnedSessionId: entry.sessionId,
+      });
+    } finally {
+      admission.close();
+    }
+    const completion = resolvePendingFinalDeliveryCompletion(payloads);
     if (options.second) {
       await patchSessionEntryCore(scope, ({ pendingFinalDelivery }) => ({
         pendingFinalDelivery: {
@@ -118,10 +156,28 @@ describe("recovered requester receipt safety", () => {
         },
       }));
     }
-    return { scope, context, payloads, completion };
+    return { scope, context, payloads, marker, completion };
   }
 
-  it.each(["missing-identity", "wrong-channel", "not-sent"] as const)(
+  async function prepareDelivery(options: Parameters<typeof prepare>[0] = {}) {
+    const fixture = await prepare(options);
+    if (!fixture.completion) {
+      throw new Error("missing completion");
+    }
+    return { ...fixture, completion: fixture.completion };
+  }
+
+  it("does not bind finishing A to refreshed same-session/route successor B", async () => {
+    const { scope, marker } = await prepare({ refreshSuccessor: true });
+    expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(false);
+    expect(loadSessionEntry(scope)).toMatchObject({
+      restartRecoveryDeliveryRunId: "run-b",
+      restartRecoveryDeliverySourceRunId: "source-b",
+    });
+    expect(loadSessionEntry(scope)?.pendingFinalDelivery).toBeUndefined();
+  });
+
+  it.each(["missing-identity", "wrong-target", "wrong-channel", "not-sent"] as const)(
     "requires evidence for earlier logical members: %s then valid",
     async (invalid) => {
       const { scope, context, completion } = await prepareDelivery({ second: true });
@@ -132,7 +188,7 @@ describe("recovered requester receipt safety", () => {
       const first: OutboundDeliveryResult = {
         channel: invalid === "wrong-channel" ? "discord" : "matrix",
         messageId: invalid === "missing-identity" ? "" : "first",
-        target: { kind: "room", id: context.to },
+        target: { kind: "room", id: invalid === "wrong-target" ? "!other:example" : context.to },
         ...(invalid === "not-sent" ? { outcome: "not_sent" as const } : {}),
       };
       await settle(first);
@@ -195,41 +251,51 @@ describe("recovered requester receipt safety", () => {
     },
   );
 
-  // Per-field placement and normalization are covered by delivery-completion.progress-evidence;
-  // keep the final-only aggregate boundary here: one valid part cannot bless a misrouted part.
-  it.each([false, true])("validates mixed physical receipt routing: %s", async (mixed) => {
+  it.each([
+    "nested-target",
+    "mixed-parts",
+    "receipt-thread",
+    "part-thread",
+    "matching",
+    "normalized",
+    "metadata-omitted",
+  ] as const)("validates physical receipt routing through queue delivery: %s", async (variant) => {
     const fixture = await prepareDelivery();
     const { scope, context } = fixture;
+    const roomId = variant === "normalized" ? `  ${context.to}  ` : context.to;
     const part = {
       platformMessageId: "first-id",
       kind: "text" as const,
       index: 0,
-      threadId: context.threadId,
-      raw: { roomId: context.to },
+      threadId: variant === "part-thread" ? "other-thread" : context.threadId,
+      raw: { roomId },
     };
-    const parts = mixed
-      ? [
-          part,
-          { ...part, platformMessageId: "other-id", index: 1, raw: { roomId: "!other:example" } },
-        ]
-      : [part];
+    const parts =
+      variant === "mixed-parts"
+        ? [
+            part,
+            { ...part, platformMessageId: "other-id", index: 1, raw: { roomId: "!other:example" } },
+          ]
+        : [part];
     const receipt = {
       primaryPlatformMessageId: "first-id",
       platformMessageIds: parts.map((item) => item.platformMessageId),
       parts,
-      threadId: context.threadId,
+      threadId: variant === "receipt-thread" ? "other-thread" : context.threadId,
       sentAt: 1,
-      raw: [{ roomId: context.to }],
+      raw: [{ roomId: variant === "nested-target" ? "!other:example" : roomId }],
     };
     await enqueue(fixture);
-    const send = vi.fn(async () => ({
-      messageId: "first-id",
-      target: { kind: "room", id: context.to },
-      receipt,
-    }));
+    const sent = { messageId: "first-id" };
+    const send = vi.fn(async () =>
+      variant === "metadata-omitted"
+        ? sent
+        : { ...sent, target: { kind: "room", id: context.to }, receipt },
+    );
     const recover = recovery(send);
     await recover();
-    expectReceipt(scope, mixed ? undefined : "first-id");
+    const valid = ["matching", "normalized", "metadata-omitted"].includes(variant);
+    expectReceipt(scope, valid ? "first-id" : undefined);
     await expectDrained(recover, send, 1);
   });
   it.each([1, 2])("reconciliation cannot imply a complete batch (%s payloads)", async (count) => {
@@ -267,6 +333,7 @@ describe("recovered requester receipt safety", () => {
     const recover = recovery(undefined, deliver);
     await recover();
     expectReceipt(fixture.scope, count === 1 ? "reconciled-id" : undefined);
+    expect(deliver).not.toHaveBeenCalled();
     await expectDrained(recover, reconcile, 1);
     expect(deliver).not.toHaveBeenCalled();
   });
