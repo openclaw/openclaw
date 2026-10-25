@@ -43,8 +43,11 @@ function fixture() {
   };
 }
 
-const create = (entry: SessionEntry) =>
-  ({ type: "session.entry.create", input: { entry } }) as const;
+const create = (entry: Partial<SessionEntry> = {}) =>
+  ({
+    type: "session.entry.create",
+    input: { entry: { sessionId: "memory-read", updatedAt: 1, incognito: true, ...entry } },
+  }) as const;
 const patchFields = (patch: Partial<SessionEntry>) =>
   ({ type: "session.entry.patch", input: { operation: { kind: "fields", patch } } }) as const;
 
@@ -57,8 +60,6 @@ it("unbound child readers observe memory lineage writes without opening SQLite",
     await actor.storage!.mutate(
       create({
         sessionId: "child",
-        updatedAt: 1,
-        incognito: true,
         skillsSnapshot: { prompt: "private instructions", skills: [] },
       }),
       authority,
@@ -116,14 +117,7 @@ it("unbound readers observe committed entry and sharing changes without replacin
     const commit = async (command: Parameters<typeof storage.mutate>[0]) => {
       expect((await storage.mutate(command, authority)).kind).toBe("committed");
     };
-    await commit(
-      create({
-        sessionId: "memory-read",
-        updatedAt: 1,
-        incognito: true,
-        modelSelectionLocked: false,
-      }),
-    );
+    await commit(create({ modelSelectionLocked: false }));
     const current = captureNativeSessionEntryCurrentRead(scope);
     const list = createSessionEntryListReader(scope);
     expect(current.readCurrent()?.modelSelectionLocked).toBe(false);
@@ -137,15 +131,13 @@ it("unbound readers observe committed entry and sharing changes without replacin
     });
     expect(current.readCurrent()?.modelSelectionLocked).toBe(true);
     expect((await list()).entries[0]?.entry.updatedAt).toBe(2);
-    expect((await readSessionEntryInWorker(scope))?.updatedAt).toBe(2);
-    expect(
-      (await readSessionEntryByIdReadOnlyInWorker({ ...scope, sessionId: "memory-read" }))?.entry
-        .updatedAt,
-    ).toBe(2);
-    expect(
-      (await readSessionEntryByIdReadOnlyInWorker({ ...scope, sessionId: " memory-read " }))?.entry
-        .updatedAt,
-    ).toBe(2);
+    const readById = (sessionId: string) =>
+      readSessionEntryByIdReadOnlyInWorker({ ...scope, sessionId });
+    expect([
+      (await readSessionEntryInWorker(scope))?.updatedAt,
+      (await readById("memory-read"))?.entry.updatedAt,
+      (await readById(" memory-read "))?.entry.updatedAt,
+    ]).toEqual([2, 2, 2]);
     const batch = await readSessionEntriesFromStoreInWorker({
       ...scope,
       sessionKeys: [scope.sessionKey],
@@ -197,29 +189,23 @@ it("admits an absent memory session and keeps creation and subsequent reads on t
       kind: "memory",
       incarnation: claim.incarnation,
     });
-    expect(
-      (
-        await actor.patch(
-          {
-            commandId: "admitted-entry-update",
-            phaseId: "test",
-            reducers: [{ kind: "activity", updatedAt: 2 }],
-          },
-          authority,
-        )
-      ).kind,
-    ).toBe("committed");
+    const patched = await actor.patch(
+      {
+        commandId: "admitted-entry-update",
+        phaseId: "test",
+        reducers: [{ kind: "activity", updatedAt: 2 }],
+      },
+      authority,
+    );
+    expect(patched.kind).toBe("committed");
     expect((await readResolvedSessionEntryInWorker({ ...scope, cfg: {} }))?.updatedAt).toBe(2);
-    expect(
-      (
-        await resolveSessionEntryCandidateTargetForRuntime({
-          agentId: scope.agentId,
-          env: scope.env,
-          cfg: {},
-          candidateKeys: ["agent:main:absent", scope.sessionKey],
-        })
-      )?.entry.updatedAt,
-    ).toBe(2);
+    const candidate = await resolveSessionEntryCandidateTargetForRuntime({
+      agentId: scope.agentId,
+      env: scope.env,
+      cfg: {},
+      candidateKeys: ["agent:main:absent", scope.sessionKey],
+    });
+    expect(candidate?.entry.updatedAt).toBe(2);
     next = await claim.afterTransition?.({ current: { sessionId: "created-memory" } }, () => {});
     expect(next?.incarnation).toBe(claim.incarnation);
     await claim.release();

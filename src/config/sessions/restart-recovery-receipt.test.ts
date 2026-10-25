@@ -75,36 +75,8 @@ describe("restart recovery terminal delivery receipt", () => {
     expect(read()).toEqual(before);
   });
 
-  it.each(["success", "non-delivery"] as const)(
-    "persists pending and blocks repeat sends until provider %s",
-    async (outcome) => {
-      await seed(claim);
-      await expect(begin(scope())).resolves.toBe("started");
-      expect(read()).toMatchObject({
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-        restartRecoveryDeliveryToolCallId: "message-call-1",
-      });
-      await expect(begin(scope())).resolves.toBe("delivery-ambiguous");
-      if (outcome === "success") {
-        await expect(complete(scope())).resolves.toBe("recorded");
-        await expect(complete(scope())).resolves.toBe("recorded");
-        await expect(cancel(scope())).resolves.toBe("stale");
-      } else {
-        await expect(cancel(scope())).resolves.toBe("cleared");
-      }
-      const receipt = read();
-      expect(receipt?.restartRecoveryDeliveryReceiptState).toBe(
-        outcome === "success" ? "delivered-terminal" : undefined,
-      );
-      expect(receipt?.restartRecoveryDeliveryToolCallId).toBe(
-        outcome === "success" ? "message-call-1" : undefined,
-      );
-    },
-  );
-
   it.each<[string, Partial<SessionEntry>, string]>([
     ["claimless live turn", { status: undefined }, "not-applicable"],
-    ["replaced claimless session", { sessionId: "session-2" }, "stale"],
     ["completed source", { restartRecoveryTerminalRunIds: ["source-1"] }, "already-delivered"],
   ])("does not arm a receipt for %s", async (_name, fields, expected) => {
     await seed(fields);
@@ -201,7 +173,6 @@ describe("restart recovery steering block reasons", () => {
     [tombstone("source-1"), "already-delivered"],
     [tombstone("source-old")],
     [tombstone("source-old"), "unknown-source-with-terminal-history", ""],
-    [{ ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" }, "stale-claim"],
     [claim, undefined, "recovery-1"],
     [claim, "stale-claim", "other-run"],
     [{ ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"],

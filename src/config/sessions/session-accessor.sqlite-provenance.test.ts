@@ -1,28 +1,22 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import * as agentDb from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import {
-  projectPublicSessionEntry,
-  projectExecutionSessionEntry,
-} from "./session-entry-projection.js";
+import * as projection from "./session-entry-projection.js";
 import type { SessionEntry } from "./types.js";
 
 const retainedPrompt = "retained skill prompt ".repeat(400);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
+function closeDatabases() {
+  agentDb.closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-});
+}
+afterEach(closeDatabases);
 
 function createFixture() {
   const scope = {
@@ -30,7 +24,7 @@ function createFixture() {
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("session-provenance-") },
     sessionKey: "agent:main:provenance",
   };
-  const database = openOpenClawAgentDatabase(scope);
+  const database = agentDb.openOpenClawAgentDatabase(scope);
   const entry: SessionEntry = {
     sessionId: "target",
     updatedAt: 20,
@@ -48,7 +42,11 @@ function createFixture() {
   };
   const transcriptScope = { ...scope, sessionId: entry.sessionId };
   const read = (table: string, columns: string, key = "session_key", id = scope.sessionKey) =>
-    database.db.prepare(`SELECT ${columns} FROM ${table} WHERE ${key} = ?`).get(id);
+    agentDb
+      .openOpenClawAgentDatabase(scope)
+      .db.prepare(`SELECT ${columns} FROM ${table} WHERE ${key} = ?`)
+      .get(id);
+  const storedEntry = () => JSON.parse(String(read("session_nodes", "entry_json")?.entry_json));
   const window = (columns: string) =>
     read("session_windows", columns, "session_id", entry.sessionId);
   const append = () =>
@@ -57,7 +55,7 @@ function createFixture() {
       id: entry.sessionId,
       timestamp: 10,
     });
-  return { scope, database, entry, transcriptScope, read, window, append };
+  return { scope, database, entry, transcriptScope, read, storedEntry, window, append };
 }
 
 it.each([
@@ -75,7 +73,7 @@ it.each([
       updatedAt: 10,
     });
   }
-  runOpenClawAgentWriteTransaction((db) => {
+  agentDb.runOpenClawAgentWriteTransaction((db) => {
     if (root === "unknown") {
       ensureTranscriptSessionRoot(db, transcriptScope, 10);
       // Migrated windows have no trusted entry provenance, even when an entry survives.
@@ -138,7 +136,7 @@ it.each(["transcript-first", "entry-first"] as const)(
   (order) => {
     const { scope, entry, window, append } = createFixture();
     using _ = vi.spyOn(Date, "now").mockReturnValue(10);
-    runOpenClawAgentWriteTransaction((db) => {
+    agentDb.runOpenClawAgentWriteTransaction((db) => {
       if (order === "transcript-first") {
         append();
       }
@@ -175,7 +173,7 @@ it.each([
 ] as const)(
   "keeps legacy actor columns and immutable $type attribution across cold reopen",
   (delegatedBy) => {
-    const { scope, entry, read } = createFixture();
+    const { scope, entry, read, storedEntry } = createFixture();
     const createdActor = {
       type: "human",
       source: "profile",
@@ -187,31 +185,25 @@ it.each([
       created_actor_type: "human",
       created_actor_id: "isolation-owner",
     });
-    const first = JSON.parse(String(read("session_nodes", "entry_json")?.entry_json));
-    expect(first.createdActor).toEqual(createdActor);
-    const publicEntry = projectPublicSessionEntry({ ...entry, createdActor });
+    expect(storedEntry().createdActor).toEqual(createdActor);
+    const publicEntry = projection.projectPublicSessionEntry({ ...entry, createdActor });
     expect(publicEntry.createdActor).toEqual(createdActor.delegatedBy);
-    expect(projectExecutionSessionEntry({ ...entry, createdActor }).createdActor).toEqual(
-      createdActor,
-    );
-    replaceSessionEntrySync(scope, { ...publicEntry, updatedAt: 25 });
     expect(
-      JSON.parse(String(read("session_nodes", "entry_json")?.entry_json)).createdActor,
+      projection.projectExecutionSessionEntry({ ...entry, createdActor }).createdActor,
     ).toEqual(createdActor);
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawAgentDatabase(scope);
+    replaceSessionEntrySync(scope, { ...publicEntry, updatedAt: 25 });
+    expect(storedEntry().createdActor).toEqual(createdActor);
+    closeDatabases();
     replaceSessionEntrySync(scope, {
       sessionId: entry.sessionId,
       updatedAt: 30,
       label: "post-reopen write",
       createdActor: { type: "agent", id: "cannot-replace-creator" },
     });
-    const row = reopened.db
-      .prepare("SELECT entry_json, created_actor_id FROM session_nodes WHERE session_key = ?")
-      .get(scope.sessionKey);
-    expect(row?.created_actor_id).toBe("isolation-owner");
-    expect(JSON.parse(String(row?.entry_json))).toMatchObject({
+    expect(read("session_nodes", "created_actor_id")).toEqual({
+      created_actor_id: "isolation-owner",
+    });
+    expect(storedEntry()).toMatchObject({
       label: "post-reopen write",
       createdActor,
       sandbox: "required",

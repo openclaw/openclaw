@@ -35,12 +35,30 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
 
 const { observer, tempDirs } = fixtures.useReconcileTestRuntime();
 
-function projection(sessionId: string) {
+function projection(sessionId: string, otherIds: string[] = []) {
   const fixture = fixtures.reconcileScope(tempDirs.make("openclaw-projection-"), sessionId);
   setRuntimeConfigSnapshot({});
+  const scopeFor = (id: string) => ({
+    ...fixture.scope,
+    sessionId: id,
+    sessionKey: `agent:main:${id}`,
+  });
+  const scopes = [fixture.scope, ...otherIds.map(scopeFor)];
   let release: (() => void) | undefined;
   return {
     ...fixture,
+    scopeFor,
+    async prepare() {
+      for (const scope of scopes) {
+        await fixtures.seedTranscript(scope, "seed", "Projection", null);
+      }
+      await waitForSessionTranscriptIndexReconcile(fixture.options);
+      const database = openOpenClawAgentDatabase(fixture.options);
+      for (const scope of scopes) {
+        fixtures.markRebuild(database.db, scope.sessionId);
+      }
+      return database;
+    },
     async [Symbol.asyncDispose]() {
       release?.();
       observer.onTask = undefined;
@@ -72,9 +90,7 @@ function observeStatus() {
 it("observes foreground traversal completion while foreign writes continue", async () => {
   await using fixture = projection("zz-late");
   const { options, scope } = fixture;
-  await fixtures.seedTranscript(scope, "late", "Late projection", null);
-  await waitForSessionTranscriptIndexReconcile(options);
-  const { db } = openOpenClawAgentDatabase(options);
+  const { db } = await fixture.prepare();
   fixtures.seedScanBacklog(db, scope.sessionKey);
   fixtures.markRebuild(db);
   const foreignCommit = db.prepare(
@@ -140,10 +156,7 @@ it.each([
   async (boundary) => {
     await using fixture = projection("retired-read");
     const { options, scope, hold } = fixture;
-    await fixtures.seedTranscript(scope, "seed", "Read owner", null);
-    await waitForSessionTranscriptIndexReconcile(options);
-    const database = openOpenClawAgentDatabase(options);
-    fixtures.markRebuild(database.db);
+    const database = await fixture.prepare();
     const held = hold("plan-start");
     const resume = held.release;
     startSessionTranscriptIndexReconcile(options);
@@ -216,16 +229,15 @@ it.each([
       );
       const controller = new AbortController();
       const reason = new Error("cancel queued projection status");
-      let ready: Promise<{ kind: "resolved" } | { kind: "rejected"; error: unknown }> | undefined;
+      let ready: Promise<unknown> | undefined;
       try {
         await awaitGateBeforeSettlement(
           preparing.promise,
           Promise.all(blockers),
           "Projection reads settled before filling the worker pool",
         );
-        ready = waitForSessionTranscriptProjection(scope, controller.signal).then(
-          () => ({ kind: "resolved" as const }),
-          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ready = waitForSessionTranscriptProjection(scope, controller.signal).catch(
+          (error: unknown) => error,
         );
         await queued.promise;
         expect(historyPages.getSnapshot()).toMatchObject({
@@ -237,10 +249,7 @@ it.each([
           activeTasks: capacity,
           pendingTasks: capacity,
         });
-        await expect(ready).resolves.toMatchObject({
-          kind: "rejected",
-          error: { name: "AbortError", cause: reason },
-        });
+        await expect(ready).resolves.toMatchObject({ name: "AbortError", cause: reason });
       } finally {
         releasePreparation.resolve();
         const outcomes = await Promise.allSettled([...blockers, ready]);
@@ -269,17 +278,10 @@ it.each([
 );
 
 it("settles pending sessions after background failure without retracting published readiness", async () => {
-  await using fixture = projection("ready-first");
-  const { options, scope, hold } = fixture;
-  const broken = { ...scope, sessionId: "broken-next", sessionKey: "agent:main:broken-next" };
-  for (const target of [scope, broken]) {
-    await fixtures.seedTranscript(target, "seed", "Publication failure", null);
-  }
-  await waitForSessionTranscriptIndexReconcile(options);
-  const database = openOpenClawAgentDatabase(options);
-  for (const target of [scope, broken]) {
-    fixtures.markRebuild(database.db, target.sessionId);
-  }
+  await using fixture = projection("ready-first", ["broken-next"]);
+  const { options, scope, hold, scopeFor } = fixture;
+  const database = await fixture.prepare();
+  const broken = scopeFor("broken-next");
   database.db
     .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
     .run(broken.sessionId);
@@ -311,22 +313,11 @@ it("settles pending sessions after background failure without retracting publish
 it.each(["rewrite", "replacement", "json-update"] as const)(
   "publishes synchronous %s readiness before unrelated reconciliation finishes",
   async (producer) => {
-    await using fixture = projection("sync-target");
-    const { options, scope, hold } = fixture;
-    const unrelated = {
-      ...scope,
-      sessionId: "unrelated",
-      sessionKey: "agent:main:unrelated",
-    };
-    for (const target of [scope, unrelated]) {
-      await fixtures.seedTranscript(target, "seed", "Synchronous projection", null);
-    }
-    await waitForSessionTranscriptIndexReconcile(options);
-    const database = openOpenClawAgentDatabase(options);
+    await using fixture = projection("sync-target", ["unrelated"]);
+    const { options, scope, hold, scopeFor } = fixture;
+    const database = await fixture.prepare();
+    const unrelated = scopeFor("unrelated");
     const events = loadTranscriptEventsFromDatabase(database, scope.sessionId);
-    for (const target of [scope, unrelated]) {
-      fixtures.markRebuild(database.db, target.sessionId);
-    }
     const held = hold("plan-start", unrelated.sessionId);
     startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: unrelated.sessionId });
     await held.paused;
