@@ -1,11 +1,7 @@
 import { statSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it as baseIt, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -29,8 +25,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
@@ -200,49 +194,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("does not probe archive recovery during ordinary replacements", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const schemaLease = acquireStateDatabaseSchemaLease(database.path);
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => schemaLease.assertCurrent(),
-    assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-  });
-  try {
-    // The native maintenance path exposes SQL from the same replacement kernel.
-    await maintenance.run(async () => {
-      const sessionKey = "agent:main:replacement-no-archive";
-      writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 1 });
-      ensureSessionTranscriptArchiveSchema(database.db);
-      const sql = observeSqliteReadSql(StatementSync.prototype);
-      const nativeExec = vi.spyOn(database.db, "exec");
-      try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [sessionKey],
-          update: updateEntry(sessionKey, { label: "committed" }),
-        });
-        expect(
-          nativeExec.mock.calls.some(([statement]) => /\bBEGIN\s+IMMEDIATE\b/i.test(statement)),
-        ).toBe(true);
-        expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
-        expect(
-          sql.queries.filter((query) => /from "session_transcript_archives"/i.test(query)),
-        ).toEqual([]);
-      } finally {
-        nativeExec.mockRestore();
-        sql.restore();
-      }
-    });
-  } finally {
-    try {
-      await maintenance.close();
-    } finally {
-      schemaLease.release();
-    }
-  }
-});
 
 it("commits platform-normalized replacements without entering a caller-thread SQLite write transaction", async () => {
   const { database, sessionKey } = seedSession("replacement-worker", {

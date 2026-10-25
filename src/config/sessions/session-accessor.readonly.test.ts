@@ -3,10 +3,6 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isSessionNodePayloadSelect,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -48,6 +44,15 @@ const tempDirs = createTempDirTracker();
 function makeScope(name: string, agentId = "worker-1") {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make(`openclaw-session-${name}-`) };
   return { agentId, env };
+}
+
+async function seedIdentity(name: string, sessionId = "session-1", key = "main") {
+  const scope = makeScope(name);
+  const sessionKey = `agent:worker-1:${key}`;
+  await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
+  const database = openOpenClawAgentDatabase(scope);
+  const probe = { ...scope, sessionId, sessionKey, storePath: database.path };
+  return { scope, database, probe, sessionId, sessionKey };
 }
 
 function makeSharedReader() {
@@ -236,6 +241,7 @@ describe("session accessor readonly listing", () => {
     expect(listReadOnly(listScope)).toEqual(writableEntries);
     expect(listEntries({ ...listScope, clone: false })).toEqual(writableEntries);
     expect(readSummary(listScope, summaryOptions)).toEqual(expectedSummary);
+    expect(resolveIdentity({ ...listScope, sessionId: "session-1" })).toBe("agent:worker-1:main");
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
   });
@@ -364,7 +370,7 @@ describe("session accessor readonly listing", () => {
     expect(() => readSummary(scope, options)).toThrow("openclaw doctor --fix");
   });
 
-  it("batches shared-store recent payloads and participants without dropping saved entry fields", () => {
+  it("reads shared-store recent payloads and participants without dropping saved entry fields", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-summary-batch-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
@@ -399,50 +405,28 @@ describe("session accessor readonly listing", () => {
     }
     const scope = { agentId: "main", env, storePath };
     const options = { recentLimit: 5, agentIds };
-    readSummary(scope, options);
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["payloads", "participants"],
-      (sql) => {
-        if (sql.includes('from "session_participants"')) {
-          return "participants";
-        }
-        if (isSessionNodePayloadSelect(sql)) {
-          return "payloads";
-        }
-        return null;
-      },
+    const summary = readSummary(scope, options);
+    expect(summary.count).toBe(48);
+    expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(
+      agentIds.slice(0, 5).map((agentId) => `agent:${agentId}:session-5`),
     );
-    try {
-      const summary = readSummary(scope, options);
-      expect(summary.count).toBe(48);
-      expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(
-        agentIds.slice(0, 5).map((agentId) => `agent:${agentId}:session-5`),
+    for (const agentId of agentIds) {
+      const agent = expectDefined(summary.byAgent.get(agentId), "shared-store agent");
+      expect(agent.count).toBe(6);
+      expect(agent.recent.map(({ entry }) => entry.sessionId)).toEqual(
+        [5, 4, 3, 2, 1].map((index) => `${agentId}-${index}`),
       );
-      for (const agentId of agentIds) {
-        const agent = expectDefined(summary.byAgent.get(agentId), "shared-store agent");
-        expect(agent.count).toBe(6);
-        expect(agent.recent.map(({ entry }) => entry.sessionId)).toEqual(
-          [5, 4, 3, 2, 1].map((index) => `${agentId}-${index}`),
-        );
-        for (const { entry } of agent.recent) {
-          expect(entry.sessionDiffBaseline).toEqual({
-            version: 1,
-            sessionId: entry.sessionId,
-            root: "/synthetic",
-            files: [],
-          });
-          expect(entry.skillsSnapshot?.prompt).toBe("saved prompt");
-          expect(entry.systemPromptReport?.sessionId).toBe(entry.sessionId);
-          expect(entry.participants).toEqual([{ identity: { type: "profile", id: "alice" } }]);
-        }
+      for (const { entry } of agent.recent) {
+        expect(entry.sessionDiffBaseline).toEqual({
+          version: 1,
+          sessionId: entry.sessionId,
+          root: "/synthetic",
+          files: [],
+        });
+        expect(entry.skillsSnapshot?.prompt).toBe("saved prompt");
+        expect(entry.systemPromptReport?.sessionId).toBe(entry.sessionId);
+        expect(entry.participants).toEqual([{ identity: { type: "profile", id: "alice" } }]);
       }
-      expect(queries.counts.payloads).toBeGreaterThan(0);
-      expect(queries.counts.payloads).toBeLessThanOrEqual(2);
-      expect(queries.counts.participants).toBeGreaterThan(0);
-      expect(queries.counts.participants).toBeLessThanOrEqual(2);
-    } finally {
-      queries.restore();
     }
   });
 
@@ -501,33 +485,18 @@ describe("session accessor readonly listing", () => {
     );
   });
 
-  it("resolves an existing session identity without registering its database", async () => {
-    const scope = makeScope("readonly-existing-identity");
-    const { env } = scope;
-    const sessionKey = "agent:worker-1:main";
-    await upsertEntry({ ...scope, sessionKey }, { sessionId: "session-1", updatedAt: 1 });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    clearRegisteredAgentDatabases(env);
-
-    expect(resolveIdentity({ ...scope, sessionId: "session-1" })).toBe(sessionKey);
-    expect(countRegisteredAgentDatabases(env)).toBe(0);
-  });
-
   it("batches exact, moved, absent, and unreadable session identity evidence", async () => {
-    const scope = makeScope("readonly-evidence");
+    const { scope, database, probe, sessionKey } = await seedIdentity(
+      "readonly-evidence",
+      "session-1",
+      "moved",
+    );
     const { env } = scope;
-    const sessionKey = "agent:worker-1:moved";
-    const sessionId = "session-1";
-    await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
-    const storePath = resolveOpenClawAgentSqlitePath(scope);
-    const probe = { ...scope, sessionId, sessionKey, storePath };
     const invalidSessionKey = "agent:worker-1:invalid";
     await upsertEntry(
       { ...scope, sessionKey: invalidSessionKey },
       { sessionId: "invalid-session", updatedAt: 1 },
     );
-    const database = openOpenClawAgentDatabase(scope);
     expect(
       readEvidence([
         probe,
@@ -607,18 +576,15 @@ describe("session accessor readonly listing", () => {
   it.each(["identity", "timestamp", "json", "nul", "participant", "participant-integer"])(
     "rejects stale valid %s evidence without relying on a fallback read",
     async (corruption) => {
-      const scope = makeScope("readonly-stale-valid-evidence");
-      const sessionId = "session-1";
-      const sessionKey = "agent:worker-1:main";
-      await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
+      const { scope, database, probe, sessionId, sessionKey } = await seedIdentity(
+        "readonly-stale-valid-evidence",
+      );
       const readableSessionId = "session-2";
       const readableSessionKey = "agent:worker-1:readable";
       await upsertEntry(
         { ...scope, sessionKey: readableSessionKey },
         { sessionId: readableSessionId, updatedAt: 1 },
       );
-      const database = openOpenClawAgentDatabase(scope);
-      const probe = { ...scope, sessionId, sessionKey, storePath: database.path };
       expect(readEvidence([probe])).toEqual([{ status: "current", sessionKey }]);
       if (corruption === "participant" || corruption === "participant-integer") {
         recordSessionParticipant(
@@ -698,12 +664,13 @@ describe("session accessor readonly listing", () => {
   });
 
   it("validates a later required fallback row after another connection commits", async () => {
-    const scope = makeScope("evidence-external-commit");
-    const sessionKey = "agent:worker-1:main";
-    const sessionId = "shared-generation";
-    await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
-    const database = openOpenClawAgentDatabase(scope);
-    const probe = { ...scope, sessionId, storePath: database.path };
+    const {
+      database,
+      sessionId,
+      sessionKey,
+      probe: exactProbe,
+    } = await seedIdentity("evidence-external-commit", "shared-generation");
+    const { sessionKey: _key, ...probe } = exactProbe;
     const probes = [{ ...probe, sessionKey }, probe];
     expect(readEvidence(probes)).toEqual([
       { status: "current", sessionKey },

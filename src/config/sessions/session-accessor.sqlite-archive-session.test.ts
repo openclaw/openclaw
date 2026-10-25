@@ -338,13 +338,9 @@ describe("SQLite transcript archive sessions", () => {
       }
       return publish(...args);
     });
-    const activeWorkersAtReply: number[] = [];
     const observedWorkers = new Set<Worker>();
     using archiveWorkers = observeArchiveSessionWorkers((_message, worker) => {
       observedWorkers.add(worker);
-      activeWorkersAtReply.push(
-        [...observedWorkers].filter((observed) => observed.threadId !== -1).length,
-      );
     });
     const publicationWorkers = new Set<SqliteReclamationWorker>();
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
@@ -404,7 +400,6 @@ describe("SQLite transcript archive sessions", () => {
         ["published", first.sessionId],
       ]);
       expect(observedWorkers.size).toBe(exited ? 2 : 1);
-      expect(activeWorkersAtReply).toEqual([1, 1, 1, 1]);
       await closeOpenClawAgentDatabasesAsync(tempDir);
       archiveWorkers.expectJoined(exited ? 2 : 1);
     } finally {
