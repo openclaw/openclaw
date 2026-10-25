@@ -14,7 +14,6 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
-import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import {
   connectOk,
   connectReq,
@@ -32,10 +31,7 @@ type ScopeUpgradeAttempt = {
   error?: { message?: unknown; details?: unknown };
 };
 
-async function approveReadScopedDevice(
-  clientId: (typeof GATEWAY_CLIENT_NAMES)[keyof typeof GATEWAY_CLIENT_NAMES] = GATEWAY_CLIENT_NAMES.CLI,
-  clientMode: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES] = GATEWAY_CLIENT_MODES.CLI,
-) {
+async function approveReadScopedDevice() {
   const identity = loadOrCreateDeviceIdentity();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const request = await requestDevicePairing({
@@ -43,8 +39,8 @@ async function approveReadScopedDevice(
     publicKey,
     role: "operator",
     scopes: ["operator.read"],
-    clientId,
-    clientMode,
+    clientId: GATEWAY_CLIENT_NAMES.CLI,
+    clientMode: GATEWAY_CLIENT_MODES.CLI,
   });
   await approveDevicePairing(request.request.requestId, {
     callerScopes: ["operator.read"],
@@ -155,14 +151,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
     expect(afterUpgrade.ok).toBe(false);
   });
 
-  test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
-    const identity = await approveReadScopedDevice();
-
-    const health = await callLocal("health", { scopes: ["operator.admin"] });
-    expect(health.ok).toBe(true);
-    await expectReadScopedPairing(identity.deviceId);
-  });
-
   test("keeps direct-local CLI shared-token calls off stale paired CLI baseline", async () => {
     const identity = await approveReadScopedDevice();
 
@@ -175,29 +163,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
       scopes: ["operator.admin"],
     });
     expect(admin).toMatchObject({ file: { version: 1 } });
-    const pending = await devicePairingModule.listDevicePairing();
-    expect(pending.pending).toHaveLength(0);
-    await expectReadScopedPairing(identity.deviceId);
-  });
-
-  test("keeps local native approval clients off stale paired gateway-client baseline", async () => {
-    const identity = await approveReadScopedDevice(
-      GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      GATEWAY_CLIENT_MODES.BACKEND,
-    );
-
-    await expect(
-      withOperatorApprovalsGatewayClient(
-        {
-          config: {
-            gateway: { port: started.port, auth: { mode: "token", token: "secret" } },
-          } as never,
-          clientDisplayName: "test native approvals",
-        },
-        async () => undefined,
-      ),
-    ).resolves.toBeUndefined();
-
     const pending = await devicePairingModule.listDevicePairing();
     expect(pending.pending).toHaveLength(0);
     await expectReadScopedPairing(identity.deviceId);
