@@ -82,10 +82,7 @@ function lastDelivery() {
   return delivery;
 }
 function expectLastDeliveryFields(fields: Record<string, unknown>) {
-  const delivery = lastDelivery();
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(Reflect.get(delivery, key)).toEqual(expected);
-  }
+  expect(lastDelivery()).toEqual(expect.objectContaining(fields));
 }
 function lastDeliveryPayload() {
   const payload = lastDelivery().payloads[0];
@@ -133,14 +130,10 @@ describe("routeReply", () => {
   });
 
   it.each([
-    { channel: "slack", aborted: true, error: "Reply routing aborted" },
-    {
-      channel: "webchat",
-      aborted: false,
-      error: "Webchat routing not supported for queued replies",
-    },
-    { channel: "", aborted: false, error: "Unknown channel: " },
-  ] as const)("records pre-I/O no-send for $error", async ({ channel, aborted, error }) => {
+    ["slack", true, "Reply routing aborted"],
+    ["webchat", false, "Webchat routing not supported for queued replies"],
+    ["", false, "Unknown channel: "],
+  ] as const)("records pre-I/O no-send for %s (aborted=%s)", async (channel, aborted, error) => {
     const controller = new AbortController();
     if (aborted) {
       controller.abort();
@@ -153,22 +146,14 @@ describe("routeReply", () => {
   });
 
   it.each([
-    {
-      name: "reasoning",
-      payload: { text: "step", isReasoning: true },
-      outcome: { delivered: false, suppressed: true },
-    },
-    {
-      name: "recorded silence",
-      payload: setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
-      outcome: {},
-    },
-    {
-      name: "invalid Slack blocks",
-      payload: { text: " ", channelData: { slack: { blocks: " " } } },
-      outcome: {},
-    },
-  ])("suppresses $name before delivery", async ({ payload, outcome }) => {
+    ["reasoning", { text: "step", isReasoning: true }, { delivered: false, suppressed: true }],
+    [
+      "recorded silence",
+      setReplyPayloadMetadata({ text: SILENT_REPLY_TOKEN }, { silentReply: true }),
+      {},
+    ],
+    ["invalid Slack blocks", { text: " ", channelData: { slack: { blocks: " " } } }, {}],
+  ] as const)("suppresses %s before delivery", async (_name, payload, outcome) => {
     expect(await expectSlackNoDelivery(payload)).toMatchObject(outcome);
   });
 
@@ -248,11 +233,11 @@ describe("routeReply", () => {
   });
 
   it.each([
-    { sameRoute: true, expectedReply: "999.000" },
-    { sameRoute: false, expectedReply: null },
-  ])(
-    "selects payload reply policy only for the same destination ($sameRoute)",
-    async ({ sameRoute, expectedReply }) => {
+    [true, "999.000"],
+    [false, null],
+  ] as const)(
+    "selects payload reply policy only for the same destination (%s)",
+    async (sameRoute, expectedReply) => {
       const payload = setReplyPayloadMetadata(
         { text: "hello", replyToId: "999.000" },
         {
@@ -304,8 +289,7 @@ describe("routeReply", () => {
 
     expect(res.ok).toBe(true);
     expect(lastDeliveryPayload().text).toBe("native command response");
-    const session = lastDelivery().session;
-    expect(session).toMatchObject({
+    expect(lastDelivery().session).toMatchObject({
       key: "agent:main:main",
       policyKey: "agent:main:slack:direct:U123",
       conversationType: "direct",
@@ -335,18 +319,18 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
   });
 
-  it.each([
-    {
-      name: "BTW",
-      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
-      expected: { text: "BTW\nQuestion: what is 17 * 19?\n\n323" },
-    },
-    {
-      name: "multiple media",
-      payload: { text: "caption", mediaUrls: ["a", "b"] },
-      expected: { text: "caption", mediaUrls: ["a", "b"] },
-    },
-  ])("preserves $name in the outbound payload", async ({ payload, expected }) => {
+  it.each<[string, RouteReplyParams["payload"], Partial<RouteReplyParams["payload"]>]>([
+    [
+      "BTW",
+      { text: "323", btw: { question: "what is 17 * 19?" } },
+      { text: "BTW\nQuestion: what is 17 * 19?\n\n323" },
+    ],
+    [
+      "multiple media",
+      { text: "caption", mediaUrls: ["a", "b"] },
+      { text: "caption", mediaUrls: ["a", "b"] },
+    ],
+  ])("preserves %s in the outbound payload", async (_name, payload, expected) => {
     await routeTestReply(payload);
     expectLastDeliveryFields({ channel: "slack" });
     expect(lastDeliveryPayload()).toMatchObject(expected);

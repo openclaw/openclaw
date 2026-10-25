@@ -257,15 +257,13 @@ it("suppresses tool-start typing in message mode until renderable text arrives",
 });
 
 it("suppresses typing when disabled", async () => {
-  for (const params of [{ mode: "never" }] as const) {
-    const { typing, signaler } = createTestSignaler(params.mode);
-    await signaler.signalRunStart();
-    await signaler.signalTextDelta("hi");
-    await signaler.signalReasoningDelta();
-    await signaler.signalExecutionActivity?.();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
-  }
+  const { typing, signaler } = createTestSignaler("never");
+  await signaler.signalRunStart();
+  await signaler.signalTextDelta("hi");
+  await signaler.signalReasoningDelta();
+  await signaler.signalExecutionActivity?.();
+  expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  expect(typing.startTypingOnText).not.toHaveBeenCalled();
 });
 
 function createCoalescer(config: Partial<BlockStreamingCoalescing> = {}) {

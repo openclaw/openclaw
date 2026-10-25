@@ -3,7 +3,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sandboxRuntime from "../../agents/sandbox/runtime-status.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import type { ReplyPayload } from "../types.js";
-import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
+import {
+  applyMixedDirectives,
+  createInlineDirectiveParams,
+} from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
@@ -51,45 +54,22 @@ function directiveParams(
   overrides: Partial<Parameters<typeof applyInlineDirectiveOverrides>[0]> = {},
 ): Parameters<typeof applyInlineDirectiveOverrides>[0] {
   const model = overrides.model ?? "gpt-5.5";
-  const sessionEntry = overrides.sessionEntry ?? { sessionId: "session-1", updatedAt: 1 };
-  const directives = parseInlineSessionDirectives(body);
   return {
-    ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
-    cfg: {},
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    agentCfg: {},
-    sessionEntry,
-    sessionStore: { "agent:main:main": sessionEntry },
-    sessionKey: "agent:main:main",
-    sessionScope: undefined,
-    isGroup: false,
-    allowTextCommands: true,
-    command: {
-      surface: "webchat",
+    ...createInlineDirectiveParams({
+      body,
+      cfg: {},
       channel: "webchat",
-      ownerList: [],
+      provider: "openai",
+      model,
+      sessionEntry: overrides.sessionEntry,
+      sessionKey: "agent:main:main",
       senderIsOwner: true,
-      isAuthorizedSender: true,
-      rawBodyNormalized: body,
-      commandBodyNormalized: body,
-    },
-    directives,
-    elevatedEnabled: true,
-    elevatedAllowed: true,
-    elevatedFailures: [],
-    defaultProvider: "openai",
-    defaultModel: model,
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model,
+    }),
+    ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
     modelState: createModelSelectionStateFixture({ agentCfg: {}, provider: "openai", model }),
     initialModelLabel: `openai/${model}`,
     formatModelSwitchEvent: (label) => label,
-    resolvedElevatedLevel: "off",
-    defaultActivation: () => "always",
-    contextTokens: 8192,
+    effectiveModelDirective: undefined,
     typing: createMockTypingController(),
     ...overrides,
   };

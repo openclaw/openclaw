@@ -354,10 +354,7 @@ describe("runReplyAgent media path normalization", () => {
     },
   );
 
-  it.each([
-    ["passes current inbound media as native images", false],
-    ["retains resolved images and skips unresolved attachments", true],
-  ] as const)("%s", async (_label, unresolvedAttachment) => {
+  it("passes resolved current images and skips unresolved attachments", async () => {
     const { tmpDir, imagePath } = await nativeImage();
     const attachment = (file: string) => ({
       path: file,
@@ -367,12 +364,9 @@ describe("runReplyAgent media path normalization", () => {
     await runTurn(
       {
         ...makeSessionContext(),
-        media: [
-          ...(unresolvedAttachment ? [attachment(path.join(tmpDir, "missing.png"))] : []),
-          attachment(imagePath),
-        ],
+        media: [attachment(path.join(tmpDir, "missing.png")), attachment(imagePath)],
       } as unknown as TemplateContext,
-      unresolvedAttachment ? "compare these images" : "describe this image",
+      "compare these images",
     );
 
     const call = nativeCall();
