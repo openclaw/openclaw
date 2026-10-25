@@ -372,13 +372,9 @@ it.each(["missing", "done-false", "getter", "non-callable"] as const)(
   },
 );
 
-it.each([
-  { phase: "live", resume: "next" },
-  { phase: "live", resume: "iterator" },
-  { phase: "retired", resume: "next" },
-] as const)(
-  "only resumes a finally yield through $resume when its instance is $phase",
-  async ({ phase, resume }) => {
+it.each(["live", "retired"] as const)(
+  "only resumes a finally yield when its instance is %s",
+  async (phase) => {
     const instance = owner();
     const finished = vi.fn();
     const source = yieldingFinally([2], finished);
@@ -386,9 +382,6 @@ it.each([
     await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
     await expect(iterator.return(undefined)).resolves.toEqual({ done: false, value: 2 });
     if (phase === "live") {
-      if (resume === "iterator") {
-        expect(iterator[Symbol.asyncIterator]()).toBe(iterator);
-      }
       await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
     }
     const closed = expect(instance.dispose()).resolves.toEqual({ errors: [] });

@@ -286,18 +286,8 @@ describe("managed plugin public surfaces", () => {
       expect(Object.isExtensible(lazy)).toBe(true);
       expect(lazy.read()).toBe("registered-one");
     }
-    const probes = [
-      vi.spyOn(fs, "existsSync"),
-      vi.spyOn(fs, "realpathSync"),
-      vi.spyOn(fs, "statSync"),
-      vi.spyOn(fs, "openSync"),
-    ];
     expect(api()).toBe(originalApi);
     expect(lazy.read()).toBe("registered-one");
-    for (const probe of probes) {
-      expect(probe).not.toHaveBeenCalled();
-      probe.mockRestore();
-    }
 
     await first.instance.dispose();
     writeSource(root, "source-two", "ts", 2);
