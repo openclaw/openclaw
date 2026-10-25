@@ -557,10 +557,11 @@ model.
   not selected as the default. Retry after reviewing its tool support or choose
   another model.
 - Platforms without a verified managed build should use an existing server.
-- Managed embedding server keeps exiting or is OOM-killed: serve embeddings
-  from an external [llmman](/providers/llmman#advanced-configuration) daemon
-  instead. It relaunches a dead backend on the next request, and the Gateway
-  manages no child process.
+- Managed embedding server keeps exiting, is OOM-killed, or the Gateway exits
+  when it starts the server: serve embeddings from an external
+  [llmman](/providers/llmman#advanced-configuration) daemon instead. It
+  relaunches a dead backend on the next request, and the Gateway manages no
+  child process.
 
 OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 
