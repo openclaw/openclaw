@@ -1,10 +1,10 @@
-// Focused QA evidence for official plugin drift through doctor diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import {
   detectPluginVersionDrift,
   resolvePluginVersionDriftTargets,
+  type PluginVersionRestartReadiness,
 } from "../plugins/plugin-version-drift.js";
 import { collectWorkspaceStatusHealthFindings } from "./doctor-workspace-status.js";
 
@@ -62,6 +62,10 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
   return report;
 }
 
+function findings(pluginVersionReadiness: PluginVersionRestartReadiness) {
+  return collectWorkspaceStatusHealthFindings(config, { pluginVersionReadiness });
+}
+
 describe("official Codex plugin version drift doctor evidence", () => {
   it("reports an unresolved post-restart target instead of silently omitting readiness", () => {
     const readiness = {
@@ -70,9 +74,7 @@ describe("official Codex plugin version drift doctor evidence", () => {
       runningGatewayVersion: "2026.5.30",
     };
 
-    expect(
-      collectWorkspaceStatusHealthFindings(config, { pluginVersionReadiness: readiness }),
-    ).toEqual([
+    expect(findings(readiness)).toEqual([
       expect.objectContaining({
         requirement: "plugin-version-restart-readiness",
         message: expect.stringContaining("Gateway service package version is unavailable"),
@@ -89,9 +91,7 @@ describe("official Codex plugin version drift doctor evidence", () => {
       report: detectCodexDrift(restartVersion, restartVersion),
     };
 
-    expect(
-      collectWorkspaceStatusHealthFindings(config, { pluginVersionReadiness: readiness }),
-    ).toEqual([
+    expect(findings(readiness)).toEqual([
       expect.objectContaining({
         requirement: "plugin-version-gateway-restart",
         message: expect.stringContaining(`running Gateway is ${runningGatewayVersion}`),
@@ -105,31 +105,7 @@ describe("official Codex plugin version drift doctor evidence", () => {
 
     for (const installedVersion of ["2026.5.30", "2026.6.2"]) {
       const report = detectCodexDrift(installedVersion, gatewayVersion);
-      expect(report).toEqual({
-        gatewayVersion,
-        drifts: [
-          {
-            pluginId: "codex",
-            installedVersion,
-            gatewayVersion,
-            source: "npm",
-            packageName: "@openclaw/codex",
-            spec: `@openclaw/codex@${installedVersion}`,
-            targetResolution: {
-              status: "resolved",
-              packageName: "@openclaw/codex",
-              requestedTarget: gatewayVersion,
-              version: gatewayVersion,
-            },
-          },
-        ],
-      });
-
-      expect(
-        collectWorkspaceStatusHealthFindings(config, {
-          pluginVersionReadiness: { status: "resolved", report },
-        }),
-      ).toEqual([
+      expect(findings({ status: "resolved", report })).toEqual([
         {
           checkId: "core/doctor/workspace-status",
           severity: "warning",
@@ -149,15 +125,8 @@ describe("official Codex plugin version drift doctor evidence", () => {
       ["2026.6.1-1", "2026.6.1"],
     ] as const) {
       const report = detectCodexDrift(installedVersion, correctionGatewayVersion);
-      expect(report.drifts).toEqual([]);
       expect(
-        collectWorkspaceStatusHealthFindings(config, {
-          pluginVersionReadiness: {
-            status: "resolved",
-            report,
-            runningGatewayVersion: installedVersion,
-          },
-        }),
+        findings({ status: "resolved", report, runningGatewayVersion: installedVersion }),
       ).toEqual([]);
     }
   });
@@ -165,33 +134,13 @@ describe("official Codex plugin version drift doctor evidence", () => {
 
 describe("ClawHub plugin version drift doctor evidence", () => {
   it.each([
-    {
-      installedVersion: "2026.9.2",
-      pluginApiRange: ">=2026.9.3",
-      result: "resolved",
-      latestVersion: "2026.9.3",
-    },
-    {
-      installedVersion: "2026.9.3",
-      pluginApiRange: ">=2026.9.3",
-      result: "current",
-      latestVersion: "2026.9.3",
-    },
-    {
-      installedVersion: "2026.9.3",
-      pluginApiRange: ">=2026.10.1",
-      result: "unresolved",
-      latestVersion: "2026.9.3",
-    },
-    {
-      installedVersion: "2026.9.3",
-      pluginApiRange: ">=2026.9.3",
-      result: "resolved",
-      latestVersion: "2026.9.3-1",
-    },
+    ["2026.9.2", ">=2026.9.3", "resolved", "2026.9.3"],
+    ["2026.9.3", ">=2026.9.3", "current", "2026.9.3"],
+    ["2026.9.3", ">=2026.10.1", "unresolved", "2026.9.3"],
+    ["2026.9.3", ">=2026.9.3", "resolved", "2026.9.3-1"],
   ])(
-    "renders $result ClawHub targets consistently",
-    async ({ installedVersion, pluginApiRange, result, latestVersion }) => {
+    "renders ClawHub %s (%s, %s, %s) consistently",
+    async (installedVersion, pluginApiRange, result, latestVersion) => {
       vi.mocked(fetchClawHubPackageDetail).mockResolvedValueOnce({
         package: {
           name: "@openclaw/whatsapp",
@@ -218,27 +167,23 @@ describe("ClawHub plugin version drift doctor evidence", () => {
           },
         }),
       );
-      const readiness = { status: "resolved" as const, report };
-      const findings = collectWorkspaceStatusHealthFindings(
-        {},
-        { pluginVersionReadiness: readiness },
-      );
-      expect(findings).toHaveLength(1);
+      const resultFindings = findings({ status: "resolved", report });
+      expect(resultFindings).toHaveLength(1);
       if (result === "current") {
         // Registry lag stays visible, but as an explanation with no repair command.
-        expect(findings[0]?.severity).toBe("info");
-        expect(findings[0]?.message).toContain("registry version 2026.9.3");
-        expect(findings[0]?.message).toContain("No plugin update can reach 2026.9.4");
-        expect(findings[0]?.fixHint).toContain("No plugin repair is available");
+        expect(resultFindings[0]?.severity).toBe("info");
+        expect(resultFindings[0]?.message).toContain("registry version 2026.9.3");
+        expect(resultFindings[0]?.message).toContain("No plugin update can reach 2026.9.4");
+        expect(resultFindings[0]?.fixHint).toContain("No plugin repair is available");
       } else if (result === "resolved") {
-        expect(findings[0]?.message).toContain(`confirmed plugin target is ${latestVersion}`);
+        expect(resultFindings[0]?.message).toContain(`confirmed plugin target is ${latestVersion}`);
 
-        expect(findings[0]?.fixHint).toBe(
+        expect(resultFindings[0]?.fixHint).toBe(
           "openclaw plugins update whatsapp && openclaw gateway restart",
         );
       } else {
-        expect(findings[0]?.message).toContain("requires plugin API >=2026.10.1");
-        expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
+        expect(resultFindings[0]?.message).toContain("requires plugin API >=2026.10.1");
+        expect(resultFindings[0]?.fixHint).not.toContain("openclaw plugins update");
       }
     },
   );

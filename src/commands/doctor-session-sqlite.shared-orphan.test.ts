@@ -20,6 +20,7 @@ import {
   seedRetainedSource,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
+  type DoctorSessionSqliteReport,
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
@@ -28,6 +29,20 @@ import { writeState } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const issues = (report: DoctorSessionSqliteReport) =>
+  report.targets.flatMap((target) => target.issues);
+const manifestTargets = (env: NodeJS.ProcessEnv) =>
+  listSessionSqliteMigrationManifestPaths(env).flatMap(
+    (file) => readSessionSqliteMigrationManifest(file)?.targets ?? [],
+  );
+const resolvePlugin = (env: NodeJS.ProcessEnv) =>
+  recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["fixture-plugin"] });
+const expectPreserved = (files: Map<string, Buffer>) => {
+  for (const [file, bytes] of files) {
+    expect(fs.readFileSync(file)).toEqual(bytes);
+  }
+};
 
 it("settles every receipt sharing an orphan archive after interrupted index publication", async () => {
   await withOpenClawTestState({ label: "shared-orphan-settlement" }, async (state) => {
@@ -92,11 +107,9 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
         expect(report.totals.importedEntries).toBe(0);
 
         await expect(settle()).resolves.toBeUndefined();
-        expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+        expect(issues(report)).toEqual([]);
         expectMissing(storePath, orphan);
-        const targets = listSessionSqliteMigrationManifestPaths(state.env).flatMap(
-          (file) => readSessionSqliteMigrationManifest(file)?.targets ?? [],
-        );
+        const targets = manifestTargets(state.env);
         const moves = originalTargets.map((target) => {
           expect(readReceipt(target)).toBeUndefined();
           const archived = targets
@@ -118,14 +131,10 @@ it("settles every receipt sharing an orphan archive after interrupted index publ
           expect(target.archivedLegacyStoreFiles).toHaveLength(1);
         }
         expect(report.totals.archivedLegacyStoreFiles).toBe(1);
-        await recordDeferredPluginMigrations({
-          env: state.env,
-          pending: [],
-          resolvedPluginIds: ["fixture-plugin"],
-        });
+        await resolvePlugin(state.env);
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         const repeated = await run();
-        expect(repeated.targets.flatMap((target) => target.issues)).toEqual([]);
+        expect(issues(repeated)).toEqual([]);
         expect(repeated.totals).toMatchObject({
           importedEntries: 0,
           archivedUnreferencedJsonlFiles: 0,
@@ -174,8 +183,7 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
       fs.writeFileSync(file, bytes);
     }
     const archivedMoves = (source: string) =>
-      listSessionSqliteMigrationManifestPaths(state.env)
-        .flatMap((file) => readSessionSqliteMigrationManifest(file)?.targets ?? [])
+      manifestTargets(state.env)
         .flatMap((entry) => entry.completedMoves)
         .filter((move) => move.sourcePath === source);
 
@@ -189,7 +197,7 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
         await settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
           authority.assertCurrent(),
         );
-        expect(report.targets.flatMap((entry) => entry.issues)).toEqual([]);
+        expect(issues(report)).toEqual([]);
       },
     });
     expectMissing(storePath, history, trajectory, pointer);
@@ -197,26 +205,20 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     expect(settledMoves).toHaveLength(1);
     const settledArchive = expectDefined(settledMoves[0], "pointer archive").archivePath;
     expect(fs.readFileSync(settledArchive)).toEqual(pointerBytes);
-    for (const [file, bytes] of untouched) {
-      expect(fs.readFileSync(file)).toEqual(bytes);
-    }
+    expectPreserved(untouched);
     for (const file of untouched.keys()) {
       fs.rmSync(file);
     }
-    await recordDeferredPluginMigrations({
-      env: state.env,
-      pending: [],
-      resolvedPluginIds: ["fixture-plugin"],
-    });
+    await resolvePlugin(state.env);
     const inspect = () => f.run("inspect");
-    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
+    expect(issues(await inspect())).toEqual([]);
 
     // Earlier releases archived the transcript but left its verified pointer live.
     writeState(state.env, [
       "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
     ]);
     fs.writeFileSync(pointer, pointerBytes);
-    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toContainEqual(
+    expect(issues(await inspect())).toContainEqual(
       expect.objectContaining({ code: "plugin_migration_source_retained" }),
     );
     await f.run();
@@ -226,7 +228,7 @@ it("archives unindexed history pointer sidecars with their receipt-bound transcr
     expect(
       fs.readFileSync(expectDefined(recovered[0], "stranded pointer archive").archivePath),
     ).toEqual(pointerBytes);
-    expect((await inspect()).targets.flatMap((entry) => entry.issues)).toEqual([]);
+    expect(issues(await inspect())).toEqual([]);
     const repeated = await f.run();
     expect(repeated.totals).toMatchObject({
       archivedTranscriptFiles: 0,
