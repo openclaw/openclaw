@@ -1,12 +1,13 @@
+import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import { detectAndLoadAgentHarnessPromptImages } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { getApiProvider, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
-import { registerModel, toolReplayMessages } from "./baseten.test-support.js";
+import { registerModel } from "./baseten.test-support.js";
 import basetenPlugin from "./index.js";
 
 const TEST_VALUE = "resolved-marker";
@@ -57,16 +58,17 @@ async function captureRegisteredRequest(params: {
   model: Model<"openai-completions">;
   reasoning: "off" | "low" | "high" | "max";
   simple?: boolean;
-  maxTokens?: number;
-  replay?: boolean;
   images?: Awaited<ReturnType<typeof detectAndLoadAgentHarnessPromptImages>>["images"];
+  options?: SimpleStreamOptions;
 }) {
   let body: Record<string, unknown> | undefined;
+  let headers: Headers | undefined;
   const fetchMock = vi
     .spyOn(globalThis, "fetch")
     .mockClear()
     .mockImplementation(async (input, init) => {
       const request = new Request(input, init);
+      headers = request.headers;
       expect(request.url).toBe("https://inference.baseten.co/v1/chat/completions");
       expect(request.method).toBe("POST");
       body = (await request.json()) as Record<string, unknown>;
@@ -75,6 +77,13 @@ async function captureRegisteredRequest(params: {
         { status: 200, headers: { "content-type": "text/event-stream" } },
       );
     });
+  const registry = createApiRegistry();
+  const completions = getApiProvider("openai-completions");
+  if (!completions) {
+    throw new Error("expected built-in Chat Completions adapter");
+  }
+  registry.registerApiProvider(completions);
+  const runtime = createNodeLlmRuntime(registry, { buildModelFetch: () => fetchMock });
   const wrap = params.simple
     ? params.provider.wrapSimpleCompletionStreamFn
     : params.provider.wrapStreamFn;
@@ -84,7 +93,7 @@ async function captureRegisteredRequest(params: {
     model: params.model,
     sourceApi: "openai-completions",
     thinkingLevel: params.reasoning,
-    streamFn: params.simple ? createOpenAICompletionsTransportStreamFn() : streamSimple,
+    streamFn: params.simple ? createOpenAICompletionsTransportStreamFn() : runtime.streamSimple,
   });
   if (!wrapped) {
     throw new Error("Registered Baseten stream wrapper is missing");
@@ -92,40 +101,60 @@ async function captureRegisteredRequest(params: {
   const stream = await wrapped(
     params.model,
     {
-      messages: params.replay
-        ? [
-            ...toolReplayMessages("live_probe"),
-            { role: "user", content: "Reply with exactly ok.", timestamp: 3 },
-          ]
-        : [
-            {
-              role: "user",
-              content: [{ type: "text", text: "Call live_probe." }, ...(params.images ?? [])],
-              timestamp: 0,
-            },
-          ],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Call live_probe." }, ...(params.images ?? [])],
+          timestamp: 0,
+        },
+      ],
       tools: [probeTool],
     },
     {
       apiKey: TEST_VALUE,
-      maxTokens: params.maxTokens ?? 256,
+      ...params.options,
+      maxTokens: 256,
       reasoning: params.reasoning,
-      onPayload: (payload) =>
-        params.replay
-          ? payload
-          : {
-              ...(payload as Record<string, unknown>),
-              tool_choice: { type: "function", function: { name: "live_probe" } },
-            },
+      onPayload: (payload) => ({
+        ...(payload as Record<string, unknown>),
+        tool_choice: { type: "function", function: { name: "live_probe" } },
+      }),
     },
   );
   const result = await stream.result();
   expect(result.stopReason, result.errorMessage).toBe("stop");
   expect(fetchMock).toHaveBeenCalledOnce();
-  return body;
+  return { body, headers };
 }
 
 describe("Baseten sparse live model transport", () => {
+  it.each<[SimpleStreamOptions, string]>([
+    [{ sessionId: "synthetic-session" }, "synthetic-session"],
+    [
+      { sessionId: "synthetic-session", headers: { "X-Session-Affinity": "caller-affinity" } },
+      "caller-affinity",
+    ],
+  ])("sends Baseten cache affinity in the real request: %j", async (options, expected) => {
+    const registered = await resolveSparseLiveModel();
+    const { headers } = await captureRegisteredRequest({
+      ...registered,
+      reasoning: "off",
+      options,
+    });
+    expect(headers?.get("x-session-affinity")).toBe(expected);
+  });
+
+  it("preserves sparse Pro capabilities and sends its thinking envelope", async () => {
+    const registered = await resolveSparseLiveModel("deepseek-ai/DeepSeek-V4-Pro-0813");
+    expect(registered.model.input).toEqual(["text"]);
+    const { body } = await captureRegisteredRequest({ ...registered, reasoning: "high" });
+    expect(body).toMatchObject({
+      model: "deepseek-ai/DeepSeek-V4-Pro-0813",
+      reasoning_effort: "high",
+      thinking: { type: "enabled" },
+    });
+  });
+
   it("forwards configured references through the registered live catalog", async () => {
     const fetchMock = mockCatalog([{ id: "chat-local", object: "model" }]);
     const provider = await registerSingleProviderPlugin(basetenPlugin);
@@ -157,7 +186,7 @@ describe("Baseten sparse live model transport", () => {
     async (reasoning) => {
       const { provider, model } = await resolveSparseLiveModel();
       for (const simple of [false, true]) {
-        const body = await captureRegisteredRequest({ provider, model, reasoning, simple });
+        const { body } = await captureRegisteredRequest({ provider, model, reasoning, simple });
         expect(body).toMatchObject({
           model: DEEPSEEK_V41_FLASH_MODEL_ID,
           max_tokens: 256,
@@ -192,7 +221,7 @@ describe("Baseten sparse live model transport", () => {
       maxTokens: 120_000,
       cost: { input: 0.37, output: 1.41, cacheRead: 0.011, cacheWrite: 0 },
     });
-    const body = await captureRegisteredRequest({
+    const { body } = await captureRegisteredRequest({
       provider,
       model,
       reasoning: "low",
@@ -204,31 +233,6 @@ describe("Baseten sparse live model transport", () => {
         content: expect.arrayContaining([
           { type: "image_url", image_url: { url: `data:image/png;base64,${image.data}` } },
         ]),
-      }),
-    );
-  });
-
-  it("sends the current Pro replay through its registered transport", async () => {
-    const { provider, model } = await resolveSparseLiveModel("deepseek-ai/DeepSeek-V4-Pro-0813");
-    const body = await captureRegisteredRequest({
-      provider,
-      model,
-      reasoning: "high",
-      maxTokens: 512,
-      replay: true,
-    });
-    expect(body).toMatchObject({
-      model: "deepseek-ai/DeepSeek-V4-Pro-0813",
-      max_tokens: 512,
-      reasoning_effort: "high",
-      thinking: { type: "enabled" },
-    });
-    expect(body).not.toHaveProperty("tool_choice");
-    expect(body?.messages).toContainEqual(
-      expect.objectContaining({
-        role: "assistant",
-        reasoning_content: "",
-        tool_calls: expect.any(Array),
       }),
     );
   });

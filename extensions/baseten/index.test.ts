@@ -1,10 +1,4 @@
-import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
-import {
-  createAssistantMessageEventStream,
-  getApiProvider,
-  type Context,
-  type SimpleStreamOptions,
-} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import {
   createRuntimeEnv,
   createTestWizardPrompter,
@@ -24,7 +18,6 @@ async function captureRegisteredPayloads(params: {
   modelId: string;
   authoredModel?: ModelDefinitionConfig;
   thinkingLevel?: "off" | "high" | "max" | "adaptive";
-  reasoningLevels: readonly ("off" | "high" | "max" | undefined)[];
   context?: Context;
 }) {
   const { provider, model } = await registerModel(params.modelId, undefined, params.authoredModel);
@@ -54,7 +47,7 @@ async function captureRegisteredPayloads(params: {
   if (!wrapped) {
     throw new Error("Baseten provider did not register a stream wrapper");
   }
-  for (const reasoning of params.reasoningLevels) {
+  for (const reasoning of ["off", "max", undefined] as const) {
     await wrapped(
       model,
       params.context ?? { messages: [] },
@@ -65,51 +58,6 @@ async function captureRegisteredPayloads(params: {
 }
 
 describe("Baseten provider registration", () => {
-  it.each<[SimpleStreamOptions, string]>([
-    [{ sessionId: "synthetic-session" }, "synthetic-session"],
-    [
-      { sessionId: "synthetic-session", headers: { "X-Session-Affinity": "caller-affinity" } },
-      "caller-affinity",
-    ],
-  ])("sends Baseten cache affinity in the real request: %j", async (options, expected) => {
-    const { provider, model } = await registerModel("deepseek-ai/DeepSeek-V4.1-Flash");
-    const registry = createApiRegistry();
-    const completions = getApiProvider("openai-completions");
-    if (!completions) {
-      throw new Error("expected built-in Chat Completions adapter");
-    }
-    registry.registerApiProvider(completions);
-    let sentHeaders: Headers | undefined;
-    const runtime = createNodeLlmRuntime(registry, {
-      buildModelFetch: () => async (_url, init) => {
-        sentHeaders = new Headers(init?.headers);
-        return new Response(JSON.stringify({ error: { message: "synthetic request captured" } }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    const wrapped = provider.wrapStreamFn?.({
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      streamFn: runtime.streamSimple,
-    });
-    if (!wrapped) {
-      throw new Error("expected registered Baseten stream wrapper");
-    }
-    const result = await (
-      await wrapped(
-        model,
-        { messages: [{ role: "user", content: "Synthetic question", timestamp: 1 }] },
-        { ...options, apiKey: "synthetic-unused-key" },
-      )
-    ).result();
-    expect(result.errorMessage).toContain("synthetic request captured");
-    expect(sentHeaders).toBeDefined();
-    expect(sentHeaders?.get("x-session-affinity")).toBe(expected);
-  });
-
   it.each([undefined, "replace"] as const)(
     "keeps registered %s setup separate from the public catalog preset",
     async (mode) => {
@@ -167,7 +115,6 @@ describe("Baseten provider registration", () => {
       const payloads = await captureRegisteredPayloads({
         modelId: "zai-org/GLM-5.2",
         thinkingLevel,
-        reasoningLevels: ["off", "max", undefined],
       });
       expect(payloads.map((p) => [p.chat_template_args, p.reasoning_effort])).toEqual([
         [{ preserve_me: true, enable_thinking: false }, "none"],
@@ -190,7 +137,6 @@ describe("Baseten provider registration", () => {
       const payloads = await captureRegisteredPayloads({
         modelId,
         authoredModel: legacy ? { ...current, id: modelId } : undefined,
-        reasoningLevels: ["off", "max", undefined],
         context: {
           tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
           messages: [
@@ -250,7 +196,7 @@ describe("Baseten provider registration", () => {
       provider.resolveThinkingProfile?.({ provider: "baseten", modelId, reasoning: true } as never);
     const deepseekLevels = [{ id: "off" }, { id: "low" }, { id: "high" }, { id: "max" }];
     const glmProfile = {
-      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
+      levels: ["off", "high", "max"].map((id) => ({ id })),
       defaultLevel: "off",
     };
     for (const [modelId, expected] of [
@@ -258,10 +204,7 @@ describe("Baseten provider registration", () => {
       ["deepseek-ai/DeepSeek-V4-Pro-0813", { levels: deepseekLevels }],
       [
         "moonshotai/Kimi-K2.6",
-        {
-          levels: [{ id: "off" }, { id: "low", label: "on" }],
-          defaultLevel: "off",
-        },
+        { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" },
       ],
       ["zai-org/GLM-5.2", glmProfile],
       ["zai-org/GLM-5.2-Fast", glmProfile],
