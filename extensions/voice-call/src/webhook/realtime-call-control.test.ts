@@ -13,6 +13,8 @@ import { makeBridge, makeCall, makeHandler } from "./realtime-call-control.test-
 import type { RealtimeCallHandler } from "./realtime-handler.js";
 import { sendCarrierStart } from "./realtime-handler.lifecycle.test-helpers.js";
 
+type BridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+
 async function openCall(call: CallRecord, handler: RealtimeCallHandler) {
   const stream = handler.issueStreamSession({
     providerName: "twilio",
@@ -49,13 +51,11 @@ async function connectCall(
   } = {},
 ) {
   const call = options.call ?? makeCall(providerCallId);
-  const created = createDeferred<Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]>();
-  const createBridge = vi.fn(
-    (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
-      created.resolve(request);
-      return makeBridge(options.bridge);
-    },
-  );
+  const created = createDeferred<BridgeRequest>();
+  const createBridge = vi.fn((request: BridgeRequest) => {
+    created.resolve(request);
+    return makeBridge(options.bridge);
+  });
   const fixture = makeHandler({ ...options, call, createBridge });
   const connection = await openCall(call, fixture.handler);
   await vi.waitFor(() => expect(createBridge).toHaveBeenCalledOnce());
@@ -76,11 +76,17 @@ async function flushCarrier(ws: WebSocket) {
   await pong;
 }
 
+async function sendFrames(ws: WebSocket, count: number, byte = 0x00) {
+  for (let i = 0; i < count; i++) {
+    sendAudio(ws, Buffer.alloc(160, byte));
+  }
+  await flushCarrier(ws);
+}
+
 const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
 describe("realtime call control over the Twilio stream", () => {
   it("abandons a pending realtime admission when carrier voicemail takes ownership", async () => {
-    const providerCallId = "CA-pending-playback";
-    const call = makeCall(providerCallId);
+    const call = makeCall("CA-pending-playback");
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const createBridge = vi.fn(() => makeBridge());
@@ -110,11 +116,7 @@ describe("realtime call control over the Twilio stream", () => {
     const consultResult = createDeferred<{ text: string }>();
     const handleBargeIn = vi.fn();
     const sendAudioToModel = vi.fn();
-    const {
-      handler,
-      ws,
-      request: callbacks,
-    } = await connectCall("CA-silent-consult", {
+    const { handler, ws, request } = await connectCall("CA-silent-consult", {
       nativeConsult: true,
       bridge: { handleBargeIn, sendAudio: sendAudioToModel },
     });
@@ -123,13 +125,10 @@ describe("realtime call control over the Twilio stream", () => {
       return consultResult.promise;
     });
     try {
-      const pending = callbacks?.runAgentConsult?.({ prompt: "Check reservation availability" });
+      const pending = request.runAgentConsult?.({ prompt: "Check reservation availability" });
       const signal = await consultStarted.promise;
-      callbacks?.onAudio?.(Buffer.alloc(160, 0xff));
-      for (let i = 0; i < 4; i += 1) {
-        sendAudio(ws, Buffer.alloc(160, 0x00));
-      }
-      await flushCarrier(ws);
+      request.onAudio?.(Buffer.alloc(160, 0xff));
+      await sendFrames(ws, 4);
       expect(sendAudioToModel).toHaveBeenCalledTimes(4);
       expect(handleBargeIn).not.toHaveBeenCalled();
       expect(signal?.aborted).toBe(false);
@@ -141,18 +140,11 @@ describe("realtime call control over the Twilio stream", () => {
   });
 
   it("pauses speech-idle hang-up while an agent consult is in flight", async () => {
-    const {
-      handler,
-      endCall,
-      request: callbacks,
-    } = await connectCall("CA-idle", {
-      idleHangupMs: 1_000,
-    });
-
+    const { handler, endCall, request } = await connectCall("CA-idle", { idleHangupMs: 1_000 });
     const consulted = createDeferred<{ text: string }>();
     handler.registerToolHandler("openclaw_agent_consult", () => consulted.promise);
-    callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-    callbacks?.onToolCall?.({
+    request.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+    request.onToolCall?.({
       itemId: "consult-idle",
       callId: "consult-idle",
       name: "openclaw_agent_consult",
@@ -167,12 +159,9 @@ describe("realtime call control over the Twilio stream", () => {
   });
 
   it("keeps the call alive while buffered assistant audio is still playing out", async () => {
-    const { endCall, request: callbacks } = await connectCall("CA-playout", {
-      idleHangupMs: 1_000,
-    });
-
+    const { endCall, request } = await connectCall("CA-playout", { idleHangupMs: 1_000 });
     // Three seconds of loud 8 kHz mu-law arrive at once; the pacer plays them out over time.
-    callbacks?.onAudio(Buffer.alloc(24_000, Buffer.from([0x00, 0x80])));
+    request.onAudio(Buffer.alloc(24_000, Buffer.from([0x00, 0x80])));
     await vi.advanceTimersByTimeAsync(2_500);
     expect(endCall).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
@@ -180,14 +169,9 @@ describe("realtime call control over the Twilio stream", () => {
   });
 
   it("keeps the call alive during sustained caller speech and ends after silence", async () => {
-    const { ws, endCall } = await connectCall("CA-sustained-speech", {
-      idleHangupMs: 1_000,
-    });
-
-    const loudFrame = Buffer.alloc(160, 0x00);
+    const { ws, endCall } = await connectCall("CA-sustained-speech", { idleHangupMs: 1_000 });
     for (let index = 0; index < 5; index += 1) {
-      sendAudio(ws, loudFrame);
-      await flushCarrier(ws);
+      await sendFrames(ws, 1);
       await vi.advanceTimersByTimeAsync(600);
       expect(endCall).not.toHaveBeenCalled();
     }
@@ -245,10 +229,7 @@ describe("realtime playback through carrier frames", () => {
       bridge: { triggerGreeting, sendAudio: forwardAudio },
     });
     request.onReady?.();
-    for (let i = 0; i < 200; i++) {
-      sendAudio(ws, Buffer.alloc(160, 0x00));
-    }
-    await flushCarrier(ws);
+    await sendFrames(ws, 200);
     await vi.advanceTimersByTimeAsync(3100);
     expect(triggerGreeting).toHaveBeenCalledTimes(1);
     expect(triggerGreeting.mock.calls[0]?.[0]).toContain("Sí, un momento");
@@ -274,13 +255,8 @@ describe("realtime playback through carrier frames", () => {
     });
     try {
       const closing = handler.prepareCarrierPlayback(call.callId);
-      const settled = vi.fn();
-      const late = handler.playVoicemail(call.callId, "too late")?.then(
-        () => settled("done"),
-        () => settled("closed"),
-      );
+      const late = expect(handler.playVoicemail(call.callId, "too late")).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toHaveBeenCalledWith("closed");
       await late;
       closed.resolve();
       await closing;
@@ -299,10 +275,7 @@ describe("realtime playback through carrier frames", () => {
     async (mode) => {
       const call = makeCall("CA-voicemail", {
         direction: "outbound",
-        metadata: {
-          voicemailManagedByHost: true,
-          answeredBy: "machine_end_beep",
-        },
+        metadata: { voicemailManagedByHost: true, answeredBy: "machine_end_beep" },
       });
       const triggerGreeting = vi.fn();
       const { handler, ws, request } = await connectCall("CA-voicemail", {
@@ -332,8 +305,7 @@ describe("realtime playback through carrier frames", () => {
         await vi.advanceTimersByTimeAsync(100);
       } else {
         for (let i = 0; i < 43; i++) {
-          sendAudio(ws, Buffer.alloc(160, 0xff));
-          await flushCarrier(ws);
+          await sendFrames(ws, 1, 0xff);
           request.onAudio(Buffer.alloc(160, mode === "silent" ? 0xff : 0x00));
           await vi.advanceTimersByTimeAsync(1000);
         }
