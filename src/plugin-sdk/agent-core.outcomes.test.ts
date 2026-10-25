@@ -1,7 +1,7 @@
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import {
   createTurnSequenceStream,
+  makeAssistantMessage,
   makeCall,
   makeTool,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
@@ -12,7 +12,6 @@ import {
 } from "../../packages/agent-core/src/internal-hooks.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolDefinition } from "../agents/sessions/tools/tool-definition-wrapper.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -222,15 +221,17 @@ it.each([
   const failureThrown = Promise.withResolvers<void>();
   const releaseSibling = Promise.withResolvers<void>();
   let siblingSettled = false;
-  let requests = 0;
+  const streamFn = vi.fn(
+    createTurnSequenceStream([
+      [makeCall("failing", "fail"), makeCall("sibling", "hold")],
+      [{ type: "text", text: "Continued" }],
+    ]),
+  );
   const agent = new Agent({
     initialState: {
       tools: toToolDefinitions([
         {
-          name: "failing",
-          label: "Failing tool",
-          description: "Synthetic failure",
-          parameters: Type.Object({}),
+          ...makeTool("failing"),
           async execute() {
             await siblingStarted.promise;
             failureThrown.resolve();
@@ -238,10 +239,7 @@ it.each([
           },
         },
         {
-          name: "sibling",
-          label: "Sibling tool",
-          description: "Synthetic accepted work",
-          parameters: Type.Object({}),
+          ...makeTool("sibling"),
           async execute() {
             siblingStarted.resolve();
             await releaseSibling.promise;
@@ -251,28 +249,7 @@ it.each([
         },
       ]).map((definition) => wrapToolDefinition(definition)),
     },
-    streamFn: (model) => {
-      const first = requests++ === 0;
-      const output = createAssistantMessageEventStream();
-      const message = {
-        role: "assistant" as const,
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: first
-          ? [
-              { type: "toolCall" as const, id: "fail", name: "failing", arguments: {} },
-              { type: "toolCall" as const, id: "hold", name: "sibling", arguments: {} },
-            ]
-          : [{ type: "text" as const, text: "Continued" }],
-        stopReason: first ? ("toolUse" as const) : ("stop" as const),
-        timestamp: 0,
-        usage: createZeroUsageFixture(),
-      };
-      output.push({ type: "done", reason: message.stopReason, message });
-      output.end();
-      return output;
-    },
+    streamFn,
   });
   const events: AgentEvent[] = [];
   agent.subscribe((event) => {
@@ -298,15 +275,13 @@ it.each([
   }
   expect(siblingSettled).toBe(true);
   expect(agent.state.isStreaming).toBe(false);
-  expect(requests).toBe(local ? 1 : 2);
-  expect(
-    events.some(
-      (event) =>
-        event.type === "message_end" &&
-        event.message.role === "toolResult" &&
-        event.message.toolCallId === "hold",
-    ),
-  ).toBe(true);
+  expect(streamFn).toHaveBeenCalledTimes(local ? 1 : 2);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "message_end",
+      message: expect.objectContaining({ role: "toolResult", toolCallId: "hold" }),
+    }),
+  );
 });
 
 it("preserves ordinary caller abort behavior", async () => {
@@ -358,20 +333,10 @@ it.each(["before-provider", "after-provider-abort"] as const)(
   "retains a local abort reason %s",
   async (phase) => {
     const failure = new SqliteWorkerError("Synthetic lost connection", "outcome-unknown");
-    const agent: Agent = new Agent({
+    const agent = new Agent({
       streamFn: () => {
         const stream = createAssistantMessageEventStream();
-        const model = agent.state.model;
-        const message = {
-          role: "assistant" as const,
-          content: [],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          stopReason: "aborted" as const,
-          timestamp: Date.now(),
-          usage: createZeroUsageFixture(),
-        };
+        const message = { ...makeAssistantMessage([]), stopReason: "aborted" as const };
         stream.push({ type: "error", reason: "aborted", error: message });
         stream.end();
         return stream;
