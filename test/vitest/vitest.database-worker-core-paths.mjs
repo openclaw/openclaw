@@ -77,6 +77,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/acp-retention.conformance.test.ts",
   "src/infra/database-engine/row-limit.conformance.test.ts",
   "src/infra/database-engine/scalar-portability.conformance.test.ts",
+  "src/infra/database-engine/session-owner-portability.conformance.test.ts",
+  "src/infra/database-engine/session-transcript-portability.conformance.test.ts",
   "src/infra/database-engine/text-comparison.conformance.test.ts",
   "src/infra/database-engine/migration-sql.conformance.test.ts",
   "src/infra/database-engine/voice-lookup.conformance.test.ts",

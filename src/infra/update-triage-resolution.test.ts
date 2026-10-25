@@ -7,10 +7,8 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { readDeferredPluginMigrationsAsync } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
-import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
-import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import type { UpdateRepairValidation } from "./update-repair-protocol.js";
 import {
   findActiveUpdateRun,
@@ -43,14 +41,6 @@ vi.mock("./update-run-reader.js", () => ({
   findActiveUpdateRun: vi.fn(),
   getUpdateRun: vi.fn(),
   readUpdateRunResolutionHistory: vi.fn(),
-}));
-const repairRuntime = vi.hoisted(() => ({
-  prepareUpdateRepairInference: vi.fn(),
-  runUpdateRepairTurn: vi.fn(),
-}));
-vi.mock("./update-repair-agent.runtime.js", () => ({
-  ...repairRuntime,
-  withUpdateRepairEnvironment: <T>(_target: unknown, operation: () => Promise<T>) => operation(),
 }));
 
 const FAILED_RUN_ID = "10000000-0000-4000-8000-000000000001";
@@ -139,30 +129,6 @@ function useGitTarget() {
   latestRun.after = { version: TARGET_VERSION, sha: TARGET_SHA };
 }
 
-function repair() {
-  return runUpdateRepairLoop({
-    target: {
-      installRoot: "/fixture/openclaw",
-      stateDir: "/fixture/state",
-      configPath: "/fixture/config.json",
-      workspaceDir: "/fixture/workspace",
-    },
-    context: { ...failure(), phase: "verifying", targetVersion: TARGET_VERSION },
-    validate: (signal) => validate(failure(), undefined, signal),
-  });
-}
-
-const successfulTurn = {
-  toolCalls: 1,
-  exitCode: 0,
-  envelope: {
-    model: "repair",
-    provider: "fixture",
-    final: 'REPAIR_RESULT: {"status":"fixed","summary":"Restored the missing runtime file."}',
-    status: "ok",
-  },
-};
-
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
@@ -191,24 +157,6 @@ beforeEach(() => {
   vi.mocked(resolveGatewayRestartProbeContext).mockResolvedValue({ config: {}, auth: undefined });
   vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(true);
   vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(TARGET_SHA));
-  repairRuntime.prepareUpdateRepairInference.mockResolvedValue({
-    ok: true,
-    route: { provider: "fixture", model: "repair" },
-    modelFallbacks: [],
-  });
-  repairRuntime.runUpdateRepairTurn.mockResolvedValue(successfulTurn);
-});
-
-it("requires repair when package admission is blocked", async () => {
-  vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
-    throw new Error("managed handoff lease database identity changed");
-  });
-  expectStopped(
-    await validate(),
-    "managed handoff lease database identity changed",
-    "`openclaw update repair`",
-  );
-  expect(validateDoctor).not.toHaveBeenCalled();
 });
 
 it("preserves post-core migration guidance", async () => {
@@ -327,29 +275,11 @@ it("requires a verified runtime and rollback receipt", async () => {
   await expectResolution(false);
 });
 
-it("skips repair after verified resolution", async () => {
-  expect(await repair()).toMatchObject({
-    status: "repaired",
-    attempts: [],
-    finalValidation: {
-      ok: true,
-      summary: expect.stringContaining("recorded by the updater"),
-    },
-  });
-  expect(repairRuntime.prepareUpdateRepairInference).not.toHaveBeenCalled();
-  expect(repairRuntime.runUpdateRepairTurn).not.toHaveBeenCalled();
-});
-
-it("revalidates runtime after a repair turn", async () => {
-  let runtimeErrors = ["Missing runtime file"];
-  vi.mocked(collectInstalledGlobalPackageErrors).mockImplementation(async () => [...runtimeErrors]);
-  repairRuntime.runUpdateRepairTurn.mockImplementationOnce(async () => {
-    runtimeErrors = [];
-    return successfulTurn;
-  });
-  expect(await repair()).toMatchObject({
-    status: "repaired",
-    finalValidation: { ok: true },
-    attempts: [{ turn: 1, toolCalls: 1, validation: { ok: true } }],
+it("rejects missing installed runtime files", async () => {
+  vi.mocked(collectInstalledGlobalPackageErrors).mockResolvedValue(["Missing runtime file"]);
+  expect(await validate()).toMatchObject({
+    ok: false,
+    score: -1,
+    summary: expect.stringContaining("Installed runtime verification failed: Missing runtime file"),
   });
 });

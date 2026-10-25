@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import { BoardView } from "../components/board/board-view.tsx";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../lib/board/view-types.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import "../styles.css";
 
 type Widget = BoardSnapshot["widgets"][number];
@@ -13,18 +14,15 @@ function makeWidget(
   sizeH: number,
   overrides: Partial<Widget> = {},
 ): Widget {
-  return {
+  return createBoardWidget({
     name,
     title: name.replaceAll("-", " ").replace(/^./, (letter) => letter.toUpperCase()),
     position,
     sizeW,
     sizeH,
     tabId: "overview",
-    contentKind: "html",
-    grantState: "none",
-    revision: 1,
     ...overrides,
-  };
+  });
 }
 
 const initialSnapshot: BoardSnapshot = {

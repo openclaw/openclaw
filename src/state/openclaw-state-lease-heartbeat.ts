@@ -21,6 +21,7 @@ import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -237,11 +238,19 @@ export function startOpenClawStateLeaseHeartbeat(
   let workerLoss: LeaseHeartbeatLoss | undefined;
   const lossDetail = () =>
     workerLoss ? ` (lossPath=${workerLoss.path}, lossOutcome=${workerLoss.outcome})` : "";
-  const fail = (error: Error) => {
+  const fail = (cause: Error) => {
     if (lossReported || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
     lossReported = true;
+    const error =
+      workerLoss?.leaseLoss && !(cause instanceof OpenClawStateLeaseError)
+        ? new OpenClawStateLeaseError(cause.message, {
+            code: "OPENCLAW_STATE_LEASE_LOST",
+            loss: workerLoss.leaseLoss,
+            cause,
+          })
+        : cause;
     Atomics.store(shared, state.status, state.lost);
     clearStartupTimers();
     cancelExpiry?.();

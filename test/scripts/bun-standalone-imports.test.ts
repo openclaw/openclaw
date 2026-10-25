@@ -38,6 +38,37 @@ function rewrite(contents: string, entries: Record<string, string> = embeddedPat
 }
 
 describe("standalone import relocation", () => {
+  it("relocates free CommonJS paths while preserving local bindings and property names", () => {
+    const source = `[
+      { __dirname, __filename },
+      (({ __dirname }) => __dirname)({ __dirname: "local" }),
+      ({ __dirname: "property" }).__dirname,
+      class { __dirname() { return "method"; } },
+    ];`;
+    const contents = rewrite(source);
+    const result = vm.runInNewContext(contents, {
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
+    });
+    expect(result[0]).toEqual({
+      __dirname: "/relocated-app/runtime/dist",
+      __filename: "/relocated-app/runtime/dist/entry.mjs",
+    });
+    expect(result[1]).toBe("local");
+    expect(result[2]).toBe("property");
+    expect(new result[3]()["__dirname"]()).toBe("method");
+  });
+
+  it.each([
+    'import { __dirname as directory } from "./value.mjs"; export { directory as __filename };',
+    'export { value as __dirname } from "./value.mjs";',
+    'export * as __filename from "./value.mjs";',
+    "__dirname: for (;;) { break __dirname; }",
+  ])("preserves module names and labels: %s", (source) => {
+    const contents = rewrite(source);
+    expect(() => parse(contents, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+    expect(contents).toBe(source);
+  });
+
   it("defers a known unrendered URL without inventing a runtime path", () => {
     const contents = rewriteStandaloneImports({
       contents: "(() => import.meta.url)",
@@ -135,7 +166,7 @@ holder.module._resolveFilename = original;
 
   it("keeps a typed root's published module URL while its compiler input is staged elsewhere", async () => {
     const rewritten = rewriteStandaloneImports({
-      contents: "(async () => [import.meta.url, await import(target)])",
+      contents: "(async () => [import.meta.url, await import(target), __dirname, __filename])",
       filename: `${runtimeRoot}/.typed-source/core/src/entry.ts`,
       physicalFilename: `${runtimeRoot}/dist/entry.js`,
       runtimeRoot,
@@ -150,8 +181,14 @@ holder.module._resolveFilename = original;
       __openclawStandaloneRootUrl: relocatedRoot,
       __openclawStandaloneImport: async (parent: string, target: string) =>
         new URL(target, parent).href,
+      __openclawStandaloneNativePath: (relative: string) => `/relocated-app/runtime/${relative}`,
     });
-    expect(await load()).toEqual([`${relocatedRoot}dist/entry.js`, `${relocatedRoot}dist/next.js`]);
+    expect(await load()).toEqual([
+      `${relocatedRoot}dist/entry.js`,
+      `${relocatedRoot}dist/next.js`,
+      "/relocated-app/runtime/dist",
+      "/relocated-app/runtime/dist/entry.js",
+    ]);
   });
 
   it("retains the import type witness without evaluating computed arguments again", async () => {

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -16,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { summarizeText } from "../plugin-sdk/speech-core.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -181,14 +181,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     agents: {
       entries: { main: {} },

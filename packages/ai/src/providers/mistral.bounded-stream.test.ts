@@ -1,6 +1,6 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
+import * as httpFixtures from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { serializeSse } from "./provider-stream.test-support.js";
@@ -10,17 +10,11 @@ const TOTAL = 18 * 1024 * 1024;
 
 async function withServer<T>(handler: http.RequestListener, run: (url: string) => Promise<T>) {
   const server = http.createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const url = await httpFixtures.listenLoopback(server);
   try {
-    return await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    return await run(url);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await httpFixtures.closeHttpServer(server);
   }
 }
 
