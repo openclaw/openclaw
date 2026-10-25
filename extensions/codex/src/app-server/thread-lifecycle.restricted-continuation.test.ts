@@ -6,7 +6,7 @@ import {
   protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { isJsonObject } from "./protocol.js";
-import { sessionBindingIdentity } from "./session-binding.js";
+import { sessionBindingIdentity, type CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -26,7 +26,10 @@ import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
 
 type ThreadBinding = Awaited<ReturnType<typeof startOrResumeThread>>;
+type Attempt = CodexAttemptThreadInput["params"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const safeDeny = { pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] };
+const resumed = (threadId: string) => ({ threadId, lifecycle: { action: "resumed" } });
 
 async function createFixture(rejectStartNumber?: number) {
   const tempDir = tempDirs.make("openclaw-codex-restricted-continuation-");
@@ -72,6 +75,8 @@ async function createFixture(rejectStartNumber?: number) {
   } satisfies Omit<CodexAttemptThreadInput, "params">;
   const identity = sessionBindingIdentity(attempt);
   const read = () => testCodexAppServerBindingStore.read(identity);
+  const patchBinding = (threadId: string, patch: Partial<CodexAppServerThreadBinding>) =>
+    testCodexAppServerBindingStore.mutate(identity, { kind: "patch", threadId, patch });
   const idle = async (binding: ThreadBinding, mode: "warm" | "cold") => {
     if (mode === "cold") {
       await fixture.endTurn(binding.threadId);
@@ -86,7 +91,7 @@ async function createFixture(rejectStartNumber?: number) {
     }
   };
   const start = (
-    patch: Partial<CodexAttemptThreadInput["params"]> = {},
+    patch: Partial<Attempt> = {},
     overrides: Partial<Omit<CodexAttemptThreadInput, "params">> = {},
   ) => startOrResumeThread({ ...common, ...overrides, params: { ...attempt, ...patch } });
   const calls = (method: string) => fixture.request.mock.calls.filter(([name]) => name === method);
@@ -107,10 +112,10 @@ async function createFixture(rejectStartNumber?: number) {
     expect(read()).toEqual(previous);
     await fixture.endTurn(temporary.threadId);
     const next = await durableStart("ordinary");
-    expect(next).toMatchObject({ threadId: durable.threadId, lifecycle: { action: "resumed" } });
+    expect(next).toMatchObject(resumed(durable.threadId));
     expect(read()?.threadId).toBe(durable.threadId);
   };
-  return { fixture, attempt, identity, read, idle, start, calls, expectIsolation };
+  return { fixture, attempt, patchBinding, read, idle, start, calls, expectIsolation };
 }
 
 afterEach(() => {
@@ -126,7 +131,7 @@ it.each([
   ["cold", "safe deny"],
   ["cold", "legacy"],
 ] as const)("continues a %s restricted conversation across %s policy", async (mode, change) => {
-  const { identity, read, idle, start, calls } = await createFixture();
+  const { patchBinding, read, idle, start, calls } = await createFixture();
   const rotate = change === "safe deny" || change === "legacy";
   const policy = change === "empty" ? { toolsAllow: [] } : {};
   const first = await start(policy);
@@ -138,18 +143,12 @@ it.each([
   const previous = read();
   await idle(first, mode);
   if (change === "legacy") {
-    await testCodexAppServerBindingStore.mutate(identity, {
-      kind: "patch",
-      threadId: first.threadId,
-      patch: { restrictedThreadConfigFingerprint: undefined },
-    });
+    await patchBinding(first.threadId, { restrictedThreadConfigFingerprint: undefined });
     expect(read()?.restrictedThreadConfigFingerprint).toBeUndefined();
   }
   const followup = {
     ...policy,
-    ...(change === "safe deny"
-      ? { pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }
-      : {}),
+    ...(change === "safe deny" ? safeDeny : {}),
   };
   const second = await start({
     ...followup,
@@ -173,7 +172,7 @@ it.each([
     ...followup,
     runId: change === "legacy" ? "after-upgrade" : rotate ? "recovered" : "follow-up",
   });
-  expect(next).toMatchObject({ threadId: expectedId, lifecycle: { action: "resumed" } });
+  expect(next).toMatchObject(resumed(expectedId));
   expect(read()).toMatchObject({
     threadId: expectedId,
     nativeToolPolicyRestricted: true,
@@ -194,13 +193,11 @@ it("keeps a protected warm policy usable after refusing the changed-deny trigger
   const unprotect = protectCodexAppServerLiveThread(fixture.client, first.threadId);
   fixture.request.mockClear();
   try {
-    await expect(
-      start({ pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }),
-    ).rejects.toThrow("claimed by active work");
+    await expect(start(safeDeny)).rejects.toThrow("claimed by active work");
     expect(read()).toEqual(previous);
     expect(isCodexAppServerLiveThreadClaimed(fixture.client, first.threadId)).toBe(false);
     const retry = await start({ runId: "original-policy" });
-    expect(retry).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+    expect(retry).toMatchObject(resumed(first.threadId));
     expect(
       fixture.request.mock.calls.some(([method]) =>
         ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
@@ -219,9 +216,7 @@ it("preserves the exact durable predecessor when a changed-policy fresh start fa
   const first = await start();
   const previous = read();
   await fixture.endTurn(first.threadId);
-  await expect(
-    start({ pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }),
-  ).rejects.toThrow("synthetic restricted successor creation failed");
+  await expect(start(safeDeny)).rejects.toThrow("synthetic restricted successor creation failed");
   expect(read()).toEqual(previous);
   expect(calls("thread/start")).toHaveLength(2);
 });
@@ -233,7 +228,7 @@ it.each([
   ["turn policy", { pluginHarnessToolPolicyScope: "turn" }],
   ["temporary empty allowlist", { toolsAllow: [], pluginHarnessToolPolicyScope: "turn" }],
   ["unscoped wildcard", { toolsAllow: ["*"], pluginHarnessToolPolicyScope: undefined }],
-] satisfies Array<[string, Partial<CodexAttemptThreadInput["params"]>]>)(
+] satisfies Array<[string, Partial<Attempt>]>)(
   "isolates initial and follow-up %s while retaining the durable conversation",
   async (_restriction, patch) => {
     const { start, expectIsolation } = await createFixture();
@@ -247,20 +242,16 @@ it.each([
 it.each(["legacy", "native restoration", "temporary"] as const)(
   "keeps the bound local provider through %s",
   async (transition) => {
-    const { fixture, attempt, identity, start, calls } = await createFixture();
+    const { fixture, attempt, patchBinding, start, calls } = await createFixture();
     attempt.provider = "codex";
     attempt.modelId = "local-model";
     const first = await start();
     await fixture.endTurn(first.threadId);
     expect(
-      await testCodexAppServerBindingStore.mutate(identity, {
-        kind: "patch",
-        threadId: first.threadId,
-        patch: {
-          model: "local-model",
-          modelProvider: "lmstudio",
-          ...(transition === "legacy" ? { restrictedThreadConfigFingerprint: undefined } : {}),
-        },
+      await patchBinding(first.threadId, {
+        model: "local-model",
+        modelProvider: "lmstudio",
+        ...(transition === "legacy" ? { restrictedThreadConfigFingerprint: undefined } : {}),
       }),
     ).toBe(true);
     await start(
@@ -291,9 +282,7 @@ it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
       start(
         {
           ...(policy ? { runId: "incognito-follow-up" } : {}),
-          ...(policy === "safe deny"
-            ? { pluginHarnessToolPolicySafeDeniedTools: ["image_generate"] }
-            : {}),
+          ...(policy === "safe deny" ? safeDeny : {}),
         },
         {
           developerInstructions: policy === "generic policy" ? "changed policy" : "generic policy",
@@ -308,7 +297,7 @@ it.each(["unchanged", "skills", "generic policy", "safe deny"] as const)(
       expect(hasCodexAppServerLiveThread(fixture.client, first.threadId)).toBe(true);
     }
     const next = await continueWith(rejected ? undefined : change);
-    expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+    expect(next).toMatchObject(resumed(first.threadId));
     expect(calls("thread/start")).toHaveLength(1);
     expect(calls("thread/resume")).toHaveLength(0);
     if (change === "skills") {
@@ -345,6 +334,6 @@ it("does not isolate an unrestricted scheduled turn", async () => {
     { ...params, pluginHarnessToolPolicyScope: "conversation", runId: "scheduled" },
     { nativeCodeModeEnabled: true },
   );
-  expect(next).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+  expect(next).toMatchObject(resumed(first.threadId));
   expect(next.lifecycle.preserveExistingBinding).toBeUndefined();
 });

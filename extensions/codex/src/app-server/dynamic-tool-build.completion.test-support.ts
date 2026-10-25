@@ -121,6 +121,13 @@ export function registerCodexCompletionCommandTest() {
             tools,
             signal: new AbortController().signal,
           });
+          const savedGoal = async () =>
+            (
+              await getSessionEntryAsync({
+                sessionKey: expectDefined(params.sessionKey, "Goal session key"),
+                agentId: "main",
+              })
+            )?.goal;
           expect(buildCodexRuntimeThreadConfig(undefined)["features.goals"]).toBe(false);
           const registeredNames = flattenCodexDynamicToolFunctions(bridge.specs).map(
             (tool) => tool.name,
@@ -144,14 +151,7 @@ export function registerCodexCompletionCommandTest() {
               success: false,
             });
             expect(await call("get_goal", {})).toMatchObject({ success: true });
-            expect(
-              (
-                await getSessionEntryAsync({
-                  sessionKey: expectDefined(params.sessionKey, "Goal session key"),
-                  agentId: "main",
-                })
-              )?.goal,
-            ).toEqual(existingGoal);
+            expect(await savedGoal()).toEqual(existingGoal);
             expect(params.config.tools).toEqual(configuredPolicy);
             return;
           }
@@ -164,12 +164,7 @@ export function registerCodexCompletionCommandTest() {
           expect(
             await call("create_goal", { objective: "Verify the synthetic fixture" }),
           ).toMatchObject({ success: true });
-          const active = (
-            await getSessionEntryAsync({
-              sessionKey: expectDefined(params.sessionKey, "Goal session key"),
-              agentId: "main",
-            })
-          )?.goal;
+          const active = await savedGoal();
           expect(active).toMatchObject({
             status: "active",
             objective: "Verify the synthetic fixture",
@@ -178,14 +173,7 @@ export function registerCodexCompletionCommandTest() {
           expect(await call("update_goal", { status: "complete" })).toMatchObject({
             success: true,
           });
-          expect(
-            (
-              await getSessionEntryAsync({
-                sessionKey: expectDefined(params.sessionKey, "Goal session key"),
-                agentId: "main",
-              })
-            )?.goal,
-          ).toMatchObject({
+          expect(await savedGoal()).toMatchObject({
             id: active?.id,
             status: "complete",
           });

@@ -13,6 +13,7 @@ import {
 import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
+  agentMessage,
   childTurnCompletedNotification,
   createRuntime,
   directSpawnItem,
@@ -39,6 +40,22 @@ import {
 } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
+
+function parentParams(name: string) {
+  return createParams(path.join(tempDir, `${name}.jsonl`), path.join(tempDir, "workspace"));
+}
+
+function interceptRetention(
+  action: (retain: (stopped?: boolean) => Promise<boolean>, stopped?: boolean) => Promise<boolean>,
+) {
+  const prepare = attemptResources.prepareCodexAttemptResources;
+  vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
+    const resources = prepare(prompt);
+    const retain = resources.retainThreadSubscription;
+    resources.retainThreadSubscription = (stopped) => action(retain, stopped);
+    return resources;
+  });
+}
 
 function createParentHarness() {
   const runtime = createRuntime();
@@ -100,10 +117,7 @@ function createParentHarness() {
 
 describe("Codex parent continuation with native child custody", () => {
   it("observes the active parent through its canonical store rather than the legacy selector", async () => {
-    const params = createParams(
-      path.join(tempDir, "roster.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = parentParams("roster");
     await seedRunSessionOwnerForTest(params.sessionId, params.sessionKey!);
     const storePath = resolveStorePath(undefined, { agentId: "main" });
     params.sessionTarget = {
@@ -147,10 +161,9 @@ describe("Codex parent continuation with native child custody", () => {
   it.each([false, true])(
     "continues an interrupted parent and delivers its child's result (warm: %s)",
     async (warm) => {
-      const sessionFile = path.join(tempDir, "parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const abort = new AbortController();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = parentParams("parent");
+      const { sessionFile, workspaceDir } = params;
       params.abortSignal = abort.signal;
       params.agentHarnessCompletionScope = {
         requesterSessionKey: params.sessionKey!,
@@ -187,17 +200,8 @@ describe("Codex parent continuation with native child custody", () => {
       expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
       expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
       const childCompleted = childTurnCompletedNotification({
-        threadId: "child-thread",
-        turnId: "child-turn",
         status: "completed",
-        items: [
-          {
-            type: "agentMessage",
-            id: "child-result",
-            phase: "final_answer",
-            text: "child completed",
-          },
-        ],
+        items: [agentMessage("child-result", "child completed", "final_answer")],
       });
       await harness.notify(childCompleted);
       await completionAttempts.settle();
@@ -220,30 +224,23 @@ describe("Codex parent continuation with native child custody", () => {
   it.each(["binding", "lineage"] as const)(
     "does not publish an interrupted parent after its %s is replaced",
     async (replacement) => {
-      const sessionFile = path.join(tempDir, "replaced-parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const abort = new AbortController();
-      const params = createParams(sessionFile, workspaceDir);
+      const params = parentParams("replaced-parent");
+      const { sessionFile } = params;
       params.abortSignal = abort.signal;
-      const prepare = attemptResources.prepareCodexAttemptResources;
-      vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
-        const resources = prepare(prompt);
-        const retain = resources.retainThreadSubscription;
-        resources.retainThreadSubscription = async (afterConfirmedCancellation) => {
-          if (afterConfirmedCancellation) {
-            if (replacement === "binding") {
-              const binding = await readCodexAppServerBinding(sessionFile);
-              await writeCodexAppServerBinding(sessionFile, {
-                ...binding!,
-                threadId: "thread-successor",
-              });
-            } else {
-              await seedRunSessionOwnerForTest("session-successor", params.sessionKey!);
-            }
+      interceptRetention(async (retain, stopped) => {
+        if (stopped) {
+          if (replacement === "binding") {
+            const binding = await readCodexAppServerBinding(sessionFile);
+            await writeCodexAppServerBinding(sessionFile, {
+              ...binding!,
+              threadId: "thread-successor",
+            });
+          } else {
+            await seedRunSessionOwnerForTest("session-successor", params.sessionKey!);
           }
-          return retain(afterConfirmedCancellation);
-        };
-        return resources;
+        }
+        return retain(stopped);
       });
       const harness = createStartedThreadHarness();
       const run = runCodexAppServerAttempt(params);
@@ -267,9 +264,7 @@ describe("Codex parent continuation with native child custody", () => {
   it.each([false, true])(
     "settles a yielded parent under retained source authority (revoked: %s)",
     async (revoked) => {
-      const sessionFile = path.join(tempDir, "yielded-parent.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(sessionFile, workspaceDir);
+      const params = parentParams("yielded-parent");
       // Full host tool construction can exceed the lightweight fixture's 5s budget.
       params.timeoutMs = 30_000;
       params.agentId = "main";
@@ -291,16 +286,10 @@ describe("Codex parent continuation with native child custody", () => {
         },
       });
       params.hostCapabilities = host.capabilities;
-      const prepare = attemptResources.prepareCodexAttemptResources;
-      vi.spyOn(attemptResources, "prepareCodexAttemptResources").mockImplementation((prompt) => {
-        const resources = prepare(prompt);
-        const retain = resources.retainThreadSubscription;
-        resources.retainThreadSubscription = async (afterConfirmedStop) => {
-          host.close();
-          sourceRevoked = revoked;
-          return retain(afterConfirmedStop);
-        };
-        return resources;
+      interceptRetention(async (retain, stopped) => {
+        host.close();
+        sourceRevoked = revoked;
+        return retain(stopped);
       });
       const parent = createParentHarness();
       const { harness } = parent;
@@ -320,7 +309,7 @@ describe("Codex parent continuation with native child custody", () => {
         rawPayload: {
           hook_event_name: "PreToolUse",
           agent_id: "child-thread",
-          cwd: workspaceDir,
+          cwd: params.workspaceDir,
           tool_name: "Bash",
           tool_use_id: "child-first-tool",
           tool_input: { command: "allow-child" },

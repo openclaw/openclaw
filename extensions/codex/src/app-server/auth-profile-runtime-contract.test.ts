@@ -1,11 +1,8 @@
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT as contract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { beforeEach, expect, it, vi } from "vitest";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createAppServerHarness,
@@ -74,28 +71,26 @@ function setPreparedOpenAIRoute(
   authRequirement: "api-key" | "subscription",
   forwardedAuthProfileId?: string,
 ): void {
-  const runtimePlan = createCodexRuntimePlanFixture();
-  params.runtimePlan = {
-    ...runtimePlan,
-    auth: {
-      ...runtimePlan.auth,
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      selectedAuthMode: authRequirement,
-      ...(forwardedAuthProfileId ? { forwardedAuthProfileId } : {}),
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.4-codex",
-        api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
-        baseUrl:
-          authRequirement === "api-key"
-            ? "https://api.openai.com/v1"
-            : "https://chatgpt.com/backend-api/codex",
-        authRequirement,
-        requestTransportOverrides: "none",
-      },
+  const plan = createCodexRuntimePlanFixture();
+  plan.auth = {
+    ...plan.auth,
+    providerForAuth: "openai",
+    authProfileProviderForAuth: "openai",
+    selectedAuthMode: authRequirement,
+    ...(forwardedAuthProfileId ? { forwardedAuthProfileId } : {}),
+    modelRoute: {
+      provider: "openai",
+      modelId: "gpt-5.4-codex",
+      api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
+      baseUrl:
+        authRequirement === "api-key"
+          ? "https://api.openai.com/v1"
+          : "https://chatgpt.com/backend-api/codex",
+      authRequirement,
+      requestTransportOverrides: "none",
     },
   };
+  params.runtimePlan = plan;
 }
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
@@ -123,19 +118,16 @@ function createAuthHarness(
 ) {
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenClientOptions: CodexAppServerClientOptions[] = [];
+  const responses: Record<string, unknown> = {
+    "config/read": { config: {}, origins: {}, layers: [] },
+    "configRequirements/read": { requirements: null },
+    [params.startMethod]: threadStartResult("thread-auth-contract", { cwd: "" }),
+    "turn/start": turnStartResult("turn-auth-contract"),
+  };
   const harness = createAppServerHarness(
     async (method) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === params.startMethod) {
-        return threadStartResult("thread-auth-contract", { cwd: "" });
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-auth-contract");
+      if (Object.hasOwn(responses, method)) {
+        return responses[method];
       }
       throw new Error(`unexpected method: ${method}`);
     },
@@ -162,7 +154,6 @@ function createAuthHarness(
 }
 
 setupRunAttemptTestHooks();
-afterEach(() => clearRuntimeConfigSnapshot());
 
 let sessionFile: string;
 let params: EmbeddedRunAttemptParams;
