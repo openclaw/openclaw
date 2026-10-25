@@ -62,15 +62,10 @@ afterEach(() => {
 const discover = (providers: Record<string, ProviderConfig>) =>
   vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue(providers);
 
-const defaultModel = modelDefinition("gpt-5.5", {
-  name: "GPT-5.5",
-  contextWindow: 400000,
-  maxTokens: 128000,
-});
 const provider = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
   baseUrl: "https://api.openai.com/v1",
   api: "openai-responses",
-  models: [structuredClone(defaultModel)],
+  models: [modelDefinition("gpt-5.5")],
   ...overrides,
 });
 async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {}) {
@@ -95,9 +90,7 @@ describe("models-config planning", () => {
     providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
       "POLICY_ALIAS_API_KEY",
     );
-    discover({
-      "policy-alias": provider({ baseUrl: "https://policy.example/v1" }),
-    });
+    discover({ "policy-alias": provider({ baseUrl: "https://policy.example/v1" }) });
     await generate({
       pluginMetadataSnapshot: {
         ...createPluginMetadataSnapshotFixture(),
@@ -186,15 +179,14 @@ describe("models-config planning", () => {
   });
 
   it("keeps static catalog rows when an auth profile supplies the key", async () => {
-    const agentDir = "/tmp/openclaw-google-vertex-models-profile";
-    const vertex = provider({
-      baseUrl: "https://{location}-aiplatform.googleapis.com",
-      api: "google-vertex",
-      models: [modelDefinition("gemini-2.5-pro")],
+    discover({
+      "google-vertex": provider({
+        baseUrl: "https://{location}-aiplatform.googleapis.com",
+        api: "google-vertex",
+        models: [modelDefinition("gemini-2.5-pro")],
+      }),
     });
-    discover({ "google-vertex": vertex });
     const plan = await generate({
-      agentDir,
       authStore: {
         version: 1,
         profiles: {

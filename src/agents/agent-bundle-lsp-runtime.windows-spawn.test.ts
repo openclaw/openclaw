@@ -55,8 +55,7 @@ async function expectFailedRuntime(
     abortSignal: options.abortSignal,
   });
   try {
-    expect(runtime.sessions).toEqual([]);
-    expect(runtime.tools).toEqual([]);
+    expect(runtime).toMatchObject({ sessions: [], tools: [] });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(failure));
   } finally {
     await runtime.dispose();
@@ -80,7 +79,7 @@ it.each([
     resolve.mockReturnValue(program(shell));
     const abortSignal = new AbortController().signal;
     await expectFailedRuntime(
-      { command: "typescript-language-server", args: ["--stdio"], ...(env ? { env } : {}) },
+      { command: "typescript-language-server", args: ["--stdio"], env },
       { abortSignal },
     );
 
@@ -123,35 +122,46 @@ async function capturedChildEnv(env?: Record<string, string>, serverName?: strin
   sanitize.mockImplementation(realSanitize);
   vi.spyOn(ownedStdio, "createOwnedStdioProcess").mockImplementation(spawn);
   await expectFailedRuntime(
-    {
-      command: "typescript-language-server",
-      args: ["--stdio"],
-      ...(env ? { env } : {}),
-    },
-    serverName === undefined ? {} : { serverName },
+    { command: "typescript-language-server", args: ["--stdio"], env },
+    { serverName },
   );
   return spawn.mock.calls.at(-1)?.[0]?.env ?? {};
 }
 
+const warnings = () => vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+const warningFor = (warn: ReturnType<typeof warnings>, name: string) =>
+  warn.mock.calls.map(([entry]) => entry).find((entry) => entry.includes(`"${name}"`));
+
 describe.skipIf(process.platform === "win32")("bundle LSP child environment", () => {
-  it("withholds Gateway secrets while keeping process essentials", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "gateway-token-canary");
-    vi.stubEnv("OPENAI_API_KEY", "provider-key-canary");
-    vi.stubEnv("OP_CONNECT_TOKEN", "secret-manager-canary");
-    vi.stubEnv("PATH", "/usr/local/bin:/usr/bin");
-    vi.stubEnv("HOME", "/home/lsp-user");
-    vi.stubEnv("LC_ALL", "C.UTF-8");
-    vi.stubEnv("RUSTUP_HOME", "/opt/rustup");
-
+  it.each([
+    {
+      name: "Gateway secrets and process essentials",
+      retained: {
+        PATH: "/usr/local/bin:/usr/bin",
+        HOME: "/home/lsp-user",
+        LC_ALL: "C.UTF-8",
+        RUSTUP_HOME: "/opt/rustup",
+      },
+      withheld: {
+        OPENCLAW_GATEWAY_TOKEN: "gateway-token-canary",
+        OPENAI_API_KEY: "provider-key-canary",
+        OP_CONNECT_TOKEN: "secret-manager-canary",
+      },
+    },
+    {
+      name: "Go module/install dirs and host-policy exclusions",
+      retained: { GOMODCACHE: "/srv/go/mod", GOBIN: "/srv/go/bin" },
+      withheld: { GOPATH: "/srv/go", CARGO_HOME: "/srv/cargo" },
+    },
+  ])("filters $name", async ({ retained, withheld }) => {
+    for (const [key, value] of Object.entries({ ...retained, ...withheld })) {
+      vi.stubEnv(key, value);
+    }
     const env = await capturedChildEnv();
-
-    expect(env).not.toHaveProperty("OPENCLAW_GATEWAY_TOKEN");
-    expect(env).not.toHaveProperty("OPENAI_API_KEY");
-    expect(env).not.toHaveProperty("OP_CONNECT_TOKEN");
-    expect(env.PATH).toBe("/usr/local/bin:/usr/bin");
-    expect(env.HOME).toBe("/home/lsp-user");
-    expect(env.LC_ALL).toBe("C.UTF-8");
-    expect(env.RUSTUP_HOME).toBe("/opt/rustup");
+    expect(env).toMatchObject(retained);
+    for (const key of Object.keys(withheld)) {
+      expect(env).not.toHaveProperty(key);
+    }
   });
 
   it("still applies the server's configured env", async () => {
@@ -162,26 +172,11 @@ describe.skipIf(process.platform === "win32")("bundle LSP child environment", ()
       OPENAI_API_KEY: "server-owned",
     });
 
-    expect(env.LSP_LOG_LEVEL).toBe("verbose");
-    expect(env.OPENAI_API_KEY).toBe("server-owned");
-  });
-
-  it("keeps Go module and install dirs; the host env policy still drops GOPATH and CARGO_HOME", async () => {
-    vi.stubEnv("GOMODCACHE", "/srv/go/mod");
-    vi.stubEnv("GOBIN", "/srv/go/bin");
-    vi.stubEnv("GOPATH", "/srv/go");
-    vi.stubEnv("CARGO_HOME", "/srv/cargo");
-
-    const env = await capturedChildEnv();
-
-    expect(env.GOMODCACHE).toBe("/srv/go/mod");
-    expect(env.GOBIN).toBe("/srv/go/bin");
-    expect(env).not.toHaveProperty("GOPATH");
-    expect(env).not.toHaveProperty("CARGO_HOME");
+    expect(env).toMatchObject({ LSP_LOG_LEVEL: "verbose", OPENAI_API_KEY: "server-owned" });
   });
 
   it("withholds GRADLE_USER_HOME, which the host env policy alone lets a child inherit", async () => {
-    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const warn = warnings();
     vi.stubEnv("GRADLE_USER_HOME", "/srv/gradle");
 
     expect(realSanitize({ baseEnv: { GRADLE_USER_HOME: "/srv/gradle" } }).GRADLE_USER_HOME).toBe(
@@ -190,14 +185,12 @@ describe.skipIf(process.platform === "win32")("bundle LSP child environment", ()
     const env = await capturedChildEnv(undefined, "env-gradle-probe");
 
     expect(env).not.toHaveProperty("GRADLE_USER_HOME");
-    const message = warn.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => entry.includes('"env-gradle-probe"'));
+    const message = warningFor(warn, "env-gradle-probe");
     expect(message).toMatch(/GRADLE_USER_HOME[^:]*: refused by the host exec env policy/);
   });
 
   it("warns once per server with withheld names only, never values", async () => {
-    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const warn = warnings();
     vi.stubEnv(
       "HTTPS_PROXY",
       ["http://proxy-user", "proxy-pass-canary@proxy.example:3128"].join(":"),
@@ -229,15 +222,13 @@ describe.skipIf(process.platform === "win32")("bundle LSP child environment", ()
   });
 
   it("does not list a withheld name the server's env supplies", async () => {
-    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const warn = warnings();
     vi.stubEnv("ANDROID_HOME", "/srv/android");
     vi.stubEnv("DOTNET_ROOT", "/srv/dotnet");
 
     await capturedChildEnv({ ANDROID_HOME: "/bundle/android" }, "env-covered-probe");
 
-    const message = warn.mock.calls
-      .map(([entry]) => entry)
-      .find((entry) => entry.includes('"env-covered-probe"'));
+    const message = warningFor(warn, "env-covered-probe");
     expect(message).toContain("DOTNET_ROOT");
     expect(message).not.toContain("ANDROID_HOME");
   });

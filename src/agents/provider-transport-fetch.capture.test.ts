@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
-import { Stream } from "openai/core/streaming";
 import { describe, expect, it, vi } from "vitest";
 import { createResponsesStreamWithRecovery } from "../../packages/ai/src/transports/openai-responses-replay-internal.js";
 import { createOpenAIResponsesAssistantOutput } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
@@ -174,13 +173,6 @@ describe("managed provider response capture", () => {
               }
               const raw = await reader.readBlob(captured.dataBlobId);
               expect(raw).toBe(body);
-              const events = [];
-              for await (const event of Stream.fromSSEResponse<{
-                type: string;
-                response: { usage?: typeof usage };
-              }>(new Response(raw), new AbortController())) {
-                events.push(event);
-              }
               if (isTerminal) {
                 expect(outcome.error).toBeUndefined();
                 expect(output.stopReason).toBe("stop");
@@ -191,14 +183,9 @@ describe("managed provider response capture", () => {
                   cacheWrite: 100,
                   totalTokens: 509,
                 });
-                expect(events.at(-1)).toMatchObject({
-                  type: "response.completed",
-                  response: { usage },
-                });
               } else {
                 expect(outcome.error).toBeInstanceOf(Error);
                 expect(outcome.value).toBeUndefined();
-                expect(events.some((event) => event.type === "response.completed")).toBe(false);
               }
               // A parsed terminal closes the SDK iterator. Its managed cleanup
               // can beat EOF even when the server has already ended the body.

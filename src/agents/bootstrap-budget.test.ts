@@ -37,6 +37,15 @@ function analyze(
   return analyzeBootstrapBudget({ files, bootstrapMaxChars, bootstrapTotalMaxChars });
 }
 
+function injected(bootstrapFiles: WorkspaceBootstrapFile[], lengths: number[]) {
+  return buildBootstrapInjectionStats({
+    bootstrapFiles,
+    injectedFiles: bootstrapFiles.flatMap(({ path, content }, index) =>
+      lengths[index] === undefined ? [] : [{ path, content: content!.slice(0, lengths[index]) }],
+    ),
+  });
+}
+
 type TruncationReport = NonNullable<
   Parameters<typeof resolveBootstrapWarningSignaturesSeen>[0]
 >["bootstrapTruncation"];
@@ -50,7 +59,7 @@ const NOTICE = [
 describe("bootstrap budget", () => {
   it("composes configured limits, ordered injection stats, and warning state", () => {
     const bootstrapFiles: WorkspaceBootstrapFile[] = [
-      bootstrapFile("AGENTS.md", "a".repeat(8)),
+      bootstrapFile("AGENTS.md", "a".repeat(9)),
       bootstrapFile("SOUL.md", "b".repeat(8)),
     ];
 
@@ -58,13 +67,7 @@ describe("bootstrap budget", () => {
       config: {
         agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
       },
-      files: buildBootstrapInjectionStats({
-        bootstrapFiles,
-        injectedFiles: [
-          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
-          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
-        ],
-      }),
+      files: injected(bootstrapFiles, [9, 3]),
     });
 
     expect(state).toMatchObject({
@@ -74,6 +77,19 @@ describe("bootstrap budget", () => {
       bootstrapPromptWarning: { warningShown: true },
     });
     expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+    expect(
+      buildBootstrapTruncationReportMeta({
+        analysis: state.bootstrapAnalysis,
+        warning: state.bootstrapPromptWarning,
+      }),
+    ).toMatchObject({
+      warningMode: "always",
+      warningShown: true,
+      truncatedFiles: 1,
+      nearLimitFiles: 1,
+      promptWarningSignature: state.bootstrapPromptWarning.signature,
+      warningSignaturesSeen: [state.bootstrapPromptWarning.signature],
+    });
   });
 
   it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
@@ -88,10 +104,7 @@ describe("bootstrap budget", () => {
       },
     ];
 
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
-    });
+    const stats = injected(bootstrapFiles, [1_000]);
     const analysis = analyze(stats, 20_000, 1_000);
 
     expect(analysis.totals.injectedChars).toBe(1_000);
@@ -113,10 +126,7 @@ describe("bootstrap budget", () => {
       content: "remember",
       missing: false,
     } as unknown as WorkspaceBootstrapFile;
-    const stats = buildBootstrapInjectionStats({
-      bootstrapFiles: [pathOnlyFile],
-      injectedFiles: [{ path: pathOnlyFile.path, content: "remember" }],
-    });
+    const stats = injected([pathOnlyFile], [8]);
     expect(stats).toMatchObject([
       {
         name: "SELF_IMPROVEMENT_REMINDER.md",
@@ -220,25 +230,5 @@ describe("bootstrap budget", () => {
       previousSignature: "latest",
     }).bootstrapPromptWarning;
     expect(bounded.warningSignaturesSeen).toEqual([...history.slice(2), "latest", seen.signature]);
-  });
-
-  it("builds truncation report metadata from analysis + warning decision", () => {
-    const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
-      buildBootstrapBudgetState({
-        config: { agents: { defaults: { bootstrapMaxChars: 120, bootstrapTotalMaxChars: 200 } } },
-        files: [stat("AGENTS.md", 150, 100)],
-      });
-    const meta = buildBootstrapTruncationReportMeta({
-      analysis,
-      warning,
-    });
-    expect(meta).toMatchObject({
-      warningMode: "always",
-      warningShown: true,
-      truncatedFiles: 1,
-      nearLimitFiles: 1,
-      promptWarningSignature: warning.signature,
-      warningSignaturesSeen: [warning.signature],
-    });
   });
 });
