@@ -340,7 +340,7 @@ export function checkTokenDrift(params: {
   return null;
 }
 
-/** Compare inline snapshots only; generated env files retain their runtime precedence. */
+/** Compare recorded managed snapshots without changing supervisor precedence. */
 export function checkManagedServiceEnvDrift(params: {
   command: GatewayServiceCommand;
   durableEnvironment: Record<string, string | undefined> | undefined;
@@ -378,9 +378,6 @@ export function checkManagedServiceEnvDrift(params: {
     .filter(
       (key) =>
         !excluded.has(key) &&
-        hasInlineEnvironmentSource(
-          readEnvironmentValueSource(command.environmentValueSources, key),
-        ) &&
         installed.get(key) !== undefined &&
         !(durable.get(key) === undefined && secretRefs.has(key)) &&
         installed.get(key) !== durable.get(key),

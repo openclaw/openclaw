@@ -1,5 +1,9 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveLaunchAgentProgramArguments } from "../../daemon/launchd-plist.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
   createGatewayServiceRunArgs,
@@ -32,6 +36,7 @@ vi.mock("../../infra/restart-intent.js", async (importOriginal) => ({
   writeGatewayServiceRestartIntentSync: () => undefined,
 }));
 const { runServiceRestart } = await import("./lifecycle-core.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   mockSystemAccountHome();
@@ -60,13 +65,20 @@ it.each([
         }
       : {}),
   });
-  service.readCommand.mockResolvedValue({
-    programArguments: [],
-    environment: {
-      OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
-      TAVILY_API_KEY: "old-value",
+  const home = tempDirs.make("managed-env-drift-");
+  const envFile = path.join(home, "fixture.env");
+  await fs.writeFile(
+    envFile,
+    "export OPENCLAW_SERVICE_MANAGED_ENV_KEYS='TAVILY_API_KEY'\nexport TAVILY_API_KEY='old-value'\n",
+  );
+  const command = await resolveLaunchAgentProgramArguments(
+    {
+      ProgramArguments: ["/bin/sh", path.join(home, "fixture-env-wrapper.sh"), envFile, "node"],
     },
-  });
+    path.join(home, "fixture.plist"),
+  );
+  expect(command.environmentValueSources?.TAVILY_API_KEY).toBe("file");
+  service.readCommand.mockResolvedValue(command);
   await runServiceRestart(createGatewayServiceRunArgs(true));
   const output = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
   const payload = JSON.parse(output ?? "{}") as { warnings?: string[] };

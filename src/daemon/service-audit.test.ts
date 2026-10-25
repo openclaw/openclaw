@@ -556,7 +556,7 @@ describe("managed service environment drift", () => {
     { name: "removed value", durable: undefined, drift: true },
     { name: "exact whitespace", durable: "old-value ", drift: true },
     { name: "matching value", durable: "old-value", drift: false },
-    { name: "file-owned value", durable: "new-value", source: "file", drift: false },
+    { name: "generated file snapshot", durable: "new-value", source: "file", drift: true },
     {
       name: "overlapping inline value",
       durable: "new-value",
@@ -566,7 +566,13 @@ describe("managed service environment drift", () => {
     { name: "non-durable SecretRef", durable: undefined, secretRef: true, drift: false },
     { name: "durable SecretRef", durable: "new-value", secretRef: true, drift: true },
     { name: "dynamic systemd value", durable: "new-value", systemd: true, drift: false },
-    { name: "new unmanaged value", durable: "new-value", unrecorded: true, drift: false },
+    {
+      name: "unrecorded file value",
+      durable: "new-value",
+      source: "file",
+      unrecorded: true,
+      drift: false,
+    },
   ] as const)("$name", (scenario) => {
     const result = checkManagedServiceEnvDrift({
       command: {
