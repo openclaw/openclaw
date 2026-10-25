@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { memoryIndexCutoff } from "./memory-index-hook.js";
+import { memoryIndexCutoff, readMemoryIndex } from "./memory-index-hook.js";
 import { memoryFixture } from "./memory-provider.test-support.js";
+import type { Stores } from "./stores.js";
 import { useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
@@ -33,6 +34,37 @@ it("appends a byte-stable index for owner-private sessions until the cutoff move
     hookContext(f),
   );
   expect(refreshed.appendSystemContext).toContain("Saved during the session");
+});
+
+it("pins the index per physical store, so a binding moved to a fresh store renders its own", async () => {
+  let vaultId = "vault-shared";
+  const runtime = {
+    get vaultId() {
+      return vaultId;
+    },
+    enqueue: (check: () => void, operation: () => unknown) => {
+      check();
+      return operation();
+    },
+    client: { call: async () => ({ text: `index of ${vaultId}` }) },
+  };
+  // Mirrors the Stores member the hook uses: the binding stays, the physical store changes.
+  const stores = {
+    async open(_principal: unknown, _options: { provision: boolean }): Promise<unknown> {
+      return { kind: "ready", binding: "agent:main", runtime, access: { assertCurrent() {} } };
+    },
+  };
+  const ctx = {
+    agentId: "main",
+    sessionKey: `agent:main:pin-${randomUUID()}`,
+    sessionId: randomUUID(),
+    sandboxed: false,
+    memoryAudience: { kind: "owner-private" as const, agentId: "main" },
+    assertMemoryAudienceCurrent() {},
+  };
+  expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-shared");
+  vaultId = "vault-own";
+  expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-own");
 });
 
 it("keeps the rendered index byte-stable when a record is renamed mid-session", async () => {

@@ -88,7 +88,16 @@ export async function readMemoryIndex(
     return "";
   }
   const { runtime, access, binding } = opened;
-  const key = JSON.stringify([ctx.agentId, ctx.sessionKey, ctx.sessionId ?? null, binding, asOf]);
+  // A binding can move to a different physical store (share, then use own), so the
+  // vault identity keys the pin too.
+  const key = JSON.stringify([
+    ctx.agentId,
+    ctx.sessionKey,
+    ctx.sessionId ?? null,
+    binding,
+    runtime.vaultId,
+    asOf,
+  ]);
   const pinned = pinnedIndexes.get(key);
   if (pinned !== undefined) {
     access.assertCurrent();
