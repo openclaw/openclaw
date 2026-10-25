@@ -47,9 +47,10 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it.each([
-    { name: "uncapped", maxBytes: undefined },
-    { name: "bounded", maxBytes: 5 },
-  ])("yields during $name reads without losing the pinned file", async ({ maxBytes }) => {
+    { name: "uncapped", contents: "hello", maxBytes: undefined },
+    { name: "chunked", contents: "x".repeat(64 * 1024 + 1), maxBytes: 64 * 1024 + 1 },
+  ])("yields during $name reads without losing the pinned file", async ({ contents, maxBytes }) => {
+    await fs.writeFile(path.join(workspaceDir, "from.txt"), contents);
     const openRootFile = mockedOpenRootFile.getMockImplementation()!;
     const events: string[] = [];
     let heartbeat: Promise<void> | undefined;
@@ -75,26 +76,17 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(fsSync.fstatSync(fd).isFile()).toBe(true);
     };
 
-    let contents: Buffer;
+    let actual: Buffer;
     try {
-      contents = await bridge.readFile({ filePath: "from.txt", maxBytes });
+      actual = await bridge.readFile({ filePath: "from.txt", maxBytes });
       events.push("read-complete");
     } finally {
       await heartbeat;
       readGate = undefined;
     }
-    expect(contents).toEqual(Buffer.from("hello"));
+    expect(actual).toEqual(Buffer.from(contents));
     expect(events).toEqual(["event-loop", "read-complete"]);
     expect(() => fsSync.fstatSync(openedFd!)).toThrow(expect.objectContaining({ code: "EBADF" }));
-  });
-
-  it("reads bounded content across chunks", async () => {
-    const contents = "x".repeat(64 * 1024 + 1);
-    await fs.writeFile(path.join(workspaceDir, "from.txt"), contents);
-
-    await expect(
-      bridge.readFile({ filePath: "from.txt", maxBytes: contents.length }),
-    ).resolves.toEqual(Buffer.from(contents));
   });
 
   it("rejects negative limits without an unbounded read", async () => {
