@@ -2,7 +2,6 @@ import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -35,12 +34,7 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
-import {
-  boardFixture,
-  boardClient,
-  htmlWidget,
-  mcpContent,
-} from "./board-store.fixtures.test-support.js";
+import { boardFixture, htmlWidget, mcpContent } from "./board-store.fixtures.test-support.js";
 import type { BoardSnapshotWithHtmlViewMetadata } from "./board-store.js";
 import { closeBoardDatabases } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -55,15 +49,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function fixture() {
   const seeded = boardFixture(tempDirs.make("board-worker-mutations-"));
-  const store = new SqliteBoardStore({
-    resolveSession: () => ({ ...seeded.options, sessionKey: seeded.sessionKey }),
-    env: seeded.env,
-  });
   return {
     ...seeded,
-    ...boardClient(store, seeded.target),
     putHtml: (name: string, html = `<p>${name}</p>`) =>
-      store.putWidget(htmlWidget(seeded.sessionKey, name, html)),
+      seeded.store.putWidget(htmlWidget(seeded.sessionKey, name, html)),
   };
 }
 
@@ -195,17 +184,15 @@ it.each([false, true])(
           throw new Error("Board source changed");
         },
       });
-    const replaceSession = () =>
-      replaceSessionEntrySync(
-        { ...target, agentId: options.agentId, storePath: database.path },
-        { sessionId: "replacement-session", updatedAt: 2 },
-      );
     const pending = store.putWidget(
       { ...target, name: "app", content: mcpContent() },
       {
         assertCurrent,
         resolveMcpAppInteraction: async () => {
-          replaceSession();
+          replaceSessionEntrySync(
+            { ...target, agentId: options.agentId, storePath: database.path },
+            { sessionId: "replacement-session", updatedAt: 2 },
+          );
           return true;
         },
       },
@@ -289,11 +276,7 @@ it.each([false, true])(
     const { changes } = observed;
     await using writer = await holdWriter(options);
     const authority = new AbortController();
-    const params: BoardWidgetMaterializedPutParams = htmlWidget(
-      target.sessionKey,
-      "captured",
-      "<p>captured</p>",
-    );
+    const params = htmlWidget(target.sessionKey, "captured", "<p>captured</p>");
     const pending = writer.track(
       store.putWidget(params, { assertCurrent: () => authority.signal.throwIfAborted() }),
     );
@@ -348,12 +331,8 @@ it("preserves committed Boards and admits followers after publication cleanup is
     const final = await put("later");
     expect(final.revision).toBe(3);
     expect(final.widgets.map(({ name }) => name).toSorted()).toEqual(["first", "later", "queued"]);
-    expect(changes).toEqual(
-      Array.from({ length: 3 }, () => ({
-        sessionKey: target.sessionKey,
-        storePath: database.path,
-      })),
-    );
+    const change = { sessionKey: target.sessionKey, storePath: database.path };
+    expect(changes).toEqual([change, change, change]);
     await closeOpenClawAgentDatabasesAsync();
     const { resolvedWidgetName: _, ...snapshot } = final;
     expect(await store.getSnapshot(target)).toEqual(snapshot);
@@ -393,16 +372,13 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
 it("reads Board snapshots and documents without a write-capable publication", async () => {
   const { store, target, putHtml, document } = fixture();
   const put = await putHtml("status", "read-only");
-  using publication = vi
-    .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore")
-    .mockImplementation(() => {
-      throw new Error("Board read acquired a write-capable publication");
-    });
+  using _ = vi.spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore").mockImplementation(() => {
+    throw new Error("Board read acquired a write-capable publication");
+  });
   expect(await store.getSnapshotWithHtmlViewMetadata(target)).toMatchObject({
     snapshot: { revision: put.revision, widgets: [{ name: "status" }] },
   });
   expect(await document("status")).toMatchObject({ html: "read-only" });
-  publication.mockRestore();
 });
 
 it("refuses Board disclosure when its target changes during a read", async () => {
@@ -421,13 +397,12 @@ it("refuses Board disclosure when its target changes during a read", async () =>
     }),
     env: options.env,
   });
-  using interception = interceptSnapshotRead(() => {
+  using _ = interceptSnapshotRead(() => {
     sessionKey = "agent:main:replacement";
   });
   const consume = vi.fn();
   await expect(reader.useSnapshot(target, consume)).rejects.toThrow("board session changed; retry");
   expect(consume).not.toHaveBeenCalled();
-  interception.mockRestore();
 });
 
 it.each(["snapshot", "document"] as const)(
@@ -518,7 +493,7 @@ it.each(["mutation", "snapshot", "document"] as const)(
     const laterRoot = path.join(home, "later-state");
     const mixedEnv = { HOME: home, USERPROFILE: home, OpenClaw_State_Dir: env.OPENCLAW_STATE_DIR };
     const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
-    using clone = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((input) =>
+    using _ = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((input) =>
       // Exercise the Windows clone while paths and native SQLite retain the host platform.
       withMockedPlatform("win32", () => cloneEnv(input)),
     );
@@ -538,21 +513,17 @@ it.each(["mutation", "snapshot", "document"] as const)(
               document && "html" in document ? document.html : undefined,
             ),
     );
-    let settled = false;
-    const settledCallback = () => {
-      settled = true;
-    };
-    void pending.then(settledCallback, settledCallback);
+    const settled = vi.fn();
+    void pending.then(settled, settled);
     mixedEnv.OpenClaw_State_Dir = laterRoot;
     await setImmediate();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     await writer.release();
     expect(await pending).toBe(
       operation === "mutation" ? "queued" : operation === "snapshot" ? "initial" : "original",
     );
     expect(existsSync(path.join(home, ".openclaw"))).toBe(false);
     expect(existsSync(laterRoot)).toBe(false);
-    clone.mockRestore();
   },
 );
 
@@ -575,7 +546,7 @@ it("rejects a Board read through an alias when its physical database closes", as
   expect(getOpenClawAgentDatabaseIfOpen(aliasOptions)).toBeUndefined();
 
   let readCompleted = false;
-  using interception = interceptSnapshotRead(async (snapshot) => {
+  using _ = interceptSnapshotRead(async (snapshot) => {
     expect(snapshot?.snapshot.widgets).toEqual([
       expect.objectContaining({ name: "status", revision: 1 }),
     ]);
@@ -589,7 +560,6 @@ it("rejects a Board read through an alias when its physical database closes", as
   );
   expect(readCompleted).toBe(true);
   expect(consume).not.toHaveBeenCalled();
-  interception.mockRestore();
 });
 
 describe("batched Board writes", () => {
@@ -696,7 +666,7 @@ describe("Board source authority", () => {
     const options = { assertCurrent: authorization.assertCurrent };
     const write = (name: string, declared?: Declared) =>
       store.putWidget(
-        { ...target, name, content: { kind: "html", html: name }, declared },
+        { ...target, ...htmlWidget(target.sessionKey, name, name), declared },
         options,
       );
     return { source, target, store, memberId, authorize, authorization, options, write };
