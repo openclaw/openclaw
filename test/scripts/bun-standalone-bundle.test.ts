@@ -88,6 +88,7 @@ it.skipIf(!configuredBun && !hasBun)(
 import fs from "node:fs";
 import path from "node:path";
 import { bundleStandaloneModules } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-bundle.mjs", import.meta.url).href)};
+import { rewriteStandaloneImports } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-imports.mjs", import.meta.url).href)};
 import { createStandaloneNativeAdapter } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-native.mjs", import.meta.url).href)};
 import { createStandaloneSourceParser } from ${JSON.stringify(new URL("../../scripts/lib/bun-standalone-source-parser.mjs", import.meta.url).href)};
 const root = ${JSON.stringify(root)};
@@ -103,7 +104,7 @@ for (const directory of ["first", "second"]) {
   fs.writeFileSync(path.join(dependency, "runtime.wasm"), "synthetic resource");
   fs.writeFileSync(path.join(runtime, "fixture.bin"), "retained asset");
   fs.writeFileSync(path.join(runtime, "shared.cjs"), "module.exports = 2;");
-  fs.writeFileSync(path.join(runtime, "entry.mjs"), 'import { shared } from "fixture-native"; import asset from "./fixture.bin"; console.log(shared + require("./shared.cjs"), asset.endsWith(".bin"));');
+  fs.writeFileSync(path.join(runtime, "entry.mjs"), 'import { shared } from "fixture-native"; import asset from "./fixture.bin"; console.log(JSON.stringify([shared + require("./shared.cjs"), asset.endsWith(".bin"), __dirname, __filename]));');
   fs.writeFileSync(path.join(runtime, "worker.mjs"), 'import { shared } from "fixture-native"; console.log(shared + require("./shared.cjs") + 1);');
   const native = createStandaloneNativeAdapter({ runtimeRoot: runtime, parse: createStandaloneSourceParser() });
   const output = path.join(stage, "modules");
@@ -117,6 +118,13 @@ for (const directory of ["first", "second"]) {
     loader: { ".bin": "file" },
     metafile: true,
     naming: { entry: "[dir]/[name].[ext]", chunk: "chunks/[name]-[hash].[ext]" },
+    banner: 'globalThis.__openclawStandaloneNativePath = relative => "/relocated/runtime/" + relative;',
+    plugins: [{ name: "standalone-imports", setup(build) {
+      build.onLoad({ filter: /[.]m?js$/ }, ({ path: filename }) => ({
+        contents: rewriteStandaloneImports({ contents: fs.readFileSync(filename, "utf8"), filename, runtimeRoot: runtime, embeddedPaths: {}, moduleAliases: {}, workerThreadsShim: "", parse: createStandaloneSourceParser() }),
+        loader: "js",
+      }));
+    } }],
   }, Bun.build, createStandaloneSourceParser());
   assert.equal(built.success, true, String(built.logs));
   const resources = native.finalize({ metafile: built.runtimeMetafile }).files;
@@ -125,7 +133,7 @@ for (const directory of ["first", "second"]) {
   assert.ok(Object.values(files).includes("retained asset"));
   const child = Bun.spawnSync([process.execPath, path.join(output, "runtime/entry.js")]);
   assert.equal(child.exitCode, 0, child.stderr.toString());
-  assert.equal(child.stdout.toString().trim(), "42 true");
+  assert.deepEqual(JSON.parse(child.stdout.toString()), [42, true, "/relocated/runtime/.", "/relocated/runtime/entry.mjs"]);
   results.push({ files, resources });
 }
 assert.deepEqual(results[0], results[1]);

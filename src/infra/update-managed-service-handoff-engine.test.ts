@@ -44,6 +44,17 @@ afterEach(() => {
 });
 
 const itUnix = it.runIf(process.platform !== "win32");
+const failedUpdate = {
+  status: "error" as const,
+  mode: "npm" as const,
+  reason: "candidate-failed",
+  recovery: { serviceRestartSafe: true, version: "1.0.0" },
+};
+
+function expectNoConnection(contents: string) {
+  expect(contents).not.toContain(connection);
+  expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
+}
 
 async function writePostgresAnchor(pathname: string) {
   await fs.mkdir(path.dirname(pathname), { recursive: true });
@@ -165,12 +176,7 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
     controlDisconnect: "transferred",
     helperExitCode: 7,
     updaterNotification: "published",
-    updaterResult: {
-      status: "error",
-      mode: "npm",
-      reason: "candidate-failed",
-      recovery: { serviceRestartSafe: true, version: "1.0.0" },
-    },
+    updaterResult: failedUpdate,
     async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
       env.OPENCLAW_LOG_LEVEL = "debug";
       env.OPENCLAW_TEST_CONSOLE = "1";
@@ -202,20 +208,18 @@ describe.skipIf(!connection || process.platform === "win32")(
         let namespace: string | undefined;
         let anchorPath = "";
         let fixtureEnv: NodeJS.ProcessEnv | undefined;
-        const publishedAt = 1_800_000_000_000;
+        const published = {
+          status: outcome === "completed" ? ("ok" as const) : ("error" as const),
+          ts: 1_800_000_000_000,
+          message: "Published candidate result survives handoff.",
+          stats: { handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary" },
+        };
         try {
           const result = await runManagedServiceManagerBoundary("systemd", {
             controlDisconnect: "transferred",
             helperExitCode: outcome === "completed" ? 0 : 7,
-            updaterResult: {
-              status: "error",
-              mode: "npm",
-              reason: "candidate-failed",
-              recovery: { serviceRestartSafe: true, version: "1.0.0" },
-            },
-            ...(outcome === "completed"
-              ? { updaterExitCode: 0, updaterResult: { status: "ok", mode: "npm" } }
-              : {}),
+            updaterResult: outcome === "completed" ? { status: "ok", mode: "npm" } : failedUpdate,
+            ...(outcome === "completed" ? { updaterExitCode: 0 } : {}),
             async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
               fixtureEnv = env;
               const root = env.OPENCLAW_STATE_DIR!;
@@ -252,19 +256,12 @@ describe.skipIf(!connection || process.platform === "win32")(
                 const db = openOpenClawStateDatabase({ env }).db;
                 return getPostgresPhysicalFacts(db)!.namespace;
               });
-              if (["failure", "completed", "consumed", "foreign"].includes(outcome)) {
+              if (outcome !== "unavailable") {
                 await writeRestartSentinel(
                   {
+                    ...published,
                     kind: "update",
-                    status: outcome === "completed" ? "ok" : "error",
-                    ts: publishedAt,
-                    message: "Published candidate result survives handoff.",
-                    stats: {
-                      handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary",
-                      root,
-                      mode: "npm",
-                      reason: "candidate-failed",
-                    },
+                    stats: { ...published.stats, root, mode: "npm", reason: "candidate-failed" },
                   },
                   env,
                 );
@@ -309,8 +306,7 @@ export async function waitForGatewayUpdateRecovery(...args) {
               const { scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
               for (const file of [scriptPath, paramsPath]) {
                 const contents = await fs.readFile(file, "utf8");
-                expect(contents).not.toContain(connection);
-                expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
+                expectNoConnection(contents);
               }
               expect(JSON.stringify(args)).not.toContain(connection);
             },
@@ -318,27 +314,15 @@ export async function waitForGatewayUpdateRecovery(...args) {
               return withEngineStoreAdmission(() => readRestartSentinelPayload(env));
             },
           });
-          expect(result.log).not.toContain(connection);
-          expect(result.log).not.toMatch(/postgres(?:ql)?:\/\//);
-          const anchor = new DatabaseSync(anchorPath, { readOnly: true });
-          try {
+          expectNoConnection(result.log);
+          {
+            using anchor = new DatabaseSync(anchorPath, { readOnly: true });
             expect(
               anchor.prepare("SELECT name FROM sqlite_schema WHERE type = 'table'").all(),
             ).toEqual([{ name: "openclaw_engine_anchor" }]);
-          } finally {
-            anchor.close();
           }
           if (outcome === "completed" || outcome === "foreign") {
-            expect(result.sentinel).toMatchObject({
-              payload: {
-                status: outcome === "completed" ? "ok" : "error",
-                ts: publishedAt,
-                message: "Published candidate result survives handoff.",
-                stats: {
-                  handoffId: outcome === "foreign" ? "another-handoff" : "systemd-boundary",
-                },
-              },
-            });
+            expect(result.sentinel).toMatchObject({ payload: published });
             if (outcome === "foreign") {
               expect(result.log).toContain("belongs to another handoff");
             }
@@ -355,15 +339,11 @@ export async function waitForGatewayUpdateRecovery(...args) {
           }
           // The boundary fixture asserts the local handoff lease is gone before returning.
           for (const entry of await fs.readdir(fixtureEnv!.OPENCLAW_STATE_DIR!)) {
-            if (!entry.endsWith(".json")) {
-              continue;
+            if (entry.endsWith(".json")) {
+              expectNoConnection(
+                await fs.readFile(path.join(fixtureEnv!.OPENCLAW_STATE_DIR!, entry), "utf8"),
+              );
             }
-            const contents = await fs.readFile(
-              path.join(fixtureEnv!.OPENCLAW_STATE_DIR!, entry),
-              "utf8",
-            );
-            expect(contents).not.toContain(connection);
-            expect(contents).not.toMatch(/postgres(?:ql)?:\/\//);
           }
         } finally {
           if (namespace) {

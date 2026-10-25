@@ -6062,7 +6062,6 @@
 ["src/infra/update-triage-resolution.test.ts","./package-json.js","386044d6e14888a51f9f26c322c7500b14c610a1b098c0c6207e10da0d947166",1]
 ["src/infra/update-triage-resolution.test.ts","./update-git-runtime.js","93f0f1c984892968698524f10acd434cd3fb81fd6b7a28055e42cf87a9d5d24d",1]
 ["src/infra/update-triage-resolution.test.ts","./update-global.js","727f8821fa538041d05cd40b2bd4f84272b1c9ccfb5c1cf4cae32163ceae5232",1]
-["src/infra/update-triage-resolution.test.ts","./update-repair-agent.runtime.js","0dfb3aa29ba87240bcae35d46893db78b0d6e5e7b55108803f7fb7678f484685",1]
 ["src/infra/update-triage-resolution.test.ts","./update-run-reader.js","017a61f90453e130e0fdc6d8e36473b205f2feaaa911333f7095eadde775ebc3",1]
 ["src/infra/windows-diagnostic-env.test.ts","../process/exec.js","fcc21acc756cd3e486f04db7d609acc74052253d99316d8083c28931c837fa15",1]
 ["src/infra/worker-task-pool.cleanup.test.ts","./temp-artifact-cleanup.js","0ff0c0b0da42f80c7c504d64a56807a06a5aa6c83277ce1830d5c28e77bfa898",1]
