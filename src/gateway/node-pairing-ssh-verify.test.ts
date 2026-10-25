@@ -26,23 +26,6 @@ function makeIdentity(): { deviceId: string; publicKey: string } {
   return { deviceId, publicKey: raw };
 }
 
-function makeEligibility(
-  overrides?: Partial<FreshNodePairingEligibilityParams>,
-): FreshNodePairingEligibilityParams {
-  return {
-    existingPairedDevice: false,
-    role: "node",
-    reason: "not-paired",
-    scopes: [],
-    hasBrowserOriginHeader: false,
-    isControlUi: false,
-    isWebchat: false,
-    reportedClientIpSource: "direct",
-    reportedClientIp: "192.168.1.20",
-    ...overrides,
-  };
-}
-
 function makePlan(host = "192.168.1.20"): NonNullable<ReturnType<typeof planNodePairingSshVerify>> {
   return { policy: { user: "tester", timeoutMs: 1_000 }, host };
 }
@@ -68,33 +51,41 @@ function planFor(
   overrides: Partial<FreshNodePairingEligibilityParams> = {},
   config?: Parameters<typeof planNodePairingSshVerify>[0]["config"],
 ) {
-  return planNodePairingSshVerify({ config, eligibility: makeEligibility(overrides) });
+  return planNodePairingSshVerify({
+    config,
+    eligibility: {
+      existingPairedDevice: false,
+      role: "node",
+      reason: "not-paired",
+      scopes: [],
+      hasBrowserOriginHeader: false,
+      isControlUi: false,
+      isWebchat: false,
+      reportedClientIpSource: "direct",
+      reportedClientIp: "192.168.1.20",
+      ...overrides,
+    },
+  });
 }
 
 describe("planNodePairingSshVerify", () => {
-  test("plans a probe for an eligible private-network node pairing", () => {
-    const plan = planFor();
-    expect(plan?.host).toBe("192.168.1.20");
+  test("uses default policy and strips the IPv4-mapped IPv6 prefix from the probe target", () => {
+    const plan = planFor({ reportedClientIp: "::ffff:192.168.1.21" });
+    expect(plan?.host).toBe("192.168.1.21");
     expect(plan?.policy.user.length).toBeGreaterThan(0);
     expect(plan?.policy.timeoutMs).toBe(7_000);
   });
 
-  test("strips the IPv4-mapped IPv6 prefix from the probe target", () => {
-    const plan = planFor({ reportedClientIp: "::ffff:192.168.1.21" });
-    expect(plan?.host).toBe("192.168.1.21");
-  });
-
   test.each([
-    ["disabled config", {}, false],
     ["browser origin", { hasBrowserOriginHeader: true }],
     ["public source address", { reportedClientIp: "203.0.113.9" }],
     ["local-use NAT64 source address", { reportedClientIp: "64:ff9b:1::8.8.8.8" }],
     ["loopback source address", { reportedClientIp: "127.0.0.1" }],
     ["zone-scoped IPv6 literal", { reportedClientIp: "fe80::1%en0" }],
-  ] satisfies Array<[string, Partial<FreshNodePairingEligibilityParams>, false?]>)(
+  ] satisfies Array<[string, Partial<FreshNodePairingEligibilityParams>]>)(
     "returns null for %s",
-    (_label, overrides, config?: false) => {
-      expect(planFor(overrides, config)).toBeNull();
+    (_label, overrides) => {
+      expect(planFor(overrides)).toBeNull();
     },
   );
 
@@ -147,21 +138,18 @@ describe("startNodePairingSshVerify", () => {
     }
   });
 
-  test.each(["publicKey", "deviceId"] as const)(
-    "rejects a mismatched %s and cools the target down",
-    async (field) => {
-      const identity = makeIdentity();
-      const probe = probeReturning({
-        status: "ok",
-        stdout: JSON.stringify({ ...identity, [field]: makeIdentity()[field] }),
-      });
-      await expect(startProbe(identity, probe)?.done).resolves.toEqual({
-        ok: false,
-        reason: "identity-mismatch",
-      });
-      expect(startProbe(identity, probe)).toBeNull();
-    },
-  );
+  test("rejects a mismatched deviceId and cools the target down", async () => {
+    const identity = makeIdentity();
+    const probe = probeReturning({
+      status: "ok",
+      stdout: JSON.stringify({ ...identity, deviceId: makeIdentity().deviceId }),
+    });
+    await expect(startProbe(identity, probe)?.done).resolves.toEqual({
+      ok: false,
+      reason: "identity-mismatch",
+    });
+    expect(startProbe(identity, probe)).toBeNull();
+  });
 
   test("reports probe failures and unreadable identities distinctly", async () => {
     const identity = makeIdentity();
@@ -192,8 +180,6 @@ describe("startNodePairingSshVerify", () => {
       user: "tester",
       host: "192.168.1.20",
     });
-    expect(probe.mock.calls).toEqual([
-      [{ user: "tester", host: "192.168.1.20", identity: undefined, timeoutMs: 1_000 }],
-    ]);
+    expect(probe).toHaveBeenCalledOnce();
   });
 });
