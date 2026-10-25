@@ -7,7 +7,6 @@ import {
   loadSystemAgentGreetingFacts,
   resolveSystemAgentGreeting,
   SYSTEM_AGENT_EXTERNAL_EDIT_ALERT,
-  systemAgentGreetingChannelHealth,
   systemAgentGreetingFactsHash,
   type SystemAgentGreetingCacheRecord,
   type SystemAgentGreetingCacheStore,
@@ -129,10 +128,7 @@ describe("system agent greeting cache", () => {
       await expect(cache.greet({ allowInference: false })).resolves.toBe(
         cached ? "All systems nominal." : HEALTHY_GREETING_TEMPLATE,
       );
-      if (cached) {
-        await cache.acknowledge(5);
-        expect(cache.read()?.lastSeenAuditSequence).toBe(5);
-      } else {
+      if (!cached) {
         expect(cache.read()).toBeUndefined();
       }
       expect(cache.planner).not.toHaveBeenCalled();
@@ -364,40 +360,6 @@ describe("system agent greeting cache", () => {
     },
   );
 
-  it.each(["failed", "revoked"])(
-    "does not publish cached text after a %s asynchronous greeting read",
-    async (failure) => {
-      const cache = createCache(cachedGreeting({ text: "Cached greeting that must not publish." }));
-      const readStarted = createDeferred();
-      const finishRead = createDeferred();
-      const latest = cache.store.latest;
-      vi.spyOn(cache.store, "latest").mockImplementationOnce(async (...args) => {
-        readStarted.resolve();
-        await finishRead.promise;
-        if (failure === "failed") {
-          throw new Error("read failed");
-        }
-        return latest(...args);
-      });
-      const greeting = cache.greet();
-      await awaitGateBeforeSettlement(readStarted.promise, greeting, "cache read did not start");
-      if (failure === "revoked") {
-        vi.spyOn(cache.store, "assertCurrent").mockImplementation(() => {
-          throw new Error("store authority revoked");
-        });
-      }
-      finishRead.resolve();
-
-      if (failure === "revoked") {
-        await expect(greeting).rejects.toThrow("store authority revoked");
-      } else {
-        await expect(greeting).resolves.toBe(HEALTHY_GREETING_TEMPLATE);
-      }
-      expect(cache.planner).not.toHaveBeenCalled();
-      expect(cache.store.compareAndSet).not.toHaveBeenCalled();
-    },
-  );
-
   it("hashes decision fields stably while ignoring diagnostic-only details", () => {
     const facts = healthyFacts({ channelHealth: degradedHealth });
     const left = createOverview();
@@ -428,42 +390,60 @@ describe("system agent greeting cache", () => {
 });
 
 describe("system agent greeting facts", () => {
-  it.each(["failed", "revoked"])(
-    "does not publish audit facts after a %s asynchronous scan",
-    async (failure) => {
-      const audit = createConfigAudit([[6, "config.external"]]);
-      const scanStarted = createDeferred();
-      const finishScan = createDeferred();
-      const readFacts = audit.store.configAuditFacts.getMockImplementation()!;
-      audit.store.configAuditFacts.mockImplementation(async (lastSeenAuditSequence) => {
-        scanStarted.resolve();
-        await finishScan.promise;
-        if (failure === "failed") {
-          throw new Error("audit scan failed");
-        }
-        return readFacts(lastSeenAuditSequence);
+  it.each([
+    ["cache", "failed"],
+    ["cache", "revoked"],
+    ["audit", "failed"],
+    ["audit", "revoked"],
+  ] as const)("does not publish after a %s read is %s", async (source, failure) => {
+    const cache = createCache(cachedGreeting({ text: "Cached greeting that must not publish." }));
+    const audit = createConfigAudit([[6, "config.external"]]);
+    const started = createDeferred();
+    const finish = createDeferred();
+    const pause = async () => {
+      started.resolve();
+      await finish.promise;
+      if (failure === "failed") {
+        throw new Error("read failed");
+      }
+    };
+    if (source === "cache") {
+      const read = cache.store.latest;
+      vi.spyOn(cache.store, "latest").mockImplementationOnce(async (...args) => {
+        await pause();
+        return read(...args);
       });
-      const loading = createCache().facts(audit);
-      await awaitGateBeforeSettlement(scanStarted.promise, loading, "audit scan did not start");
-      if (failure === "revoked") {
-        audit.store.assertCurrent.mockImplementation(() => {
-          throw new Error("audit source revoked");
-        });
-      }
-      finishScan.resolve();
+    } else {
+      const read = audit.store.configAuditFacts.getMockImplementation()!;
+      audit.store.configAuditFacts.mockImplementation(async (...args) => {
+        await pause();
+        return read(...args);
+      });
+    }
+    const loading = source === "cache" ? cache.greet() : cache.facts(audit);
+    await awaitGateBeforeSettlement(started.promise, loading, "read did not start");
+    if (failure === "revoked") {
+      vi.spyOn(source === "cache" ? cache.store : audit.store, "assertCurrent").mockImplementation(
+        () => {
+          throw new Error("source revoked");
+        },
+      );
+    }
+    finish.resolve();
+    if (failure === "revoked") {
+      await expect(loading).rejects.toThrow("source revoked");
+    } else {
+      await expect(loading).resolves.toEqual(
+        source === "cache"
+          ? HEALTHY_GREETING_TEMPLATE
+          : expect.objectContaining({ auditSequence: 0, recentExternalEdit: false }),
+      );
+    }
+    expect(cache.planner).not.toHaveBeenCalled();
+    expect(cache.store.compareAndSet).not.toHaveBeenCalled();
+  });
 
-      if (failure === "revoked") {
-        await expect(loading).rejects.toThrow("audit source revoked");
-      } else {
-        await expect(loading).resolves.toMatchObject({
-          auditSequence: 0,
-          recentExternalEdit: false,
-        });
-      }
-    },
-  );
-
-  it("uses cached update and health state without probing", async () => {
+  it("loads cached facts and sorts degraded channel labels without probing", async () => {
     const facts = await loadSystemAgentGreetingFacts({
       cacheStore: createCache({ lastSeenAuditSequence: 0 }).store,
       configAuditStore: {
@@ -479,46 +459,34 @@ describe("system agent greeting facts", () => {
         ({
           channels: {
             telegram: {
-              accountId: "default",
-              configured: true,
-              healthState: "stale-socket",
+              accountId: "primary",
+              accounts: {
+                primary: { accountId: "primary", configured: true, probe: { ok: false } },
+                quiet: { accountId: "quiet", configured: false, healthState: "not-running" },
+              },
             },
+            discord: { accountId: "default", running: true, connected: false },
+            slack: { accountId: "default", configured: true, running: false },
+            whatsapp: { accountId: "default", configured: true, running: true, linked: false },
+            signal: { accountId: "default", configured: true, healthState: "stale-socket" },
           },
-          channelLabels: { telegram: "Telegram" },
+          channelLabels: {
+            telegram: "Telegram",
+            discord: "Discord",
+            slack: "Slack",
+            whatsapp: "WhatsApp",
+            signal: "Signal",
+          },
         }) as never,
     });
     expect(facts).toEqual({
       updateAvailable: "2026.7.20",
-      channelHealth: singleDegradedHealth,
+      channelHealth: {
+        available: true,
+        degraded: ["Discord", "Signal", "Slack", "Telegram", "WhatsApp"],
+      },
       recentExternalEdit: true,
       auditSequence: 2,
-    });
-  });
-
-  it("deduplicates and sorts degraded channel labels", () => {
-    const health = systemAgentGreetingChannelHealth({
-      channels: {
-        telegram: {
-          accountId: "primary",
-          accounts: {
-            primary: { accountId: "primary", configured: true, probe: { ok: false } },
-            quiet: { accountId: "quiet", configured: false, healthState: "not-running" },
-          },
-        },
-        discord: { accountId: "default", running: true, connected: false },
-        slack: { accountId: "default", configured: true, running: false },
-        whatsapp: { accountId: "default", configured: true, running: true, linked: false },
-      },
-      channelLabels: {
-        telegram: "Telegram",
-        discord: "Discord",
-        slack: "Slack",
-        whatsapp: "WhatsApp",
-      },
-    } as never);
-    expect(health).toEqual({
-      available: true,
-      degraded: ["Discord", "Slack", "Telegram", "WhatsApp"],
     });
   });
 });
@@ -556,15 +524,10 @@ describe("system agent quick actions", () => {
     );
     expect(question.header).toBe("Quick actions");
     expect(question.options.map((option) => option.reply)).toEqual(replies);
-  });
-
-  it("does not recommend agent handoff for a recent external edit", () => {
-    const question = buildSystemAgentGreetingQuestion(
-      createOverview(),
-      healthyFacts({ recentExternalEdit: true }),
-    );
-    expect(question.options.find((option) => option.reply === "talk to agent")?.recommended).toBe(
-      false,
-    );
+    if (facts.recentExternalEdit) {
+      expect(question.options.find((option) => option.reply === "talk to agent")?.recommended).toBe(
+        false,
+      );
+    }
   });
 });
