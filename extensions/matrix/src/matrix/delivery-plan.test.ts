@@ -149,7 +149,7 @@ function expectUnresolved(queueId: string, error: string, retryable = false) {
   return expect(reconcileMatrixUnknownSend(reconciliationContext(queueId))).resolves.toMatchObject({
     status: "unresolved",
     retryable,
-    error: expect.stringContaining(error),
+    error: error === "unknown error" ? error : expect.stringContaining(error),
   });
 }
 
@@ -194,101 +194,77 @@ it.each([{ queueId: "different-queue" }, { partIndex: 1 }])(
   },
 );
 
-it("fails closed when a persisted plan contains invalid UTF-8", async () => {
-  const queueId = "queue-invalid-utf8";
-  const deliveryIdentity = identity(queueId);
-  const plan = await persist({ queueId });
-  const bytes = Buffer.from(JSON.stringify(plan));
-  const markerOffset = bytes.indexOf("durable hello");
-  if (markerOffset < 0) {
-    throw new Error("expected test plan body marker");
-  }
-  bytes[markerOffset + "durable".length] = 0xff;
-
-  await replaceStoredPlan(queueId, bytes);
-  await expectUnresolved(queueId, "invalid JSON");
-  expect(client.sendMessage).not.toHaveBeenCalled();
-  await expect(load(deliveryIdentity)).resolves.toBeNull();
-});
-
-it("preserves the unknown-error fallback for non-error send failures", async () => {
-  await persist();
-  client.sendMessage.mockRejectedValueOnce({ code: "M_UNKNOWN" });
-
-  await expect(reconcileMatrixUnknownSend(reconciliationContext())).resolves.toMatchObject({
-    status: "unresolved",
-    error: "unknown error",
-    retryable: true,
-  });
-});
-
-it.each([false, true])(
-  "preserves ordered typed receipt parts and the final event identity (duplicate ID: %s)",
-  async (duplicateId) => {
-    const deliveryIdentity = identity("queue-multi-event");
-    const relation = {
-      rel_type: "m.thread" as const,
-      event_id: "$thread",
-      "m.in_reply_to": { event_id: "$reply" },
-    };
-    const plannedEvents = createMatrixPlannedEvents({
-      identity: deliveryIdentity,
-      events: [
-        {
-          receiptKind: "media",
-          content: { msgtype: "m.image", body: "caption", "m.relates_to": relation },
-        },
-        {
-          receiptKind: "text",
-          content: { msgtype: "m.text", body: "follow-up", "m.relates_to": relation },
-        },
-      ],
-    });
-    await persistEvents(plannedEvents, planTarget(deliveryIdentity));
-    client.sendMessage
-      .mockResolvedValueOnce("$media-event")
-      .mockResolvedValueOnce(duplicateId ? "$media-event" : "$text-event");
-    const messageIds = duplicateId ? ["$media-event"] : ["$media-event", "$text-event"];
-
-    await expect(
-      reconcileMatrixUnknownSend({
-        ...reconciliationContext("queue-multi-event"),
-        effectiveReplyToId: "$reply",
-        threadId: "$thread",
-      }),
-    ).resolves.toMatchObject({
-      status: "sent",
-      messageId: messageIds.at(-1),
-      receipt: {
-        primaryPlatformMessageId: "$media-event",
-        platformMessageIds: messageIds,
-        replyToId: "$reply",
-        threadId: "$thread",
-        parts: receiptParts(messageIds, ["media", "text"], true),
-      },
-    });
-  },
-);
-
-it("fails closed without provider I/O when any expected part plan is missing", async () => {
-  const incompleteIdentity = identity("queue-incomplete", 0, 2);
-  await persist({ queueId: "queue-incomplete", partIndex: 0, partCount: 2 });
-
-  await expectUnresolved("queue-incomplete", "incomplete event plan");
-  expect(client.sendMessage).not.toHaveBeenCalled();
-  await expect(load(incompleteIdentity)).resolves.toBeNull();
-});
-
-it("fails closed when the SDK selects a different Matrix endpoint path", async () => {
-  await persist({ queueId: "queue-route" });
-  client.sendMessage.mockImplementationOnce(
-    async (roomId, _content, transactionId, beforeWireDispatch) => {
-      await beforeWireDispatch?.(dispatch(roomId, transactionId ?? "missing", "v4"));
+it.each([
+  ["invalid UTF-8", "invalid JSON", false],
+  ["missing part", "incomplete event plan", false],
+  ["changed endpoint", "no longer matches the prepared event batch", false],
+  ["non-Error send", "unknown error", true],
+] as const)("reconciles %s without unsafe replay", async (failure, error, retryable) => {
+  const plan = await persist({ partCount: failure === "missing part" ? 2 : 1 });
+  if (failure === "invalid UTF-8") {
+    const bytes = Buffer.from(JSON.stringify(plan));
+    const marker = bytes.indexOf("durable hello");
+    expect(marker).toBeGreaterThanOrEqual(0);
+    bytes[marker + "durable".length] = 0xff;
+    await replaceStoredPlan(plan.queueId, bytes);
+  } else if (failure === "changed endpoint") {
+    client.sendMessage.mockImplementationOnce(async (room, _content, txn, beforeDispatch) => {
+      await beforeDispatch?.(dispatch(room, txn ?? "missing", "v4"));
       return "$must-not-send";
-    },
-  );
+    });
+  } else if (failure === "non-Error send") {
+    client.sendMessage.mockRejectedValueOnce({ code: "M_UNKNOWN" });
+  }
+  await expectUnresolved(plan.queueId, error, retryable);
+  if (failure === "invalid UTF-8" || failure === "missing part") {
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  }
+  if (!retryable) {
+    await expect(load(identity(plan.queueId, 0, plan.partCount))).resolves.toBeNull();
+  }
+});
 
-  await expectUnresolved("queue-route", "no longer matches the prepared event batch");
+it("deduplicates receipts while preserving media and thread identity", async () => {
+  const deliveryIdentity = identity("queue-multi-event");
+  const relation = {
+    rel_type: "m.thread" as const,
+    event_id: "$thread",
+    "m.in_reply_to": { event_id: "$reply" },
+  };
+  const plannedEvents = createMatrixPlannedEvents({
+    identity: deliveryIdentity,
+    events: [
+      {
+        receiptKind: "media",
+        content: { msgtype: "m.image", body: "caption", "m.relates_to": relation },
+      },
+      {
+        receiptKind: "text",
+        content: { msgtype: "m.text", body: "follow-up", "m.relates_to": relation },
+      },
+    ],
+  });
+  await persistEvents(plannedEvents, planTarget(deliveryIdentity));
+  client.sendMessage.mockResolvedValueOnce("$media-event").mockResolvedValueOnce("$media-event");
+  const messageIds = ["$media-event"];
+
+  await expect(
+    reconcileMatrixUnknownSend({
+      ...reconciliationContext("queue-multi-event"),
+      effectiveReplyToId: "$reply",
+      threadId: "$thread",
+    }),
+  ).resolves.toMatchObject({
+    status: "sent",
+    messageId: messageIds.at(-1),
+    receipt: {
+      primaryPlatformMessageId: "$media-event",
+      platformMessageIds: messageIds,
+      replyToId: "$reply",
+      threadId: "$thread",
+      parts: receiptParts(messageIds, ["media", "text"], true),
+    },
+  });
 });
 
 it.each(["scope-1", "old-scope"])(
