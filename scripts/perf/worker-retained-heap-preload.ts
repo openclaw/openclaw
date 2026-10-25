@@ -116,7 +116,7 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
+  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive|openclaw-state-read)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
     script,
   )
 ) {
@@ -144,6 +144,7 @@ if (
       `${file}.tmp`,
       JSON.stringify({
         ...identity,
+        commandId: suffix,
         atEpochMs: Date.now(),
         baselineModules: [...baselineModules],
         ...value,
@@ -163,6 +164,8 @@ if (
         gc: Map<string, number[]>;
         count: number;
         complete: boolean;
+        peakHeapUsedBytes: number;
+        heapSamples: number;
       }
     | undefined;
   const drainGc = (restart: boolean) => {
@@ -174,6 +177,10 @@ if (
       profiler.start();
     }
     for (const entry of profile?.statistics ?? []) {
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        entry.beforeGC.heapStatistics.usedHeapSize,
+      );
       measured.count++;
       if (measured.count > 100_000) {
         measured.complete = false;
@@ -250,6 +257,8 @@ if (
         gc: new Map(),
         count: 0,
         complete: true,
+        peakHeapUsedBytes: process.memoryUsage().heapUsed,
+        heapSamples: 0,
       };
       loop.reset();
       loop.enable();
@@ -277,6 +286,8 @@ if (
         ok: true,
         operation: command.operation,
         complete: result.complete,
+        peakHeapUsedBytes: result.peakHeapUsedBytes,
+        heapSamples: result.heapSamples,
         startedAtEpochMs: result.startedAtEpochMs,
         endedAtEpochMs,
         elapsedMs,
@@ -327,6 +338,16 @@ if (
     }
   };
   let polling = false;
+  // GC boundaries capture synchronous allocation bursts that timer samples can miss.
+  setInterval(() => {
+    if (measured) {
+      measured.peakHeapUsedBytes = Math.max(
+        measured.peakHeapUsedBytes,
+        process.memoryUsage().heapUsed,
+      );
+      measured.heapSamples++;
+    }
+  }, 5).unref();
   setInterval(() => {
     drainGc(true);
     if (polling || !existsSync(commandPath)) {

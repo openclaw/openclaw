@@ -50,6 +50,23 @@ it("refuses missing declared outputs before producing an incomplete image", () =
   ).toThrow("Missing standalone worker outputs: dist/commands/doctor.worker.js");
 });
 
+it("requires every declared worker and child entry in the compiler outputs", () => {
+  const runtimeRoot = fixture({});
+  const outputRoot = path.join(runtimeRoot, "build");
+  const prepared = prepareStandaloneWorkers({
+    runtimeRoot,
+    outputRoot,
+    runtimeBootstrap: path.join(outputRoot, "bootstrap.mjs"),
+    workerEntries: ["dist/commands/doctor.worker.js", "dist/recovery.mjs"],
+  });
+  const doctor = path.join(outputRoot, "modules/standalone-workers/dist/commands/doctor.worker.js");
+  const recovery = path.join(outputRoot, "modules/standalone-workers/dist/recovery.js");
+  expect(() => prepared.validateOutputs([doctor])).toThrow(
+    "Missing embedded standalone worker outputs: dist/recovery.mjs",
+  );
+  expect(() => prepared.validateOutputs([doctor, recovery])).not.toThrow();
+});
+
 it("routes declared physical worker paths through their embedded bootstrap", () => {
   const runtimeRoot = fixture({ "dist/commands/doctor.worker.js": "export {};" });
   const outputRoot = path.join(runtimeRoot, "build");

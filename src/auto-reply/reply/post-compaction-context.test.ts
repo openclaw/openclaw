@@ -5,7 +5,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import {
+  appendPostCompactionRefreshPrompt,
+  readPostCompactionContext,
+} from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
   let tmpDir = "";
@@ -88,6 +92,26 @@ describe("readPostCompactionContext", () => {
       }
     },
   );
+
+  it("preserves existing prompt bytes when appending post-compaction context", async () => {
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\nRead files.");
+    const followupRun = createTestFollowupRun({
+      workspaceDir: tmpDir,
+      extraSystemPrompt: "### Delivery Format\nSynthetic contract.\n",
+    });
+
+    await appendPostCompactionRefreshPrompt({
+      cfg: {
+        agents: { defaults: { compaction: { postCompactionSections: ["Session Startup"] } } },
+      },
+      followupRun,
+    });
+
+    expect(followupRun.run.extraSystemPrompt).toMatch(
+      /^### Delivery Format\nSynthetic contract\.\n\n\n/,
+    );
+    expect(followupRun.run.extraSystemPrompt).toContain("Read files.");
+  });
 
   it("keeps truncated post-compaction context UTF-16 safe", async () => {
     const prefix = "A".repeat(159);

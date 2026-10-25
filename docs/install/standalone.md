@@ -124,7 +124,10 @@ do not match their declared types. Type errors still stop compilation.
 AOT-only options apply to either input mode:
 
 - `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` and retains the selected locales.
+  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
+  and, optionally, its JIT. Both AOT modes pass these retention options through
+  the compiler's build API. The JIT support companion does not inherit AOT options.
 - `--no-compile-function-source` omits function source text. Source serialization
   consumers need their own qualification with this option.
 - `--disallow-code-generation-from-strings` denies ordinary string evaluation;
@@ -381,7 +384,8 @@ state before upgrading; see [Updating](/install/updating).
 Worker and child-process targets come from the shared runtime-process manifest.
 The same declarations resolve source workers, installed Node/Bun workers, and
 selected plugin workers. The standalone builder requires every declared output
-before compiling; a filename ending in `.worker.js` does not
+before bundling and verifies that each declared worker or child entry maps to an
+emitted module before compiling the executable; a filename ending in `.worker.js` does not
 declare an entry. Doctor database inspection, database discovery and backup,
 update helpers, workspace leases, certificate warmup, directory watching, hashing,
 the shutdown watchdog, update gates, retired-worktree cleanup, and file-transfer

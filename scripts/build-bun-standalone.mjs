@@ -814,6 +814,7 @@ if (sourceGraph) {
 if (!result.success) {
   throw new AggregateError(result.logs, "Standalone bundle failed");
 }
+workers.validateOutputs(result.outputs.map((output) => output.path));
 fs.writeFileSync(path.join(outputRoot, "metafile.json"), JSON.stringify(result.metafile, null, 2));
 fs.writeFileSync(
   path.join(outputRoot, "transformed.json"),
@@ -1007,6 +1008,7 @@ const artifactsToPublish = await compileStandaloneArtifacts({
   supportDestination,
   mode,
   compileFlags,
+  aotCompileOptions: options.aotCompileOptions,
   compileRoot,
   compileCwd,
   mainEntry,

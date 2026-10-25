@@ -1,4 +1,5 @@
 import { createServer, request as requestHttp, type IncomingMessage } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -20,11 +21,7 @@ const requests: TeamsLoopbackRequest[] = [];
 type ConnectorReply = { id?: string; error?: { message?: string } };
 
 async function readJson<T>(message: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of message) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+  return JSON.parse((await consumeBuffer(message)).toString("utf8")) as T;
 }
 
 const provider = createServer((request, response) => {
@@ -71,9 +68,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.close((error) => (error ? reject(error) : resolve()));
-  });
+  await provider[Symbol.asyncDispose]();
 });
 
 function createLoopbackController(
