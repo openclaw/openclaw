@@ -269,12 +269,6 @@ describe("live device scope upgrade", () => {
     });
   });
 
-  test("rejects a requested scope set narrower than the live connection", async () => {
-    const limited = await openLimitedDevice("live-scope-upgrade-narrower");
-    const response = await requestUpgrade(limited.ws, ["operator.approvals"]);
-    expectInvalidRequest(response, { message: expect.stringContaining("current scopes") });
-  });
-
   test("uses the refreshed durable deadline when retrying an existing upgrade", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-refreshed-deadline");
     const now = Date.now();

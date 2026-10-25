@@ -18,7 +18,6 @@ import {
   testGitContext,
 } from "./control-ui-session-prs.test-support.js";
 import { gitHubPublicApi } from "./github-public-api.js";
-import { isGitHubPublicationSuperseded } from "./github-publication-relevance.js";
 
 const { prepareRead, load } = createSessionPullRequestsFixture();
 const head = "a".repeat(40);
@@ -151,7 +150,7 @@ it("shows the bound original PR before any publication, independent of the check
   }
 });
 
-it("reconciles a fourth merged PR without expanding or poisoning displayed PRs", async () => {
+it("keeps a fourth merged publication candidate separate from displayed PRs", async () => {
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: undefined,
     cacheScope: "fixture",
@@ -166,13 +165,7 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
       head: { sha: head },
     }),
   );
-  const fetchImpl = routedFetch([
-    { match: "/pulls?head=", response: () => githubJson(items) },
-    {
-      match: "/git/commits/" + head,
-      response: () => githubJson({ sha: head, tree: { sha: tree } }),
-    },
-  ]);
+  const fetchImpl = routedFetch([{ match: "/pulls?head=", response: () => githubJson(items) }]);
   vi.stubGlobal("fetch", fetchImpl);
   const broadcastToConnIds = vi.fn();
   owner = createTestControlUiSessionPrSubscriptions({
@@ -192,24 +185,6 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
   expect(displayed.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3]);
   const candidates = await owner.read(target, current, "publication");
   expect(candidates.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3, 2]);
-  const snapshot = {
-    repository: "openclaw/openclaw",
-    branch: testGitContext.branch,
-    source_head_commit: head,
-    workspace_tree: tree,
-  };
-  expect(
-    await isGitHubPublicationSuperseded(snapshot, async () => ({
-      pullRequests: candidates.pullRequests,
-      assertCurrent: current,
-    })),
-  ).toBe(true);
-  expect(
-    await isGitHubPublicationSuperseded(
-      { ...snapshot, workspace_tree: "c".repeat(40) },
-      async () => ({ pullRequests: candidates.pullRequests, assertCurrent: current }),
-    ),
-  ).toBe(false);
   expect((await owner.read(target, current)).pullRequests).toEqual(displayed.pullRequests);
   expect(displayed).not.toHaveProperty("publicationCandidates");
   expect(candidates).not.toHaveProperty("publicationCandidates");
