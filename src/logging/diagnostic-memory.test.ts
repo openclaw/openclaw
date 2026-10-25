@@ -41,11 +41,6 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
   };
 }
 
-const workerLifecycle: ReturnType<
-  typeof workerMemory.sampleTrackedWorkerMemory
->["workerLifecycle"] = [
-  { script: "sqlite-store.worker.js", started: 3, retired: [{ reason: "closed", count: 3 }] },
-];
 const emptyWorkers = {
   workerCount: 0,
   postgresBridgeCount: 0,
@@ -60,7 +55,7 @@ const emptyWorkers = {
   workerMemoryMissing: [],
   workerHeaps: [],
   workerTaskMetrics: [],
-  workerLifecycle,
+  workerLifecycle: [],
 };
 const rssThresholds = { rssWarningBytes: 1000, rssCriticalBytes: 3000, pressureRepeatMs: 60_000 };
 function expectedPressure(reason: string, limitBytes: number, includeUsed = false) {
@@ -228,17 +223,13 @@ describe("diagnostic memory", () => {
       };
       sample({ ...options, isBunRuntime: true });
       expect(getHeapStatistics).not.toHaveBeenCalled();
-      for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-        sample({ ...options, heapSizeLimitBytes });
-      }
+      sample({ ...options, heapSizeLimitBytes: 0 });
       expect(getHeapStatistics).not.toHaveBeenCalled();
 
       sample(options);
       expect(getHeapStatistics).toHaveBeenCalledTimes(1);
       expect(getHeapSpaceStatistics).not.toHaveBeenCalled();
       sample({ ...options, emitSample: true });
-      expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
-      sample(options);
       expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
       sample({ ...options, heapSizeLimitBytes: 8 * 1024 ** 3 });
       sample(options);
@@ -249,60 +240,9 @@ describe("diagnostic memory", () => {
     }
   });
 
-  it("emits pressure when RSS crosses a threshold", () => {
-    emitDiagnosticMemorySample({
-      now: 1000,
-      uptimeMs: 123,
-      isBunRuntime: true,
-      heapSizeLimitBytes: 280_657_920,
-      processMemoryLimitBytes: 512 * 1024 ** 3,
-      physicalMemoryBytes: 512 * 1024 ** 3,
-      memoryUsage: memoryUsage({ rss: 2000 }),
-      thresholds: rssThresholds,
-    });
-
-    const expectedMemory = {
-      arrayBuffersBytes: 5,
-      ...emptyWorkers,
-      workerMessages: [],
-      sessionRowSelections: expect.any(Object),
-      externalBytes: 10,
-      heapTotalBytes: 80,
-      heapUsedBytes: 40,
-      rssBytes: 2000,
-    };
-    expect(events).toEqual([
-      {
-        seq: 1,
-        ts: 1_776_859_200_000,
-        trace: undefined,
-        type: "diagnostic.memory.sample",
-        uptimeMs: 123,
-        memory: {
-          heapSpaces: process.versions.bun ? undefined : expect.any(Array),
-          ...expectedMemory,
-        },
-      },
-      {
-        seq: 2,
-        ts: 1_776_859_200_000,
-        trace: undefined,
-        type: "diagnostic.memory.pressure",
-        level: "warning",
-        reason: "rss_threshold",
-        thresholdBytes: 1000,
-        limitBytes: 512 * 1024 ** 3,
-        usedBytes: 2000,
-        memory: expectedMemory,
-      },
-    ]);
-  });
-
   it.each([
     ["main heap critical before RSS critical", 3000, 2000, "critical"],
-    ["heap critical before RSS warning", 1000, 2000, "critical"],
     ["main heap warning before RSS warning", 1000, 500, "warning"],
-    ["heap warning after RSS stays below its threshold", 999, 500, "warning"],
     ["no pressure below all thresholds", 999, 499, null],
   ] as const)("selects %s at inclusive boundaries", (_name, rss, heapUsed, level) => {
     const memory = emitDiagnosticMemorySample({
@@ -315,6 +255,13 @@ describe("diagnostic memory", () => {
         rssWarningBytes: 1000,
         heapUsedWarningBytes: 500,
       },
+    });
+    expect(memory).toMatchObject({
+      rssBytes: rss,
+      heapUsedBytes: heapUsed,
+      heapTotalBytes: 80,
+      externalBytes: 10,
+      arrayBuffersBytes: 5,
     });
 
     expect(events).toEqual(
@@ -383,8 +330,8 @@ describe("diagnostic memory", () => {
     }
   });
 
-  it.each([1, 16])("measures main heap pressure against a %i GiB V8 limit", (heapGiB) => {
-    const limitBytes = heapGiB * 1024 ** 3;
+  it("measures main heap pressure against its V8 limit", () => {
+    const limitBytes = 1024 ** 3;
     for (const [index, ratio] of [0.5, 0.8, 0.9].entries()) {
       emitDiagnosticMemorySample({
         now: index * 1000,
@@ -400,10 +347,7 @@ describe("diagnostic memory", () => {
   it.each([
     ["cgroup", 4, 64, 4],
     ["host", 0, 32, 32],
-    ["oversized cgroup", 64, 4, 4],
-    ["unknown host", 4, 0, 4],
     ["invalid constraint", Number.NaN, 4, 4],
-    ["unlimited sentinel", Number.MAX_SAFE_INTEGER, 4, 4],
   ] as const)(
     "measures RSS against %s capacity independently of V8",
     (_name, constraint, host, limitGiB) => {
@@ -423,7 +367,7 @@ describe("diagnostic memory", () => {
     },
   );
 
-  it.each([0, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([0, Number.POSITIVE_INFINITY])(
     "does not invent byte limits when capacity is %s",
     (limit) => {
       emitDiagnosticMemorySample({

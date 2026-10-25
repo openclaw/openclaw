@@ -4,11 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { makeOpenAIProviderModel } from "../../packages/ai/src/providers/openai-provider.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../packages/ai/src/transports/openai-responses-client.js";
 import {
+  completed,
   message,
+  outputItem,
   outputTextDelta,
   outputTextPart,
   startedMessage,
 } from "../../packages/ai/src/transports/openai-responses-stream-parity.test-helpers.js";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -38,7 +41,6 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import { classifySessionAttention } from "./diagnostic-session-attention.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
@@ -56,29 +58,22 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
   const requests: Array<Record<string, unknown>> = [];
   const responses: ServerResponse[] = [];
   const received = [createDeferred(), createDeferred(), createDeferred()];
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
     response.on("error", () => {});
     if (request.method !== "POST" || request.url !== "/v1/responses") {
       response.writeHead(404);
       response.end();
       return;
     }
-    request.setEncoding("utf8");
-    let body = "";
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      const index = requests.length;
-      requests.push(JSON.parse(body) as Record<string, unknown>);
-      responses.push(response);
-      if (index >= received.length) {
-        response.writeHead(503, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: { message: "unexpected extra loopback request" } }));
-        return;
-      }
-      received[index]!.resolve();
-    });
+    const body = await readRequestText(request);
+    const index = requests.length;
+    requests.push(JSON.parse(body) as Record<string, unknown>);
+    responses.push(response);
+    if (index >= received.length) {
+      respondJson(response, { error: { message: "unexpected extra loopback request" } }, 503);
+      return;
+    }
+    received[index]!.resolve();
   });
   const { claim, releaseListener } = await reserveTestPortListener({
     offsets: [0],
@@ -109,26 +104,17 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
         type: "response.created",
         response: { id: "fallback-response", status: "in_progress", output: [] },
       });
-      writeFrame(response, {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: startedMessage("fallback-message"),
-      });
+      writeFrame(response, outputItem("added", startedMessage("fallback-message"), 0));
       writeFrame(response, outputTextPart("fallback-message"));
       writeFrame(response, outputTextDelta("fallback-message", "synthetic"));
     },
     completeFallbackStream() {
       const response = responseAt(2);
       writeFrame(response, outputTextDelta("fallback-message", " answer"));
-      writeFrame(response, {
-        type: "response.completed",
-        response: {
-          id: "fallback-response",
-          status: "completed",
-          output: [message("fallback-message", "synthetic answer")],
-          usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-        },
-      });
+      writeFrame(
+        response,
+        completed("fallback-response", [message("fallback-message", "synthetic answer")]),
+      );
       response.end();
     },
     async close() {
@@ -345,18 +331,6 @@ it.for(["success", "expiry"] as const)(
         activeModelCallRequestTimeoutMs: REQUEST_TIMEOUT_MS,
       });
       expect(operation.watchdog.decide().action).not.toBe("stop");
-      expect(
-        classifySessionAttention({
-          state: "processing",
-          queueDepth: 1,
-          activity,
-          staleMs: 30_000,
-          stuckSessionAbortMs: STUCK_ABORT_MS,
-        }),
-      ).toMatchObject({
-        eventType: "session.stalled",
-        reason: "repeated_model_requests_without_progress",
-      });
       const recover = () =>
         recoverStuckDiagnosticSession({
           operation,

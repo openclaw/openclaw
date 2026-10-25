@@ -82,6 +82,7 @@ function setClock(date: string) {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
   resetDiagnosticEventsForTest();
@@ -355,35 +356,19 @@ describe("repeated request liveness", () => {
     requestTwice({ ...run });
 
     emitTrustedDiagnosticEvent({
-      type: "model.call.completed",
-      ...run,
-      callId: "completed-call",
-      provider: "mock",
-      model: "request-model",
-      observationUnit: "request",
-      durationMs: 1,
-    });
-    emitTrustedDiagnosticEvent({
       type: "model.call.error",
       ...run,
       callId: "error-call",
       provider: "mock",
       model: "request-model",
-      observationUnit: "request",
       durationMs: 1,
       errorCategory: "test",
     });
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.started",
-      ...run,
-      toolName: "read",
-      toolCallId: "tool-call",
-    });
+    const tool = { ...run, toolName: "read", toolCallId: "tool-call" };
+    emitTrustedDiagnosticEvent({ type: "tool.execution.started", ...tool });
     emitTrustedDiagnosticEvent({
       type: "tool.execution.completed",
-      ...run,
-      toolName: "read",
-      toolCallId: "tool-call",
+      ...tool,
       durationMs: 1,
     });
     await waitForDiagnosticEventsDrained();
@@ -475,29 +460,19 @@ describe("repeated request liveness", () => {
     const obsoleteProvenanceKey = Symbol.for(
       "openclaw.diagnosticSemanticRunProgressProvenance.state.v1",
     );
-    const previousObsoleteProvenance = Reflect.get(globalThis, obsoleteProvenanceKey);
     const forgedEvent = {
       type: "run.progress" as const,
       ...run,
       reason: "plugin_trusted:forged_global_semantic",
       progressKind: "semantic" as const,
     };
-    const forgedEvents = new WeakSet<object>();
-    forgedEvents.add(forgedEvent);
-    Reflect.set(globalThis, obsoleteProvenanceKey, {
+    vi.stubGlobal(obsoleteProvenanceKey, {
       marker: obsoleteProvenanceKey,
-      events: forgedEvents,
+      events: new WeakSet([forgedEvent]),
     });
-    try {
-      emitPluginTrustedDiagnosticEvent(forgedEvent);
-      await waitForDiagnosticEventsDrained();
-    } finally {
-      if (previousObsoleteProvenance === undefined) {
-        Reflect.deleteProperty(globalThis, obsoleteProvenanceKey);
-      } else {
-        Reflect.set(globalThis, obsoleteProvenanceKey, previousObsoleteProvenance);
-      }
-    }
+    emitPluginTrustedDiagnosticEvent(forgedEvent);
+    await waitForDiagnosticEventsDrained();
+    vi.unstubAllGlobals();
 
     expectRequestProgress(ref, "plugin_trusted:forged_global_semantic");
 

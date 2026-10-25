@@ -229,15 +229,10 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info("removed log listener");
     unsubscribeUnrelated();
     const records = await readRecords(file);
-    expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
-      false,
-      false,
-      false,
-      true,
-      false,
-      false,
-      false,
-    ]);
+    expect(records).toHaveLength(7);
+    expect(
+      records.filter((record) => record._meta.path?.fileLine).map((record) => record.message),
+    ).toEqual(["warning with listener"]);
     expect(listener.mock.calls.map(([event]) => [event.type, event.message])).toEqual([
       ["log.record", "log listener"],
       ["log.record", "warning with listener"],
@@ -390,6 +385,8 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warn = consoleLogging();
     const error = vi.fn();
     loggingState.rawConsole!.error = error;
+    const circular: Record<string, unknown> = { name: "catalog" };
+    circular.self = circular;
     const log = createSubsystemLogger("session-catalog");
     log.warn("slow Codex catalog list phases", {
       elapsedMs: 12345,
@@ -399,6 +396,11 @@ describe("createSubsystemLogger().isEnabled", () => {
       note: "two words",
       skipped: undefined,
       error: new Error("boom"),
+      apiToken: "opaque-value-no-pattern-match",
+      nested: { password: "hunter2" },
+      circular,
+      big: 10n,
+      handler: () => undefined,
     });
     log.error("catalog failed", { reason: "timeout" });
     expect(warn).toHaveBeenCalledTimes(1);
@@ -407,7 +409,11 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warnLine).toContain(
       'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
     );
-    expect(warnLine).not.toContain("skipped=");
+    expectText(
+      warnLine,
+      ['circular={"name":"catalog","self":"[Circular]"}', "big=10"],
+      ["skipped=", "opaque-value-no-pattern-match", "hunter2", "handler=", "\n"],
+    );
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");
   });
   it("retains lifecycle error diagnostics in the file and pretty console sinks", async () => {
@@ -447,15 +453,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(fs.readFileSync(file, "utf8")).not.toContain("synthetic private");
     expect(failure.stack).toContain("omitted");
   });
-  it("masks key-aware sensitive fields in the console tail", () => {
-    const warn = consoleLogging();
-    createSubsystemLogger("gateway").warn("provider retry", {
-      apiToken: "opaque-value-no-pattern-match",
-      nested: { password: "hunter2" },
-      elapsedMs: 12,
-    });
-    expectText(consoleLine(warn), ["elapsedMs=12"], ["opaque-value-no-pattern-match", "hunter2"]);
-  });
   it("redacts structured fields before the console tail length cap clips them", () => {
     const warn = consoleLogging();
     createSubsystemLogger("gateway").warn("provider retry", {
@@ -488,21 +485,5 @@ describe("createSubsystemLogger().isEnabled", () => {
       attempt: 2,
     });
     expect(serializations).toBe(1);
-  });
-  it("keeps a circular field readable on one line and omits fields with no JSON form", () => {
-    const warn = consoleLogging();
-    const circular: Record<string, unknown> = { name: "catalog" };
-    circular.self = circular;
-    createSubsystemLogger("session-catalog").warn("slow list", {
-      circular,
-      big: 10n,
-      // Dropped by the shared redactor, matching the file sink and the json style.
-      handler: () => undefined,
-    });
-    expectText(
-      consoleLine(warn),
-      ['circular={"name":"catalog","self":"[Circular]"}', "big=10"],
-      ["handler=", "\n"],
-    );
   });
 });

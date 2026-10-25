@@ -75,23 +75,6 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("coalesces diagnostic heartbeats after sleep", async () => {
-  const startedAt = Date.now();
-  const { clock, scheduler, events } = heartbeatFixture(false, startedAt);
-  const heartbeats = () => events.filter((event) => event.type === "diagnostic.heartbeat");
-  scheduler.schedule({ id: "pending-work", atMs: startedAt + 60_000, run: () => {} });
-  startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
-  logMessageQueued({ sessionKey: "diagnostic-schedule", source: "test" });
-  await clock.advanceBy(30_000);
-  await clock.advanceBy(120_000);
-  await waitForDiagnosticEventsDrained();
-  expect(heartbeats()).toHaveLength(2);
-  stopGatewayDiagnosticHeartbeat();
-  await clock.advanceBy(120_000);
-  await waitForDiagnosticEventsDrained();
-  expect(heartbeats()).toHaveLength(2);
-});
-
 // Mirrors the private per-field budget in diagnostic-content.ts.
 const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
 
@@ -231,6 +214,12 @@ it("keeps pressure sampling silent and reconciles diagnostic options on one cade
   expectCalls(0, ...passive, warn);
   expect(childSamples).toHaveBeenCalledTimes(3);
 
+  startGatewayDiagnosticHeartbeat(scheduler, {}, latest);
+  stopGatewayDiagnosticHeartbeat();
+  await clock.advanceBy(120_000);
+  expect(critical).toHaveBeenCalledTimes(3);
+  expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
   scheduler.beginClose();
   await scheduler.stop();
   startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);

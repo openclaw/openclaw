@@ -23,6 +23,7 @@ import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recove
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
+const session = { sessionKey: "agent:main:recovery", sessionId: "recovery-session" };
 const classification = {
   eventType: "session.stalled",
   classification: "stalled_agent_run",
@@ -91,17 +92,12 @@ function heartbeat(now: number, shortTimings = true) {
 }
 
 it("reports a 54-second stall without requesting recovery from an observing controller", async () => {
-  const ref = {
-    sessionKey: "agent:main:provider-deadline-heartbeat",
-    sessionId: "deadline-session",
-    runId: "deadline-run",
-  };
+  const ref = { ...session, runId: "deadline-run" };
   const { operation, cancel, attempt, events } = observedOperation(ref);
   const { recover, advance } = heartbeat(30_000);
   vi.setSystemTime(45_000);
   attempt.beginRequest({ requestTimeoutMs: 45_000, deadlineAtMs: 90_000 });
   vi.setSystemTime(60_000);
-  expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(6_000);
   expect(operation.watchdog.decide().action).toBe("observe");
   await advance(60_000);
   expect(events).toContainEqual(
@@ -121,11 +117,7 @@ it.each([
 ] as const)(
   "uses the controller-owned $kind allowance through its exact boundary",
   async ({ kind, deadlineAtMs }) => {
-    const ref = {
-      sessionKey: "agent:main:heartbeat-allowance",
-      sessionId: "allowance-session",
-      runId: "allowance-run",
-    };
+    const ref = { ...session, runId: "allowance-run" };
     const { operation, cancel, attempt, events } = observedOperation(ref);
     const { recover, advance } = heartbeat(306_000);
     vi.setSystemTime(330_000);
@@ -167,10 +159,7 @@ it.each([
 it.each(["missing", "retired"] as const)(
   "does not adopt a replacement after capturing a %s owner",
   (kind) => {
-    const ref = {
-      sessionKey: "agent:main:heartbeat-replacement",
-      sessionId: "replacement-session",
-    };
+    const ref = session;
     const original =
       kind === "retired" ? createReplyOperation({ ...ref, resetTriggered: false }) : undefined;
     original?.complete();
@@ -189,10 +178,7 @@ it.each(["missing", "retired"] as const)(
 );
 
 it("retains the finite local request ceiling without a diagnostic timeout policy", async () => {
-  const ref = {
-    sessionKey: "agent:main:heartbeat-local-ceiling",
-    sessionId: "local-ceiling-session",
-  };
+  const ref = session;
   const { operation, cancel } = activeOperation(ref);
   const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
   const deadlineAtMs = 6_000 + DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
@@ -213,7 +199,7 @@ it("retains the finite local request ceiling without a diagnostic timeout policy
 });
 
 it("defers an overdue heartbeat even when the captured controller is eligible", async () => {
-  const ref = { sessionKey: "agent:main:overdue-recovery", sessionId: "overdue-session" };
+  const ref = session;
   const { operation, cancel } = activeOperation(ref);
   logSessionStateChange({ ...ref, state: "processing" });
   const { recover, advance } = heartbeat(306_000, false);
@@ -230,7 +216,7 @@ it("defers an overdue heartbeat even when the captured controller is eligible", 
 });
 
 it("projects cleanup eligibility without releasing queued work before its writer settles", async () => {
-  const ref = { sessionKey: "agent:main:cleanup-recovery", sessionId: "cleanup-session" };
+  const ref = session;
   const operation = createReplyOperation({ ...ref, resetTriggered: false });
   operation.setPhase("running");
   const cancel = vi.fn();

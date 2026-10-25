@@ -256,29 +256,6 @@ it("warns once per append failure streak and continues with later batches", asyn
   expect(warnings.join("\n")).not.toContain(secret);
 });
 
-it("keeps failure streaks independent by file", async () => {
-  const firstPath = logPathTracker.nextPath();
-  const secondPath = logPathTracker.nextPath();
-  fs.mkdirSync(firstPath);
-  fs.mkdirSync(secondPath);
-  failedLogPaths.add(firstPath);
-  failedLogPaths.add(secondPath);
-  const stderrSpy = captureStderr();
-
-  logTo(firstPath, "first-file-failure");
-  logTo(secondPath, "second-file-failure");
-  await fileLogTransport.flush();
-
-  fs.rmdirSync(secondPath);
-  getLogger().info("second-file-recovery");
-  logTo(firstPath, "first-file-repeated-failure");
-  await fileLogTransport.flush();
-
-  expect(warningLines(stderrSpy, `file=${firstPath}`)).toHaveLength(1);
-  expect(warningLines(stderrSpy, `file=${secondPath}`)).toHaveLength(1);
-  expect(read(secondPath)).toContain("second-file-recovery");
-});
-
 // A deleted directory reached through its open descriptor mirrors a stale mounted
 // /tmp: children fail with ENOENT while the parent path still resolves, the shape
 // on which Node's recursive mkdirSync never returns.
@@ -345,7 +322,7 @@ it("retries the warning after stderr rejects it", async () => {
   expect(String(stderrSpy.mock.calls[1]?.[0])).toContain(`file=${logPath}`);
 });
 
-it("releases saturated failure tracking after a tracked file recovers", async () => {
+it("keeps failure streaks independent and releases saturated tracking after recovery", async () => {
   const paths = Array.from({ length: 65 }, () => logPathTracker.nextPath());
   const firstPath = paths[0]!;
   const lastPath = paths[64]!;
@@ -369,7 +346,11 @@ it("releases saturated failure tracking after a tracked file recovers", async ()
   recoveringFirstPath = true;
   logTo(firstPath, "tracked-file-recovery");
   logTo(lastPath, "newly-tracked-failure");
+  logTo(paths[1]!, "still-failing-file");
   await fileLogTransport.flush();
 
+  expect(read(firstPath)).toContain("tracked-file-recovery");
+  expect(warningLines(stderrSpy, `file=${firstPath}`)).toHaveLength(1);
+  expect(warningLines(stderrSpy, `file=${paths[1]!}`)).toHaveLength(1);
   expect(warningLines(stderrSpy, `file=${lastPath}`)).not.toHaveLength(0);
 });
