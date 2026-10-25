@@ -2,7 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { normalizeModelRef, splitModelRef } from "./model-switch.test-support.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import {
+  addQaFlowTestOutbound,
+  runLoadedScenarioFlow,
+} from "./scenario-flow-runner.test-support.js";
 
 function terminalReceipt(params: {
   runId: string;
@@ -62,27 +65,18 @@ async function runFollowUp(params?: {
         call === 1
           ? (params?.primaryReplyText ?? "hello from the primary model")
           : (params?.alternateReplyText ?? "the model switch handoff completed");
-      state.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text:
-          call === 1
-            ? (params?.primaryOutboundText ?? replyText)
-            : (params?.alternateOutboundText ?? replyText),
-      });
+      addQaFlowTestOutbound(
+        state,
+        "dm:qa-operator",
+        call === 1
+          ? (params?.primaryOutboundText ?? replyText)
+          : (params?.alternateOutboundText ?? replyText),
+      );
       if (call === 1 && params?.unrelatedPrimaryOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedPrimaryOutboundText,
-        });
+        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedPrimaryOutboundText);
       }
       if (call === 2 && params?.unrelatedLaterOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedLaterOutboundText,
-        });
+        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedLaterOutboundText);
       }
       const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
       return {

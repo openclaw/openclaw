@@ -606,6 +606,7 @@ src/config/io.factory.ts
 src/config/io.health-state.kernel.ts
 src/config/io.health-state.ts
 src/config/io.invalid-config.ts
+src/config/io.legacy-issues.runtime.ts
 src/config/io.load.ts
 src/config/io.meta.ts
 src/config/io.observe-promotion.ts

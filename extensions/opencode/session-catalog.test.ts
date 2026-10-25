@@ -976,10 +976,7 @@ describe("OpenCode session catalog", () => {
   });
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
-    let releaseSlow: ((value: unknown) => void) | undefined;
-    const slow = new Promise<unknown>((resolve) => {
-      releaseSlow = resolve;
-    });
+    const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
       nodeId === "node-a" ? slow : Promise.resolve(page("session-b")),

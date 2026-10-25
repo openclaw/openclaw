@@ -6,7 +6,10 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
+import {
+  createChatMobileHostFixture,
+  createMobileRootContentFixture as rootContent,
+} from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
   ChatDetailsMobileContent,
@@ -22,28 +25,6 @@ function details(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     messages: [],
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
-  };
-}
-function rootContent(): Extract<ChatDetailsMobilePage, { kind: "root" }>["content"] {
-  return {
-    entries: {
-      labels: {
-        people: "People",
-        taskProgress: "Task progress",
-        subagents: "Subagents",
-        environment: "Environment",
-        context: "Context",
-        pullRequests: "Pull requests",
-        automations: "Automations",
-        generatedFiles: "Generated files",
-        session: "Session",
-      },
-      people: { label: "People" },
-      versions: { label: "Versions", metadata: 1 },
-      onNavigate: vi.fn(),
-    },
-    processes: undefined,
-    subagents: { workingLabel: "Working", onOpenSubagent: vi.fn(), onOpenSubagents: vi.fn() },
   };
 }
 

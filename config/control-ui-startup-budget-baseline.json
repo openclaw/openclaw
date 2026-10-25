@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281702,
-  "reason": "Combined warm transcript and shared visible clocks: measured 281702 B after integrating main. Warm transcript remote median improved from 509.3 to 304.7 ms; shared clocks retain their separately measured CPU win. Startup requests remain 7 JS and 1 CSS; accept the sub-0.5 KB change against main.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 281465,
+  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "updatedAt": "2026-10-25"
 }

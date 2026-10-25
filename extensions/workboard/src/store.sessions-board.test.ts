@@ -1,5 +1,5 @@
 import { copyFileSync, renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
@@ -100,7 +100,9 @@ describe("Sessions board storage", () => {
     const { store, pin } = await sessionBoard();
     const changes = vi.fn();
     store.onChange = changes;
+    expect(await pin({ expectedUpdatedAt: 1000 })).toBe(false);
     expect(await pin()).toBe(true);
+    expect(await pin()).toBe(false);
     expect(await pin({ columnId: "merged", expectedUpdatedAt: 1000 })).toBe(true);
     // Same-millisecond writes still advance the revision and fence delayed moves.
     expect(await store.listSessionPlacements("sessions")).toEqual([
@@ -117,6 +119,27 @@ describe("Sessions board storage", () => {
     await expect(pin({ columnId: "missing" }, current.sessions)).rejects.toThrow(
       "Unknown sessions board column",
     );
+  });
+
+  test("writes placements without a precondition SELECT", async () => {
+    const { pin } = await sessionBoard({ createStores: createKernelStores });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Preserve the native receiver below.
+    const get = StatementSync.prototype.get;
+    const reads: string[] = [];
+    const spy = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+      this: StatementSync,
+      ...params: Parameters<typeof get>
+    ) {
+      reads.push(this.sourceSQL);
+      return get.apply(this, params);
+    });
+    try {
+      expect(await pin()).toBe(true);
+      expect(await pin({ expectedUpdatedAt: 1000 })).toBe(true);
+      expect(reads.filter((sql) => sql.includes("workboard_session_placements"))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // Injects legacy session placement data through a native SQLite file handle.

@@ -5,6 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { createImageProcessor } from "../../media/media-services.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -282,6 +285,47 @@ it("stages local media while a competing writer needs the host to release its lo
     await closeOpenClawStateDatabaseAsync();
     writer.close();
   }
+});
+
+it("replays converted PNG bytes with a matching public name and unchanged spool custody", async () => {
+  const sourceBytes = (
+    await createImageProcessor().encode(
+      createSolidPngBuffer(2050, 2, { r: 40, g: 90, b: 180, a: 96 }),
+      { format: "webp" },
+    )
+  ).data;
+  expect(sourceBytes.toString("ascii", 8, 12)).toBe("WEBP");
+  const imagePath = path.join(sourceDir, "transparent.webp");
+  await fs.writeFile(imagePath, sourceBytes);
+  const staged = await stage({ payloads: [{ mediaUrl: imagePath }] });
+  await enqueue(staged.payloads, staged.mediaStageId);
+  await fs.rm(imagePath);
+
+  const queued = (await loadPendingDeliveries(stateDir))[0]?.preparedBatch.entries[0];
+  expect(queued?.status).toBe("accepted");
+  if (!queued || queued.status !== "accepted" || !queued.payload.mediaUrl) {
+    throw new Error("Expected queued image artifact");
+  }
+  const replayPath = queued.payload.mediaUrl;
+  expect(replayPath).toBe(staged.artifacts[0]);
+  // SQLite owns this preplanned path; only public image metadata changes.
+  expect(path.extname(replayPath)).toBe(".webp");
+  const encodedBytes = await fs.readFile(replayPath);
+  expect(encodedBytes.subarray(0, 8)).toEqual(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  );
+
+  const replayed = await loadWebMedia(replayPath, {
+    maxBytes: 1024 * 1024,
+    localRoots: [spoolRoot],
+  });
+  expect([replayed.kind, replayed.contentType, replayed.fileName]).toEqual([
+    "image",
+    "image/png",
+    `${path.basename(replayPath, ".webp")}.png`,
+  ]);
+  expect(replayed.buffer).toEqual(encodedBytes);
+  expect(await fs.readFile(replayPath)).toEqual(encodedBytes);
 });
 
 it("uses the live send's local-read capability", async () => {

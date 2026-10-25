@@ -1614,7 +1614,6 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	1
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.ts	2
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
 src/config/mcp-config.ts	1

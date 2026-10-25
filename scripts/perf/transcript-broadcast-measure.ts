@@ -133,6 +133,8 @@ const { values } = parseArgs({
     "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string" },
     sessions: { type: "string", default: "100" },
+    plugins: { type: "string", default: "0" },
+    "plugin-update": { type: "boolean", default: false },
     "history-turns": { type: "string", default: "0" },
     "history-last-turns": { type: "string", default: "0" },
     "history-payload-kib": { type: "string", default: "0" },
@@ -205,6 +207,10 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
   throw new Error("Dashboard widgets reserve Gateway port + 1; choose a different --mock-port");
 }
 const scenario = values.scenario;
+const pluginCount = integer(values.plugins, "--plugins", 0);
+if (values["plugin-update"] && scenario !== "plugins.reload") {
+  throw new Error("--plugin-update requires --scenario plugins.reload");
+}
 if (
   ![
     "sessions.list",
@@ -364,6 +370,9 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
 const clientCount =
   scenario === "chat.send" || idleScenario ? 1 : integer(values.clients, "--clients");
 const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
+if (values["plugin-update"] && rpcConcurrency !== 1) {
+  throw new Error("--plugin-update requires --rpc-concurrency 1");
+}
 if (rpcConcurrency > clientCount) {
   throw new Error("--rpc-concurrency must not exceed --clients");
 }
@@ -1159,11 +1168,33 @@ globalThis.fetch = async (input, options) => {
 }
 let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
-if (scenario === "plugins.reload" || scenario === "plugin.scope") {
-  const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
+let updateReloadPlugin: (() => number) | undefined;
+const pluginUpdateLatenciesMs: number[] = [];
+if (scenario === "plugins.reload" || scenario === "plugin.scope" || pluginCount > 0) {
+  const plugin = writePluginFixtures(output, {
+    count: Math.max(1, pluginCount),
+    activationOnStartup: true,
+  });
   if (scenario === "plugins.reload") {
     reloadPluginId = plugin.pluginIds[0];
-  } else {
+    if (values["plugin-update"]) {
+      const pluginSource = path.join(plugin.pluginsDir, reloadPluginId!, "index.cjs");
+      let revision = 0;
+      updateReloadPlugin = () => {
+        revision++;
+        writeFileSync(
+          pluginSource,
+          `module.exports = { id: ${JSON.stringify(reloadPluginId)}, register(api) {
+  api.registerGatewayMethod("benchmark.pluginVersion", async ({ respond }) => {
+    respond(true, { revision: ${revision} });
+  }, { scope: "operator.read" });
+} };\n`,
+        );
+        return revision;
+      };
+      updateReloadPlugin();
+    }
+  } else if (scenario === "plugin.scope") {
     scopePluginId = plugin.pluginIds[0];
     const pluginSource = path.join(plugin.pluginsDir, scopePluginId!, "index.cjs");
     writeFileSync(
@@ -4239,6 +4270,7 @@ try {
     ],
     proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
   );
+  const gatewayStartedAt = performance.now();
   gateway = launch(
     gatewayArgs,
     "gateway",
@@ -4248,6 +4280,7 @@ try {
     true,
   );
   await ready(port, "/readyz", gateway);
+  const gatewayReadyMs = performance.now() - gatewayStartedAt;
   await readGatewayCpuUsage(gateway);
   console.log("PHASE gateway-ready");
   // Startup recovery for the retained-run inventory is outside the measured workload.
@@ -4766,12 +4799,28 @@ try {
                 throw new Error("synthetic plugin RPC did not preserve its invocation scope");
               }
             } else {
+              const updateStartedAt = performance.now();
+              const expectedRevision = updateReloadPlugin?.();
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
                 waitForDrain: true,
               });
               if (!isRecord(result) || result.restartRequired !== false) {
                 throw new Error("synthetic plugin reload did not apply live");
+              }
+              if (expectedRevision !== undefined) {
+                // This verification RPC is outside the reload-only latency distribution.
+                const observed = await workerClient.request("benchmark.pluginVersion", {}, 180_000);
+                if (
+                  !observed.ok ||
+                  !isRecord(observed.payload) ||
+                  observed.payload.revision !== expectedRevision
+                ) {
+                  throw new Error("synthetic plugin update did not publish the edited revision");
+                }
+                if (measuring) {
+                  pluginUpdateLatenciesMs.push(performance.now() - updateStartedAt);
+                }
               }
             }
           }
@@ -6039,6 +6088,16 @@ try {
   }
   const result = {
     output,
+    gatewayReadyMs,
+    syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
+    ...(values["plugin-update"]
+      ? {
+          pluginUpdate: {
+            scope: "source edit through successful RPC verification of the new revision",
+            latency: latencySummary(pluginUpdateLatenciesMs),
+          },
+        }
+      : {}),
     ...(values["worker-retained-heap"] ? { workerHeapEvidence } : {}),
     scenario,
     ...(scenario === "chat.startup"

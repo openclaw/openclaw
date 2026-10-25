@@ -233,6 +233,15 @@ be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
 
+Source-built Docker images are a composed distribution when
+`OPENCLAW_EXTENSIONS` selects an otherwise external plugin. The frozen install
+first resolves the ordinary root and selected-plugin production trees. Final
+artifact materialization then adds the selected plugins' existing exact runtime
+pins to the distribution manifest and links those installed identities at both
+the root resolution scope and each packaged plugin root. This supports unified
+root chunks without transferring the dependencies into the source plugin or
+running another install; incompatible existing root bindings fail closed.
+
 Package verification uses build-generated
 `dist/runtime-dependency-ownership.json` to identify chunks used only by
 plugins. Each entry binds a chunk filename and SHA-256 hash to its owning

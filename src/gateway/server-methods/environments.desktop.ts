@@ -11,20 +11,12 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
   if (error instanceof DesktopCredentialsRequiredError) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-        details: { code: error.detailCode, auth: error.auth },
-      }),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, error.message, {
+      details: { code: error.detailCode, auth: error.auth },
+    });
     return;
   }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback),
-  );
+  respondError(respond, ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback);
 }
 
 export async function respondDesktopObserve(params: {
