@@ -48,6 +48,11 @@ import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
+import {
+  projectTranscriptMutationPublication,
+  type TranscriptMutationAdvance,
+  type TranscriptMutationOptions,
+} from "./session-transcript-mutation-projection.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 const transcriptContextVersionQuery = createSqliteQueryCache((database: EngineConnection) => {
@@ -450,18 +455,11 @@ export function advanceTranscriptMutationAtInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   value: number,
-  options: {
-    strictly?: boolean;
-    windowUpdatedAt?: number;
-    rowTranscript?: SessionRowTranscriptProjection;
-    persistActorMutation?: boolean;
-    writeActorMutation?: (
-      update: import("./session-transcript-index-postgres.js").TranscriptWindowUpdate,
-    ) => void;
-  } = {},
+  options: TranscriptMutationOptions = {},
 ): void {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     let transcriptUpdatedAt = Math.floor(value);
+    const steps = options.steps ?? 1;
     if (!Number.isFinite(transcriptUpdatedAt) || transcriptUpdatedAt < 0) {
       return;
     }
@@ -473,11 +471,15 @@ export function advanceTranscriptMutationAtInTransaction(
     }
     const db = getSessionKysely(database.db);
     const actor = readSessionActorTransactionState(database, { sessionId });
+    const publicationProjection = projectTranscriptMutationPublication(
+      options.rowTranscript,
+      options.publicationAssistant,
+    );
     if (actor?.window && options.strictly) {
       transcriptUpdatedAt = Math.max(
         transcriptUpdatedAt,
-        (actor.window.transcript_updated_at ?? -1) + 1,
-        (actor.window.transcript_observed_at ?? -1) + 1,
+        (actor.window.transcript_updated_at ?? -1) + steps,
+        (actor.window.transcript_observed_at ?? -1) + steps,
       );
     }
     const update = db
@@ -487,8 +489,8 @@ export function advanceTranscriptMutationAtInTransaction(
           options.strictly && !actor?.window
             ? eb.fn<number>(isPostgresSqlConnection(database.db) ? "greatest" : "max", [
                 eb.val(transcriptUpdatedAt),
-                eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", 1),
-                eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", 1),
+                eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", steps),
+                eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", steps),
               ])
             : transcriptUpdatedAt;
         return {
@@ -529,13 +531,7 @@ export function advanceTranscriptMutationAtInTransaction(
         indexedSeq: projection?.indexedSeq ?? null,
         activeMessageCount: projection?.activeMessageCount ?? null,
         needsRebuild: projection ? (projection.needsRebuild ? 1 : 0) : null,
-        ...(options.rowTranscript
-          ? {
-              lastMessagePreview: options.rowTranscript.lastMessagePreview,
-              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
-              terminalModel: options.rowTranscript.terminalModel,
-            }
-          : {}),
+        ...publicationProjection,
       });
       return;
     }
@@ -599,13 +595,7 @@ export function advanceTranscriptMutationAtInTransaction(
       );
       publishSessionTranscriptAuthority(database, {
         ...context,
-        ...(options.rowTranscript
-          ? {
-              lastMessagePreview: options.rowTranscript.lastMessagePreview,
-              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
-              terminalModel: options.rowTranscript.terminalModel,
-            }
-          : {}),
+        ...publicationProjection,
       });
     }
   });
@@ -620,14 +610,22 @@ export function touchTranscriptMutationInTransaction(
   writeActorMutation?: (
     update: import("./session-transcript-index-postgres.js").TranscriptWindowUpdate,
   ) => void,
+  logicalAdvance?: TranscriptMutationAdvance,
 ): void {
-  advanceTranscriptMutationAtInTransaction(database, sessionId, Date.now(), {
-    strictly: true,
-    windowUpdatedAt,
-    rowTranscript,
-    persistActorMutation,
-    writeActorMutation,
-  });
+  advanceTranscriptMutationAtInTransaction(
+    database,
+    sessionId,
+    logicalAdvance?.adjustedTime ?? Date.now(),
+    {
+      strictly: true,
+      steps: logicalAdvance?.steps,
+      publicationAssistant: logicalAdvance?.publicationAssistant,
+      windowUpdatedAt,
+      rowTranscript,
+      persistActorMutation,
+      writeActorMutation,
+    },
+  );
 }
 
 export function deleteTranscriptEventsInTransaction(

@@ -65,7 +65,7 @@ export function createAgentHarnessAttemptDeadlineController(params: {
       },
       resolveTimerTimeoutMs(Math.max(1, remainingMs), 1),
     );
-    timer.unref?.();
+    timer.unref();
   };
   const dispose = () => {
     deadline = { kind: "closed" };

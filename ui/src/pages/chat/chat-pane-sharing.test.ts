@@ -466,6 +466,31 @@ describe("chat pane sharing authorization", () => {
   });
 });
 
+describe("sharing operation code loading", () => {
+  it.each(["scope", "connection", "session"] as const)(
+    "reserves one operation and rechecks %s before its deferred write",
+    async (change) => {
+      const request = vi.fn(async () => ({}));
+      const { pane, state } = sharingPane(request);
+      const row = sessionRow();
+      const pending = pane.mutateSessionSharing(row, { visibility: "shared" });
+      expect(sharingState(pane, row)?.loading).toBe(true);
+      const duplicate = pane.mutateSessionSharing(row, { visibility: "shared" });
+      if (change === "scope") {
+        setSharingAuthorization(pane, { scopes: ["operator.read"] });
+      } else if (change === "connection") {
+        pane.connectionGeneration += 1;
+      } else {
+        state.sessionsResult = sharingSessionsResult({ ...row, sessionId: "replacement" });
+      }
+      expect(await duplicate).toEqual({ status: "unavailable" });
+      expect(await pending).toEqual({ status: "unavailable" });
+      expect(request).not.toHaveBeenCalled();
+      expect(sharingState(pane, row)).toBeUndefined();
+    },
+  );
+});
+
 describe("chat pane mutation connection ownership", () => {
   it.each([
     ["connection", "resolve", mutations[0]],
@@ -474,9 +499,11 @@ describe("chat pane mutation connection ownership", () => {
     const { pane, state, request, sessions, response } = pendingMutation(mutation);
     const row = sessionRow();
     const pending = mutation.invoke(pane, row);
-    expect(request).toHaveBeenCalledWith(
-      mutation.method,
-      expect.objectContaining({ sessionKey: row.key }),
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        mutation.method,
+        expect.objectContaining({ sessionKey: row.key }),
+      ),
     );
     let replacement: ReturnType<typeof installReplacementConnection> | undefined;
     const cacheKey = pane.sessionSharingCacheKey(row.key);
@@ -508,7 +535,7 @@ describe("chat pane mutation connection ownership", () => {
 
   it("keeps a previous-session failure out of the newly selected session", async () => {
     const mutation = mutations[1];
-    const { pane, state, sessions, response } = pendingMutation(mutation);
+    const { pane, state, request, sessions, response } = pendingMutation(mutation);
     const previous = sessionRow();
     const selected = {
       ...sessionRow(),
@@ -521,6 +548,7 @@ describe("chat pane mutation connection ownership", () => {
       sessions: [previous, selected],
     };
     const pending = mutation.invoke(pane, previous);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     state.sessionKey = selected.key;
 
     response.reject(new Error(`${mutation.name} failed after session switch`));
@@ -536,9 +564,10 @@ describe("chat pane mutation connection ownership", () => {
 
   it("drops a failure after leaving and returning to the retained pane", async () => {
     const mutation = mutations[0];
-    const { pane, state, sessions, response } = pendingMutation(mutation);
+    const { pane, state, request, sessions, response } = pendingMutation(mutation);
     const row = sessionRow();
     const pending = mutation.invoke(pane, row);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     pane.presented = false;
     pane.presented = true;
 

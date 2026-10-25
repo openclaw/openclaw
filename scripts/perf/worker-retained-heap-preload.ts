@@ -1,4 +1,5 @@
 // Synthetic benchmarks only. Controllers serialize snapshots and keep them outside timed windows.
+// OPENCLAW_BENCH_TRACE_GC=1 is a separate promotion pass; use untraced runs for timing gates.
 import {
   existsSync,
   mkdirSync,
@@ -6,17 +7,19 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { GCProfiler, getHeapStatistics, writeHeapSnapshot } from "node:v8";
+import { GCProfiler, getHeapStatistics, setFlagsFromString, writeHeapSnapshot } from "node:v8";
 import workerThreads, { isMainThread, threadId } from "node:worker_threads";
 
 const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
+const traceGc = process.env.OPENCLAW_BENCH_TRACE_GC === "1";
 if ((!output && !baseline) || (output && !path.isAbsolute(output))) {
   throw new Error("Worker heap preload requires an absolute synthetic benchmark output directory");
 }
@@ -62,6 +65,7 @@ workerThreads.Worker = class extends NativeWorker {
           : {
               ...(options.env ?? process.env),
               ...(output ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
+              ...(output && traceGc ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
               ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
             },
     });
@@ -110,12 +114,17 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(script)
+  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
+    script,
+  )
 ) {
   mkdirSync(output, { recursive: true });
   const prefix = path.join(output, `worker-${process.pid}-${threadId}`);
   const commandPath = `${prefix}.command.json`;
-  const identity = { pid: process.pid, threadId, script, node: process.version };
+  const identity = { pid: process.pid, threadId, script, node: process.version, traceGc };
+  const traceMarker = (marker: string, commandId: string) => {
+    writeSync(1, `${marker} pid=${process.pid} threadId=${threadId} command=${commandId}\n`);
+  };
   const memory = () => ({
     ...process.memoryUsage(),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
@@ -200,6 +209,19 @@ if (
       if (measured) {
         throw new Error("Worker heap measurement is already active");
       }
+      if (traceGc) {
+        // Identify the isolate before starting counters; forced collections are not workload GC.
+        traceMarker("WORKER_GC_IDENTIFY_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+        try {
+          await collect();
+        } finally {
+          setFlagsFromString("--no-trace-gc-nvp");
+          traceMarker("WORKER_GC_IDENTIFY_END", command.id);
+        }
+        traceMarker("WORKER_GC_BEGIN", command.id);
+        setFlagsFromString("--trace-gc-nvp");
+      }
       measured = {
         startedAtEpochMs: Date.now(),
         startedAt: performance.now(),
@@ -220,6 +242,10 @@ if (
       const endedAtEpochMs = Date.now();
       const elapsedMs = performance.now() - measured.startedAt;
       const cpu = process.threadCpuUsage(measured.cpu);
+      if (traceGc) {
+        setFlagsFromString("--no-trace-gc-nvp");
+        traceMarker("WORKER_GC_END", command.id);
+      }
       loop.disable();
       drainGc(false);
       const result = measured;

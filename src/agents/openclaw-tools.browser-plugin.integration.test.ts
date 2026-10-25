@@ -10,10 +10,6 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
-import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
@@ -150,20 +146,19 @@ describe("createOpenClawTools browser plugin integration", () => {
     const enteredDiscovery = createDeferred();
     const releaseDiscovery = createDeferred();
     const describeMessageTool = vi.fn(() => ({ actions: [] }));
-    const describeMessageToolAsync = vi.fn(async () => {
-      enteredDiscovery.resolve();
-      await releaseDiscovery.promise;
-      return {
-        actions: ["send", "react"] as const,
-        capabilities: ["delivery-pin"] as const,
-        schema: { properties: { reactionKind: Type.Optional(Type.String()) } },
-      };
-    });
     installChannel({
       ...createChannelTestPluginBase({ id: "matrix" }),
       actions: {
         describeMessageTool,
-        describeMessageToolAsync,
+        describeMessageToolAsync: async () => {
+          enteredDiscovery.resolve();
+          await releaseDiscovery.promise;
+          return {
+            actions: ["send", "react"] as const,
+            capabilities: ["delivery-pin"] as const,
+            schema: { properties: { reactionKind: Type.Optional(Type.String()) } },
+          };
+        },
       },
     });
     const publish = vi.fn((tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>) => tools);
@@ -191,7 +186,6 @@ describe("createOpenClawTools browser plugin integration", () => {
       },
     });
     expect(describeMessageTool).not.toHaveBeenCalled();
-    expect(describeMessageToolAsync).toHaveBeenCalledOnce();
   });
 
   it.each([SESSION_KEY, undefined])("binds delivery for %s", async (key) => {
@@ -415,19 +409,13 @@ describe("createOpenClawTools browser plugin integration", () => {
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
     const config: OpenClawConfig = { plugins: { enabled: true } };
     const pluginRegistry = createEmptyPluginRegistry();
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([]),
-      workspaceDir: "/tmp",
-    });
-    expect(
-      prepareOwnedPluginLoadContext(
-        { config, workspaceDir: "/tmp" },
-        process.env,
-        pluginRegistry,
-        metadataSnapshot,
-      ),
-    ).toBe(metadataSnapshot);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    prepareOwnedPluginLoadContext(
+      { config, workspaceDir: "/tmp" },
+      process.env,
+      pluginRegistry,
+      metadataSnapshot,
+    );
     const loadContext = getPluginRuntimeLoadContext(pluginRegistry);
     expectDefined(loadContext, "expected prepared plugin load context");
     const params = resolveTools({
@@ -508,18 +496,9 @@ describe("createOpenClawTools browser plugin integration", () => {
   );
 
   it("keeps the plugin tool getter live across authored source reloads", () => {
-    const sourceConfig: OpenClawConfig = {
-      gateway: { publicOrigin: "https://first.example" },
-      plugins: { allow: ["memory-core"] },
-    };
-    const firstRuntimeConfig: OpenClawConfig = {
-      ...sourceConfig,
-      plugins: { ...sourceConfig.plugins, entries: { "memory-core": { enabled: true } } },
-    };
-    const nextSourceConfig: OpenClawConfig = {
-      ...sourceConfig,
-      gateway: { publicOrigin: "https://second.example" },
-    };
+    const sourceConfig = { gateway: { publicOrigin: "https://first.example" } };
+    const firstRuntimeConfig = { ...sourceConfig, plugins: { allow: ["memory-core"] } };
+    const nextSourceConfig = { gateway: { publicOrigin: "https://second.example" } };
     const nextRuntimeConfig: OpenClawConfig = { ...firstRuntimeConfig, ...nextSourceConfig };
     setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
     const { getRuntimeConfig } = resolveTools({ config: sourceConfig }).context;

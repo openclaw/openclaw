@@ -22,6 +22,7 @@ import {
   touchTranscriptMutationInTransaction,
   touchTranscriptWindowRecency,
 } from "./session-accessor.sqlite-transcript-state.js";
+import type { TranscriptMutationAdvance } from "./session-transcript-mutation-projection.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -74,9 +75,14 @@ export function createTranscriptAppendBatch(
       [scope.sessionKey, sqliteSessionIdWriteScope(scope.sessionId)],
       () =>
         preserveSessionEntryCacheAcrossWrite(database, () => {
-          // Immediate foreign keys require payloads before identities and active rows.
-          cursor.insertEvent?.batch(batch.events);
-          cursor.insertIdentity?.batch([...batch.identities.values()]);
+          // PG uses the payload CTE's accepted sequences; SQLite keeps its two writes.
+          const identities = [...batch.identities.values()];
+          if (cursor.insertEvent?.batchWithIdentities) {
+            cursor.insertEvent.batchWithIdentities(batch.events, identities);
+          } else {
+            cursor.insertEvent?.batch(batch.events);
+            cursor.insertIdentity?.batch(identities);
+          }
           cursor.appendToIndex?.flushRows();
           batch.events.length = 0;
           batch.identities.clear();
@@ -94,7 +100,12 @@ export function createTranscriptAppendBatch(
         flushRows();
       }
     },
-    settle(completed: boolean, appended: number, projectionNeedsRebuild: boolean) {
+    settle(
+      completed: boolean,
+      appended: number,
+      projectionNeedsRebuild: boolean,
+      logicalAdvance?: TranscriptMutationAdvance,
+    ) {
       // A caller may catch an iterator error and commit the accepted prefix.
       // Settle its index and attempt recency without advancing the mutation fence.
       preserveSessionEntryCacheAcrossWrite(database, () => {
@@ -106,6 +117,9 @@ export function createTranscriptAppendBatch(
             scope.sessionId,
             cursor.windowUpdatedAt,
             projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+            undefined,
+            undefined,
+            logicalAdvance,
           );
         } else if (cursor.windowUpdatedAt !== undefined) {
           touchTranscriptWindowRecency(database, scope.sessionId, cursor.windowUpdatedAt, cursor);

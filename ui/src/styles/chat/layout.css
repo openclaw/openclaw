@@ -1195,11 +1195,6 @@ openclaw-pending-session-create {
     width: 36px;
   }
 }
-.context-usage__note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--muted);
-}
 .task-suggestion__start svg,
 .chat-pr__checks-chevron svg,
 .chat-ci__chevron svg,

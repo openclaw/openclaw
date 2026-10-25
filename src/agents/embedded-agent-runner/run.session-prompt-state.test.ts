@@ -40,6 +40,7 @@ import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import {
   compactionAssistantFixture,
   makeTerminalInput,
+  textAssistant,
 } from "./run/terminal-resolution.test-support.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 
@@ -85,6 +86,16 @@ function makeUserMessage(content = BASE_RUN_PARAMS.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
 }
 
+function persisted(message: ReturnType<typeof makeUserMessage>, messageId: string) {
+  return {
+    admission: TEST_ADMISSION,
+    sessionFile: BASE_RUN_PARAMS.sessionFile,
+    sessionEntry: undefined,
+    messageId,
+    message,
+  };
+}
+
 function createRecorder(
   overrides: Partial<UserTurnTranscriptRecorder> = {},
 ): UserTurnTranscriptRecorder {
@@ -127,6 +138,24 @@ function replaySafeAttempt(assistant: ReturnType<typeof buildEmbeddedRunnerAssis
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+  });
+}
+
+function terminal(
+  sessionPromptState: Awaited<ReturnType<typeof createState>>,
+  input: Parameters<typeof makeTerminalInput>[0],
+) {
+  return resolveEmbeddedRunTerminal({ ...makeTerminalInput(input), sessionPromptState });
+}
+function retryAssistant(
+  state: Awaited<ReturnType<typeof createState>>,
+  assistant: Parameters<typeof replaySafeAttempt>[0],
+  retryState?: ReturnType<typeof createEmbeddedRunTerminalRetryState>,
+) {
+  return terminal(state, {
+    attempt: replaySafeAttempt(assistant),
+    attemptAssistant: assistant,
+    ...(retryState ? { retryState } : {}),
   });
 }
 
@@ -184,9 +213,7 @@ describe("embedded run session prompt state", () => {
       prompt: "Task B: inspect the blue database.",
       messages: [],
     });
-    const completed = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "The blue database was inspected." }],
-    });
+    const completed = textAssistant("The blue database was inspected.");
     const messages = [completed];
     state.continueFromCurrentTranscript({ messages });
     const previous = state.continuation!;
@@ -381,17 +408,7 @@ describe("embedded run session prompt state", () => {
       persisted: true,
       internal: true,
     };
-    const attempt = replaySafeAttempt(undefined);
-
-    const resolved = await resolveEmbeddedRunTerminal({
-      ...makeTerminalInput({
-        attempt,
-        attemptAssistant: undefined,
-      }),
-      sessionPromptState: state,
-    });
-
-    expect(resolved).toEqual({ action: "retry" });
+    await expect(retryAssistant(state, undefined)).resolves.toEqual({ action: "retry" });
     expect(state.activePrompt).toEqual(activePrompt);
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
@@ -400,17 +417,9 @@ describe("embedded run session prompt state", () => {
     await using state = await createState();
     const retryState = createEmbeddedRunTerminalRetryState();
     const compactionAssistant = compactionAssistantFixture("cmp-shared-state");
-    const compactionAttempt = replaySafeAttempt(compactionAssistant);
-    await expect(
-      resolveEmbeddedRunTerminal({
-        ...makeTerminalInput({
-          retryState,
-          attempt: compactionAttempt,
-          attemptAssistant: compactionAssistant,
-        }),
-        sessionPromptState: state,
-      }),
-    ).resolves.toEqual({ action: "retry" });
+    await expect(retryAssistant(state, compactionAssistant, retryState)).resolves.toEqual({
+      action: "retry",
+    });
 
     const reasoningAssistant = buildEmbeddedRunnerAssistant({
       content: [
@@ -421,30 +430,12 @@ describe("embedded run session prompt state", () => {
         },
       ],
     });
-    const reasoningAttempt = replaySafeAttempt(reasoningAssistant);
-    await expect(
-      resolveEmbeddedRunTerminal({
-        ...makeTerminalInput({
-          retryState,
-          attempt: reasoningAttempt,
-          attemptAssistant: reasoningAssistant,
-        }),
-        sessionPromptState: state,
-      }),
-    ).resolves.toEqual({ action: "retry" });
-
-    const emptyResponseAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "" }],
+    await expect(retryAssistant(state, reasoningAssistant, retryState)).resolves.toEqual({
+      action: "retry",
     });
-    await expect(
-      resolveEmbeddedRunTerminal({
-        ...makeTerminalInput({
-          retryState,
-          attempt: replaySafeAttempt(emptyResponseAssistant),
-        }),
-        sessionPromptState: state,
-      }),
-    ).resolves.toEqual({ action: "retry" });
+    await expect(retryAssistant(state, textAssistant(""), retryState)).resolves.toEqual({
+      action: "retry",
+    });
 
     const prompt = state.activePrompt.override ?? "";
     expect(prompt).toContain("Your turn ended without a final reply.");
@@ -473,26 +464,19 @@ describe("embedded run session prompt state", () => {
     await using state = await createState();
     try {
       state.activateCompactionContinuation("continue after compaction");
-      const assistant = buildEmbeddedRunnerAssistant({
-        content: [{ type: "text", text: "Visible draft." }],
-      });
-      const attempt = makeEmbeddedRunnerAttempt({
+      const assistant = textAssistant("Visible draft.");
+      const attempt = {
+        ...replaySafeAttempt(assistant),
         assistantTexts: ["Visible draft."],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
         beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      });
+      };
 
       await expect(
-        resolveEmbeddedRunTerminal({
-          ...makeTerminalInput({
-            attempt,
-            attemptAssistant: assistant,
-            payloadsWithToolMedia: [{ text: "Visible draft." }],
-            finalAssistantVisibleText: "Visible draft.",
-          }),
-          sessionPromptState: state,
+        terminal(state, {
+          attempt,
+          attemptAssistant: assistant,
+          payloadsWithToolMedia: [{ text: "Visible draft." }],
+          finalAssistantVisibleText: "Visible draft.",
         }),
       ).resolves.toEqual({ action: "retry" });
 
@@ -554,13 +538,7 @@ describe("embedded run session prompt state", () => {
       },
     };
     const persistApproved = vi.fn(async () => undefined);
-    const persistBlocked = vi.fn(async () => ({
-      admission: TEST_ADMISSION,
-      sessionFile: BASE_RUN_PARAMS.sessionFile,
-      sessionEntry: undefined,
-      messageId: "msg-user-blocked",
-      message: blockedMessage,
-    }));
+    const persistBlocked = vi.fn(async () => persisted(blockedMessage, "msg-user-blocked"));
     const recorder = createRecorder({ persistApproved, persistBlocked });
     const onUserMessagePersisted = vi.fn();
     await using state = await createState({
@@ -633,13 +611,7 @@ describe("embedded run session prompt state", () => {
       expect(state.suppressNextUserMessagePersistence).toBe(false);
 
       closed = owner === "closed";
-      persistence.resolve({
-        admission: TEST_ADMISSION,
-        sessionFile: BASE_RUN_PARAMS.sessionFile,
-        sessionEntry: undefined,
-        messageId: "msg-user-delayed",
-        message: persistedMessage,
-      });
+      persistence.resolve(persisted(persistedMessage, "msg-user-delayed"));
       if (closed) {
         await expect(retryPromise).rejects.toBe(callerError);
         expect(retryPrepared).toBe(false);

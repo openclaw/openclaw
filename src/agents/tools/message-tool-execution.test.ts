@@ -31,7 +31,7 @@ import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "../../infra/outbound/message-action-runner.test-support.js";
-import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.types.js";
+import type { HookResult } from "../../plugins/hook-runner-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -56,6 +56,8 @@ import {
   registerMessageChannel,
   stubMessageSecrets,
 } from "./message-tool-execution.test-support.js";
+
+type MessageSendingHookResult = HookResult<"message_sending">;
 
 const EMPTY_CATALOG = {
   version: 0,
@@ -744,7 +746,7 @@ describe("message tool group thread replies", () => {
       } satisfies ChannelPlugin);
       const delivered: unknown[] = [];
       const recordReply = vi.fn();
-      const sendingHook = vi.fn<() => PluginHookMessageSendingResult>();
+      const sendingHook = vi.fn<() => MessageSendingHookResult>();
       const hookRunner = createHookRunner(
         createMockPluginRegistry([{ hookName: "message_sending", handler: sendingHook }]),
       );
@@ -758,7 +760,7 @@ describe("message tool group thread replies", () => {
           if (String(params.message).includes("Failed reply")) {
             throw new Error("delivery failed");
           }
-          let hookResult: PluginHookMessageSendingResult | undefined;
+          let hookResult: MessageSendingHookResult | undefined;
           if (String(params.message).includes("hook")) {
             sendingHook.mockReturnValue(
               String(params.message).includes("Cancelled")
