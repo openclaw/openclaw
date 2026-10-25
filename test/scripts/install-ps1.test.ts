@@ -33,6 +33,17 @@ it("preserves the min-release-age probe status before raw npmrc detection", () =
   expect(probeStatusCapture).toBeLessThan(rawKeyProbe);
   expect(npmInstallBody).toContain("} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge");
 });
+it("accepts an omitted NodeVersion while still validating nonempty versions", () => {
+  const patternSource = source.match(
+    /\[ValidatePattern\("([^"]+)"\)\]\s*\[string\]\$NodeVersion/,
+  )?.[1];
+  expect(patternSource, "missing NodeVersion ValidatePattern").toBeDefined();
+  const pattern = new RegExp(patternSource ?? "(?!x)x");
+  expect(pattern.test("")).toBe(true);
+  expect(pattern.test("26.12.1")).toBe(true);
+  expect(pattern.test("26.12")).toBe(false);
+  expect(pattern.test("v26.12.1")).toBe(false);
+});
 const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
 const powershellArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass".split(" ");
@@ -67,6 +78,27 @@ Write-Output 'installer caller survived'`,
     if (mode === "streamed") {
       expect(output).toContain("caught canonical failure\ninstaller caller survived\n");
     }
+  },
+);
+runWithPowerShell(
+  "runs the documented piped Invoke-Expression entrypoint with an omitted NodeVersion",
+  () => {
+    const scriptPath = join(process.cwd(), SCRIPT_PATH).replaceAll("'", "''");
+    const result = runPowerShell([
+      "-Command",
+      `$ErrorActionPreference = 'Stop'
+$env:OPENCLAW_DRY_RUN = '1'
+$env:OPENCLAW_NO_ONBOARD = '1'
+$env:OPENCLAW_INSTALL_METHOD = 'npm'
+Get-Content -LiteralPath '${scriptPath}' -Raw | Invoke-Expression`,
+    ]);
+    const output = result.stdout.replace(/\r\n/g, "\n");
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(output).toContain("[OK] Windows detected");
+    expect(output).toContain("[OK] Dry run");
+    expect(output).toContain("[OK] Install method: npm");
+    expect(output).toContain("[OK] Onboard: skipped");
   },
 );
 runWithPowerShell(
