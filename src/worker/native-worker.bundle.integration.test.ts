@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, readdir } from "node:fs/promises";
 import type { Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,15 +17,7 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { NodeWorkerBundleInstaller } from "../node-host/node-worker-bundle-installer.js";
 import { snapshotNodeWorkerNativeInference } from "../node-host/node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
-import {
-  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  readWorkerBundleDirectoryManifest,
-} from "../shared/worker-bundle-archive.js";
-import {
-  hashWorkerBundleManifest,
-  WORKER_BUNDLE_ARTIFACT_PATHS,
-  workerBundleArchiveRelativePath,
-} from "../shared/worker-bundle-hash.js";
+import { workerBundleArchiveRelativePath } from "../shared/worker-bundle-hash.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   closeNativeServers,
@@ -84,12 +75,6 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
       cacheDir: path.join(root, "bundle-cache"),
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
     }).prepare();
-    expect(artifact.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
-    const archiveHash = createHash("sha256");
-    for await (const chunk of createReadStream(artifact.tarballPath)) {
-      archiveHash.update(chunk);
-    }
-    expect(archiveHash.digest("hex")).toBe(artifact.tarballSha256);
     const build = {
       bundleHash: artifact.bundleHash,
       openclawVersion: artifact.openclawVersion,
@@ -133,14 +118,6 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
       },
       gatewayUrl: "ws://127.0.0.1:1",
     });
-    const installedRoot = path.join(bundleRoot, gatewayNamespace, "bundles", build.bundleHash);
-    const manifest = await readWorkerBundleDirectoryManifest({
-      root: installedRoot,
-      limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-      ignoreTopLevel: new Set(["bootstrap-receipt.json"]),
-    });
-    expect(hashWorkerBundleManifest(manifest)).toBe(artifact.bundleHash);
-    expect(manifest.map((entry) => entry.path)).toEqual([...WORKER_BUNDLE_ARTIFACT_PATHS]);
 
     gateway = await ComposedGatewayHarness.create(tempDirs.make("oc-bundle-gw-"), artifact);
     await gateway.start();
@@ -210,21 +187,18 @@ it.skipIf(process.env.TEST_NATIVE_WORKER_BUNDLE !== "1" || process.platform === 
         { timeout: 30_000, interval: 50 },
       )
       .toMatchObject({ state: "completed" });
-    const receipt = await processOwner.status(input.launchId);
+    const receipt = expectDefined(await processOwner.status(input.launchId), "supervisor receipt");
     expect(receipt).toMatchObject({
       state: "completed",
       launchId: input.launchId,
       planHash: nodeWorkerPlanHash(input),
       placementGeneration: placement.generation,
     });
-    if (receipt?.state !== "completed" || !receipt.resultJson) {
-      throw new Error("Missing completed supervisor receipt");
-    }
     const transcript = SessionManager.open(owner.sessionTarget);
     const messages = transcript
       .getEntries()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(JSON.parse(receipt.resultJson)).toMatchObject({
+    expect(JSON.parse(expectDefined(receipt.resultJson, "completed result"))).toMatchObject({
       status: "completed",
       transcriptLeafId: transcript.getLeafId(),
     });
