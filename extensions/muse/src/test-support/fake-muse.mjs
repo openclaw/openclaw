@@ -92,13 +92,32 @@ function answer() {
         args: '{"path":"a.txt"}',
       });
     }
-    item("toolCall", active.prompt === "tool-failure" ? "failed" : "completed", {
-      tool: "read_file",
-      callId: "call-1",
-      args: '{"path":"a.txt"}',
-      visibleOutput: "file content",
-    });
+    const finish = () => {
+      item("toolCall", active.prompt === "tool-failure" ? "failed" : "completed", {
+        tool: "read_file",
+        callId: "call-1",
+        args: '{"path":"a.txt"}',
+        visibleOutput: "file content",
+      });
+      answerText();
+    };
+    if (active.prompt === "tool" && process.env.MUSE_FIXTURE_TOOL_GATE_PORT) {
+      const gate = createConnection({
+        host: "127.0.0.1",
+        port: Number(process.env.MUSE_FIXTURE_TOOL_GATE_PORT),
+      });
+      gate.once("data", () => {
+        gate.end();
+        finish();
+      });
+      return;
+    }
+    finish();
+    return;
   }
+  answerText();
+}
+function answerText() {
   const text =
     active.prompt === "credential"
       ? `credential:${process.env.META_API_KEY ?? "cli-login"}`

@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { readFile, realpath } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { Session } from "@muse-code/sdk";
 import {
@@ -181,9 +183,13 @@ export function registerMuseLifecycleTests({
         }
         return { decision: "allow-once" as const };
       });
-      // Call the preserved SDK operation with its actual Session receiver below.
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      const registerApprovalError = Session.prototype.onApprovalError;
+      const sessionOperations: {
+        onApprovalError: (
+          this: Session,
+          ...args: Parameters<Session["onApprovalError"]>
+        ) => ReturnType<Session["onApprovalError"]>;
+      } = Session.prototype;
+      const registerApprovalError = sessionOperations.onApprovalError;
       const observedApprovalError = vi
         .spyOn(Session.prototype, "onApprovalError")
         .mockImplementation(function (this: Session, handler) {
@@ -295,7 +301,26 @@ export function registerMuseLifecycleTests({
     const globalEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
     const toolActivity: Array<{ type: string; toolName: string }> = [];
     const progress = vi.fn();
-    first.params.onRunProgress = progress;
+    const previousToolGate = process.env.MUSE_FIXTURE_TOOL_GATE_PORT;
+    let observeStart!: () => void;
+    const started = new Promise<void>((resolve) => {
+      observeStart = resolve;
+    });
+    let connectSocket!: (socket: Socket) => void;
+    const connected = new Promise<Socket>((resolve) => {
+      connectSocket = resolve;
+    });
+    let toolSocket: Socket | undefined;
+    const toolGate = createServer((socket) => {
+      toolSocket = socket;
+      connectSocket(socket);
+    });
+    first.params.onRunProgress = (event) => {
+      progress(event);
+      if (event.reason === "muse:tool:started") {
+        observeStart();
+      }
+    };
     const stopDiagnostics = onTrustedInternalDiagnosticEvent((event) => {
       if (
         (event.type === "tool.execution.started" ||
@@ -308,7 +333,23 @@ export function registerMuseLifecycleTests({
     });
     const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
     try {
-      const result = await first.harness.runAttempt({ ...first.params, prompt: "tool" });
+      const listening = once(toolGate, "listening");
+      toolGate.listen(0, "127.0.0.1");
+      await listening;
+      const address = toolGate.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Tool observation gate has no TCP address");
+      }
+      vi.stubEnv("MUSE_FIXTURE_TOOL_GATE_PORT", String(address.port));
+      const running = first.harness.runAttempt({ ...first.params, prompt: "tool" });
+      const [socket] = await Promise.race([
+        Promise.all([connected, started]),
+        running.then(() => {
+          throw new Error("Muse finished before live tool observation");
+        }),
+      ]);
+      socket.end("complete");
+      const result = await running;
       expect(prepareContinuationRetryCount).toHaveBeenCalledExactlyOnceWith({
         cwd: await realpath(workspace),
       });
@@ -354,6 +395,11 @@ export function registerMuseLifecycleTests({
     } finally {
       unsubscribe();
       stopDiagnostics();
+      vi.stubEnv("MUSE_FIXTURE_TOOL_GATE_PORT", previousToolGate);
+      toolSocket?.destroy();
+      await new Promise<void>((resolve) => {
+        toolGate.close(() => resolve());
+      });
       await first.harness.dispose?.();
     }
     const resumed = createHarness({
