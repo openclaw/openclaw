@@ -37,6 +37,8 @@ const streamOptions = {
 const normalizeProtected = (source: readonly unknown[]) =>
   normalize(source, { protectFences: true });
 const oversized = "x".repeat(256_001);
+const functionOpen = "<function=read>";
+const functionCall = `${functionOpen}</function>`;
 const overCapXml = `<function=read>${"\u00a0".repeat(128_001)}</function>`;
 const lifecycles = Array.from({ length: 129 }, (_, index) => [
   { type: "thinking_start", contentIndex: index + 1 },
@@ -75,6 +77,11 @@ function cumulativeDeltas(...chunks: string[]) {
   let snapshot = "";
   return chunks.map((delta) => textDelta(delta, (snapshot += delta)));
 }
+function chunksOf(text: string, size: number) {
+  return Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+    text.slice(i * size, (i + 1) * size),
+  );
+}
 
 describe("normalizePlainTextToolCallStreamEvents", () => {
   const falseMarker = cumulativeDeltas(aggregate + "[tool:re", " nope");
@@ -89,20 +96,19 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   const endTypes = ["text_delta", "text_end"];
   const malformed = "<parameter=x!>Visible answer";
   const invalidParameter = streamDeltas(xmlParameter + "</parameter>", malformed);
-  const completed = xmlParameter + "</parameter></function>\nVisible answer";
-  const recovered = [textEvent(xmlParameter), textEnd(completed)];
+  const recovered = [textEvent(xmlParameter), textEnd(`${parameterCall}\nVisible answer`)];
   const heldStart = [
     textStart(0, "", assistant(textContent(""))),
     ...cumulativeDeltas("Visible\n[tool:re", " nope"),
   ];
   const startTypes = ["text_start", "text_delta", "text_delta"];
   it.each<[string, Record<string, unknown>[], string[], string?, string[]?]>([
-    ["replays an aggregate's false marker", falseMarker, ["[tool:re nope"], "<function=read>"],
+    ["replays an aggregate's false marker", falseMarker, ["[tool:re nope"], functionOpen],
     ["retains split optional-closer whitespace", optionalWhitespace, ["\nVisible"]],
     ["reconciles false-prefix prose", proseEnd, [prose], undefined, endTypes],
     ["bounds unnamed Harmony prefixes", streamDeltas(longHarmony), [longHarmony]],
     ["preserves malformed parameters", invalidParameter, [malformed]],
-    ["recovers an authoritative suffix", recovered, ["Visible answer"], "<function=read>"],
+    ["recovers an authoritative suffix", recovered, ["Visible answer"], functionOpen],
     ["emits a held start", heldStart, ["Visible\n", "[tool:re nope"], undefined, startTypes],
   ])("%s", async (_name, source, visible, hidden, types) => {
     const events = await normalize(source);
@@ -116,43 +122,36 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ["<", "eof"],
     ["comment", "done"],
   ] as const)("preserves unnamed prefix %s at %s", async (raw, terminal) => {
-    const events = await normalize(withTerminal([textEvent(raw)], terminal, raw));
+    const events = await normalize(withTerminal(streamDeltas(raw), terminal, raw));
     expectVisible(events, [raw], undefined, terminal);
   });
 
   it.each<[string, string[], string[], string]>([
     ["false prefix", [" [read]\n", "<function=read>"], [" [read]\n"], "<function=read>"],
     [
-      "stacked function",
-      ['[tool:read]\n{"path":"a"}<funct', "ion=read></function>"],
-      [],
-      "<function=read>",
-    ],
-    [
       "stacked Harmony",
-      ['[tool:read]\n{"path":"a"} <|channel|>', "commentary to=read code<|message|>  "],
+      [leading.trimEnd() + " <|channel|>", "commentary to=read code<|message|>  "],
       [],
       "<|channel|>",
     ],
   ])("keeps split call markers private after %s", async (_name, chunks, visible, hidden) => {
-    const events = await normalizeTextDeltas(...chunks);
-    expectVisible(events, visible, hidden);
-    const unsplit = await normalizeTextDeltas(chunks.join(""));
-    expect(textDeltas(unsplit)).toEqual(visible);
+    expectVisible(await normalizeTextDeltas(...chunks), visible, hidden);
+    expect(textDeltas(await normalizeTextDeltas(chunks.join("")))).toEqual(visible);
   });
 
   it.each([
     ["<function=read>", "</function>"],
     ["<|channel|>commentary", ' to=read code<|message|>{"path":"a"}'],
   ])("keeps every opening-marker split private for %s", async (marker, tail) => {
-    const firstCall = '[tool:read]\n{"path":"a"}';
     for (let split = 1; split < marker.length; split += 1) {
       const events = await normalizeTextDeltas(
-        firstCall + marker.slice(0, split),
+        leading.trimEnd() + marker.slice(0, split),
         marker.slice(split) + tail,
       );
       expect(textDeltas(events)).toEqual([]);
+      expectHidden(events, marker);
     }
+    expect(textDeltas(await normalizeTextDeltas(leading.trimEnd() + marker + tail))).toEqual([]);
   });
 
   it.each([
@@ -176,7 +175,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     const events = await normalize(
       withTerminal(cumulativeDeltas(prefix, visible), "done", prefix + visible),
     );
-    expectVisible(events, [visible], "<function=read>", "done");
+    expectVisible(events, [visible], functionOpen, "done");
   });
 
   it.each<[string, string[]]>([
@@ -223,14 +222,13 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
 
   it("preserves a follow-on named JSON call invalidated by visible tail text", async () => {
     const visible = '[read]\n{"path":"/tmp"} visible';
-    const raw = `${overCapXml}\n${visible}`;
-    const events = await normalize([finish("length", raw)]);
+    const events = await normalize([finish("length", `${overCapXml}\n${visible}`)]);
     expect(events.at(-1)?.message).toMatchObject({ content: textContent(visible) });
   });
 
   it("uses the compact error projection when no partial is present", async () => {
     const raw = `[tool:read]\n<parameter=path>\n${oversized}`;
-    const error = assistant([{ type: "text", text: raw }, thinking]);
+    const error = assistant([...textContent(raw), thinking]);
     const events = await normalize([
       textDelta(raw, raw),
       { ...queuedReasoning, contentIndex: 1, partial: error },
@@ -240,13 +238,13 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       { type: "thinking_delta", contentIndex: 0, partial: { content: [thinking] } },
       { type: "error", error: { content: [thinking] } },
     ]);
-    expect(JSON.stringify(events)).not.toContain("[tool:read]");
+    expectHidden(events, "[tool:read]");
   });
 
   it("drains every auxiliary lifecycle event at the candidate queue cap", async () => {
     const events = await normalize([textEvent('[tool:read] {"path":"SECRET"'), ...lifecycles]);
     expect(events).toMatchObject([{ type: "start" }, ...lifecycles]);
-    expect(JSON.stringify(events)).not.toContain("SECRET");
+    expectHidden(events, "SECRET");
   });
 
   it("drains merged auxiliary deltas at the suppression queue byte cap", async () => {
@@ -258,7 +256,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     expect(events[0]?.type).toBe("start");
     const deltas = events.filter((event) => event.type === "thinking_delta");
     expect(deltas.map((event) => event.delta)).toEqual([chunk + chunk, chunk]);
-    expect(JSON.stringify(events)).not.toContain("SECRET");
+    expectHidden(events, "SECRET");
   });
 
   it("preserves fence protection after replaying a false prefix at the auxiliary queue cap", async () => {
@@ -280,77 +278,61 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   it("scans complete under-cap call sequences linearly", () => {
     const callCount = 64;
     const hasExactName = vi.fn((name: string) => matcher.hasExactName(name));
-    const text = Array.from({ length: callCount }, () => "<function=read></function>").join("\n");
+    const text = Array.from({ length: callCount }, () => functionCall).join("\n");
     expect(
-      scrubMessage({
-        matcher: { ...matcher, hasExactName },
-        message: assistant(text),
-      }),
+      scrubMessage({ matcher: { ...matcher, hasExactName }, message: assistant(text) }),
     ).toBeUndefined();
     expect(hasExactName.mock.calls.length).toBeLessThanOrEqual(callCount * 3);
   });
 
   it("keeps post-JSON structural whitespace private without accumulating it", async () => {
     const prefix = `[read]\n{"path":"${oversized}`;
-    const whitespaceChunks = Array.from({ length: 64 }, () => " ".repeat(4096));
+    const whitespaceChunks = chunksOf(" ".repeat(64 * 4096), 4096);
     const tail = "[/read]\nVisible";
     const raw = `${prefix}"}${whitespaceChunks.join("")}${tail}`;
     const events = await normalize([
-      textEvent(prefix),
-      textEvent('"}'),
-      ...whitespaceChunks.map((delta) => textEvent(delta)),
-      textEvent(tail),
+      ...streamDeltas(prefix, '"}', ...whitespaceChunks, tail),
       finish("length", raw),
     ]);
     expectVisible(events, ["Visible"], "[read]", "done");
   });
 
   it("bounds blank-line buffering after a complete call", async () => {
-    const call = "<function=read></function>\n";
-    const whitespaceChunks = Array.from({ length: 65 }, () => "\n".repeat(4096));
-    const events = await normalize([
-      textEvent(call),
-      ...whitespaceChunks.map((delta) => textEvent(delta)),
-      textEvent("Visible"),
-    ]);
+    const whitespaceChunks = chunksOf("\n".repeat(65 * 4096), 4096);
+    const events = await normalizeTextDeltas(`${functionCall}\n`, ...whitespaceChunks, "Visible");
 
     const deltas = textDeltas(events);
     expect(deltas.at(-1)).toBe("Visible");
     expect(deltas.slice(0, -1).join("").length).toBeLessThanOrEqual(2 * 4096);
-    expect(JSON.stringify(events)).not.toContain("<function=read>");
+    expectHidden(events);
   });
 
   it("retains a new block supplied only by its authoritative text end", async () => {
     const events = await normalize([textEvent("[read]"), textEnd("Visible answer", 1)]);
-    expect(events).toEqual([
-      { type: "text_delta", contentIndex: 0, delta: "[read]" },
-      { type: "text_end", contentIndex: 1, content: "Visible answer" },
-    ]);
+    expect(events).toEqual([textEvent("[read]"), textEnd("Visible answer", 1)]);
   });
 
   it("preserves streamed content indexes in terminal error snapshots", async () => {
-    const call = parameterCall;
     const suffix = { type: "text", text: "Visible suffix." };
     const clean = {
       type: "thinking_start",
       contentIndex: 1,
-      partial: assistant([{ type: "text", text: "" }, thinking]),
+      partial: assistant([...textContent(""), thinking]),
     };
-    const error = assistant([{ type: "text", text: call }, thinking, suffix]);
+    const error = assistant([...textContent(parameterCall), thinking, suffix]);
     const events = await normalize([
-      textEvent(call),
+      textEvent(parameterCall),
       clean,
       textEvent(suffix.text, 2),
       errorEvent(error, error),
     ]);
     expect(events[0]).toEqual(clean);
     expect(textDeltas(events)).toEqual([suffix.text]);
-    expectTerminal(events, "error", [{ type: "text", text: "" }, thinking, suffix]);
+    expectTerminal(events, "error", [...textContent(""), thinking, suffix]);
   });
 
   it("emits each visible segment once across multiple stripped calls and cumulative text_end", async () => {
-    const call = `${overCapXml}\n`;
-    const first = `${call}ONE\n`;
+    const first = `${overCapXml}\nONE\n`;
     const second = "TWO\n<function=read></function>\nONE\n";
     const raw = first + second;
     const events = await normalize([
@@ -381,30 +363,26 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     ],
     [
       "hostile content index",
-      [
-        {
-          ...textDelta(parameterCall, parameterCall),
-          contentIndex: Number.MAX_SAFE_INTEGER,
-        },
-      ],
+      [textEvent(parameterCall, Number.MAX_SAFE_INTEGER, assistant(textContent(parameterCall)))],
     ],
   ] as const)("suppresses %s", async (_name, source) => {
     expect(await normalize(source)).toEqual([]);
   });
 
-  it.each([
-    ["<function=read><parameter=path>SECRET", "error"],
-    ["<function=read><parameter=path>SECRET", "done"],
-  ] as const)("fails closed on a known %s candidate at %s", async (raw, terminal) => {
-    const events = await normalize(
-      terminal === "error"
-        ? [textEvent(raw), errorEvent({ message: "stream failed" })]
-        : withTerminal([textEvent(raw)], terminal, raw),
-    );
-    expect(events.at(-1)?.type).toBe(terminal);
-    expect(textDeltas(events)).toEqual([]);
-    expect(JSON.stringify(events)).not.toContain("SECRET");
-  });
+  it.each(["error", "done"] as const)(
+    "fails closed on a known candidate at %s",
+    async (terminal) => {
+      const raw = "<function=read><parameter=path>SECRET";
+      const events = await normalize(
+        terminal === "error"
+          ? [textEvent(raw), errorEvent({ message: "stream failed" })]
+          : withTerminal([textEvent(raw)], terminal, raw),
+      );
+      expect(events.at(-1)?.type).toBe(terminal);
+      expect(textDeltas(events)).toEqual([]);
+      expectHidden(events, "SECRET");
+    },
+  );
 
   it("keeps block-local text_end checkpoints out of the candidate buffer", async () => {
     const header = "[read]";
@@ -426,10 +404,8 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
       ],
       {
         matcher,
-        createPromotedToolCallEvents: (message) => [
-          { type: "toolcall_start", contentIndex: 0, partial: message },
-          { type: "toolcall_end", contentIndex: 0, partial: message },
-        ],
+        createPromotedToolCallEvents: (partial) =>
+          ["toolcall_start", "toolcall_end"].map((type) => ({ type, contentIndex: 0, partial })),
         normalizeTerminalMessage: () => ({
           kind: "promoted",
           message: promotedMessage,
@@ -439,7 +415,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     );
     expect(eventTypes(events)).toEqual(["start", "toolcall_start", "toolcall_end", "done"]);
     expect(events.at(-1)).toMatchObject({ reason: "toolUse", message: promotedMessage });
-    expect(JSON.stringify(events)).not.toContain("[/read]");
+    expectHidden(events, "[/read]");
   });
 });
 
@@ -584,17 +560,8 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
         : [{ start, end: close === -1 ? text.length : close + "<<END>>".length }];
     };
     const text = `<<PROTECT>>\n${literalCall}<<END>>\n`;
-    const events = await collect([textEvent(text), finish("stop", text)], {
-      ...streamOptions,
+    const events = await normalize([textEvent(text), finish("stop", text)], {
       resolveProtectedRanges: resolveMarkedRanges,
-      normalizeTerminalMessage: ({ message }) => {
-        const scrubbed = scrubMessage({
-          matcher,
-          message,
-          resolveProtectedRanges: resolveMarkedRanges,
-        });
-        return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
-      },
     });
     expectLiteral(events, text, textContent(text));
   });
@@ -609,12 +576,7 @@ describe("normalizePlainTextToolCallStreamEvents scrub reuse", () => {
       preserveEmptyTextBlocks: true,
       resolveProtectedRanges: resolveTestFenceRanges,
     })?.message;
-  const chunked = (text: string, size: number) => {
-    const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
-      text.slice(i * size, (i + 1) * size),
-    );
-    return cumulativeDeltas(...chunks);
-  };
+  const chunked = (text: string, size: number) => cumulativeDeltas(...chunksOf(text, size));
 
   it("reuses settled scans across a streamed reply with a leaked call (#174345)", async () => {
     const fenced = fencedSections(40);
@@ -730,7 +692,7 @@ describe("normalizePlainTextToolCallStreamEvents trim replay ordering", () => {
       ["thinking_delta", "checking"],
       ["text_delta", "\n"],
     ]);
-    expect(JSON.stringify(events)).not.toContain("<function=read>");
+    expectHidden(events);
   });
 });
 
