@@ -4,7 +4,10 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+import {
+  createClosedChunkStream,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 
 type CapturedArchiveLimits = NonNullable<
   Parameters<typeof import("openclaw/plugin-sdk/setup-tools").extractArchive>[0]["limits"]
@@ -201,13 +204,7 @@ it("rejects declared archives above the download cap", async () => {
 });
 
 it("aborts streamed archives above the download cap and removes partial files", async () => {
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(6));
-      controller.enqueue(Buffer.alloc(256 * 1024 * 1024));
-      controller.close();
-    },
-  });
+  const body = createClosedChunkStream([new Uint8Array(6), Buffer.alloc(256 * 1024 * 1024)]);
   const fetchResult = okDownloadResponse(body);
   await expectRejectedDownload("268435456-byte download cap", fetchResult.release);
 });
