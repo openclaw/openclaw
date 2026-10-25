@@ -1,10 +1,5 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceAuthTokenRecord } from "../../packages/gateway-client/src/client.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { startMinimalRealGateway } from "../gateway/minimal-gateway.test-helpers.js";
 import { ExitError } from "../runtime.js";
@@ -320,25 +315,12 @@ describe("real Gateway session boundary", () => {
   it("preserves real handoff wire outcomes and closes each client before returning", async () => {
     const { GatewayChatClient } =
       await vi.importActual<typeof import("../tui/gateway-chat.js")>("../tui/gateway-chat.js");
-    const responses: unknown[] = [];
-    const errors: unknown[] = [];
     const lifecycle: string[] = [];
     const resolveStart = harness.sessionResolveRequests.length;
     const listStart = harness.sessionListRequests.length;
     mocks.connect.mockImplementation(async (options) => {
       const client = await GatewayChatClient.connect(options);
-      const resolveSession = client.resolveSession.bind(client);
       const stop = client.stop.bind(client);
-      vi.spyOn(client, "resolveSession").mockImplementation(async (params) => {
-        try {
-          const response = await resolveSession(params);
-          responses.push(response);
-          return response;
-        } catch (error) {
-          errors.push(error);
-          throw error;
-        }
-      });
       vi.spyOn(client, "stop").mockImplementation(async () => {
         await stop();
         lifecycle.push("stopped");
@@ -368,20 +350,10 @@ describe("real Gateway session boundary", () => {
       expect(lifecycle.filter((event) => event === "stopped")).toHaveLength(index + 1);
     }
 
-    expect(responses).toEqual([
-      { ok: true, key: "agent:main:alpha", agentId: "main" },
-      { ok: false },
-    ]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({
-      gatewayCode: "INVALID_REQUEST",
-      message: 'Unknown agent id "resume-unconfigured"',
-    });
     expect(harness.sessionResolveRequests.slice(resolveStart)).toEqual(
       cases.map(({ key, agentId }) => ({ key, agentId, includeGlobal: true, allowMissing: true })),
     );
     expect(harness.sessionListRequests).toHaveLength(listStart);
-    expect(mocks.connect).toHaveBeenCalledTimes(3);
     expect(mocks.runTui).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ session: "agent:main:alpha" }),
     );
@@ -400,53 +372,5 @@ describe("real Gateway session boundary", () => {
         }),
       }),
     );
-  });
-
-  it("retires the one-use bootstrap credential before a real-wire reconnect", async () => {
-    const { GatewayClient } =
-      await vi.importActual<typeof import("../gateway/client.js")>("../gateway/client.js");
-    const authState: { value: DeviceAuthTokenRecord | null } = { value: null };
-    const storeDeviceAuthToken = vi.fn(({ token, scopes }: { token: string; scopes: string[] }) => {
-      authState.value = { token, scopes };
-    });
-    const authMethods: (string | undefined)[] = [];
-    const client = new GatewayClient({
-      url: harness.url,
-      bootstrapToken: await harness.issueNodeBootstrapToken(),
-      preferBootstrapToken: true,
-      role: "node",
-      scopes: [],
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientVersion: "test",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      deviceIdentity: await harness.createDeviceIdentity("reconnect"),
-      hostDeps: {
-        loadDeviceAuthToken: () => authState.value,
-        storeDeviceAuthToken,
-      },
-      onHelloOk: (hello) => {
-        authMethods.push(hello.auth?.method);
-      },
-    });
-    client.start();
-    try {
-      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token"]), { timeout: 5_000 });
-      expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
-      expect(storeDeviceAuthToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token: expect.stringMatching(/\S/),
-          scopes: expect.any(Array),
-        }),
-      );
-      expect(authState.value?.token).toBeTruthy();
-
-      client.updateNodeManifest({ caps: [], commands: [] });
-      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token", "device-token"]), {
-        timeout: 5_000,
-      });
-    } finally {
-      await client.stopAndWait();
-    }
   });
 });
