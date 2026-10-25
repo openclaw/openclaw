@@ -13,7 +13,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
@@ -133,14 +133,6 @@ export {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
-export const nativeVoiceNoteChannels = [
-  "discord",
-  "feishu",
-  "matrix",
-  "telegram",
-  "whatsapp",
-] as const;
-
 export function createMockSpeechProvider(
   id = "mock",
   options: Partial<SpeechProviderPlugin> = {},
@@ -238,39 +230,6 @@ export function requireAttempt(attempts: unknown[] | undefined, index: number) {
     throw new Error("expected synthesis attempts");
   }
   return requireRecord(attempts[index], `synthesis attempt ${index}`);
-}
-
-export async function expectTtsPayloadResult(params: {
-  channel: string;
-  prefsName: string;
-  text: string;
-  target: "voice-note" | "audio-file";
-  audioAsVoice: true | undefined;
-  providerResult?: MockSpeechSynthesisResult;
-  mediaExtension?: string;
-  kind?: "tool" | "block" | "final";
-}) {
-  if (params.providerResult) {
-    synthesizeMock.mockResolvedValueOnce(params.providerResult);
-  }
-  await withTtsPayload(
-    {
-      payload: { text: params.text },
-      cfg: createTtsConfig(params.prefsName),
-      channel: params.channel,
-      kind: params.kind ?? "final",
-    },
-    (result) => {
-      expect(synthesizeMock.mock.lastCall?.[0]?.target).toBe(params.target);
-      expect(result.audioAsVoice).toBe(params.audioAsVoice);
-      expect(result.mediaUrl).toMatch(
-        new RegExp(`voice---[a-f0-9-]+\\.${params.mediaExtension ?? "ogg"}$`),
-      );
-      expect(result.spokenText).toBe(params.text);
-      expect(result.ttsSupplement).toEqual({ spokenText: params.text });
-      expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
-    },
-  );
 }
 
 export { prepareSynthesisMock, synthesizeMock, transcodeAudioBufferMock };
