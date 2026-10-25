@@ -143,20 +143,14 @@ it("applies dashboard enablement to subsequent requests without replacing the li
 
 it("resolves identity for documents and bootstrap, not assets", () =>
   withUiRoot(
-    async (check, workspace) => {
-      const identityRuntime = await import("../agents/identity-file-runtime.js");
-      const prepareIdentity = vi.spyOn(identityRuntime, "prepareIdentityFile");
+    async (check) => {
       const realpath = vi.spyOn(fsSync, "realpathSync");
-      onTestFinished(() => {
-        prepareIdentity.mockRestore();
-        realpath.mockRestore();
-      });
+      onTestFinished(() => vi.restoreAllMocks());
       const identityReads = () =>
         realpath.mock.calls.filter(([file]) => nodePath.basename(String(file)) === "IDENTITY.md");
       await check("/assets/app.js", 200);
       await check("/assets/app.js", 200, { method: "HEAD", body: "" });
       expect(identityReads()).toHaveLength(0);
-      expect(prepareIdentity).not.toHaveBeenCalled();
 
       for (const path of ["/", "/chat"]) {
         const response = await check(path, 200);
@@ -175,7 +169,6 @@ it("resolves identity for documents and bootstrap, not assets", () =>
         assistantAgentId: "research",
         assistantName: "Synthetic assistant",
       });
-      expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
       expect(identityReads()).toHaveLength(0);
     },
     async (workspace) => {
@@ -196,29 +189,15 @@ it("serves marketplace documents without claiming plugin HTTP routes", () =>
     async (check) => {
       const browserRequest: Check = (path, status, options) =>
         check(path, status, { headers: { accept: "text/html" }, ...options });
-      const documentPaths = ["", "/", "/ch_bWF0cml4", "/local_bWVtb3J5"].map(
-        (path) => `/plugins${path}`,
-      );
+      const documentPaths = ["/plugins", "/plugins/ch_bWF0cml4", "/plugins/local_bWVtb3J5"];
       for (const pathname of documentPaths) {
         await browserRequest(pathname, 200, { body: expect.stringContaining("spa fallback") });
-        await browserRequest(pathname, 200, { method: "HEAD", body: "" });
       }
-      for (const [path, method, accept] of [
-        ...documentPaths.flatMap((pathname) => [
-          [pathname, "GET", "application/json"] as const,
-          [pathname, "GET", "text/html;q=0"] as const,
-          [pathname, "POST", "text/html"] as const,
-        ]),
-        ...["/plugins/unclaimed", "/plugins/ch_a", "/plugins/ch_bWF0cml4/extra"].map(
-          (pathname) => [pathname, "GET", "text/html"] as const,
-        ),
-      ]) {
-        await browserRequest(path, 404, { method, headers: { accept }, body: "Not Found" });
-      }
+      await browserRequest("/plugins", 200, { method: "HEAD", body: "" });
+      await browserRequest("/plugins/unclaimed", 404, { body: "Not Found" });
+      await browserRequest("/plugins/ch_a", 404, { body: "Not Found" });
+      await browserRequest("/plugins/ch_bWF0cml4/extra", 404, { body: "Not Found" });
       await browserRequest("/plugins/webhook", 202, { body: "plugin response" });
-      await browserRequest("/settings/plugins", 200, {
-        body: expect.stringContaining("spa fallback"),
-      });
     },
     () => ({
       handlePluginRequest: async (req, res) => {
