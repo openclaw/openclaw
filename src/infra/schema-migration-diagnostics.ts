@@ -12,7 +12,7 @@ export function formatSchemaMigrationFailure(
   const reason = String(error)
     .replace(`SQLite schema is incomplete or noncanonical for ${pathname}: `, "")
     .replaceAll(pathname, "[redacted-path]")
-    .replace(/; run openclaw doctor --fix to repair it\.$/u, "")
-    .replace(/\.$/u, "");
-  return `${summary}${formatSqliteErrorCodeSuffix(error)}: ${reason}; database: ${pathname}`;
+    .replace(/; run openclaw doctor --fix to repair it\.$/u, ".");
+  const sentence = /[.!?]$/u.test(reason) ? reason : `${reason}.`;
+  return `${summary}${formatSqliteErrorCodeSuffix(error)}: ${sentence} Database: ${pathname}`;
 }

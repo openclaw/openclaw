@@ -234,7 +234,7 @@ it("repairs the next agent after another agent loses maintenance ownership", asy
   expect(revoked).toBe(true);
   expect(result.warnings).toHaveLength(1);
   expect(result.warnings[0]).toContain("Skipped agent database migration");
-  expect(result.warnings[0]).toContain(`database: ${first}`);
+  expect(result.warnings[0]).toContain(`Database: ${first}`);
   expect(result.warnings[0]).toContain("lease");
   expect(preparedPaths).toEqual([second]);
   expect(readDatabaseSnapshot(first)).toEqual(before);
@@ -668,7 +668,7 @@ it.each([
       ),
     ]);
     expect(result.warnings[0]).toContain("Skipped agent database migration:");
-    expect(result.warnings[0]).toContain(`database: ${databasePath}`);
+    expect(result.warnings[0]).toContain(`Database: ${databasePath}`);
     expect(result.warnings[0]).toContain(`invalid ${kind} JSON`);
     expect(
       createUpdateFailureFact({

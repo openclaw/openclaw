@@ -2748,3 +2748,4 @@ src/process/spawn-broker/worker-sender.ts
 src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
+src/infra/schema-migration-diagnostics.ts

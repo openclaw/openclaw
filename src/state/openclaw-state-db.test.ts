@@ -1984,7 +1984,7 @@ describe("openclaw state database", () => {
       const refusal = {
         changes: [],
         warnings: [
-          `Failed migrating shared state database schema: SqliteSchemaMismatchError: missing table apns_registration_tombstones; database: ${databasePath}`,
+          `Failed migrating shared state database schema: SqliteSchemaMismatchError: missing table apns_registration_tombstones. Database: ${databasePath}`,
         ],
       };
       expect(
