@@ -638,7 +638,7 @@ function ExecApprovalCardContent(
               when={!props.connected || props.canGrant}
               fallback={
                 <div class="exec-approval-status muted" role="status">
-                  <span class="chip exec-approval-status-label">
+                  <span class="exec-approval-status-label">
                     <Icon name="lock" />
                     {t("execApproval.viewOnly")}
                   </span>
