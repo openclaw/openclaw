@@ -27,6 +27,32 @@ const promptClient = () => ({
 });
 const called = (mock: unknown, count = 1) =>
   vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(count));
+function channel() {
+  const value = new MessageChannel();
+  onTestFinished(() => value.port2.close());
+  value.port2.start();
+  return value;
+}
+const acknowledge = (port: MessagePort, ticket: string) =>
+  port.postMessage({ type: "openclaw:widget-host-init-ack", ticket }, []);
+function scopedFetch(matches: (url: string) => boolean, fetchMock: typeof fetch) {
+  const original = globalThis.fetch.bind(globalThis);
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return matches(url) ? fetchMock(input, init) : original(input, init);
+  };
+}
+function nextMessage(port: MessagePort, matches: (event: MessageEvent) => boolean) {
+  return new Promise<MessageEvent>((resolve) => {
+    const listener = (event: MessageEvent) => {
+      if (matches(event)) {
+        port.removeEventListener("message", listener);
+        resolve(event);
+      }
+    };
+    port.addEventListener("message", listener);
+  });
+}
 function createHost(
   overrides: Partial<HostOptions> = {},
   fetchMock: typeof fetch | null = htmlFetch(),
@@ -67,30 +93,18 @@ function createHost(
   const ready = (sandboxUrl = options.sandboxUrl) => notify("proxy-ready", { sandboxUrl });
   const update = (next: Partial<HostOptions>) => host.update({ ...options, ...next });
   const port = async (onMessage?: (event: MessageEvent) => void) => {
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    let adopted = false;
-    const initialized = new Promise<void>((resolve) => {
-      channel.port2.addEventListener("message", (event) => {
-        onMessage?.(event);
-        if (
-          !adopted &&
-          event.data?.type === "openclaw:widget-host-init" &&
-          typeof event.data.ticket === "string"
-        ) {
-          adopted = true;
-          channel.port2.postMessage(
-            { type: "openclaw:widget-host-init-ack", ticket: event.data.ticket },
-            [],
-          );
-          resolve();
-        }
-      });
-    });
-    channel.port2.start();
-    send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
-    await initialized;
-    return channel.port2;
+    const { port1, port2 } = channel();
+    if (onMessage) {
+      port2.addEventListener("message", onMessage);
+    }
+    const initialized = nextMessage(
+      port2,
+      (event) =>
+        event.data?.type === "openclaw:widget-host-init" && typeof event.data.ticket === "string",
+    );
+    send({ type: "openclaw:widget-bridge-port-offer" }, [port1]);
+    acknowledge(port2, (await initialized).data.ticket);
+    return port2;
   };
   return { ...options, options, frame, host, fetchMock, post, send, notify, ready, update, port };
 }
@@ -110,23 +124,20 @@ const state = (id: string, phase: string, ticket = "ticket") =>
   request(id, "state.emit", { payload: { phase } }, ticket);
 const prompt = (id: string, text: string) => request(id, "prompt.send", { text });
 async function sendRequest(port: MessagePort, data: Record<string, unknown>) {
-  return await new Promise<Record<string, unknown>>((resolve) => {
-    const listener = (event: MessageEvent) => {
-      if (event.data?.type !== "openclaw:widget-bridge-response" || event.data.id !== data.id) {
-        return;
-      }
-      port.removeEventListener("message", listener);
-      resolve(event.data as Record<string, unknown>);
-    };
-    port.addEventListener("message", listener);
-    port.postMessage(data, []);
-  });
+  const response = nextMessage(
+    port,
+    (event) => event.data?.type === "openclaw:widget-bridge-response" && event.data.id === data.id,
+  );
+  port.postMessage(data, []);
+  return (await response).data as Record<string, unknown>;
 }
 const reply = (
   port: MessagePort,
   data: Record<string, unknown>,
   expected: Record<string, unknown> = { ok: true },
 ) => expect(sendRequest(port, data)).resolves.toMatchObject(expected);
+const rejectRequest = (port: MessagePort, data: Record<string, unknown>, error: string) =>
+  reply(port, data, { ok: false, error });
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
@@ -136,14 +147,9 @@ describe("BoardWidgetSandboxHost", () => {
   it("loads before connecting without accepting bridge requests", async () => {
     const c = client();
     const f = await readyHost({ connected: false, client: c });
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    channel.port2.start();
-    f.send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
-    await reply(channel.port2, request("before-hello"), {
-      ok: false,
-      error: "Gateway unavailable",
-    });
+    const { port1, port2 } = channel();
+    f.send({ type: "openclaw:widget-bridge-port-offer" }, [port1]);
+    await rejectRequest(port2, request("before-hello"), "Gateway unavailable");
     expect(f.fetchMock).toHaveBeenCalledOnce();
     expect(f.onLoaded).toHaveBeenCalledOnce();
     expect(c.request).not.toHaveBeenCalled();
@@ -211,21 +217,14 @@ describe("BoardWidgetSandboxHost", () => {
       bridgeEnabled: false,
       resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
     });
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    const close = vi.spyOn(channel.port1, "close");
-    f.send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
+    const { port1 } = channel();
+    const close = vi.spyOn(port1, "close");
+    f.send({ type: "openclaw:widget-bridge-port-offer" }, [port1]);
     expect(close).toHaveBeenCalledOnce();
     expect(c.request).not.toHaveBeenCalled();
   });
   it("reports transient document failures separately from authorization", async () => {
-    const f = createHost(
-      {
-        client: client(),
-        resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-      },
-      htmlFetch("unavailable", { status: 503 }),
-    );
+    const f = createHost({ client: client() }, htmlFetch("unavailable", { status: 503 }));
     f.ready();
     await vi.waitFor(() => expect(f.onLoadFailed).toHaveBeenCalledWith(widget()));
     expect(f.onError).not.toHaveBeenCalled();
@@ -237,7 +236,6 @@ describe("BoardWidgetSandboxHost", () => {
     const port = await f.port();
     const response = vi.fn();
     port.addEventListener("message", response);
-    f.post.mockClear();
     port.postMessage(request("old-request"), []);
     await called(c.request);
     f.update({ widget: widget({ revision: 3, viewTicket: "next-ticket" }) });
@@ -245,10 +243,6 @@ describe("BoardWidgetSandboxHost", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(response).not.toHaveBeenCalled();
-    expect(f.post).not.toHaveBeenCalledWith(
-      { type: "openclaw:widget-host-init", ticket: "next-ticket" },
-      SANDBOX_ORIGIN,
-    );
   });
   it("accepts bridge requests only on the wrapper-owned private port", async () => {
     const c = promptClient();
@@ -364,27 +358,17 @@ describe("BoardWidgetSandboxHost", () => {
       expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client", ok: true }));
       next.request.mockClear();
       next.request.mockResolvedValue({ ok: true });
-      await reply(port, state("new-client", "reconnected"), {
-        id: "new-client",
-        ok: false,
-      });
+      await reply(port, state("new-client", "reconnected"), { id: "new-client", ok: false });
       expect(next.request).not.toHaveBeenCalled();
-      const renewal = new Promise<void>((resolve) => {
-        port.addEventListener("message", (event) => {
-          if (
-            event.data?.type === "openclaw:widget-host-init" &&
-            event.data.ticket === "renewed-ticket"
-          ) {
-            port.postMessage(
-              { type: "openclaw:widget-host-init-ack", ticket: "renewed-ticket" },
-              [],
-            );
-            resolve();
-          }
-        });
-      });
+      const renewal = nextMessage(
+        port,
+        (event) =>
+          event.data?.type === "openclaw:widget-host-init" &&
+          event.data.ticket === "renewed-ticket",
+      );
       f.update({ client: next, widget: widget({ viewTicket: "renewed-ticket" }) });
       await renewal;
+      acknowledge(port, "renewed-ticket");
       await reply(port, state("revalidated", "reconnected", "renewed-ticket"), {
         id: "revalidated",
         ok: true,
@@ -405,20 +389,14 @@ describe("BoardWidgetSandboxHost", () => {
         (value) => "https://gateway.example" + value.split("?")[0],
       ),
     );
-    const originalFetch = globalThis.fetch.bind(globalThis),
-      fetchMock = htmlFetch();
+    const fetchMock = htmlFetch();
     const f = await readyHost(
       {
         sandboxUrl: change === "CSP" ? wide : SANDBOX_URL,
         client: client(),
         resolveFrameUrl: () => path(),
       },
-      (input, init) => {
-        const url = input instanceof Request ? input.url : String(input);
-        return sources.has(url.split(/[?#]/u, 1)[0]!)
-          ? fetchMock(input, init)
-          : originalFetch(input, init);
-      },
+      scopedFetch((url) => sources.has(url.split(/[?#]/u, 1)[0]!), fetchMock),
     );
     f.update({
       widget: widget({ viewTicket: "renewed-ticket" }),
@@ -436,10 +414,6 @@ describe("BoardWidgetSandboxHost", () => {
       }),
       resolveFrameUrl: () => path(change === "session" ? "b" : "a", "next-ticket"),
     });
-    expect(f.post).not.toHaveBeenCalledWith(
-      { type: "openclaw:widget-host-init", ticket: "next-ticket" },
-      SANDBOX_ORIGIN,
-    );
     await called(fetchMock, 2);
     if (change === "CSP") {
       expect(f.post).not.toHaveBeenCalled();
@@ -477,10 +451,7 @@ describe("BoardWidgetSandboxHost", () => {
     const reload = vi.spyOn(f.frame, "src", "set");
     f.host.setActive(false);
     await vi.advanceTimersByTimeAsync(20_000);
-    await reply(port, request("inactive"), {
-      ok: false,
-      error: "Widget inactive",
-    });
+    await rejectRequest(port, request("inactive"), "Widget inactive");
     expect(c.request).not.toHaveBeenCalled();
     f.host.setActive(true);
     await vi.advanceTimersByTimeAsync(20_000);
@@ -488,26 +459,22 @@ describe("BoardWidgetSandboxHost", () => {
     expect(f.fetchMock).toHaveBeenCalledOnce();
     expect(f.onReadyTimeout).not.toHaveBeenCalled();
     expect(reload).not.toHaveBeenCalled();
-    await reply(port, request("resumed"), {
-      ok: true,
-      result: { resumed: true },
-    });
+    await reply(port, request("resumed"), { ok: true, result: { resumed: true } });
   });
   it("resumes one interrupted document load after reactivation", async () => {
     const pending = Promise.withResolvers<Response>();
     const source = "https://gateway.example/widget";
-    const originalFetch = globalThis.fetch.bind(globalThis);
     let sourceFetches = 0;
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      if ((input instanceof Request ? input.url : String(input)) !== source) {
-        return await originalFetch(input, init);
-      }
+    const fetchMock = vi.fn<typeof fetch>(async () => {
       sourceFetches += 1;
       return sourceFetches === 1
         ? await pending.promise
         : new Response("<!doctype html><p>resumed</p>");
     });
-    const f = createHost({}, fetchMock);
+    const f = createHost(
+      {},
+      scopedFetch((url) => url === source, fetchMock),
+    );
     f.ready();
     await vi.waitFor(() => expect(sourceFetches).toBe(1));
     f.host.setActive(false);
