@@ -43,11 +43,7 @@ describe("worktrees cli", () => {
 
   it("escapes terminal table cells while preserving raw registry records in JSON", async () => {
     const record = makeWorktreeRecord("/repo/café\x1b[31m\nforged", "worktree-id", {
-      name: "ordinary",
-      repoFingerprint: "fingerprint",
-      path: "/state/worktree-id",
       branch: "openclaw/ordinary",
-      ownerKind: "manual",
     });
     vi.spyOn(owner, "list").mockResolvedValue([record]);
     const text = muteOutput(false);
@@ -66,11 +62,7 @@ describe("worktrees cli", () => {
   it("escapes the creation acknowledgement without changing its JSON record", async () => {
     const repoRoot = await fs.realpath(tempDirs.make("openclaw-terminal-worktree-"));
     const record = makeWorktreeRecord(repoRoot, "worktree-id", {
-      name: "ordinary",
-      repoFingerprint: "fingerprint",
       path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
-      branch: "openclaw/ordinary",
-      ownerKind: "manual",
     });
     const args = ["create", repoRoot];
     vi.spyOn(owner, "create").mockResolvedValue(record);
@@ -144,15 +136,9 @@ describe("worktrees cli", () => {
     "passes source profiles through early parsing: %j %j",
     async (runtime, selected, profiles, state) => {
       const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
-      const create = vi.spyOn(owner, "create").mockResolvedValue(
-        makeWorktreeRecord(repoRoot, "created", {
-          name: "task",
-          repoFingerprint: "fingerprint",
-          path: "/state/task",
-          branch: "openclaw/task",
-          ownerKind: "manual",
-        }),
-      );
+      const create = vi
+        .spyOn(owner, "create")
+        .mockResolvedValue(makeWorktreeRecord(repoRoot, "created"));
       muteOutput();
       const parsed = parseProfile([
         ...runtime,
@@ -231,30 +217,23 @@ describe("worktrees cli", () => {
       const retire = vi
         .spyOn(owner, "retireSnapshot")
         .mockRejectedValue(new Error("Unexpected snapshot retirement"));
-      await expect(run(retireSnapshotArgs(removedAt))).rejects.toThrow(
+      const pending = run(retireSnapshotArgs(removedAt));
+      await expect(pending).rejects.toThrow(
         "--removed-at must be a non-negative integer (epoch milliseconds).",
       );
       expect(retire).not.toHaveBeenCalled();
+      expect(
+        formatCliFailureLines({
+          title: "The CLI command failed.",
+          error: await pending.catch((cause: unknown) => cause),
+          argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
+          env: {},
+        }),
+      ).toEqual([
+        `--removed-at must be a non-negative integer (epoch milliseconds). Got: ${JSON.stringify(removedAt)}`,
+      ]);
     },
   );
-
-  it("renders the rejected --removed-at value instead of the generic CLI failure", async () => {
-    setRuntimeConfigSnapshot({}, {});
-    vi.spyOn(owner, "retireSnapshot").mockRejectedValue(
-      new Error("Unexpected snapshot retirement"),
-    );
-    const error = await run(retireSnapshotArgs("1700000000100ms")).catch((cause: unknown) => cause);
-    expect(
-      formatCliFailureLines({
-        title: "The CLI command failed.",
-        error,
-        argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
-        env: {},
-      }),
-    ).toEqual([
-      '--removed-at must be a non-negative integer (epoch milliseconds). Got: "1700000000100ms"',
-    ]);
-  });
 
   it("rejects an empty cleanup job selector before cleanup", async () => {
     setRuntimeConfigSnapshot({}, {});
