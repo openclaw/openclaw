@@ -291,6 +291,7 @@ export function writePluginFixtures(
   root: string,
   options: {
     activationOnStartup?: boolean | undefined;
+    nodePolicy?: boolean | undefined;
     count: number;
     providerCatalogStallMs?: number | undefined;
     providerStaticCatalogModelCount?: number | undefined;
@@ -334,7 +335,9 @@ export function writePluginFixtures(
       ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Catalog Stall", auth: [], catalog: { order: "simple", run: async () => { const stopAt = Date.now() + ${options.providerCatalogStallMs}; while (Date.now() < stopAt) {} return { provider }; } }, staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
       : stallsProviderStaticCatalog
         ? `const provider = ${JSON.stringify(provider)};\nmodule.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerProvider({ id: ${JSON.stringify(STALLED_CATALOG_PROVIDER_ID)}, label: "Benchmark Static Catalog Stall", auth: [], staticCatalog: { order: "simple", run: async () => ({ provider }) } }); } };\n`
-        : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
+        : options.nodePolicy
+          ? `module.exports = { id: ${JSON.stringify(id)}, register(api) { api.registerNodeInvokePolicy({ commands: [${JSON.stringify(`${id}.echo`)}], defaultPlatforms: ["linux"], handle: (ctx) => ctx.invokeNode() }); } };\n`
+          : `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`;
     writeFileSync(path.join(pluginDir, "index.cjs"), entrySource);
     if (stallsProviderStaticCatalog) {
       writeFileSync(

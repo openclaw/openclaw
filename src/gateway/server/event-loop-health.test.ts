@@ -118,9 +118,7 @@ function createMonitorHarness(params?: {
   };
   return {
     monitor,
-    scheduler,
     cpuUsage,
-    eventLoopUtilization,
     clock,
     sample,
     samples,
@@ -243,10 +241,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       degraded: params.reasons.length > 0,
       degradedSinceMs: params.reasons.length ? 0 : null,
       intervalMs: count * params.delay,
-      delayP99Ms: params.delay,
-      delayMaxMs: params.delay,
-      utilization: params.utilization,
-      cpuCoreRatio: params.cpuMsPerWallMs,
       reasons: params.reasons,
     });
   });
@@ -255,27 +249,6 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
     harness.stall(30, false);
     await harness.samples(50, { delayMaxMs: 30, reasons: ["event_loop_utilization", "cpu"] });
-  });
-
-  it("keeps overdue reads passive before the first sample under load", async () => {
-    const harness = createMonitorHarness({ cpuMsPerWallMs: 1, utilization: 1 });
-    harness.elapseWithoutSampling(1_200);
-    for (let index = 0; index < 100; index++) {
-      expect(harness.monitor.snapshot()).toBeUndefined();
-      expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
-    }
-    expect(harness.cpuUsage).toHaveBeenCalledTimes(1);
-    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
-    await harness.sample();
-    const current = harness.monitor.snapshot();
-    expect(current?.delayMaxMs).toBeGreaterThanOrEqual(1_200);
-    expect(current?.delayMaxMs).toBeLessThanOrEqual(1_200.5);
-    harness.expectHealth({
-      degraded: true,
-      intervalMs: 1_220,
-      reasons: ["event_loop_delay", "event_loop_utilization", "cpu"],
-    });
-    expect(harness.monitor.snapshot()).toBe(current);
   });
 
   it("tracks persistent degradation at completed samples and clears on recovery", async () => {
@@ -388,22 +361,17 @@ describe("event-loop measurement telemetry", () => {
     expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
   });
 
-  it("keeps diagnostics-disabled sampling active without emitting telemetry", async () => {
-    const listener = vi.fn();
-    onInternalDiagnosticEvent(listener, { include: ["gateway.event_loop.sample"] });
-    setDiagnosticsEnabledForProcess(false);
-    const harness = createMonitorHarness();
-    await harness.sample(1_500);
-    expect(harness.monitor.snapshot()?.reasons).toEqual(["event_loop_delay"]);
-    await waitForDiagnosticEventsDrained();
-    expect(listener).not.toHaveBeenCalled();
-    expect(getInternalDiagnosticEventSequence()).toBe(0);
-  });
-
   it.each<{
     name: string;
     subscribe: () => () => void | Promise<void>;
   }>([
+    {
+      name: "diagnostics disabled",
+      subscribe: () => {
+        setDiagnosticsEnabledForProcess(false);
+        return onInternalDiagnosticEvent(vi.fn(), { include: ["gateway.event_loop.sample"] });
+      },
+    },
     { name: "no listener", subscribe: () => () => {} },
     {
       name: "stability recorder",

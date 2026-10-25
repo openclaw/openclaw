@@ -152,9 +152,11 @@ it("shares one reset observer while preserving synchronous credential retirement
     }),
   );
   const images = () => mounted.flatMap((element) => [...element.querySelectorAll("img")]);
+  // Each select renders its trigger and option avatar; standalone avatars render one each.
+  const expectedImages = 12;
   try {
     await waitForSolid(() => {
-      expect(images()).toHaveLength(mounted.length);
+      expect(images()).toHaveLength(expectedImages);
       expect(images().every((image) => image.getAttribute("src") === "blob:old-context")).toBe(
         true,
       );
@@ -166,7 +168,7 @@ it("shares one reset observer while preserving synchronous credential retirement
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:old-context");
     oldImages.forEach((image) => image.dispatchEvent(new Event("error")));
     await waitForSolid(() => {
-      expect(images()).toHaveLength(mounted.length);
+      expect(images()).toHaveLength(expectedImages);
       expect(images().every((image) => image.getAttribute("src") === "blob:new-context")).toBe(
         true,
       );

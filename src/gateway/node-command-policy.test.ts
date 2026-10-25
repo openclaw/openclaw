@@ -1,7 +1,7 @@
 /**
  * Node command policy regression tests.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -293,16 +294,14 @@ describe("gateway/node-command-policy", () => {
       runtime: {} as PluginRuntime,
       activateGlobalSideEffects: false,
     });
-    const api = builder.createApi(
-      createPluginRecord({
-        id: "remote",
-        source: "/plugins/remote/index.ts",
-        origin: "global",
-        enabled: true,
-        configSchema: false,
-      }),
-      { config: {} },
-    );
+    const record = createPluginRecord({
+      id: "remote",
+      source: "/plugins/remote/index.ts",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = builder.createApi(record, { config: {} });
     const handle = async () => {
       throw new Error("collecting node command metadata must not invoke a handler");
     };
@@ -324,7 +323,12 @@ describe("gateway/node-command-policy", () => {
       });
     }
     const commands = [" remote.policy ", "remote.shared", "remote.policy"];
-    api.registerNodeInvokePolicy({ commands, defaultPlatforms: ["linux"], handle });
+    api.registerNodeInvokePolicy({
+      commands,
+      defaultPlatforms: ["linux"],
+      foregroundRestrictedOnIos: true,
+      handle,
+    });
     api.registerNodeInvokePolicy({
       commands: ["remote.policy-danger", "remote.dangerous"],
       dangerous: true,
@@ -354,6 +358,38 @@ describe("gateway/node-command-policy", () => {
     commands.push("remote.registration-input-mutation");
     expect(listDangerousPluginNodeCommands()).toEqual(["remote.dangerous", "remote.policy-danger"]);
     expect(resolveNodeCommandAllowlist({}, node)).toEqual(allowlist);
+    const admissions = vi.spyOn(getPluginInstance(record)!, "run");
+    try {
+      for (const [platform, deviceFamily] of [
+        ["linux", "Linux"],
+        ["windows", "Windows"],
+        ["macos", "Mac"],
+        ["ios", "iPhone"],
+        ["android", "Android"],
+        ["watchos", "Apple Watch"],
+        ["unknown", "unknown"],
+      ]) {
+        const current = resolveNodeCommandAllowlist({}, { platform, deviceFamily });
+        expect(current.has("remote.policy")).toBe(platform === "linux");
+        expect(current.has("remote.echo")).toBe(platform === "linux");
+        expect(current.has("remote.dangerous")).toBe(false);
+        expect(
+          isNodeCommandAllowed({
+            command: "remote.policy",
+            declaredCommands: ["remote.policy"],
+            allowlist: current,
+          }).ok,
+        ).toBe(platform === "linux");
+      }
+      expect(listDangerousPluginNodeCommands()).toEqual([
+        "remote.dangerous",
+        "remote.policy-danger",
+      ]);
+      expect(isForegroundRestrictedPluginNodeCommand(" remote.policy ")).toBe(true);
+      expect(admissions).not.toHaveBeenCalled();
+    } finally {
+      admissions.mockRestore();
+    }
     expect([
       ...resolveNodeCommandAllowlist(
         {
@@ -375,6 +411,12 @@ describe("gateway/node-command-policy", () => {
       "remote.echo",
       "remote.dangerous",
     ]);
+    // Republishing the same registry also creates a new policy generation.
+    builder.registry.nodeInvokePolicies.length = 0;
+    setActivePluginRegistry(builder.registry);
+    expect(resolveNodeCommandAllowlist({}, node).has("remote.policy")).toBe(false);
+    expect(isForegroundRestrictedPluginNodeCommand("remote.policy")).toBe(false);
+    expect(listDangerousPluginNodeCommands()).toEqual(["remote.dangerous"]);
     setActivePluginRegistry(createEmptyPluginRegistry());
     expect(listDangerousPluginNodeCommands()).toEqual([]);
     expect([...resolveNodeCommandAllowlist({}, node)]).toEqual(["system.notify", "computer.act"]);

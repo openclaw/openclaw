@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
@@ -436,14 +437,11 @@ it("redacts signed body credentials across bounded error text", async () => {
     });
     const splitAt = responseBody.indexOf(code) + Math.floor(code.length / 2);
     return new Response(
-      new ReadableStream({
-        start(controller) {
-          for (const part of [responseBody.slice(0, splitAt), responseBody.slice(splitAt)]) {
-            controller.enqueue(new TextEncoder().encode(part));
-          }
-          controller.close();
-        },
-      }),
+      createClosedChunkStream(
+        [responseBody.slice(0, splitAt), responseBody.slice(splitAt)].map((part) =>
+          new TextEncoder().encode(part),
+        ),
+      ),
       { status: 401, headers: { "content-type": "application/json" } },
     );
   });

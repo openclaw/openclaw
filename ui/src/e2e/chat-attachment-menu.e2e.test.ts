@@ -89,7 +89,9 @@ async function choose(page: Page, kind: string) {
   const input = chooser.element();
   expect(chooser.isMultiple()).toBe(kind !== "camera");
   expect(await input.getAttribute("capture")).toBe(kind === "camera" ? "environment" : null);
-  expect(await input.getAttribute("accept")).toBe(kind === "file" ? null : "image/*");
+  expect(await input.getAttribute("accept")).toBe(
+    kind === "file" ? null : kind === "media" ? "image/*,video/*" : "image/*",
+  );
   return chooser;
 }
 
@@ -156,13 +158,10 @@ suite.define(() => {
           widths.push([932, 430]);
         }
         for (const [width, height] of widths) {
-          // Exercise a prior Photo selection before the fallback picker is repositioned.
-          if (cameraFallback && width === 320) {
-            const chooser = await choose(page, "photo");
-            await expectPickerAtPlusButton(chooser);
-            await chooser.setFiles([]);
-          }
           await page.setViewportSize({ width, height });
+          const mediaChooser = await choose(page, "media");
+          await expectPickerAtPlusButton(mediaChooser);
+          await mediaChooser.setFiles([]);
           await trigger.click();
           const pending = page.waitForEvent("filechooser");
           if (cameraFallback) {
@@ -256,7 +255,9 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
+            fixture.single
+              ? ["Photos & videos", "Attach…"]
+              : ["Take photo", "Photos & videos", "File"],
           );
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });

@@ -13,7 +13,7 @@ function normalize(overrides: Partial<ProviderPlugin>) {
   };
 }
 
-it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
+it("normalizes provider metadata and preserves default OAuth repairs", () => {
   const method: ProviderAuthMethod = {
     id: "primary",
     label: "Primary",
@@ -38,6 +38,11 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: "Demo Provider",
     aliases: ["alias-one"],
     deprecatedProfileIds: ["demo:legacy"],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "demo:old", promptLabel: "Legacy profile" },
+      { promptLabel: "Choose a profile" },
+    ],
     envVars: ["DEMO_API_KEY"],
     auth: [method],
     wizard: {
@@ -55,6 +60,12 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: " Demo Provider ",
     aliases: [" alias-one ", "alias-one", ""],
     deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "   ", promptLabel: "" },
+      { legacyProfileId: " demo:old ", promptLabel: " Legacy profile " },
+      { legacyProfileId: " ", promptLabel: " Choose a profile " },
+    ],
     envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
     auth: [
       {
@@ -90,6 +101,21 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
       'provider "demo" model-picker method "missing" not found; falling back to available methods',
     ],
   ]);
+});
+
+it.each([{ values: [] }, { values: ["", "   "] }])(
+  "omits discarded deprecated profile IDs: $values",
+  ({ values }) => {
+    const { provider, diagnostics } = normalize({ deprecatedProfileIds: values });
+    expect(provider).not.toHaveProperty("deprecatedProfileIds");
+    expect(diagnostics).toEqual([]);
+  },
+);
+
+it("omits empty OAuth profile-ID repair lists", () => {
+  const { provider, diagnostics } = normalize({ oauthProfileIdRepairs: [] });
+  expect(provider).not.toHaveProperty("oauthProfileIdRepairs");
+  expect(diagnostics).toEqual([]);
 });
 
 it("drops wizard metadata when a provider has no auth methods", () => {

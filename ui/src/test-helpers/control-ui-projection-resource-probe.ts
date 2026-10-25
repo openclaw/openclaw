@@ -23,20 +23,25 @@ export function createProjectionResourceProbe() {
   function observeMethod(source: object, method: string, label: string) {
     const descriptor = Object.getOwnPropertyDescriptor(source, method);
     const original: unknown = Reflect.get(source, method);
-    if (typeof original !== "function") throw new Error(`Missing native method: ${label}`);
+    if (typeof original !== "function") {
+      throw new Error(`Missing native method: ${label}`);
+    }
     const counts = (methods[label] ??= { calls: 0, duringNativeCallback: 0 });
     Object.defineProperty(source, method, {
       configurable: true,
       writable: true,
-      value: function (this: unknown, ...args: unknown[]) {
+      value(this: unknown, ...args: unknown[]) {
         counts.calls++;
         counts.duringNativeCallback += Number(nativeCallbackDepth > 0);
         return Reflect.apply(original, this, args);
       },
     });
     restore.push(() => {
-      if (descriptor) Object.defineProperty(source, method, descriptor);
-      else Reflect.deleteProperty(source, method);
+      if (descriptor) {
+        Object.defineProperty(source, method, descriptor);
+      } else {
+        Reflect.deleteProperty(source, method);
+      }
     });
   }
 
@@ -56,7 +61,7 @@ export function createProjectionResourceProbe() {
       Object.defineProperty(widgets, method, {
         configurable: true,
         writable: true,
-        value: function (this: readonly unknown[], ...args: unknown[]) {
+        value(this: readonly unknown[], ...args: unknown[]) {
           counts.calls++;
           const callback = args[0];
           if (typeof callback === "function") {
@@ -100,7 +105,7 @@ export function createProjectionResourceProbe() {
     Object.defineProperty(source, "subscribe", {
       configurable: true,
       writable: true,
-      value: function (this: unknown, ...args: unknown[]) {
+      value(this: unknown, ...args: unknown[]) {
         const listener = args[0];
         if (typeof listener !== "function") {
           return Reflect.apply(original, this, args);
@@ -109,7 +114,7 @@ export function createProjectionResourceProbe() {
         if (!entry) {
           entry = {
             active: false,
-            callback: function (this: unknown, ...values: unknown[]) {
+            callback(this: unknown, ...values: unknown[]) {
               beforeDelivery?.();
               counts.callbacks++;
               nativeCallbackDepth++;

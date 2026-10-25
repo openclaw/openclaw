@@ -1,4 +1,3 @@
-import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isApplePlatform,
   matchesKeyboardShortcut,
@@ -122,34 +121,11 @@ export type ResolvedBoardView = {
   activeTabId: string;
 };
 
-export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // One distance owns both halves of early history loading: upward intent within
 // this range arms the sentinel observer, and the observer's rootMargin fires
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-
-export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
-  const record = catalogRawRecord(raw);
-  if (!record) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-export function catalogRawResult(raw: unknown): string | null {
-  const result = catalogRawRecord(raw)?.result;
-  try {
-    return JSON.stringify(result) || null;
-  } catch {
-    return null;
-  }
-}
 
 export type ChatPaneConnectionScope = {
   context: ApplicationContext;

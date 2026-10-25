@@ -214,8 +214,6 @@ async function runColdMutation(
                   signal,
                 ),
               workerData: {
-                type: "sqlite-transcript-archive-v2",
-                operation: "cold-mutate",
                 plan,
                 commitGate,
                 sourceMatches,

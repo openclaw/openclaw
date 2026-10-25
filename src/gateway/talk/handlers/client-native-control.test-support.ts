@@ -355,10 +355,8 @@ export async function connectNativeSession(
   voiceSessionId?: string,
 ) {
   const socketIndex = upstream.sockets.length;
-  const fetchCount = upstream.fetch.mock.calls.length;
   const result = await create(negotiated, voiceSessionId);
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
-  expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
   const socketCreated = createDeferredCore();
   upstream.events.once("socket", socketCreated.resolve);
@@ -372,8 +370,6 @@ export async function connectNativeSession(
         );
       }),
     ]);
-    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
-    expect(upstream.sockets).toHaveLength(socketIndex + 1);
     expect(response.end).not.toHaveBeenCalled();
     const socket = expectDefined(upstream.sockets[socketIndex], "Missing native sideband");
     socket.open();

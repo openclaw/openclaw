@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { CodexAppServerClient } from "./app-server/client.js";
@@ -242,12 +243,7 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
   let control: ReturnType<typeof createCodexSessionCatalogControl> | undefined;
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
-      const bytes = Array.isArray(raw)
-        ? Buffer.concat(raw)
-        : raw instanceof ArrayBuffer
-          ? Buffer.from(raw)
-          : raw;
-      const request = JSON.parse(bytes.toString()) as RpcRequest;
+      const request = JSON.parse(rawDataToString(raw, "utf8")) as RpcRequest;
       const send = (result: unknown) => socket.send(JSON.stringify({ id: request.id, result }));
       methods.push(request.method);
       if (request.method === "initialize") {

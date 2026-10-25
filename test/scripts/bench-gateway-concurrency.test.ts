@@ -1126,6 +1126,39 @@ describe("gateway concurrency benchmark script", () => {
     });
   });
 
+  it("accepts a start barrier only for one reported fixed-duration mock run", () => {
+    const controls = [
+      ["--start-barrier", "/tmp/paired-release"],
+      ["--output", "/tmp/paired-report.json"],
+      ["--duration-ms", "600000"],
+      ["--timeout-ms", "900000"],
+      ["--runs", "1"],
+      ["--warmup", "0"],
+    ];
+    expect(testing.parseOptions(controls.flat())).toMatchObject({
+      startBarrier: "/tmp/paired-release",
+      output: "/tmp/paired-report.json",
+      durationMs: 600_000,
+    });
+    for (const omitted of ["--output", "--duration-ms"]) {
+      expect(() =>
+        testing.parseOptions(controls.filter(([flag]) => flag !== omitted).flat()),
+      ).toThrow("--start-barrier requires");
+    }
+    for (const replacement of [
+      ["--runs", "2"],
+      ["--warmup", "1"],
+      ["--provider", "openai"],
+    ]) {
+      expect(() =>
+        testing.parseOptions([
+          ...controls.filter(([flag]) => flag !== replacement[0]).flat(),
+          ...replacement,
+        ]),
+      ).toThrow("Fixed-duration turns require");
+    }
+  });
+
   it("parses bounded mock and live benchmark controls without booting a gateway", () => {
     expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
     expect(

@@ -441,6 +441,9 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
           >
             <p role="status">{t("chat.toolCards.fullOutputUnavailable")}</p>
           </Show>
+          <Show when={state().card.catalogTruncated}>
+            <p role="status">{t("chat.catalogOutputTruncated")}</p>
+          </Show>
           <ToolOutcome outcome={state().outcome} exitCode={state().card.exitCode} />
         </div>
       )}

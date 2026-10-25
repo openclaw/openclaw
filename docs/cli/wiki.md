@@ -247,6 +247,10 @@ Malformed UTF-8 exports are rejected before the vault is initialized or imported
 pages are changed. If the error names an invalid export, download a fresh ChatGPT
 export and retry the import.
 
+Export files and existing source pages must resolve to regular files. Named pipes
+and other special files are rejected without waiting for data. Replace the affected
+path with a regular file and retry.
+
 Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`

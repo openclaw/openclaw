@@ -154,7 +154,10 @@ type AutomaticReplyContext = {
 // Capture assistant output; outbound planning, scoped media loading and HTTP remain real.
 async function withNativeAutomaticReply(
   run: (context: AutomaticReplyContext) => Promise<void>,
-  options: { botOnly?: boolean } = {},
+  options: {
+    botOnly?: boolean;
+    quote?: { id: string; senderId: string; senderName: string; body: string };
+  } = {},
 ) {
   await withNextcloudTalkOutboundFixture(async (fixture) => {
     const stateDir = path.join(fixture.directory, "state");
@@ -200,7 +203,10 @@ async function withNativeAutomaticReply(
     const onPlatformSendDispatch = vi.fn(async () => {});
     try {
       await handleNextcloudTalkInbound({
-        message: createMessage({ roomToken: "allowed" }),
+        message: {
+          ...createMessage({ roomToken: "allowed" }),
+          ...(options.quote ? { quote: options.quote } : {}),
+        },
         account: resolveNextcloudTalkAccount({ cfg: config, accountId: "work" }),
         config,
         runtime: createRuntimeSpies(),
@@ -259,6 +265,132 @@ describe("nextcloud-talk inbound behavior", () => {
     });
     mocks.warn.mockReturnValue(undefined);
   });
+
+  it("keeps quoted context separate from current command and reply targets", async () => {
+    const message = {
+      ...createMessage({ text: "What about this?" }),
+      quote: {
+        id: "quoted-parent",
+        senderId: "users/quoted-author",
+        senderName: "Quoted author",
+        body: "UNSEEN_QUOTED_CONTEXT /status @openclaw",
+      },
+    };
+    const request = await allowedInbound({ message });
+    expect(request.ctxPayload.ReplyChain).toEqual([
+      {
+        messageId: "quoted-parent",
+        senderId: "users/quoted-author",
+        sender: "Quoted author",
+        body: "UNSEEN_QUOTED_CONTEXT /status @openclaw",
+        isQuote: true,
+      },
+    ]);
+    expect(request.ctxPayload.RawBody).toBe("What about this?");
+    expect(request.ctxPayload.BodyForCommands).toBe("What about this?");
+    expect(request.ctxPayload.ReplyToId).toBeUndefined();
+    expect(request.ctxPayload.ReplyToIdFull).toBeUndefined();
+    expect(request.ctxPayload.MessageSid).toBe(message.messageId);
+  });
+
+  it.each([
+    { mode: "all" as const, visible: true },
+    { mode: "allowlist" as const, visible: false },
+    { mode: "allowlist_quote" as const, visible: true },
+  ])("honors $mode visibility for a quoted group sender", async ({ mode, visible }) => {
+    mocks.roomKind.mockResolvedValue("group");
+    const account = createAccount({
+      groupAllowFrom: ["user-1"],
+      rooms: { "room-1": { requireMention: false } },
+    });
+    const message = {
+      ...createMessage({ isGroupChat: true, text: "Current message" }),
+      quote: { id: "parent", senderId: "users/other", senderName: "Other", body: "Quoted" },
+    };
+    const request = await allowedInbound({
+      message,
+      account,
+      config: {
+        channels: {
+          defaults: { contextVisibility: mode },
+          "nextcloud-talk": account.config,
+        },
+      },
+    });
+    expect(request.ctxPayload.ReplyChain?.[0]?.body).toBe(visible ? "Quoted" : undefined);
+    expect(request.ctxPayload.SenderId).toBe("user-1");
+  });
+
+  it("does not count a quoted mention as addressing the current message", async () => {
+    mocks.roomKind.mockResolvedValue("group");
+    const core = installCommandRuntime((body) => body?.startsWith("/") ?? false, {
+      matchesMentionPatterns: (body) => /@openclaw/i.test(body),
+    });
+    installPairingController(vi.fn(async () => []));
+    const message = {
+      ...createMessage({ isGroupChat: true, text: "Current message" }),
+      quote: { id: "parent", senderId: "user-1", senderName: "Alice", body: "@openclaw /status" },
+    };
+    await inbound({
+      message,
+      account: createAccount({
+        groupAllowFrom: ["user-1"],
+        rooms: { "room-1": { requireMention: true } },
+      }),
+    });
+    expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { senderId: "users/bob", roomAllowFrom: undefined, visible: true },
+    { senderId: "users/outsider", roomAllowFrom: undefined, visible: false },
+    { senderId: "users/bob", roomAllowFrom: ["users/alice"], visible: false },
+  ])(
+    "applies access-group quote visibility for $senderId (room=$roomAllowFrom)",
+    async ({ senderId, roomAllowFrom, visible }) => {
+      mocks.roomKind.mockResolvedValue("group");
+      const account = createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:operators"],
+        rooms: { "room-1": { requireMention: false, allowFrom: roomAllowFrom } },
+      });
+      const request = await allowedInbound({
+        account,
+        message: {
+          ...createMessage({
+            senderId: "users/alice",
+            senderName: "Alice",
+            isGroupChat: true,
+            text: "What about this?",
+          }),
+          quote: {
+            id: "parent",
+            senderId,
+            senderName: "Quoted author",
+            body: "Group member quote",
+          },
+        },
+        config: {
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: { "nextcloud-talk": ["users/alice", "users/bob"] },
+            },
+          },
+          channels: {
+            defaults: { contextVisibility: "allowlist" },
+            "nextcloud-talk": account.config,
+          },
+        },
+      });
+      expect(request.ctxPayload.SenderId).toBe("users/alice");
+      expect(request.ctxPayload.ReplyChain?.[0]?.body).toBe(
+        visible ? "Group member quote" : undefined,
+      );
+      expect(request.ctxPayload.ReplyToId).toBeUndefined();
+    },
+  );
 
   it("issues a DM pairing challenge and sends the challenge text", async () => {
     const issueChallenge = vi.fn(
@@ -539,6 +671,32 @@ describe("nextcloud-talk inbound behavior", () => {
       },
     );
   });
+
+  it.each([
+    { kind: "final" as const, replyToId: undefined, expectedReply: undefined },
+    { kind: "block" as const, replyToId: undefined, expectedReply: undefined },
+    { kind: "final" as const, replyToId: "41", expectedReply: 41 },
+  ])(
+    "preserves $kind delivery targeting with quoted context ($replyToId)",
+    async ({ kind, replyToId, expectedReply }) => {
+      await withNativeAutomaticReply(
+        async ({ fixture, deliver }) => {
+          await deliver({ text: "Current answer", mediaUrl: fixture.mediaUrl, replyToId }, kind);
+          const share = fixture.requests.find(({ url }) => url.pathname.endsWith("/shares"));
+          const body = new URLSearchParams(share?.body.toString());
+          expect(JSON.parse(body.get("talkMetaData") ?? "{}").replyTo).toBe(expectedReply);
+        },
+        {
+          quote: {
+            id: "40",
+            senderId: "users/quoted",
+            senderName: "Quoted author",
+            body: "Earlier message",
+          },
+        },
+      );
+    },
+  );
 
   it("keeps a warning-only automatic reply invisible after sanitation", async () => {
     await withNativeAutomaticReply(async ({ fixture, deliver }) => {

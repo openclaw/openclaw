@@ -2,6 +2,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeRuntimeExecutable } from "./node-runtime-executable.js";
 
+// Platform fixtures do not create host files; the generated bootstrap has separate process proof.
+vi.mock("../../runtime-process-scripts.generated.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime-process-scripts.generated.mjs")>()),
+  createRuntimeProcessScriptFile: () => ({
+    url: new URL("file:///qa/node-runtime-probe.mjs"),
+    dispose() {},
+  }),
+}));
+
 const { probe } = vi.hoisted(() => ({ probe: vi.fn() }));
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -69,7 +78,7 @@ it.each(['"', ""])(
     ).toBe(String.raw`D:\Program Files\nodejs\node.exe`);
     expect(probe).toHaveBeenCalledWith(
       String.raw`D:\Program Files\nodejs\node.exe`,
-      ["--eval", expect.any(String)],
+      [expect.stringMatching(/node-runtime-probe\.mjs$/), ""],
       {
         encoding: "utf8",
         env: { SystemRoot: String.raw`D:\Windows` },

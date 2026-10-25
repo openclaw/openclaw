@@ -659,19 +659,6 @@ describe("agentLoop tool termination", () => {
         }
       },
     );
-    const deferredTool = (name: string): AgentTool => ({
-      name,
-      label: name,
-      description: name,
-      parameters: Type.Object({}, { additionalProperties: false }),
-      execute: async () => {
-        executed.push(name);
-        return {
-          content: [{ type: "text", text: `${name} result` }],
-          details: { name },
-        };
-      },
-    });
     const events = await collectEvents(
       captureTools(
         [],
@@ -684,7 +671,7 @@ describe("agentLoop tool termination", () => {
               // flight; later resolvers must never be awaited.
               controller.abort(new Error("user aborted"));
             }
-            return deferredTool(toolCall.name);
+            return makeTool(toolCall.name, executed);
           },
           beforeToolBatch: async () => undefined,
         },

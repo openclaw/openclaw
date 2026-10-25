@@ -649,19 +649,20 @@ describe("widget-card", () => {
   });
 
   it("shares one snapshot subscription and membership scan across independently mounted pin buttons", () => {
-    const first = boardProvider();
+    const pinWidget = vi.fn(async () => undefined);
+    const first = boardProvider({ pinWidget });
     const second = boardProvider();
     const firstName = vi.fn();
     const secondName = vi.fn();
-    const widgets = (count: number, read: () => void, pinned: boolean) =>
+    const widgetRows = (count: number, read: () => void, pinned: boolean) =>
       Array.from({ length: count }, (_, index) => ({
         get name() {
           read();
           return pinned && index === 0 ? "wanted" : `widget-${index}`;
         },
       }));
-    first.snapshot.set({ widgets: widgets(100, firstName, false) });
-    second.snapshot.set({ widgets: widgets(200, secondName, true) });
+    first.snapshot.set({ widgets: widgetRows(100, firstName, false) });
+    second.snapshot.set({ widgets: widgetRows(200, secondName, true) });
     const track = (source: typeof first.snapshot) => {
       const subscribe = source.subscribe.bind(source);
       const active = new Set<() => void>();
@@ -695,9 +696,9 @@ describe("widget-card", () => {
     expect(pinButton(mounts[1]!.container)?.disabled).toBe(true);
 
     // Admission samples the replacement immediately, before Solid updates the disabled button.
-    first.snapshot.set({ widgets: widgets(1, firstName, true) });
+    first.snapshot.set({ widgets: widgetRows(1, firstName, true) });
     pinButton(mounts[0]!.container)!.click();
-    expect(first.provider.pinWidget).not.toHaveBeenCalled();
+    expect(pinWidget).not.toHaveBeenCalled();
     expect(firstName).toHaveBeenCalledTimes(101);
     flush();
     expect(firstName).toHaveBeenCalledTimes(101);

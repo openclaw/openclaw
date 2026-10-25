@@ -115,10 +115,11 @@ export function createTranscriptAppendBatch(
           touchTranscriptMutationInTransaction(
             database,
             scope.sessionId,
-            cursor.windowUpdatedAt,
-            projectionNeedsRebuild ? undefined : cursor.rowTranscript,
-            undefined,
-            undefined,
+            {
+              windowUpdatedAt: cursor.windowUpdatedAt,
+              rowTranscript: projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+              projectionReady: !projectionNeedsRebuild,
+            },
             logicalAdvance,
           );
         } else if (cursor.windowUpdatedAt !== undefined) {

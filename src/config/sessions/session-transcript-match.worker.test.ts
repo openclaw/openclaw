@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -68,7 +68,11 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
       await expect(
         findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
       ).resolves.toBeUndefined();
-      await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
+      await expect(
+        listDirectoryTreeStrict(state.stateDir).then((inventory) =>
+          inventory.map((walkEntry) => walkEntry.relativePath),
+        ),
+      ).resolves.toEqual([]);
     };
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
     const answer = assistant("private-final", "private-run", {

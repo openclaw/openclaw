@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
 import { runClawsAddCommand } from "./claws-cli.runtime.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 
 async function snapshotTree(root: string): Promise<Record<string, string>> {
   const snapshot: Record<string, string> = {};
-  for (const entry of await fs.readdir(root, { withFileTypes: true, recursive: true })) {
+  for (const entry of (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent)) {
     const filename = path.join(entry.parentPath, entry.name);
     snapshot[path.relative(root, filename)] = entry.isDirectory()
       ? "directory"

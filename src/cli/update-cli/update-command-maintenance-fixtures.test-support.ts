@@ -1,19 +1,6 @@
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
-import type { SpawnResult } from "../../process/exec-result.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-
-export function processResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 export function updateResult(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
   return { status: "ok", mode: "npm", steps: [], durationMs: 1, ...overrides };

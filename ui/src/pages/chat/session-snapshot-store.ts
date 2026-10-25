@@ -75,6 +75,9 @@ const paginationSchema = {
 };
 const snapshotSchema = json.object(
   {
+    composer: json.optional(
+      json.nullable(json.object({ id: json.text, provider: json.text, name: json.text })),
+    ),
     board: json.optional(
       json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
     ),

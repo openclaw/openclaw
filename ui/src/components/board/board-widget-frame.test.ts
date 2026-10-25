@@ -8,6 +8,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import {
+  acknowledgeWidgetHostInit,
   createFrameOwner,
   dispatchFrameMessage,
   mountBoardWidgetFrame,
@@ -34,6 +35,129 @@ afterEach(() => {
   delete document.documentElement.dataset.themeMode;
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("board widget frame visibility lifetime", () => {
+  it("shares one native listener until the final active owner retires", () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    let firstActive = true;
+    const owners = Array.from({ length: 6 }, (_, index) => {
+      const owner = createFrameOwner(() => boardWidget({ name: `clock-${index}` }), {
+        active: () => index !== 0 || firstActive,
+      });
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      owner.connect();
+      owner.update();
+      return owner;
+    });
+    expect(add.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+
+    firstActive = false;
+    owners[0]!.activityChanged();
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
+    firstActive = true;
+    owners[0]!.activityChanged();
+    expect(add.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+
+    for (const owner of owners.slice(0, -1)) {
+      owner.disconnect();
+    }
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
+    owners.at(-1)!.disconnect();
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+  });
+});
+
+describe("board widget frame message lifetime", () => {
+  it("does not listen for frame messages when active cells have no iframe", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    for (let index = 0; index < 6; index += 1) {
+      const owner = createFrameOwner(() =>
+        boardWidget({ name: `progress-${index}`, contentKind: "plugin" }),
+      );
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      owner.update();
+    }
+    expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+  });
+
+  it("shares delivery between mounted frames and retains suspended frame registration", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    const firstHeight = vi.fn();
+    const secondHeight = vi.fn();
+    let firstActive = true;
+    const mountFrame = (name: string, reportContentHeight: typeof firstHeight) => {
+      const widget = boardWidget({ name });
+      const owner = createFrameOwner(() => widget, {
+        active: () => name !== "first" || firstActive,
+        reportContentHeight,
+      });
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      const root = document.body.appendChild(document.createElement("div"));
+      mountBoardWidgetFrame(owner, widget, root, disposers);
+      return { owner, frame: root.querySelector("iframe")! };
+    };
+    const first = mountFrame("first", firstHeight);
+    const second = mountFrame("second", secondHeight);
+    expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 360 } });
+    expect(firstHeight).toHaveBeenCalledExactlyOnceWith("first", 360);
+    expect(secondHeight).not.toHaveBeenCalled();
+    firstActive = false;
+    first.owner.activityChanged();
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 480 } });
+    expect(firstHeight).toHaveBeenCalledOnce();
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+    firstActive = true;
+    first.owner.activityChanged();
+    first.owner.disconnect();
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 640 } });
+    dispatchFrameMessage(second.frame, { data: { type: "openclaw:widget-size", height: 720 } });
+    expect(firstHeight).toHaveBeenCalledOnce();
+    expect(secondHeight).toHaveBeenCalledExactlyOnceWith("second", 720);
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+    second.owner.disconnect();
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
+  });
+
+  it("retires a replaced iframe source before accepting messages from its replacement", () => {
+    let widget = boardWidget();
+    const reportContentHeight = vi.fn();
+    const owner = createFrameOwner(() => widget, {
+      context: () => gatewayContext(null),
+      reportContentHeight,
+    });
+    disposers.push(() => owner.disconnect());
+    owner.connect();
+    const root = document.body.appendChild(document.createElement("div"));
+    const update = mountBoardWidgetFrame(owner, () => widget, root, disposers);
+    const previous = root.querySelector("iframe")!;
+    const retiredSource = previous.contentWindow;
+    widget = {
+      ...widget,
+      sandboxUrl: "/mcp-app-sandbox",
+      sandboxOrigin: "https://sandbox.example",
+      sandboxPort: 18790,
+      viewTicket: "ticket",
+    };
+    update();
+    const current = root.querySelector("iframe")!;
+    expect(current).not.toBe(previous);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: retiredSource,
+        data: { type: "openclaw:widget-size", height: 360 },
+      }),
+    );
+    expect(reportContentHeight).not.toHaveBeenCalled();
+    dispatchFrameMessage(current, { data: { type: "openclaw:widget-size", height: 480 } });
+    expect(reportContentHeight).toHaveBeenCalledExactlyOnceWith(widget.name, 480);
+  });
 });
 
 function terminalFailureError(params: {
@@ -333,15 +457,7 @@ describe("board widget frame message confirmation", () => {
       dispatchFrameMessage(frame, { origin: "https://sandbox.example", data, ports });
     const channel = new MessageChannel();
     const initialized = createDeferred();
-    channel.port2.addEventListener("message", (event) => {
-      if (event.data.type === "openclaw:widget-host-init") {
-        channel.port2.postMessage({
-          type: "openclaw:widget-host-init-ack",
-          ticket: event.data.ticket,
-        });
-        initialized.resolve();
-      }
-    });
+    acknowledgeWidgetHostInit(channel.port2, initialized);
     channel.port2.start();
     const send = (id: string, text: string) => {
       const response = createDeferred<Record<string, unknown>>();

@@ -36,7 +36,8 @@ describe("application projections", () => {
   it("shares one Gateway observation across independent render consumers", () => {
     const initialClient = createTestGatewayClient(async () => ({}));
     const replacementClient = createTestGatewayClient(async () => ({}));
-    const { gateway, publish } = createGatewayHarness(initialClient);
+    const harness = createGatewayHarness(initialClient);
+    const { gateway } = harness;
     const nativeSubscribe = gateway.subscribe.bind(gateway);
     const release = vi.fn();
     const subscribe = vi.spyOn(gateway, "subscribe").mockImplementation((notify) => {
@@ -69,14 +70,14 @@ describe("application projections", () => {
     try {
       expect(second).toBe(first);
       expect(subscribe).toHaveBeenCalledOnce();
-      publish({ client: replacementClient });
+      harness.publish({ client: replacementClient });
       expect(second.read().snapshot.client).toBe(replacementClient);
       flush();
       expect(seen).toEqual([initialClient, replacementClient]);
       stopFirst();
       flush();
       expect(release).not.toHaveBeenCalled();
-      publish({ client: initialClient });
+      harness.publish({ client: initialClient });
       flush();
       expect(seen.at(-1)).toBe(initialClient);
       stopSecond();

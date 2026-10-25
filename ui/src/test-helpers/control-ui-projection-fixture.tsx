@@ -32,9 +32,9 @@ type Group = {
   unmount?: () => void;
 };
 const settle = () =>
-  new Promise<void>((resolve) =>
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-  );
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 const selector = (family: CoreProjectionFamily) =>
   ({
     "agent-rows": "openclaw-agent-row-chip",
@@ -86,10 +86,9 @@ function createFixture(family: CoreProjectionFamily, instrumented: boolean) {
       }
       mockGateway().setMethodResponse("agents.list", {
         ...initial,
-        agents: initial.agents.map((agent) => ({
-          ...agent,
-          name: `${group.label} publication ${revision}`,
-        })),
+        agents: initial.agents.map((agent) =>
+          Object.assign({}, agent, { name: `${group.label} publication ${revision}` }),
+        ),
       });
       await group.runtime.context.agents.refreshList();
     }
@@ -283,11 +282,15 @@ window.openclawProjectionFixture = {
     return active.setup();
   },
   run: () => {
-    if (!active) throw new Error("Projection fixture is not mounted");
+    if (!active) {
+      throw new Error("Projection fixture is not mounted");
+    }
     return active.run();
   },
   finish: () => {
-    if (!active) throw new Error("Projection fixture is not mounted");
+    if (!active) {
+      throw new Error("Projection fixture is not mounted");
+    }
     return active.finish();
   },
   dispose: () => {

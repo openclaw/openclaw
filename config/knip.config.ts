@@ -55,6 +55,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // #183131 invokes this fresh-process cron flake workload by path.
+  "scripts/perf/repeat-cron-test.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -84,6 +86,9 @@ const repositoryScriptEntries = [
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
+  // scripts/perf/README.md invokes this Gateway search-count workload and its worker preload.
+  "scripts/perf/memory-search-status-measure.ts!",
+  "scripts/perf/memory-search-status-observer.cjs!",
   // #180983 invokes this isolated plugin-registration benchmark CLI by path.
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
@@ -106,8 +111,20 @@ const repositoryScriptEntries = [
   "scripts/perf/database-page-cache-measure.ts!",
   // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
   "scripts/perf/acp-ledger-eviction-measure.ts!",
+  "scripts/perf/plugin-blob-registration-measure.ts!",
+  "scripts/perf/session-reaction-quota-measure.ts!",
+  // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/node-worker-journal-measure.ts!",
+  "scripts/perf/orphan-recovery-observer.mjs!",
+  "scripts/perf/session-actor-residency-snapshot.mjs!",
+  "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/ws-counter-stress-preload.ts!",
+  "scripts/perf/ws-counter-stress.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
+  // scripts/perf/pairing-live-measure.md invokes this synthetic pairing workload by path.
+  "scripts/perf/pairing-live-measure.mts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -265,6 +282,49 @@ const repositoryScriptEntries = [
   "scripts/perf/session-polling-fixture.ts!",
   "scripts/perf/sqlite-reply-census-preload.mjs!",
   "scripts/perf/worker-retained-heap-preload.ts!",
+  // These retained proof commands are invoked by
+  // their source headers, scripts/perf/README.md, and native-allocation-profile.md.
+  "scripts/perf/archive-worker-retention-measure.ts!",
+  "scripts/perf/codex-catalog-preview-retention.ts!",
+  "scripts/perf/config-validate-measure.mjs!",
+  "scripts/perf/native-allocation-profile.mjs!",
+  "scripts/perf/session-initial-context-fixture.ts!",
+  "scripts/perf/session-initial-context-measure.ts!",
+  "scripts/perf/sql-probe-measure.ts!",
+  "scripts/perf/workspace-manifest-retention.ts!",
+  // Maintained guides and source headers invoke these focused workloads by exact path.
+  "scripts/bench-memory-publication.mjs!",
+  "scripts/perf/bash-parser-memory.ts!",
+  "scripts/perf/chat-progress-capture-measure.ts!",
+  "scripts/perf/code-mode-json-fit-measure.ts!",
+  "scripts/perf/code-mode-json-gateway-measure.ts!",
+  "scripts/perf/crabbox-state-polling.mts!",
+  "scripts/perf/local-workspace-manifest-equivalence.ts!",
+  "scripts/perf/local-workspace-manifest-measure.ts!",
+  "scripts/perf/operator-model-policy-list-probe.mjs!",
+  "scripts/perf/operator-model-policy-load.mjs!",
+  "scripts/perf/operator-model-policy-measure.ts!",
+  "scripts/perf/provider-rate-limit-retention.ts!",
+  "scripts/perf/session-cost-refresh-measure.ts!",
+  "scripts/perf/sqlite-operation-receive-measure.ts!",
+  "scripts/perf/tool-search-lexical-measure.ts!",
+  "scripts/perf/worker-cold-fixture.ts!",
+  // The performance drivers load these instrumentation preloads by exact path.
+  "scripts/perf/bash-parser-gateway-preload.mjs!",
+  "scripts/perf/provider-rate-limit-stress-probe.mjs!",
+  "scripts/perf/worker-creation-preload.mjs!",
+  // Merged benchmark PRs and source headers invoke these retained workloads by exact path.
+  // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
+  "scripts/bench-filesystem-preconditions.mts!",
+  "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/session-transcript-code-measure.mjs!",
+  "scripts/perf/stall-recorder-cost-preload.mjs!",
+  "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/transcript-session-list-measure.ts!",
+  "scripts/perf/transport-pull-allocation-measure.mjs!",
+  // scripts/perf/README.md invokes this lazy-import probe and its preload by path.
+  "scripts/perf/lazy-import-feature-probe.mjs!",
+  "scripts/perf/lazy-import-trace-preload.mjs!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -940,6 +1000,14 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
       'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
     );
   }
+  const typedShimImplementation = source.match(
+    /\brun(?:Node|Tsx)CliShim\(\s*import\.meta\.url\s*,\s*\{[\s\S]*?\bimplementation\s*:\s*["'](\.\/[^"'\r\n]+\.mts)["']/u,
+  )?.[1];
+  if (typedShimImplementation) {
+    // Keep implementation exports auditable: the shim executes the module but
+    // does not consume every named export merely by loading it.
+    return `${source}\nimport ${JSON.stringify(typedShimImplementation)};`;
+  }
   return source;
 }
 
@@ -1233,6 +1301,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // The bundled AI runtime loads Bun proxy support through a computed import.
+        "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.
         "sqlite-vec",
         "tree-sitter-bash",
@@ -1241,6 +1311,7 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        "ffmpeg",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
@@ -1322,6 +1393,8 @@ const config = {
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/ai": {
+      // Computed to preserve the browser build boundary.
+      ignoreDependencies: ["proxy-from-env"],
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         // The JSON compiler models the shared build's external runtime consumers.

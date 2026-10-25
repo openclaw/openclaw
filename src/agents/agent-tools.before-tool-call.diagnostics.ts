@@ -57,6 +57,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -481,7 +482,9 @@ export function recordSkillUsed(params: {
   match: SkillUsageMatch;
   toolName: string;
   toolCallId?: string;
+  result?: unknown;
 }): void {
+  const skillFingerprint = getSkillInstructionFingerprint(params.result);
   recordRunSkillUsage({
     runId: params.ctx?.runId,
     name: params.match.skillName,
@@ -505,6 +508,7 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
+      ...(skillFingerprint ? { skillFingerprint } : {}),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

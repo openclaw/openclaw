@@ -21,10 +21,7 @@ describe("Slack channel-create", () => {
       }
       const args = Object.fromEntries(new URLSearchParams(init.body));
       requests.push({ method: url.pathname.split("/").at(-1) ?? "", args });
-      return new Response(
-        JSON.stringify({ ok: true, channel: { id: "C01234567", name: args.name } }),
-        { headers: { "content-type": "application/json" } },
-      );
+      return Response.json({ ok: true, channel: { id: "C01234567", name: args.name } });
     };
     vi.spyOn(slackClient, "getSlackWriteClient").mockImplementation(
       (token, options) => new WebClient(token, { ...options, fetch, retryConfig: { retries: 0 } }),
@@ -78,9 +75,7 @@ describe("Slack channel-create", () => {
         method === "conversations.create"
           ? { ok: true, channel: { id: "C01234567", name: "proj-launch-pixel-peak" } }
           : { ok: false, error: "missing_scope" };
-      return new Response(JSON.stringify(response), {
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json(response);
     };
     vi.spyOn(slackClient, "getSlackWriteClient").mockImplementation(
       (token, options) => new WebClient(token, { ...options, fetch, retryConfig: { retries: 0 } }),

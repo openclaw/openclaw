@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  symlink,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readFile, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
@@ -21,6 +12,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
@@ -302,7 +294,9 @@ describe("SQLite worker store", () => {
         incognito,
         empty: "",
       };
-      const contents = (await readdir(directory, { recursive: true })).toSorted();
+      const contents = (await listDirectoryTreeStrict(directory))
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted();
       // A regressed broker can create a file from a memory locator; its child owns that cwd.
       const result = await runNodeScript(
         createNodeEvalArgs(
@@ -338,7 +332,11 @@ describe("SQLite worker store", () => {
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect((await readdir(directory, { recursive: true })).toSorted()).toEqual(contents);
+      expect(
+        (await listDirectoryTreeStrict(directory))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted(),
+      ).toEqual(contents);
     },
   );
 

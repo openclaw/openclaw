@@ -40,7 +40,7 @@ export async function prepareProjectionFixture(
   instrumented: boolean,
 ) {
   return page.evaluate(
-    async ({ family, instrumented }) => {
+    async ({ family: selectedFamily, instrumented: withInstrumentation }) => {
       const response = await fetch(new URL("/projection-fixture.json", location.href));
       if (!response.ok) {
         throw new Error("Use the explicit projection benchmark build for this scenario");
@@ -54,7 +54,7 @@ export async function prepareProjectionFixture(
       if (!fixture) {
         throw new Error("Projection benchmark entry did not install its fixture");
       }
-      return fixture.setup(family, instrumented);
+      return fixture.setup(selectedFamily, withInstrumentation);
     },
     { family, instrumented },
   );
@@ -62,13 +62,17 @@ export async function prepareProjectionFixture(
 
 export async function runProjectionFixture(page: Page) {
   return page.evaluate(() => {
-    if (!window.openclawProjectionFixture) throw new Error("Projection fixture is unavailable");
+    if (!window.openclawProjectionFixture) {
+      throw new Error("Projection fixture is unavailable");
+    }
     return window.openclawProjectionFixture.run();
   });
 }
 export async function finishProjectionFixture(page: Page) {
   return page.evaluate(() => {
-    if (!window.openclawProjectionFixture) throw new Error("Projection fixture is unavailable");
+    if (!window.openclawProjectionFixture) {
+      throw new Error("Projection fixture is unavailable");
+    }
     return window.openclawProjectionFixture.finish();
   });
 }

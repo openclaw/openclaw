@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession } from "../lib/board/provider.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.tsx";
 import "./control-ui-contributions.solid.tsx";
@@ -58,18 +59,13 @@ async function setPermissions(element: DashboardElement, value: boolean) {
 }
 
 function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "status",
-    tabId: "main",
     title: "Status",
-    contentKind: "html",
     sizeW: 12,
     sizeH: 2,
-    position: 0,
-    grantState: "none",
-    revision: 1,
     ...overrides,
-  };
+  });
 }
 
 function createClient(widgets: BoardWidget[] = [], load?: (params?: BoardGetParams) => unknown) {

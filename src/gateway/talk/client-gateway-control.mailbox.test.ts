@@ -6,7 +6,7 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { getExistingSessionControllerMailbox } from "../../sessions/session-controller.mailbox.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
-import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery-context.js";
+import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
