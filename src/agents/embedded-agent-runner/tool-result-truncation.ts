@@ -30,7 +30,6 @@ import { dropThinkingBlocks } from "./thinking.js";
 import {
   getToolResultProjectionBaseKey,
   getToolResultProjectionKeys,
-  getToolResultTextBlocks,
   hashToolResultText,
   TOOL_RESULT_PROJECTION_KEY,
 } from "./tool-result-projection-key.js";
@@ -757,9 +756,7 @@ export function reconcileToolResultPromptProjectionState(
     messages.flatMap((message, index) => {
       const key = keys[index];
       const source = key ? projectionState.sourceHashByKey.get(key) : undefined;
-      return key && (!source || source === hashToolResultText(getToolResultTextBlocks(message)))
-        ? [key]
-        : [];
+      return key && (!source || source === hashToolResultText(message)) ? [key] : [];
     }),
   );
   for (const key of [
@@ -800,10 +797,7 @@ export function projectToolResultMessages(params: {
           ? params.projectionState.replacements.get(key)
           : undefined;
       if (key && !params.recovering && !params.projectionState.sourceHashByKey.has(key)) {
-        params.projectionState.sourceHashByKey.set(
-          key,
-          hashToolResultText(getToolResultTextBlocks(source)),
-        );
+        params.projectionState.sourceHashByKey.set(key, hashToolResultText(source));
       }
       const message = projected
         ? projectToolResultMessage(
@@ -857,7 +851,7 @@ function materializeRestoredCacheTtl(
     recordToolResultPromptProjection(state, key, projected, mark.mode);
     state.frozen.add(key);
     if (!state.sourceHashByKey.has(key)) {
-      state.sourceHashByKey.set(key, hashToolResultText(getToolResultTextBlocks(message)));
+      state.sourceHashByKey.set(key, hashToolResultText(message));
     }
   }
   // Marks whose source left the branch (compaction, reset) are dropped with this pass.
