@@ -57,12 +57,6 @@ async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] 
 }
 
 it("releases decoded tree entries while their encoded worker operation is pending", async () => {
-  const input = {
-    inputPath: "/synthetic/snapshot-input",
-    ref: "refs/heads/snapshot",
-    source: { root: "/synthetic" },
-    entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
-  };
   const result = await runScript(
     `
       import { setImmediate } from "node:timers/promises";
@@ -82,7 +76,12 @@ it("releases decoded tree entries while their encoded worker operation is pendin
       let inputRef;
       let entriesRef;
       const operation = (() => {
-        const input = ${JSON.stringify(input)};
+        const input = {
+          inputPath: "/synthetic/snapshot-input",
+          ref: "refs/heads/snapshot",
+          source: { root: "/synthetic" },
+          entries: [{ path: "file.txt", type: "file", mode: 420, size: 0, sha256: "a".repeat(64) }],
+        };
         inputRef = new WeakRef(input);
         entriesRef = new WeakRef(input.entries);
         return prepareWorkspaceTreeInput(input);
@@ -109,7 +108,12 @@ it("releases decoded tree entries while their encoded worker operation is pendin
   expect(result).toEqual({
     retained: { input: false, entries: false },
     pending: true,
-    submitted: input,
+    submitted: {
+      inputPath: "/synthetic/snapshot-input",
+      ref: "refs/heads/snapshot",
+      source: { root: "/synthetic" },
+      entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
+    },
     failure: "worker failed",
   });
 });
@@ -213,21 +217,30 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   });
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, memoHitCount: 0 };
-  const capture = <T>(operation: (params: typeof selection) => Promise<T>) =>
-    withWorkspaceHashMemo(memo, () => operation(selection), metrics);
-  const first = await capture(captureWorkspaceManifest);
+  const capture = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
+  const first = await capture();
   expect(first.manifest.entries).toEqual([workspaceFile("input.txt", content)]);
   expect(first.manifest.directories).toEqual(["preserved"]);
   expect(Object.hasOwn(first, "rawManifest")).toBe(false);
-  const snapshot = await capture(captureWorkspaceSnapshot);
+  const snapshot = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceSnapshot(selection),
+    metrics,
+  );
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
   expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
-  const document = await capture(captureWorkspaceManifestDocument);
+  const document = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceManifestDocument(selection),
+    metrics,
+  );
   expect(document).toEqual({
     manifestRef: snapshot.manifestRef,
     rawManifest: snapshot.rawManifest,
   });
-  const reference = () => capture(captureWorkspaceManifestReference);
+  const reference = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
   expect(await reference()).toBe(first.manifestRef);
   const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
@@ -237,7 +250,13 @@ it("captures eligible files outside the Gateway thread and returns the canonical
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {
-  const entry = workspaceFile("input.txt", "a");
+  const entry = {
+    path: "input.txt",
+    type: "file" as const,
+    mode: 0o644,
+    size: 1,
+    sha256: "a".repeat(64),
+  };
   const base = encode([entry]);
   const current = encode([{ ...entry, sha256: "b".repeat(64) }]);
   const input = pair(base, current);
@@ -250,6 +269,32 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   await expect(
     parseWorkspaceManifestPair({ ...input, currentRaw: current.raw + " " }),
   ).rejects.toThrow("digest");
+});
+
+it("admits a large rebase against its original synchronization manifest", async () => {
+  const entries = (prefix: string, count: number, hash: string) =>
+    Array.from({ length: count }, (_, index) => ({
+      path: `${prefix}-${index}.ts`,
+      type: "file" as const,
+      mode: 0o644,
+      size: 16 * 1024,
+      sha256: hash.repeat(64),
+    }));
+  // A rebase can leave Git clean while changing the full dispatched workspace.
+  const base = encode(
+    [...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")],
+    "a".repeat(40),
+  );
+  const current = encode(
+    [...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")],
+    "a".repeat(40),
+  );
+  const result = await parseWorkspaceManifestPair(pair(base, current));
+  expect(result.changed).toBe(true);
+  expect(result.paths).toHaveLength(35_802);
+  expect(
+    result.entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
+  ).toBe(586_579_968);
 });
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {

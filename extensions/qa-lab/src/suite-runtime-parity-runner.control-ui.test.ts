@@ -8,6 +8,8 @@ import {
   projectQaEvidenceScenarioOutcomes,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
+import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
+import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
@@ -213,11 +215,54 @@ describe("runtime parity Control UI ownership", () => {
         expect({ occurrences: bundle.occurrences, entries: bundle.entries }).toEqual(
           containedEvidence(evidence, ids),
         );
-        for (const receipt of bundle.occurrences.flatMap((child) => child.receipts)) {
-          const raw = await fs.readFile(path.join(outputDir, receipt.artifact.path));
-          expect(sha256(raw)).toBe(receipt.artifact.sha256);
+        for (const child of bundle.occurrences) {
+          for (const receipt of child.receipts) {
+            const raw = await fs.readFile(path.join(outputDir, receipt.artifact.path));
+            expect(sha256(raw)).toBe(receipt.artifact.sha256);
+          }
         }
       }
+      const cell = {
+        scenarioId: scenario.id,
+        executionKind: "flow" as const,
+        channel: "qa-channel",
+      };
+      const plan = qaProfileEvidencePlan.build({
+        profile: "all",
+        taxonomyIdentity: qaMaturityTaxonomyIdentity(
+          readQaMaturityTaxonomySource(path.resolve(import.meta.dirname, "../../../taxonomy.yaml")),
+        ),
+        membershipScenarios: [scenario],
+        selectedScenarios: [scenario],
+        excludedScenarios: [],
+        expectedCells: [cell],
+        observedCells: [cell],
+        proofRequirements: [
+          {
+            id: "runtime-proof",
+            coverageId: "channels.dm",
+            obligation: "required",
+            owner: "fixture-owner",
+            acceptedRef: "qa/fixtures/acceptance",
+            retryAcceptance: "selected-attempt",
+            alternatives: [
+              { runtime: "openclaw", runtimeVersion: "fixture-version" },
+              { runtime: "codex", runtimeVersion: "fixture-version" },
+            ],
+          },
+        ],
+      });
+      const raw = structuredClone(evidence);
+      expect(qaProfileEvidencePlan.evaluateProof(plan, evidence)[0]?.qualified).toBe(
+        retryStatus === "pass",
+      );
+      plan.proofRequirements![0]!.retryAcceptance = "all-recorded-attempts";
+      expect(
+        qaProfileEvidencePlan
+          .evaluateProof(plan, evidence)[0]
+          ?.checks.some((check) => check.status === "failed"),
+      ).toBe(true);
+      expect(evidence).toEqual(raw);
     },
   );
 

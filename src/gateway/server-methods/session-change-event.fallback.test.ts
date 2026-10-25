@@ -1,5 +1,5 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createSessionCapabilityHarness,
   sessionsResult,
@@ -47,20 +47,34 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("invalidates access without repeating prepared keyless facts", () => {
+it("coalesces prepared keyless refreshes without repeating prepared facts", async () => {
   const context = {
     getRuntimeConfig: () => ({}),
     getSessionEventSubscriberConnIds: () => new Set(["listener"]),
     broadcastToConnIds: vi.fn(),
   } satisfies Parameters<typeof emitSessionsChanged>[0];
   const facts = vi.fn();
-  onTestFinished(sessionChanges.subscribeFacts(facts));
+  const unsubscribe = sessionChanges.subscribeFacts(facts);
   const accessRevision = readGatewayAccessRevision();
-  for (let index = 0; index < 3; index += 1) {
-    emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+    }
+    expect(context.broadcastToConnIds.mock.calls.length).toBeLessThan(3);
+    expect(facts).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision + 3);
+
+    await flushPendingSessionsChangedEvents(context);
+    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(context.broadcastToConnIds).toHaveBeenLastCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ reason: "delete" }),
+      new Set(["listener"]),
+      expect.any(Object),
+    );
+  } finally {
+    unsubscribe();
   }
-  expect(facts).not.toHaveBeenCalled();
-  expect(readGatewayAccessRevision()).toBe(accessRevision + 3);
 });
 
 it.each(["ready", "preparation"] as const)(
@@ -117,7 +131,9 @@ it.each(["ready", "preparation"] as const)(
         socket: { ...recipient.socket, send: noRead },
       });
       const { lease, notices } = pluginNotices("fallback-proof");
-      const sqlReads: number[] = [];
+      const reads: { describe: number; snapshot: number; sql: number }[] = [];
+      const describe = vi.spyOn(projection, "describe");
+      const snapshot = vi.spyOn(projection, "snapshot");
       const sql = [
         vi.spyOn(DatabaseSync.prototype, "exec"),
         ...(["all", "get", "iterate", "run"] as const).map((method) =>
@@ -125,9 +141,15 @@ it.each(["ready", "preparation"] as const)(
         ),
       ];
       const broadcast = vi.fn((...args: Parameters<typeof connection.broadcastToConnIds>) => {
+        describe.mockClear();
+        snapshot.mockClear();
         sql.forEach((statement) => statement.mockClear());
         connection.broadcastToConnIds(...args);
-        sqlReads.push(sql.reduce((count, statement) => count + statement.mock.calls.length, 0));
+        reads.push({
+          describe: describe.mock.calls.length,
+          snapshot: snapshot.mock.calls.length,
+          sql: sql.reduce((count, statement) => count + statement.mock.calls.length, 0),
+        });
       });
       const context = {
         ...bindSessionRowProjection({}, () => projection),
@@ -153,6 +175,7 @@ it.each(["ready", "preparation"] as const)(
         });
         await flushPendingSessionsChangedEvents(context);
         if (failure === "ready") {
+          expect(reads).toMatchObject([{ describe: 0, snapshot: 0 }]);
           expectFrame(
             frames,
             expect.objectContaining({
@@ -169,7 +192,10 @@ it.each(["ready", "preparation"] as const)(
           return;
         }
         await vi.advanceTimersByTimeAsync(5_000);
-        expect(sqlReads).toEqual([0, 0]);
+        expect(reads).toEqual([
+          { describe: 0, snapshot: 0, sql: 0 },
+          { describe: 0, snapshot: 0, sql: 0 },
+        ]);
         expect(notices).toHaveBeenCalledExactlyOnceWith({
           sessionKey,
           agentId: "main",
@@ -189,6 +215,8 @@ it.each(["ready", "preparation"] as const)(
       } finally {
         await flushPendingSessionsChangedEvents(context);
         sql.forEach((statement) => statement.mockRestore());
+        describe.mockRestore();
+        snapshot.mockRestore();
         sessions.dispose();
         lease.revoke();
         detach();

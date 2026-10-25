@@ -8,7 +8,7 @@ import {
   terminateCodexBackgroundTerminals,
   shouldRetireCodexStartupClient,
 } from "./attempt-client-cleanup.js";
-import { CodexAppServerStartupError } from "./attempt-timeouts.js";
+import { CodexAppServerStartupError, isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { isCodexAppServerIndeterminateTransportError } from "./client.js";
 import {
   CodexAppServerScopedRequestRejectedError,
@@ -64,56 +64,62 @@ function sendTurn(
 function rejectInterrupt(harness: Harness, id = lastRequest(harness).id) {
   harness.send({ id, error: { code: -32_600, message: "no active turn to interrupt" } });
 }
-function beginInterrupt(timeoutMs = 100, extra: Parameters<typeof interrupt>[2] = {}) {
-  const harness = trackedHarness();
-  return { harness, completion: interrupt(harness, timeoutMs, extra) };
-}
 
 it.each([
-  [new CodexAppServerStartupError("timed_out"), true],
-  [new AgentHarnessPreflightError("preflight refused"), false],
-] as const)("preserves %s only for definite pre-write rejection", async (cause, retireBefore) => {
-  const harness = trackedHarness();
-  const signal = new AbortController().signal;
-  const refuse = () => {
-    throw cause;
-  };
-  const request = (options: Parameters<typeof harness.client.request>[2]) =>
-    harness.client.request("thread/start", {}, options).catch((error: unknown) => error);
-  const before = await request({ assertCurrent: refuse });
-  expect(before).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
-  expect(codexPrewriteRejectionCause(before)).toBe(cause);
-  expect(shouldRetireCodexStartupClient(before, undefined, signal)).toBe(retireBefore);
-  expect(harness.writes).toHaveLength(0);
+  [
+    "startup timeout",
+    new CodexAppServerStartupError("timed_out"),
+    isCodexAppServerStartupError,
+    true,
+  ],
+  [
+    "model-independent preflight",
+    new AgentHarnessPreflightError("preflight refused"),
+    (error: unknown) => codexPrewriteRejectionCause(error) instanceof AgentHarnessPreflightError,
+    false,
+  ],
+] as const)(
+  "preserves %s only for definite pre-write rejection",
+  async (_name, cause, matches, retireBefore) => {
+    const harness = trackedHarness();
+    const signal = new AbortController().signal;
+    const refuse = () => {
+      throw cause;
+    };
+    const request = (options: Parameters<typeof harness.client.request>[2]) =>
+      harness.client.request("thread/start", {}, options).catch((error: unknown) => error);
+    const before = await request({ assertCurrent: refuse });
+    expect(before).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
+    expect(before).toMatchObject({ cause });
+    expect(matches(before)).toBe(true);
+    expect(shouldRetireCodexStartupClient(before, undefined, signal)).toBe(retireBefore);
+    expect(harness.writes).toHaveLength(0);
 
-  const after = await request({
-    withCurrent: async (write) => {
-      write();
-      refuse();
-    },
-  });
-  expect(isCodexAppServerIndeterminateTransportError(after)).toBe(true);
-  expect(codexPrewriteRejectionCause(after)).not.toBe(cause);
-  expect(shouldRetireCodexStartupClient(after, undefined, signal)).toBe(true);
-  expect(harness.writes).toHaveLength(1);
-});
+    const after = await request({
+      withCurrent: async (write) => {
+        write();
+        refuse();
+      },
+    });
+    expect(isCodexAppServerIndeterminateTransportError(after)).toBe(true);
+    expect(matches(after)).toBe(false);
+    expect(shouldRetireCodexStartupClient(after, undefined, signal)).toBe(true);
+    expect(harness.writes).toHaveLength(1);
+  },
+);
 
-it.each([
-  { oneShot: false, remains: false },
-  { oneShot: true, remains: false },
-  { oneShot: false, remains: true },
-])(
-  "drains native terminals without claiming OS cleanup ($oneShot, $remains)",
-  async ({ oneShot, remains }) => {
+it.each([false, true])(
+  "drains native terminals without claiming OS cleanup (oneShot=%s)",
+  async (oneShot) => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ data: [{ processId: "10" }, { processId: "20" }] })
-      .mockResolvedValueOnce({ terminated: !remains })
-      .mockResolvedValueOnce({ terminated: !remains })
-      .mockResolvedValueOnce({ data: remains ? [{ processId: "10" }] : [] });
+      .mockResolvedValueOnce({ terminated: true })
+      .mockResolvedValueOnce({ terminated: true })
+      .mockResolvedValueOnce({ data: [] });
     const cleanup = terminateCodexBackgroundTerminals({ request } as never, "thread-1", oneShot);
-    if (oneShot || remains) {
-      await expect(cleanup).rejects.toThrow("Codex background-terminal cleanup failed");
+    if (oneShot) {
+      await expect(cleanup).rejects.toThrow("Codex background-terminal cleanup");
     } else {
       await expect(cleanup).resolves.toBeUndefined();
     }
@@ -126,6 +132,17 @@ it.each([
   },
 );
 
+it("reports a terminal that remains running after termination", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ data: [{ processId: "10" }] })
+    .mockResolvedValueOnce({ terminated: false })
+    .mockResolvedValueOnce({ data: [{ processId: "10" }] });
+  await expect(terminateCodexBackgroundTerminals({ request } as never, "thread-1")).rejects.toThrow(
+    "Codex background-terminal cleanup failed",
+  );
+});
+
 it("keeps strict startup retirement failures visible to lifecycle owners", async () => {
   const closeAndWait = vi.fn().mockRejectedValue(new Error("strict client retirement failed"));
 
@@ -136,8 +153,9 @@ it("keeps strict startup retirement failures visible to lifecycle owners", async
 
 it("does not retry interruption after its requester expires during overload backoff", async () => {
   vi.useFakeTimers();
+  const harness = trackedHarness();
   let current = true;
-  const { harness, completion } = beginInterrupt(5_000, {
+  const completion = interrupt(harness, 5_000, {
     assertCurrent: () => {
       if (!current) {
         throw new Error("Requester expired");
@@ -204,13 +222,14 @@ it.each([
 );
 
 it("preserves a terminal receipt that precedes an interrupt rejection: expected active turn id turn-1 but found turn-2", async () => {
-  const { harness, completion } = beginInterrupt();
-  const { id } = lastRequest(harness);
+  const harness = trackedHarness();
+  const completion = interrupt(harness, 100);
+  const first = lastRequest(harness);
   sendTurn(harness, "started", "turn-1", "thread-1");
   sendTurn(harness, "completed", "turn-1", "thread-1", "completed");
   sendTurn(harness, "started", "turn-2", "thread-1");
   harness.send({
-    id,
+    id: first.id,
     error: { code: -32_600, message: "expected active turn id turn-1 but found turn-2" },
   });
   await expect(completion).resolves.toBe(true);
@@ -221,8 +240,9 @@ it("preserves a terminal receipt that precedes an interrupt rejection: expected 
 it("does not interrupt after its deadline when timeout callbacks are delayed", async () => {
   vi.useFakeTimers();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  const { harness, completion } = beginInterrupt();
-  sendTurn(harness, "started");
+  const harness = trackedHarness();
+  const completion = interrupt(harness, 100);
+  sendTurn(harness, "started", "turn-1", "thread-1");
   vi.setSystemTime(Date.now() + 100);
   rejectInterrupt(harness);
   await vi.advanceTimersByTimeAsync(0);
@@ -240,7 +260,7 @@ it("keeps the interrupt deadline bounded when the wall clock rewinds", async () 
   rejectInterrupt(harness);
   await vi.advanceTimersByTimeAsync(60);
   vi.setSystemTime(Date.now() - 300_000);
-  sendTurn(harness, "started");
+  sendTurn(harness, "started", "turn-1", "thread-1");
   await vi.advanceTimersByTimeAsync(0);
   expect(harness.writes).toHaveLength(2);
   const rpcTimeoutMs = requestSpy.mock.calls.findLast(
@@ -256,8 +276,9 @@ it("keeps the interrupt deadline bounded when the wall clock rewinds", async () 
 });
 
 it("does not act on queued activation after its physical client closes", async () => {
-  const { harness, completion } = beginInterrupt();
-  sendTurn(harness, "started");
+  const harness = trackedHarness();
+  const completion = interrupt(harness, 100);
+  sendTurn(harness, "started", "turn-1", "thread-1");
   harness.client.close();
   rejectInterrupt(harness);
   await expect(completion).resolves.toBe(false);
@@ -272,7 +293,7 @@ it("uses retained bound-turn completion after a later cleanup request", async ()
   });
   route.armTurn();
   await route.bindTurn("turn-1");
-  sendTurn(harness, "completed");
+  sendTurn(harness, "completed", "turn-1", "thread-1", "completed");
   const completion = interrupt(harness, 100);
   await expect(completion).resolves.toBe(true);
   expect(harness.writes).toHaveLength(0);
@@ -280,13 +301,18 @@ it("uses retained bound-turn completion after a later cleanup request", async ()
 });
 
 it("swallows unsubscribe cleanup failures", async () => {
+  const request = vi.fn().mockRejectedValue(new Error("already gone"));
+
   await expect(
-    unsubscribeCodexThreadBestEffort(
-      { request: vi.fn().mockRejectedValue(new Error("already gone")) } as never,
-      {
-        threadId: "thread-1",
-        timeoutMs: 123,
-      },
-    ),
+    unsubscribeCodexThreadBestEffort({ request } as never, {
+      threadId: "thread-1",
+      timeoutMs: 123,
+    }),
   ).resolves.toBe(false);
+
+  expect(request).toHaveBeenCalledWith(
+    "thread/unsubscribe",
+    { threadId: "thread-1" },
+    { timeoutMs: 123 },
+  );
 });

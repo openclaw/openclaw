@@ -18,29 +18,9 @@ import {
   testGitContext,
 } from "./control-ui-session-prs.test-support.js";
 import { gitHubPublicApi } from "./github-public-api.js";
+import { isGitHubPublicationSuperseded } from "./github-publication-relevance.js";
 
 const { prepareRead, load } = createSessionPullRequestsFixture();
-const head = "a".repeat(40);
-const tree = "b".repeat(40);
-function originalPull({ baseId = 1, headId = 2, branch = "original" } = {}) {
-  return pullListItem({
-    state: "closed",
-    head: { ref: branch, sha: head, repo: { id: headId } },
-    base: {
-      ref: "main",
-      repo: { id: baseId, name: "openclaw", owner: { login: "openclaw" } },
-    },
-  });
-}
-function requireTarget<T>(target: T | null | undefined): T {
-  if (!target) {
-    throw new Error("Missing fixture target");
-  }
-  return target;
-}
-function expectKnown(read: ControlUiSessionPrReadContext, expected: unknown = []) {
-  expect(readKnownSessionBranchMergedHeads(testGitContext, read)).toEqual(expected);
-}
 let owner: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
 afterEach(async () => {
   await owner?.stop();
@@ -65,20 +45,36 @@ it("shows the bound original PR before any publication, independent of the check
             repository: "openclaw/openclaw",
             repositoryId: 1,
             branch: "main",
-            commit: tree,
+            commit: "b".repeat(40),
           },
           head: {
             repository: "contributor/openclaw",
             repositoryId: 2,
             branch: "original",
-            commit: head,
+            commit: "a".repeat(40),
           },
-          preparedHeadCommit: head,
+          preparedHeadCommit: "a".repeat(40),
         },
       },
     },
   );
-  let original = originalPull();
+  let original = pullListItem({
+    state: "closed",
+    head: {
+      ref: "original",
+      sha: "a".repeat(40),
+      repo: { id: 2, full_name: "contributor/openclaw" },
+    },
+    base: {
+      ref: "main",
+      repo: {
+        id: 1,
+        name: "openclaw",
+        full_name: "openclaw/openclaw",
+        owner: { login: "openclaw" },
+      },
+    },
+  });
   let responseStatus = 200;
   vi.stubGlobal(
     "fetch",
@@ -126,10 +122,21 @@ it("shows the bound original PR before any publication, independent of the check
   for (const change of ["inaccessible", "base repository", "head repository", "head branch"]) {
     vi.setSystemTime(Date.now() + 91_000);
     responseStatus = change === "inaccessible" ? 404 : 200;
-    original = originalPull({
-      branch: change === "head branch" ? "replaced" : "original",
-      headId: change === "head repository" ? 99 : 2,
-      baseId: change === "base repository" ? 99 : 1,
+    original = pullListItem({
+      state: "closed",
+      head: {
+        ref: change === "head branch" ? "replaced" : "original",
+        sha: "a".repeat(40),
+        repo: { id: change === "head repository" ? 99 : 2 },
+      },
+      base: {
+        ref: "main",
+        repo: {
+          id: change === "base repository" ? 99 : 1,
+          name: "openclaw",
+          owner: { login: "openclaw" },
+        },
+      },
     });
     expect(await readOriginal(), change).toMatchObject({
       pullRequests: [],
@@ -145,7 +152,9 @@ it("shows the bound original PR before any publication, independent of the check
   }
 });
 
-it("keeps a fourth merged publication candidate separate from displayed PRs", async () => {
+it("reconciles a fourth merged PR without expanding or poisoning displayed PRs", async () => {
+  const head = "a".repeat(40);
+  const tree = "b".repeat(40);
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: undefined,
     cacheScope: "fixture",
@@ -160,7 +169,13 @@ it("keeps a fourth merged publication candidate separate from displayed PRs", as
       head: { sha: head },
     }),
   );
-  const fetchImpl = routedFetch([{ match: "/pulls?head=", response: () => githubJson(items) }]);
+  const fetchImpl = routedFetch([
+    { match: "/pulls?head=", response: () => githubJson(items) },
+    {
+      match: "/git/commits/" + head,
+      response: () => githubJson({ sha: head, tree: { sha: tree } }),
+    },
+  ]);
   vi.stubGlobal("fetch", fetchImpl);
   const broadcastToConnIds = vi.fn();
   owner = createTestControlUiSessionPrSubscriptions({
@@ -174,12 +189,33 @@ it("keeps a fourth merged publication candidate separate from displayed PRs", as
       }),
   });
   const resolve = await prepareRead("connection", { sessionKey: "agent:main:main" });
-  const target = requireTarget(await resolve());
+  const target = await resolve();
+  if (!target) {
+    throw new Error("Missing fixture target");
+  }
   const current = () => {};
   const displayed = await owner.read(target, current);
   expect(displayed.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3]);
   const candidates = await owner.read(target, current, "publication");
   expect(candidates.pullRequests.map((pr) => pr.number)).toEqual([5, 4, 3, 2]);
+  const snapshot = {
+    repository: "openclaw/openclaw",
+    branch: testGitContext.branch,
+    source_head_commit: head,
+    workspace_tree: tree,
+  };
+  expect(
+    await isGitHubPublicationSuperseded(snapshot, async () => ({
+      pullRequests: candidates.pullRequests,
+      assertCurrent: current,
+    })),
+  ).toBe(true);
+  expect(
+    await isGitHubPublicationSuperseded(
+      { ...snapshot, workspace_tree: "c".repeat(40) },
+      async () => ({ pullRequests: candidates.pullRequests, assertCurrent: current }),
+    ),
+  ).toBe(false);
   expect((await owner.read(target, current)).pullRequests).toEqual(displayed.pullRequests);
   expect(displayed).not.toHaveProperty("publicationCandidates");
   expect(candidates).not.toHaveProperty("publicationCandidates");
@@ -196,7 +232,8 @@ it("reads known merged heads without network access only for the same live sessi
     cacheScope,
     apiBaseUrl: "https://api.github.com",
   }));
-  const mergeCommitSha = tree;
+  const head = "a".repeat(40);
+  const mergeCommitSha = "b".repeat(40);
   const fetchImpl = routedFetch([
     {
       match: "/pulls?head=",
@@ -220,8 +257,11 @@ it("reads known merged heads without network access only for the same live sessi
   const resolveOther = await prepareRead("connection", {
     sessionKey: "agent:main:other-merged-heads",
   });
-  const target = requireTarget(await resolve());
-  const otherTarget = requireTarget(await resolveOther());
+  const target = await resolve();
+  const otherTarget = await resolveOther();
+  if (!target || !otherTarget) {
+    throw new Error("Missing fixture target");
+  }
   const network = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected cache fetch"));
   vi.stubGlobal("fetch", network);
   const expected = [{ sha: head, baseRef: "main", mergeCommitSha }];
@@ -232,15 +272,17 @@ it("reads known merged heads without network access only for the same live sessi
     const known = readKnownSessionBranchMergedHeads(testGitContext, read);
     expect(known).toEqual(expected);
     known[0]!.sha = "d".repeat(40);
-    expectKnown(read, expected);
-    expectKnown({ ...read, target: otherTarget });
+    expect(readKnownSessionBranchMergedHeads(testGitContext, read)).toEqual(expected);
+    expect(
+      readKnownSessionBranchMergedHeads(testGitContext, { ...read, target: otherTarget }),
+    ).toEqual([]);
     expect(
       readKnownSessionBranchMergedHeads({ ...testGitContext, branch: "other-branch" }, read),
     ).toEqual([]);
     cacheScope = "replacement-credential";
-    expectKnown(read);
+    expect(readKnownSessionBranchMergedHeads(testGitContext, read)).toEqual([]);
     cacheScope = "known-merged-heads";
-    expectKnown(read, expected);
+    expect(readKnownSessionBranchMergedHeads(testGitContext, read)).toEqual(expected);
   });
   expect(() => readKnownSessionBranchMergedHeads(testGitContext, releasedRead!)).toThrow(
     /source changed or closed/,
@@ -251,10 +293,19 @@ it("reads known merged heads without network access only for the same live sessi
   const replacement = `${target.readSource.path}.replacement`;
   await fs.copyFile(target.readSource.path, replacement);
   await fs.rename(replacement, target.readSource.path);
-  const reopened = requireTarget(await resolve());
+  const reopened = await resolve();
+  if (!reopened) {
+    throw new Error("Missing reopened fixture target");
+  }
   expect(reopened.identity).toBe(target.identity);
   await withControlUiSessionPrSource(reopened.readSource, async (assertCurrent, sourceIdentity) => {
-    expectKnown({ target: reopened, sourceIdentity, assertCurrent });
+    expect(
+      readKnownSessionBranchMergedHeads(testGitContext, {
+        target: reopened,
+        sourceIdentity,
+        assertCurrent,
+      }),
+    ).toEqual([]);
   });
   expect(network).not.toHaveBeenCalled();
   expect(fetchImpl).toHaveBeenCalledOnce();

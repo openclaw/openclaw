@@ -132,15 +132,15 @@ describe("LaunchAgent plist", () => {
       });
     }
   });
-  it("preserves empty NODE_OPTIONS while omitting other empty values", async () => {
+  it.each(["", "--max-old-space-size=24576"])("preserves NODE_OPTIONS=%j", async (nodeOptions) => {
     const { plistPath } = fixture("node-options", {});
     const commandArgs = ["/usr/bin/node", "--max-old-space-size=16384", "gateway.js"];
     await writePlist(plistPath, {
       programArguments: commandArgs,
-      environment: { NODE_OPTIONS: "", UNUSED: "", MISSING: undefined },
+      environment: { NODE_OPTIONS: nodeOptions, UNUSED: "", MISSING: undefined },
     });
     const command = await readCommand(plistPath);
-    expect(command?.environment).toEqual({ NODE_OPTIONS: "" });
+    expect(command?.environment).toEqual({ NODE_OPTIONS: nodeOptions });
     expect(command?.programArguments).toEqual(commandArgs);
   });
 });
@@ -152,13 +152,20 @@ const binaryPlist = Buffer.from(
 );
 
 describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", () => {
-  it("preserves multiline quoted values through readCommand and restart regeneration", async () => {
+  it.each([
+    ["three-line PEM", "-----BEGIN PRIVATE KEY-----  \nfixture\n-----END PRIVATE KEY-----"],
+    ["escaped quotes and trailing newline", "first 'quoted'\nsecond 'line'\n"],
+  ])("preserves %s through service readCommand and restart regeneration", async (_name, value) => {
     mockPlutil();
-    const value = "-----BEGIN PRIVATE KEY-----  \n'fixture'\n-----END PRIVATE KEY-----\n";
     const environment = { FIXTURE: value, NEXT: "retained" };
     const { env, label, plistPath, wrapper, envFile, args } = fixture("reinstall", environment);
     const expected = { programArguments, environment };
-    const legacy = path.join(env.HOME, "Library/LaunchAgents/ai.openclaw.legacy-gateway.plist");
+    const legacy = path.join(
+      env.HOME,
+      "Library",
+      "LaunchAgents",
+      "ai.openclaw.legacy-gateway.plist",
+    );
     await writeFile(legacy, "legacy definition", 0o600);
     await stageLaunchAgent(args);
     expect(await readSnapshot(legacy)).toEqual({

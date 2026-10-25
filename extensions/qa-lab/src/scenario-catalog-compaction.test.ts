@@ -76,12 +76,15 @@ describe("qa compaction scenario catalog", () => {
     ["reasoning-only", "REASONING", "reasoning-only-output-once"],
   ])("keeps %s recovery on the OpenClaw compaction owner", (variant, summary, faultMode) => {
     const id = `compaction-${variant}-recovery`;
+    const coverage = `session-memory.${id}`;
     const summaryMarker = `QA-COMPACTION-${summary}-RECOVERED-SUMMARY`;
     const scenario = requireFlowScenario(readQaScenarioById(id));
     const flow = JSON.stringify(scenario.execution.flow);
     const serializedScenario = JSON.stringify(scenario);
 
     expect(scenario.runtimePairLane).toBeUndefined();
+    expect(scenario.coverage?.primary).toEqual([coverage]);
+    expect(scenario.coverage?.secondary ?? []).toEqual([]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       agents: { defaults: { compaction: { mode: "default" } } },
     });
@@ -197,6 +200,13 @@ describe("qa compaction scenario catalog", () => {
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
+    expect(scenario.runtimePairLane).toBe("core");
+    expect(scenario.coverage?.primary).toEqual([
+      "session-memory.compaction",
+      "session-memory.compaction-retry-policy",
+      "session-memory.pruning",
+    ]);
+    expect(scenario.coverage?.secondary ?? []).toEqual([]);
     const conditional = (actions[0] as { if: Record<string, unknown> }).if;
     expect(conditional.expr).toBe("env.runtimeId === 'codex'");
     expect(conditional["then"]).toMatchObject([
