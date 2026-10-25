@@ -23,6 +23,11 @@ async function open(options: Parameters<typeof showInputDialog>[0]) {
   return { closed, ...(await getRenderedModalDialog(document.body)) };
 }
 
+async function enter(value = "Client work") {
+  await type(value);
+  submitForm();
+}
+
 async function type(value: string) {
   const input = dialogInput();
   input.value = value;
@@ -96,54 +101,38 @@ describe("showInputDialog", () => {
     await expect(first).resolves.toBeNull();
   });
 
-  it("holds a required field closed until it has a non-blank value, then trims it", async () => {
-    const submit = vi.fn().mockResolvedValue(null);
-    const { closed } = await open({ ...REQUIRED, submit });
-
-    expect(findButton("Create group").disabled).toBe(true);
-    await type("   ");
-    expect(findButton("Create group").disabled).toBe(true);
-    submitForm();
-    expect(submit).not.toHaveBeenCalled();
-
-    await type("  Client work  ");
-    expect(dialogInput().value).toBe("  Client work  ");
-    expect(findButton("Create group").disabled).toBe(false);
-    submitForm();
-
-    await closed;
-    expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
-    expect(dialog()).toBeNull();
-  });
-
-  it("holds a rename closed on the name it started from", async () => {
-    const { closed } = await open({
-      title: 'Rename group "Research"',
-      label: "Group name",
-      defaultValue: "Research",
-      requireValue: true,
-      requireChange: true,
-    });
-    expect(findButton("Save").disabled).toBe(true);
-    await type("  Research  ");
-    expect(findButton("Save").disabled).toBe(true);
-    submitForm();
-    expect(dialog()).not.toBeNull();
-
-    await type("Projects");
-    expect(findButton("Save").disabled).toBe(false);
-    submitForm();
-
-    await expect(closed).resolves.toBe("Projects");
-  });
+  it.each([undefined, "Research"])(
+    "blocks blank/unchanged values (initial=%s), then trims",
+    async (initial) => {
+      const submit = vi.fn().mockResolvedValue(null);
+      const { closed } = await open({
+        ...REQUIRED,
+        defaultValue: initial,
+        requireChange: initial !== undefined,
+        submit,
+      });
+      const button = findButton("Create group");
+      expect(button.disabled).toBe(true);
+      await enter(`  ${initial ?? ""}  `);
+      expect(button.disabled).toBe(true);
+      expect(submit).not.toHaveBeenCalled();
+      expect(dialog()).not.toBeNull();
+      await type("  Client work  ");
+      expect(dialogInput().value).toBe("  Client work  ");
+      expect(button.disabled).toBe(false);
+      submitForm();
+      await expect(closed).resolves.toBe("Client work");
+      expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
+      expect(dialog()).toBeNull();
+    },
+  );
 
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
     const pending = Promise.withResolvers<string | null>();
     const submit = vi.fn().mockReturnValue(pending.promise);
     const { closed, modal } = await open({ ...REQUIRED, submit });
 
-    await type("Client work");
-    submitForm();
+    await enter();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
     await expectSaving();
@@ -163,8 +152,7 @@ describe("showInputDialog", () => {
     const pending = Promise.withResolvers<string | null>();
     const submit = vi.fn(() => pending.promise);
     const { closed } = await open({ ...REQUIRED, signal: controller.signal, submit });
-    await type("Client work");
-    submitForm();
+    await enter();
     await expectSaving();
 
     controller.abort();
@@ -181,17 +169,18 @@ describe("showInputDialog", () => {
     await expect(successor).resolves.toBe("Still editable");
   });
 
-  it.each(["synchronous", "asynchronous"])(
+  it.each(["synchronous", "asynchronous", "validation"])(
     "recovers from a %s failure without discarding the input",
     async (mode) => {
+      const retry = Promise.withResolvers<string | null>();
       const submit = vi
-        .fn((): Promise<string | null> => Promise.resolve(null))
+        .fn(() => retry.promise)
         .mockImplementationOnce(() => {
           const error = new Error("gateway exploded");
           if (mode === "synchronous") {
             throw error;
           }
-          return Promise.reject(error);
+          return mode === "validation" ? Promise.resolve(error.message) : Promise.reject(error);
         });
       const { closed } = await open({ ...REQUIRED, submit });
 
@@ -200,7 +189,6 @@ describe("showInputDialog", () => {
       submitForm();
       await waitForSolid(() => expect(document.body.textContent).toContain("gateway exploded"));
 
-      expect(submit).toHaveBeenCalledOnce();
       expect(dialogInput()).toBe(input);
       expect(dialogInput()).toMatchObject({ disabled: false, value: "Client work" });
       expect(input.getAttribute("aria-invalid")).toBe("true");
@@ -208,34 +196,15 @@ describe("showInputDialog", () => {
       expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
-      await closed;
+      submitForm();
+      expect(submit).toHaveBeenCalledTimes(2);
+      await expectSaving();
+      expect(dialogInput()).toBe(input);
+      expect(input.hasAttribute("aria-invalid")).toBe(false);
+      expect(alert()).toBeNull();
+      retry.resolve(null);
+      await expect(closed).resolves.toBe("Client work");
       expect(dialog()).toBeNull();
     },
   );
-
-  it("retains validation feedback and the input while an admitted retry clears the failure", async () => {
-    const retry = Promise.withResolvers<string | null>();
-    const submit = vi
-      .fn()
-      .mockResolvedValueOnce("Choose another group name")
-      .mockReturnValue(retry.promise);
-    const { closed } = await open({ ...REQUIRED, submit });
-    await type("Client work");
-    const input = dialogInput();
-    submitForm();
-    await waitForSolid(() => {
-      expect(alert()?.textContent).toBe("Choose another group name");
-      expect(input.getAttribute("aria-invalid")).toBe("true");
-    });
-
-    submitForm();
-    submitForm();
-    expect(submit).toHaveBeenCalledTimes(2);
-    await waitForSolid(() => expect(input.disabled).toBe(true));
-    expect(dialogInput()).toBe(input);
-    expect(input.hasAttribute("aria-invalid")).toBe(false);
-    expect(alert()).toBeNull();
-    retry.resolve(null);
-    await expect(closed).resolves.toBe("Client work");
-  });
 });

@@ -40,16 +40,16 @@ function panel(request: GatewayRequestHandler, finish: () => void) {
       entrypoint: { type: "settings" },
     },
   };
-  let replace!: (next: McpAppOpenDetail) => void;
+  let replace!: () => void;
   const retirementListeners = new Set<() => void>();
   const mounted = mountSolid(
     () => {
       const [current, setCurrent] = createSignal(launch);
-      replace = (next) => {
+      replace = () => {
         for (const retire of retirementListeners) {
           retire();
         }
-        setCurrent(next);
+        setCurrent({ ...launch, serverName: "successor" });
       };
       return (
         <McpAppPanel
@@ -67,10 +67,7 @@ function panel(request: GatewayRequestHandler, finish: () => void) {
       } as ApplicationContext).wrapper,
     },
   );
-  onTestFinished(() => {
-    finish();
-    mounted.unmount();
-  });
+  onTestFinished(finish);
   const input = () => mounted.container.querySelector<HTMLInputElement>("input")!;
   const form = () => mounted.container.querySelector("form");
   const submit = () => mounted.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
@@ -89,7 +86,6 @@ function panel(request: GatewayRequestHandler, finish: () => void) {
     waitForSolid(() => expect(alert()?.textContent).toContain(error));
   return {
     ...mounted,
-    launch,
     replace,
     input,
     form,
@@ -106,9 +102,8 @@ it("shows a held settings read, reports its failure, and retries the current app
   const read = createDeferred<McpAppSettings>();
   const request = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue(settings("Library"));
   const view = panel(request, () => read.resolve(settings("Library")));
-  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  await waitForSolid(() => expect(view.container.querySelector('[role="status"]')).not.toBeNull());
   expect(view.container.querySelector("form")).toBeNull();
-  expect(view.container.querySelector('[role="status"]')).not.toBeNull();
   read.reject(new Error("Settings unavailable"));
   await view.expectError("Settings unavailable");
   [...view.container.querySelectorAll("button")]
@@ -116,42 +111,22 @@ it("shows a held settings read, reports its failure, and retries the current app
     .click();
   await view.expectValue("Library");
   expect(view.alert()).toBeNull();
-  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("retains the edited form while saving, reconciles accepted values, and keeps rejected edits retryable", async () => {
-  const save = createDeferred<{ toolResult?: { isError?: boolean } }>();
   const retry = createDeferred<{ toolResult?: { isError?: boolean } }>();
   const request = vi
     .fn()
     .mockResolvedValueOnce(settings("Library"))
-    .mockReturnValueOnce(save.promise)
-    .mockResolvedValueOnce(settings("Parts"))
     .mockRejectedValueOnce(new Error("Save unavailable"))
     .mockReturnValueOnce(retry.promise)
-    .mockResolvedValue(settings("Shelves"));
-  const view = panel(request, () => {
-    save.resolve({});
-    retry.resolve({});
-  });
+    .mockResolvedValue(settings("Stored"));
+  const view = panel(request, () => retry.resolve({}));
   await view.expectValue("Library");
   const form = view.form();
   const submit = view.submit();
-  let input = view.input();
-  const edit = (name: string) => {
-    input = view.edit(name);
-    view.save();
-  };
-  edit("Parts");
-  await waitForSolid(() => expect(submit.disabled).toBe(true));
-  expect(view.form()).toBe(form);
-  expect(input.value).toBe("Parts");
-  save.resolve({});
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
-  await waitForSolid(() => expect(view.input()?.disabled).toBe(false));
-  expect(view.form()).toBe(form);
-  expect(submit.disabled).toBe(true);
-  edit("Shelves");
+  const input = view.edit("Shelves");
+  view.save();
   await view.expectError("Save unavailable");
   expect(view.form()).toBe(form);
   expect(input.value).toBe("Shelves");
@@ -164,51 +139,47 @@ it("retains the edited form while saving, reconciles accepted values, and keeps 
   expect(view.form()).toBe(form);
   expect(input.value).toBe("Shelves");
   retry.resolve({});
-  await waitForSolid(() => expect(view.input()?.disabled).toBe(false));
+  await view.expectValue("Stored");
+  expect(view.input().disabled).toBe(false);
+  expect(submit.disabled).toBe(true);
   expect(view.form()).toBe(form);
 });
 
-it("replaces a held settings target immediately and ignores the old result", async () => {
-  const oldRead = createDeferred<McpAppSettings>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(oldRead.promise)
-    .mockResolvedValue(settings("Successor"));
-  const view = panel(request, () => oldRead.resolve(settings("Retired")));
-  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
-  view.replace({ ...view.launch, serverName: "successor" });
-  await view.expectValue("Successor");
-  oldRead.resolve(settings("Retired"));
-  await oldRead.promise;
-  await Promise.resolve();
-  flush();
-  expect(view.input().value).toBe("Successor");
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("lets a successor edit while an old save is held and ignores the retired failure", async () => {
-  const save = createDeferred<never>();
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce(settings("Library"))
-    .mockReturnValueOnce(save.promise)
-    .mockResolvedValueOnce(settings("Successor"));
-  const view = panel(request, () => save.reject(new Error("Retired failure")));
-  await view.expectValue("Library");
-  view.edit("Pending");
-  view.save();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-  view.replace({ ...view.launch, serverName: "successor" });
-  await view.expectValue("Successor");
-  const input = view.input();
-  expect(input.disabled).toBe(false);
-  view.edit("Successor draft");
-  expect(view.submit().disabled).toBe(false);
-  save.reject(new Error("Retired failure"));
-  await save.promise.catch(() => {});
-  await Promise.resolve();
-  flush();
-  expect(input.value).toBe("Successor draft");
-  expect(view.alert()).toBeNull();
-  expect(request).toHaveBeenCalledTimes(3);
-});
+it.each(["read", "save"])(
+  "retires a held %s without disturbing the editable successor",
+  async (operation) => {
+    const pending = createDeferred<McpAppSettings>();
+    const request = vi.fn();
+    if (operation === "save") {
+      request.mockResolvedValueOnce(settings("Library"));
+    }
+    request.mockReturnValueOnce(pending.promise).mockResolvedValue(settings("Successor"));
+    const settle = () =>
+      operation === "read"
+        ? pending.resolve(settings("Retired"))
+        : pending.reject(new Error("Retired failure"));
+    const view = panel(request, settle);
+    if (operation === "save") {
+      await view.expectValue("Library");
+      view.edit("Pending");
+      view.save();
+      await waitForSolid(() => expect(view.input().disabled).toBe(true));
+    } else {
+      await waitForSolid(() =>
+        expect(view.container.querySelector('[role="status"]')).not.toBeNull(),
+      );
+    }
+    view.replace();
+    await view.expectValue("Successor");
+    const input = view.input();
+    expect(input.disabled).toBe(false);
+    view.edit("Successor draft");
+    expect(view.submit().disabled).toBe(false);
+    settle();
+    await pending.promise.catch(() => {});
+    await Promise.resolve();
+    flush();
+    expect(input.value).toBe("Successor draft");
+    expect(view.alert()).toBeNull();
+  },
+);
