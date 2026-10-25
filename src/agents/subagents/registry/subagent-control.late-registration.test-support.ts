@@ -32,6 +32,39 @@ type StoreControlDeps = {
   writeSessionStoreFixture: (label: string, store: Record<string, unknown>) => Promise<string>;
 };
 
+const sessionIdentity = (sessionId: string) => ({
+  sessionId,
+  lifecycleRevision: sessionId + "-revision",
+});
+function withdrawReservation(runId: string, releases: Promise<void>[]) {
+  const hold = holdQueuedSwarmRun(runId);
+  const withdrawn = hold?.withdraw();
+  if (hold) {
+    releases.push(hold.release());
+  }
+  expect(withdrawn).toBe(true);
+}
+const registerQueued = (
+  runId: string,
+  requesterSessionKey: string,
+  task: string,
+  requesterTurnRunId?: string,
+) =>
+  registerSubagentRun({
+    runId,
+    childSessionKey: `agent:main:subagent:${runId}`,
+    childAgentId: "main",
+    sessionEntry: sessionIdentity(`${runId}-session`),
+    requesterSessionKey,
+    requesterAgentId: "main",
+    requesterDisplayKey: requesterSessionKey,
+    requesterTurnRunId,
+    task,
+    cleanup: "keep",
+    collect: true,
+    queued: true,
+  });
+
 export function registerAdmissionDrainControlTests({
   cfgWithSessionStore,
   controllerFor,
@@ -51,7 +84,7 @@ export function registerAdmissionDrainControlTests({
       let entry = createSubagentRunRecord({
         runId: "run-kill-admission-timeout",
         childSessionKey,
-        childSessionIdentity: { sessionId, lifecycleRevision: sessionId + "-revision" },
+        childSessionIdentity: sessionIdentity(sessionId),
         controllerSessionKey,
         task: "hold admission during kill",
         collect: queued,
@@ -139,10 +172,7 @@ export function registerLateDescendantControlTests({
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
-        childSessionIdentity: {
-          sessionId: "late-parent-session",
-          lifecycleRevision: "late-parent-session-revision",
-        },
+        childSessionIdentity: sessionIdentity("late-parent-session"),
         requesterSessionKey: owner,
         requesterDisplayKey: owner,
         task: "orchestrator",
@@ -154,10 +184,7 @@ export function registerLateDescendantControlTests({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
-        childSessionIdentity: {
-          sessionId: "live-child-session",
-          lifecycleRevision: "live-child-session-revision",
-        },
+        childSessionIdentity: sessionIdentity("live-child-session"),
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
@@ -189,22 +216,11 @@ export function registerLateDescendantControlTests({
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
         enqueueControlRun("late-descendants", "late-child", [parent.runId], start);
-        return registerSubagentRun({
-          runId: "late-child",
-          childSessionKey: childKey,
-          childAgentId: "main",
-          sessionEntry: {
-            sessionId: "late-child-session",
-            lifecycleRevision: "late-child-session-revision",
-          },
-          requesterSessionKey: requester.childSessionKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: requester.childSessionKey,
-          task: "registered while orchestrator is live",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
+        return registerQueued(
+          "late-child",
+          requester.childSessionKey,
+          "registered while orchestrator is live",
+        );
       };
       setSubagentControlDepsForTest({});
       const cfg = cfgWithSessionStore(storePath);
@@ -238,32 +254,16 @@ export function registerLateDescendantControlTests({
       try {
         await reached.promise;
         if (replaceChild) {
-          const hold = holdQueuedSwarmRun("late-child");
-          const withdrawn = hold?.withdraw();
-          if (hold) {
-            reservationReleases.push(hold.release());
-          }
-          expect(withdrawn).toBe(true);
+          withdrawReservation("late-child", reservationReleases);
         }
         await registerChild();
         const outsideStart = vi.fn(async () => {});
-        await registerSubagentRun({
-          runId: "other-turn-root",
-          childSessionKey: "agent:main:subagent:other-turn-root",
-          childAgentId: "main",
-          sessionEntry: {
-            sessionId: "other-turn-root-session",
-            lifecycleRevision: "other-turn-root-session-revision",
-          },
-          requesterSessionKey: owner,
-          requesterAgentId: "main",
-          requesterTurnRunId: "other-turn",
-          requesterDisplayKey: owner,
-          task: "outside the captured root set",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
+        await registerQueued(
+          "other-turn-root",
+          owner,
+          "outside the captured root set",
+          "other-turn",
+        );
         enqueueControlRun("other-turn", "other-turn-root", [], outsideStart);
         proceed.resolve();
         if (phase === "admission drain") {
@@ -328,10 +328,7 @@ export function registerQueuedReservationFailureTests({
     let entry = createSubagentRunRecord({
       runId: "failure-queued",
       childSessionKey: "agent:main:subagent:failure-queued",
-      childSessionIdentity: {
-        sessionId: "queued-session",
-        lifecycleRevision: "queued-session-revision",
-      },
+      childSessionIdentity: sessionIdentity("queued-session"),
       controllerSessionKey,
       requesterSessionKey: controllerSessionKey,
       task: "queued failure",
@@ -351,6 +348,11 @@ export function registerQueuedReservationFailureTests({
     reserve();
     let writes = 0;
     let rejectedWrite: number | undefined;
+    const replaceSession = () =>
+      replaceSessionEntrySync(
+        { storePath, sessionKey: entry.childSessionKey },
+        { sessionId: "new-session", updatedAt: 2 },
+      );
     resetRegistryLeafMocks();
     vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
       runSubagentStateWorkerOperation(
@@ -363,10 +365,7 @@ export function registerQueuedReservationFailureTests({
                 command.type === "subagents.persistChanges" ? ++writes : undefined;
               if (writeNumber !== undefined) {
                 if (failure === "session replacement at intent" && writeNumber === 1) {
-                  replaceSessionEntrySync(
-                    { storePath, sessionKey: entry.childSessionKey },
-                    { sessionId: "new-session", updatedAt: 2 },
-                  );
+                  replaceSession();
                 }
                 if (
                   ["tombstone write", "claim release", "session replacement release"].includes(
@@ -383,10 +382,7 @@ export function registerQueuedReservationFailureTests({
                 ["session replacement", "session replacement release"].includes(failure) &&
                 writeNumber === 1
               ) {
-                replaceSessionEntrySync(
-                  { storePath, sessionKey: entry.childSessionKey },
-                  { sessionId: "new-session", updatedAt: 2 },
-                );
+                replaceSession();
               }
               return receipt;
             },
@@ -426,12 +422,7 @@ export function registerQueuedReservationFailureTests({
             "scheduled pump cannot dispatch while cancellation owns the reservation",
           ).not.toHaveBeenCalled();
           if (failure === "row replacement") {
-            const hold = holdQueuedSwarmRun(entry.runId);
-            const withdrawn = hold?.withdraw();
-            if (hold) {
-              reservationReleases.push(hold.release());
-            }
-            expect(withdrawn).toBe(true);
+            withdrawReservation(entry.runId, reservationReleases);
             await addSubagentRunForTests({ ...entry, generation: 2, createdAt: 2 });
             reserve();
           }
