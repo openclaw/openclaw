@@ -39,11 +39,15 @@ function message(id: string, text: string, type = "output_text") {
   return { type: "message", id, role: "assistant", content: [{ type, text }] };
 }
 
-async function backfill(id: string, output: readonly unknown[]) {
-  return streamOutput([
-    { type: "response.completed", response: { id, status: "completed", output } },
-  ]);
-}
+const completed = (output: readonly unknown[] = []) => ({
+  type: "response.completed",
+  response: { id: "resp_fixture", status: "completed", output },
+});
+const textBlock = (id: string, text: string) => ({
+  type: "text",
+  text,
+  textSignature: JSON.stringify({ v: 1, id }),
+});
 
 describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
@@ -74,7 +78,7 @@ describe("openai transport stream", () => {
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {
-    const model = createAzureResponsesModel();
+    const secrets = Array.from({ length: 7 }, (_, index) => `private-identifier-${index}`);
     const event = {
       type: "response.failed",
       response: {
@@ -82,23 +86,22 @@ describe("openai transport stream", () => {
         status: "failed",
         model: "gpt-5.4-pro",
         metadata: {
-          litellm_request_id: "litellm_req_plaintext_123",
-          api_key: "sk-observation-secret",
+          litellm_request_id: secrets[0],
+          api_key: secrets[6],
         },
-        provider_request_id: "provider_req_plaintext_456",
-        status_details: {
-          provider_request_id: "provider_req_nested_789",
-        },
+        provider_request_id: secrets[1],
+        status_details: { provider_request_id: secrets[2] },
         provider_error: {
-          request_id: "provider_error_req_nested_012",
-          headers: {
-            "x-request-id": ["header_req_plaintext_345", "header_req_plaintext_678"],
-          },
+          request_id: secrets[3],
+          headers: { "x-request-id": secrets.slice(4, 6) },
         },
       },
     };
 
-    const observation = testing.normalizeResponsesFailedEvent(event, model).observation;
+    const observation = testing.normalizeResponsesFailedEvent(
+      event,
+      createAzureResponsesModel(),
+    ).observation;
     assert(observation);
 
     expect(observation).toMatchObject({
@@ -119,15 +122,7 @@ describe("openai transport stream", () => {
     } finally {
       logWarn.mockRestore();
     }
-    for (const secret of [
-      "litellm_req_plaintext_123",
-      "provider_req_plaintext_456",
-      "provider_req_nested_789",
-      "provider_error_req_nested_012",
-      "header_req_plaintext_345",
-      "header_req_plaintext_678",
-      "sk-observation-secret",
-    ]) {
+    for (const secret of secrets) {
       expect(JSON.stringify(observation)).not.toContain(secret);
     }
   });
@@ -155,7 +150,7 @@ describe("openai transport stream", () => {
             summary: [{ type: "summary_text", text: "Need a tool." }],
           },
         },
-        { type: "response.completed", response: { id: "resp_123", status: "completed" } },
+        completed(),
       ],
       model,
       { reasoningReplayMetadata: replayMetadata },
@@ -175,34 +170,27 @@ describe("openai transport stream", () => {
     expect(thinkingBlock.openclawReasoningReplay).toEqual(replayMetadata);
   });
 
-  it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
-    const output = await backfill("resp-backfill-snapshots", [
-      message("msg_1", "The answer"),
-      message("msg_2", "The answer is 42."),
-      message("msg_3", "The answer"),
-    ]);
-
-    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
-    // and is an independently identified message, so it stays a real block.
-    expect(output.content).toEqual([
-      { type: "text", text: "The answer is 42.", textSignature: '{"v":1,"id":"msg_2"}' },
-      { type: "text", text: "The answer", textSignature: '{"v":1,"id":"msg_3"}' },
-    ]);
-  });
-
-  it("keeps backfill message items separated by a reasoning item as distinct blocks", async () => {
-    const output = await backfill("resp-backfill-reasoning-boundary", [
-      message("msg_1", "Step one."),
-      { type: "reasoning", id: "rs_1", summary: [] },
-      message("msg_2", "Step one. Step two."),
-    ]);
-
-    // A reasoning item is a real boundary even in backfill: msg_2 must not
-    // collapse into msg_1 despite being a strict extension (mirrors streaming).
-    expect(output.content).toEqual([
-      { type: "text", text: "Step one.", textSignature: '{"v":1,"id":"msg_1"}' },
-      { type: "text", text: "Step one. Step two.", textSignature: '{"v":1,"id":"msg_2"}' },
-    ]);
+  it.each([
+    [
+      "collapses extensions but retains shrinking snapshots (#91959)",
+      [
+        message("msg_1", "The answer"),
+        message("msg_2", "The answer is 42."),
+        message("msg_3", "The answer"),
+      ],
+      [textBlock("msg_2", "The answer is 42."), textBlock("msg_3", "The answer")],
+    ],
+    [
+      "retains extensions across reasoning boundaries",
+      [
+        message("msg_1", "Step one."),
+        { type: "reasoning", id: "rs_1", summary: [] },
+        message("msg_2", "Step one. Step two."),
+      ],
+      [textBlock("msg_1", "Step one."), textBlock("msg_2", "Step one. Step two.")],
+    ],
+  ] as const)("completed-response backfill %s", async (_name, items, expected) => {
+    expect((await streamOutput([completed(items)])).content).toEqual(expected);
   });
 
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
@@ -240,19 +228,15 @@ describe("openai transport stream", () => {
   it("preserves Azure routing and prepared headers", async () => {
     vi.stubEnv("AZURE_OPENAI_API_VERSION", "preview");
     const baseUrl = "https://example.openai.azure.com";
-    const model = {
-      ...createAzureResponsesModel(),
-      baseUrl,
-    };
+    const model = { ...createAzureResponsesModel(), baseUrl };
     const requests: Request[] = [];
     const fetchOwner = vi
       .spyOn(getAiTransportHost(), "buildModelFetch")
       .mockReturnValue(async (input, init) => {
         requests.push(new Request(input, init));
-        return new Response(
-          'data: {"type":"response.completed","response":{"id":"resp_fixture","status":"completed","output":[]}}\n\n',
-          { headers: { "content-type": "text/event-stream" } },
-        );
+        return new Response(`data: ${JSON.stringify(completed())}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
       });
     try {
       const stream = await createAzureOpenAIResponsesTransportStreamFn()(
@@ -296,8 +280,6 @@ describe("openai transport stream", () => {
           id: "resp-streamed",
           status: "incomplete",
           incomplete_details: { reason: "max_output_tokens" },
-          // The terminal payload repeats what the stream already delivered; replaying it
-          // would persist the same text twice in the assistant turn.
           output: [message("msg_streamed", "STREAMED_HALF_SENTENCE", "text")],
           usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
         },

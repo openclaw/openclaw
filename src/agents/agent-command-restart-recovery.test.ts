@@ -114,9 +114,20 @@ const classify = createDirectAnnounceResponseClassifier({
 const delivery = (result: TerminalDeliveryInput) => classify({ status: "ok", result });
 const suppressedOutcomes = (reason: string, count = 65): PayloadOutcome[] =>
   Array.from({ length: count }, (_, index) => ({ index, status: "suppressed", reason }));
+const suppressed = (reason: string, payloadOutcomes?: PayloadOutcome[]) => ({
+  status: "suppressed" as const,
+  resultCount: 0,
+  reason,
+  payloadOutcomes,
+});
 const silent = { terminalReply: { disposition: "silent" as const } };
 const privateError = new Error("private synthetic failure");
 const ambiguous = { delivered: false, disposition: "ambiguous" };
+const intentional = {
+  delivered: false,
+  disposition: "intentional_non_delivery",
+  reason: "delivery_suppressed",
+};
 
 it.each<[string, TerminalDeliveryInput, boolean]>([
   ["intentional silent final", { meta: silent }, true],
@@ -148,7 +159,7 @@ it.each([
   const stored = project({
     payloads: [],
     meta: { yielded: true },
-    deliveryStatus: { status: "suppressed", resultCount: 0, reason },
+    deliveryStatus: suppressed(reason),
   });
   expect(await classify({ status: "ok", result: stored })).toMatchObject({
     delivered: false,
@@ -163,15 +174,10 @@ it.each<Omit<PayloadOutcome, "index">>([
 ])("retains truncated $status send evidence", async (lastOutcome) => {
   const original = {
     payloads: Array.from({ length: 65 }, () => ({ text: "progress", isCommentary: true })),
-    deliveryStatus: {
-      status: "suppressed",
-      resultCount: 0,
-      reason: "cancelled_by_message_sending_hook",
-      payloadOutcomes: [
-        ...suppressedOutcomes("cancelled_by_message_sending_hook", 64),
-        { index: 64, ...lastOutcome },
-      ],
-    },
+    deliveryStatus: suppressed("cancelled_by_message_sending_hook", [
+      ...suppressedOutcomes("cancelled_by_message_sending_hook", 64),
+      { index: 64, ...lastOutcome },
+    ]),
   } satisfies TerminalDeliveryInput;
   expect(await delivery(original)).toMatchObject(ambiguous);
   const stored = project(original);
@@ -182,23 +188,13 @@ it.each<Omit<PayloadOutcome, "index">>([
 
 it("preserves late policy cancellation beyond the bounded outcome list", async () => {
   const original = {
-    deliveryStatus: {
-      status: "suppressed",
-      resultCount: 0,
-      reason: "no_visible_payload",
-      payloadOutcomes: [
-        ...suppressedOutcomes("no_visible_payload", 64),
-        { index: 64, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
-      ],
-    },
+    deliveryStatus: suppressed("no_visible_payload", [
+      ...suppressedOutcomes("no_visible_payload", 64),
+      { index: 64, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+    ]),
   } satisfies TerminalDeliveryInput;
-  const expected = {
-    delivered: false,
-    disposition: "intentional_non_delivery",
-    reason: "delivery_suppressed",
-  };
-  expect(await delivery(original)).toMatchObject(expected);
-  expect(await delivery(project(original))).toMatchObject(expected);
+  expect(await delivery(original)).toMatchObject(intentional);
+  expect(await delivery(project(original))).toMatchObject(intentional);
 });
 
 it("bounds suppression reasons and outcomes without retaining raw terminal objects", () => {

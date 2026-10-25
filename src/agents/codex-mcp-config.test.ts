@@ -33,6 +33,12 @@ const http = (url: string, options: Record<string, unknown> = {}) => ({
   url,
   ...options,
 });
+function expectServers(
+  loaded: Awaited<ReturnType<typeof load>>,
+  mcp_servers: Record<string, unknown>,
+) {
+  expect(loaded.configPatch).toEqual({ mcp_servers });
+}
 
 vi.mock("../infra/exec-approvals-store.js", () => ({
   loadExecApprovalsReadOnlyAsync: mocks.loadExecApprovalsReadOnlyAsync,
@@ -186,14 +192,12 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       cfg: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
     });
 
-    expect(loaded.configPatch).toEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-          startup_timeout_sec: 12.345,
-          tool_timeout_sec: 20.125,
-          supports_parallel_tool_calls: true,
-        },
+    expectServers(loaded, {
+      search: {
+        url: "https://mcp.example.com/mcp",
+        startup_timeout_sec: 12.345,
+        tool_timeout_sec: 20.125,
+        supports_parallel_tool_calls: true,
       },
     });
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -224,13 +228,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       },
     });
 
-    expect(loaded.configPatch).toEqual({
-      mcp_servers: {
-        constructor: { url: "https://constructor.example.com/mcp" },
-        docs: {
-          url: "https://docs.example.com/mcp",
-          disabled_tools: ["delete_all", "delete_page"],
-        },
+    expectServers(loaded, {
+      constructor: { url: "https://constructor.example.com/mcp" },
+      docs: {
+        url: "https://docs.example.com/mcp",
+        disabled_tools: ["delete_all", "delete_page"],
       },
     });
   });
@@ -240,17 +242,9 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
     const cfg = configured({ docs: { enabled: false, url: "https://configured.example.com/mcp" } });
 
     expect((await load({ cfg })).configPatch).toBeUndefined();
-    expect(
-      (
-        await load({
-          cfg,
-          toolOverrides: { mcpServers: { docs: true } },
-        })
-      ).configPatch,
-    ).toEqual({
-      mcp_servers: {
-        docs: { url: "https://bundled.example.com/mcp" },
-      },
+    const enabled = await load({ cfg, toolOverrides: { mcpServers: { docs: true } } });
+    expectServers(enabled, {
+      docs: { url: "https://bundled.example.com/mcp" },
     });
   });
 
@@ -289,9 +283,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       setServers({ search });
       const withoutScopedConfig = await load({ cfg: {}, toolsEnabled: true });
 
-      expect(loaded.configPatch).toEqual({
-        mcp_servers: { search: { url: "https://mcp.example.com/mcp" } },
-      });
+      expectServers(loaded, { search: { url: "https://mcp.example.com/mcp" } });
       expect(JSON.stringify(loaded.configPatch)).not.toContain("unresolved.invalid");
       expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
       expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);

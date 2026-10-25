@@ -186,9 +186,8 @@ describe("prepared model runtime config stamps", () => {
   });
 
   it("resolves startup config inside the serialized publication", async () => {
-    const initialConfig = {};
     const nextConfig = hotConfig();
-    let currentConfig = initialConfig;
+    let currentConfig: OpenClawConfig = {};
 
     const publication = publish(() => currentConfig);
     currentConfig = nextConfig;
@@ -248,10 +247,9 @@ describe("prepared model runtime config stamps", () => {
   );
 
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
-    const initialConfig = {};
     const staleConfig = { gateway: { reload: { mode: "off" as const } } };
     const nextConfig = hotConfig();
-    await publish(initialConfig);
+    await publish({});
     await using resources = new AsyncDisposableStack();
     let claimCurrent = true;
     const stale = holdPublication(resources, staleConfig, {
@@ -279,9 +277,8 @@ describe("prepared model runtime config stamps", () => {
   });
 
   it("keeps an in-flight auth publication on the advanced stamp", async () => {
-    const initialConfig = {};
     const nextConfig = hotConfig();
-    await publish(initialConfig);
+    await publish({});
     const finishAuthRefreshGate = createDeferred();
     const authRefreshStarted = createDeferred();
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
