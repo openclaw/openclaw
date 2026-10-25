@@ -5811,8 +5811,10 @@ workers still require native exit before replacement. Schema and update behavior
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
 per-transcript queue, then recheck the live session before publishing. Message
-lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
-their projection-readiness retry. Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
+lookup keeps its current-only, byte-limit, and reset-archive behavior. Projection
+waiters read status once, then await the reconcile owner's per-session completion;
+committed ready receipts can release a session before unrelated rebuilds finish.
+Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
 
 Exact transcript-event matching also uses the history worker for disk discovery,
 payload decoding, and selection. Callers supply a serializable selection for the

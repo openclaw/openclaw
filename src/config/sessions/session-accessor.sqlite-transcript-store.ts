@@ -380,14 +380,13 @@ export function appendTranscriptEventInTransaction(
       }
       if (options.touchMutation !== false) {
         preserveSessionEntryCacheAcrossWrite(database, () => {
-          touchTranscriptMutationInTransaction(
-            database,
-            scope.sessionId,
-            deferWindowTouch ? windowUpdatedAt : undefined,
-            cursor.rowTranscript,
-            options.persistActorMutation,
-            flushProjectionWithMutation,
-          );
+          touchTranscriptMutationInTransaction(database, scope.sessionId, {
+            windowUpdatedAt: deferWindowTouch ? windowUpdatedAt : undefined,
+            rowTranscript: cursor.rowTranscript,
+            persistActorMutation: options.persistActorMutation,
+            writeActorMutation: flushProjectionWithMutation,
+            projectionReady: !projectionNeedsRebuild,
+          });
         });
       }
       scheduleTranscriptProjectionReconcile(
@@ -462,7 +461,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
     () => {
       const rebuildSynchronously =
         events.length > 0 &&
-        shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId, events);
+        (options.rebuildProjectionSynchronously === true ||
+          shouldRebuildSessionTranscriptIndexSynchronously(
+            database.db,
+            resolved.sessionId,
+            events,
+          ));
       const preservedTranscriptUpdatedAt =
         options.preserveSessionWindowRecency === true
           ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
@@ -496,6 +500,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
             database,
             resolved.sessionId,
             preservedTranscriptUpdatedAt,
+            true,
           );
         }
         return;
@@ -599,6 +604,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
           database,
           resolved.sessionId,
           preservedTranscriptUpdatedAt,
+          rebuildSynchronously,
         );
       }
     },
