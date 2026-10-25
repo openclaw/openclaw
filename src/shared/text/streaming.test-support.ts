@@ -19,20 +19,16 @@ export function streamChunks(
 }
 
 export function regexWork(run: () => void, matches = (_regex: RegExp) => true) {
-  const test = RegExp.prototype.test;
-  let testedCharacters = 0;
-  const probe = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
-    this: RegExp,
-    value: string,
-  ) {
-    if (typeof value === "string" && matches(this)) {
-      testedCharacters += value.length;
-    }
-    return test.call(this, value);
-  });
+  const probe = vi.spyOn(RegExp.prototype, "test");
   try {
     run();
-    return testedCharacters;
+    return probe.mock.calls.reduce((total, [value], index) => {
+      const regex = probe.mock.contexts[index];
+      return (
+        total +
+        (typeof value === "string" && regex instanceof RegExp && matches(regex) ? value.length : 0)
+      );
+    }, 0);
   } finally {
     probe.mockRestore();
   }
