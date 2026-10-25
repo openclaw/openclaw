@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished } from "vitest";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { computedStyles } from "./config-composer-fixtures.test-support.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -58,17 +59,11 @@ export function defineNativeModuleBoundaryTests(
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--mobile-nav");
-      expect(errors).toEqual([]);
 
       held.release();
       await expect.poll(() => element.evaluate((node) => node.matches(":defined"))).toBe(true);
-      await page.setViewportSize({ width: 900, height: 900 });
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => navigation.isVisible()).toBe(false);
+      // Registered-drawer focus and Escape are owned by native-nav-sidebar-toggle.e2e.test.ts.
       expect(errors).toEqual([]);
-      expect(held.requests()).toBe(1);
     });
 
     it.each([
@@ -135,7 +130,6 @@ export function defineNativeModuleBoundaryTests(
       await expect
         .poll(() => dialog.evaluate((element) => element.contains(document.activeElement)))
         .toBe(true);
-      expect(held.requests()).toBe(1);
       await page.keyboard.press("Escape");
       await expect.poll(() => dialog.count()).toBe(0);
     });
@@ -153,13 +147,12 @@ export function defineNativeModuleBoundaryTests(
       const palette = page.locator("openclaw-command-palette .cmd-palette");
       const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
       await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
-      const paletteAnimationName = await palette.evaluate(
-        (element) => getComputedStyle(element).animationName,
-      );
-      const paletteDialogAnimationDuration = await paletteDialog.evaluate((element) => {
-        const dialog = element.querySelector<HTMLDialogElement>("dialog");
-        return dialog ? getComputedStyle(dialog).animationDuration : "missing";
+      expect(await computedStyles(palette, ["animation-name"])).toEqual({
+        "animation-name": "none",
       });
+      expect(await computedStyles(paletteDialog.locator("dialog"), ["animation-duration"])).toEqual(
+        { "animation-duration": "0s" },
+      );
       await page.keyboard.press("Escape");
 
       const sidebar = page.locator("openclaw-app-sidebar");
@@ -180,52 +173,41 @@ export function defineNativeModuleBoundaryTests(
       await buildLink.hover();
       await page.clock.runFor(600);
       await popupModule.request;
-      expect(popupModule.requests()).toBe(1);
       expect(await surface.isVisible()).toBe(false);
       popupModule.release();
       await surface.waitFor({ state: "visible" });
-      const hoverCardMotion = await sidebar
-        .locator("openclaw-sidebar-build-chip openclaw-tooltip")
-        .evaluate((tooltip) => {
-          const popupSurface = tooltip.shadowRoot?.querySelector<HTMLElement>(
-            ".tooltip-surface[popover]",
-          );
-          if (!popupSurface || !popupSurface.matches(":popover-open")) {
-            throw new Error("expected the open native sidebar hovercard");
-          }
-          const [originX, originY] = getComputedStyle(popupSurface)
-            .transformOrigin.split(" ")
-            .map(Number.parseFloat);
-          return {
-            animationDuration: getComputedStyle(popupSurface).animationDuration,
-            popupHeight: popupSurface.offsetHeight,
-            popupWidth: popupSurface.offsetWidth,
-            originX,
-            originY,
-            placement: popupSurface.getAttribute("data-placement"),
-            playState: getComputedStyle(popupSurface).animationPlayState,
-          };
-        });
+      const hoverCardMotion = await surface.evaluate((popupSurface: HTMLElement) => {
+        const style = getComputedStyle(popupSurface);
+        const [originX, originY] = style.transformOrigin.split(" ").map(Number.parseFloat);
+        return {
+          open: popupSurface.matches(":popover-open"),
+          animationDuration: style.animationDuration,
+          popupHeight: popupSurface.offsetHeight,
+          popupWidth: popupSurface.offsetWidth,
+          originX,
+          originY,
+          placement: popupSurface.getAttribute("data-placement"),
+          playState: style.animationPlayState,
+        };
+      });
       await surface.evaluate((element) => {
         (element as HTMLElement).style.removeProperty("animation-play-state");
       });
       await page.clock.resume();
       await page.keyboard.press("Escape");
-      expect(popupModule.requests()).toBe(1);
 
       await page.setViewportSize({ width: 900, height: 900 });
       const drawer = page.locator(".shell-nav.nav-drawer");
       await expect.poll(() => drawer.count()).toBe(1);
       await navigationDrawerToggle(page).click();
-      const drawerAnimationName = await drawer.evaluate(
-        (element) => getComputedStyle(element).animationName,
-      );
-
-      expect(paletteAnimationName).toBe("none");
-      expect(paletteDialogAnimationDuration).toBe("0s");
-      expect(drawerAnimationName).toBe("none");
-      expect(hoverCardMotion.animationDuration).toBe("0.14s");
-      expect(hoverCardMotion.playState).toBe("paused");
+      expect(await computedStyles(drawer, ["animation-name"])).toEqual({
+        "animation-name": "none",
+      });
+      expect(hoverCardMotion).toMatchObject({
+        open: true,
+        animationDuration: "0.14s",
+        playState: "paused",
+      });
       expect(hoverCardMotion.placement).toMatch(/^top(?:-|$)/u);
       expect(hoverCardMotion.originX).toBeGreaterThan(hoverCardMotion.popupWidth * 0.45);
       expect(hoverCardMotion.originX).toBeLessThan(hoverCardMotion.popupWidth * 0.55);

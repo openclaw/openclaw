@@ -6,38 +6,36 @@ import {
   type ControlUiE2eFailureFact,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 
-const limit = 128;
-const subscribeMethod = "controlUi.sessionPullRequests.subscribe";
-type Fact = string | number | boolean | null;
-
-/** Only the descendant-PR scenario installs this bounded, content-free flight recorder. */
-export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[], branch: string) {
-  const gateway: Record<string, Fact>[] = [];
-  const frames: Record<string, ControlUiE2eFailureFact>[] = [];
-  const dropped = { gateway: 0, frames: 0 };
-  const retain = <T>(ring: T[], item: T, kind: keyof typeof dropped) => {
-    ring.push(item);
-    if (ring.length > limit) {
-      ring.shift();
-      dropped[kind]++;
+// The scenario owns full PR snapshots. This recorder adds only bounded, content-free ordering.
+export function recordTaskPrDiagnostics(
+  sessionKeys: string[],
+  _numbers: number[],
+  _branch: string,
+) {
+  const limit = 128;
+  const events: Record<string, ControlUiE2eFailureFact>[] = [];
+  let dropped = 0;
+  const record = (facts: Record<string, ControlUiE2eFailureFact>) => {
+    events.push({ at: Date.now(), ...facts });
+    if (events.length > limit) {
+      events.shift();
+      dropped++;
     }
   };
-  const recordFrame = (facts: Record<string, ControlUiE2eFailureFact>) =>
-    retain(frames, { at: Date.now(), ...facts }, "frames");
+  const keys = (value: unknown) =>
+    Array.isArray(value)
+      ? value.map((key) => sessionKeys.indexOf(String(key))).filter((index) => index >= 0)
+      : [];
   const recordGateway = (message: unknown) => {
-    if (!isRecord(message)) {
-      return;
-    }
     if (
-      typeof message.method === "string" &&
-      !message.method.startsWith("controlUi.sessionPullRequests.")
+      !isRecord(message) ||
+      (typeof message.method === "string" &&
+        !message.method.startsWith("controlUi.sessionPullRequests.")) ||
+      (typeof message.sessionKey === "string" && !sessionKeys.includes(message.sessionKey))
     ) {
       return;
     }
-    if (typeof message.sessionKey === "string" && !sessionKeys.includes(message.sessionKey)) {
-      return;
-    }
-    const facts: Record<string, Fact> = { at: Date.now() };
+    const facts: Record<string, ControlUiE2eFailureFact> = { source: "gateway" };
     for (const key of [
       "phase",
       "method",
@@ -57,7 +55,7 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
     if (typeof message.sessionKey === "string") {
       facts.session = sessionKeys.indexOf(message.sessionKey);
     }
-    retain(gateway, facts, "gateway");
+    record(facts);
   };
   const channels = [
     "openclaw.gateway.session-pr",
@@ -65,48 +63,19 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
     "openclaw.git.operation",
   ].map(channel);
   channels.forEach((source) => source.subscribe(recordGateway));
-
-  const summarize = (value: unknown) => {
-    if (!isRecord(value)) {
-      return null;
-    }
-    return {
-      status:
-        ["ready", "unavailable", "rate-limited"].find((status) => status === value.status) ?? null,
-      branchRead: value.branchRead === false ? false : null,
-      branchMatches: isRecord(value.branch) && value.branch.branch === branch,
-      pullRequestCount: Array.isArray(value.pullRequests) ? value.pullRequests.length : null,
-      taskPullRequestCount:
-        typeof value.taskPullRequestCount === "number" ? value.taskPullRequestCount : null,
-      descendants: Array.isArray(value.taskPullRequests)
-        ? value.taskPullRequests.slice(0, 4).map((item: unknown) => {
-            if (!isRecord(item)) {
-              return null;
-            }
-            return {
-              session: sessionKeys.indexOf(String(item.sourceSessionKey)),
-              number: numbers.find((number) => number === item.number) ?? null,
-              hydrated: isRecord(item.pullRequest),
-            };
-          })
-        : [],
-    };
-  };
-
   return {
     beginStage() {
-      gateway.length = frames.length = 0;
-      dropped.gateway = dropped.frames = 0;
+      events.length = dropped = 0;
     },
     stop: () => channels.forEach((source) => source.unsubscribe(recordGateway)),
     socket() {
       const pending = new Map<string, number>();
-      let requestSequence = 0;
+      let sequence = 0;
       return {
         sent(frame: unknown) {
           if (
             !isRecord(frame) ||
-            frame.method !== subscribeMethod ||
+            frame.method !== "controlUi.sessionPullRequests.subscribe" ||
             typeof frame.id !== "string"
           ) {
             return;
@@ -114,15 +83,11 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
           if (pending.size >= limit) {
             pending.delete(pending.keys().next().value!);
           }
-          pending.set(frame.id, ++requestSequence);
+          pending.set(frame.id, ++sequence);
           const params = isRecord(frame.params) ? frame.params : {};
-          const keys = (value: unknown) =>
-            Array.isArray(value)
-              ? value.map((key) => sessionKeys.indexOf(String(key))).filter((index) => index >= 0)
-              : [];
-          recordFrame({
-            direction: "sent",
-            request: requestSequence,
+          record({
+            source: "sent",
+            request: sequence,
             foreground: keys(params.sessionKeys),
             passive: keys(params.passiveSessionKeys),
           });
@@ -134,36 +99,22 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
           const request = typeof frame.id === "string" ? pending.get(frame.id) : undefined;
           if (frame.type === "res" && request !== undefined) {
             pending.delete(String(frame.id));
-            recordFrame({ direction: "received", request, ok: frame.ok === true });
+            record({ source: "received", request, ok: frame.ok === true });
           }
           if (
-            frame.event !== "controlUi.sessionPullRequests.changed" ||
-            !isRecord(frame.payload) ||
-            !isRecord(frame.payload.sessions)
+            frame.event === "controlUi.sessionPullRequests.changed" &&
+            isRecord(frame.payload) &&
+            isRecord(frame.payload.sessions)
           ) {
-            return;
+            record({ source: "publication", sessions: keys(Object.keys(frame.payload.sessions)) });
           }
-          const sessions = frame.payload.sessions;
-          recordFrame({
-            direction: "received",
-            event: frame.event,
-            sessions: sessionKeys.map((key) => summarize(sessions[key])),
-          });
         },
         close: () => pending.clear(),
       };
     },
     capture(page: Page, stage: string) {
-      // The caller owns UI, hydration, and Git-operation snapshots; retain only the timeline here.
       recordControlUiE2eFailureFacts(page, {
-        taskPrTrace: {
-          stage,
-          capturedAt: Date.now(),
-          limit,
-          dropped: { ...dropped },
-          gateway: [...gateway],
-          frames: [...frames],
-        },
+        taskPrTrace: { stage, limit, dropped, events: [...events] },
       });
     },
   };

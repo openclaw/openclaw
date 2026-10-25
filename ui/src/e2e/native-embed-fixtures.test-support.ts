@@ -3,8 +3,8 @@ import type { SecretsStoreListResult } from "../../../packages/gateway-protocol/
 import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
-import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../api/types.ts";
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
+import { createControlUiDefaultResponses } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
 import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
@@ -18,9 +18,7 @@ export async function installExistingNativeDeviceSettings(page: Page): Promise<v
       value: {
         messageHandlers: {
           openclawDeviceSettings: {
-            postMessage() {
-              return Promise.resolve(snapshot);
-            },
+            postMessage: () => Promise.resolve(snapshot),
           },
         },
       },
@@ -30,6 +28,7 @@ export async function installExistingNativeDeviceSettings(page: Page): Promise<v
 
 export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown> {
   const timestamp = Date.UTC(2026, 8, 5, 12);
+  const defaults = createControlUiDefaultResponses({});
   const jobs = (
     [
       ["healthy", "Healthy", "ok"],
@@ -44,28 +43,23 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
       state: { lastRunStatus },
     }),
   );
-  const secretScope = {
-    scopeKind: "team",
+  const secret = (name: string, content: string | string[]) => ({
+    name,
+    scopeKind: "team" as const,
     scopeId: "",
     createdAtMs: timestamp,
     updatedAtMs: timestamp,
-  } as const;
+    ...(typeof content === "string"
+      ? { kind: "env" as const, value: content }
+      : { kind: "secret" as const, allowedHosts: content }),
+  });
 
   return {
-    "channels.status": {
-      ts: 0,
-      channels: {},
-      channelAccounts: {},
-      channelOrder: [],
-      channelLabels: {},
-      channelDefaultAccountId: {},
-    } satisfies ChannelsStatusSnapshot,
+    "channels.status": defaults["channels.status"],
     "channels.pairing.list": {
-      accounts: [],
-      requests: [],
+      ...defaults["channels.pairing.list"],
       commandOwnerConfigured: false,
-      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-    } satisfies ChannelsPairingListResult,
+    },
     "webSearch.status": {
       enabled: true,
       provider: null,
@@ -130,18 +124,8 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
     } satisfies DevicePairingList,
     "secrets.store.list": {
       entries: [
-        {
-          name: "SYNTHETIC_EXAMPLE_KEY",
-          kind: "secret",
-          ...secretScope,
-          allowedHosts: ["long-service-hostname.example.invalid"],
-        },
-        {
-          name: "SYNTHETIC_SERVICE_URL",
-          kind: "env",
-          value: "https://example.invalid/long/path/for-phone-wrapping",
-          ...secretScope,
-        },
+        secret("SYNTHETIC_EXAMPLE_KEY", ["long-service-hostname.example.invalid"]),
+        secret("SYNTHETIC_SERVICE_URL", "https://example.invalid/long/path/for-phone-wrapping"),
       ],
     } satisfies SecretsStoreListResult,
     "diagnostics.lanes": {
