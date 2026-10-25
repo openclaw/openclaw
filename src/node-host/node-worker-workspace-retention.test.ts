@@ -273,72 +273,69 @@ it("preserves workspaces until the first snapshot and continues a bounded backlo
   await supervisor.close();
 });
 
-it.each(["upload", "download"] as const)(
-  "retains the latest %s manifest across command gaps until superseded or retired",
-  async (direction) => {
-    const f = fixture("transfer-retention");
-    const { workspace, input, generation, entry, collect } = f;
-    const workspaceDir = f.seed();
-    const baseDigest = "b".repeat(64);
-    const baseManifest = f.manifest(baseDigest);
-    const retainedEntry = {
-      ...entry,
-      manifestRefs: [`sha256:${baseDigest}`],
-    };
-    const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
-    const transferManifest = async (digest: string) => {
-      const manifestRef = `sha256:${digest}`;
-      const manifest = f.manifest(digest);
-      runTransfer.mockResolvedValueOnce(manifestRef);
-      await workspace.exec(
-        {
-          gatewayNamespace: input.gatewayNamespace,
-          environmentId: retainedEntry.environmentId,
-          sessionId: retainedEntry.sessionId,
-          generation,
-          argv: ["node"],
-          transfer:
-            direction === "upload"
-              ? {
-                  direction,
-                  token: "test-token",
-                  baseManifestRef: `sha256:${baseDigest}`,
-                  referenceManifestRef: `sha256:${baseDigest}`,
-                }
-              : { direction, token: "test-token", manifestRef },
-        },
-        undefined,
-        { url: "http://127.0.0.1:1" },
-      );
-      return manifest;
-    };
+it("retains transferred manifests across command gaps until superseded or retired", async () => {
+  const f = fixture("transfer-retention");
+  const { workspace, input, generation, entry, collect } = f;
+  const workspaceDir = f.seed();
+  const baseDigest = "b".repeat(64);
+  const baseManifest = f.manifest(baseDigest);
+  const retainedEntry = {
+    ...entry,
+    manifestRefs: [`sha256:${baseDigest}`],
+  };
+  const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
+  const transferManifest = async (direction: "upload" | "download", digest: string) => {
+    const manifestRef = `sha256:${digest}`;
+    const manifest = f.manifest(digest);
+    runTransfer.mockResolvedValueOnce(manifestRef);
+    await workspace.exec(
+      {
+        gatewayNamespace: input.gatewayNamespace,
+        environmentId: retainedEntry.environmentId,
+        sessionId: retainedEntry.sessionId,
+        generation,
+        argv: ["node"],
+        transfer:
+          direction === "upload"
+            ? {
+                direction,
+                token: "test-token",
+                baseManifestRef: `sha256:${baseDigest}`,
+                referenceManifestRef: `sha256:${baseDigest}`,
+              }
+            : { direction, token: "test-token", manifestRef },
+      },
+      undefined,
+      { url: "http://127.0.0.1:1" },
+    );
+    return manifest;
+  };
 
-    const first = await transferManifest("c".repeat(64));
-    const artifacts = [
-      `.${generation}.workspace-transfer-stale`,
-      `${generation}.previous-123-stale`,
-    ].map((name) => path.join(f.session, name));
-    for (const artifact of artifacts) {
-      fs.mkdirSync(artifact);
-    }
-    await collect(1, [retainedEntry]);
+  const first = await transferManifest("upload", "c".repeat(64));
+  const artifacts = [
+    `.${generation}.workspace-transfer-stale`,
+    `${generation}.previous-123-stale`,
+  ].map((name) => path.join(f.session, name));
+  for (const artifact of artifacts) {
+    fs.mkdirSync(artifact);
+  }
+  await collect(1, [retainedEntry]);
 
-    expect(fs.existsSync(first)).toBe(true);
-    expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
+  expect(fs.existsSync(first)).toBe(true);
+  expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
 
-    const latest = await transferManifest("d".repeat(64));
-    await collect(2, [retainedEntry]);
+  const latest = await transferManifest("download", "d".repeat(64));
+  await collect(2, [retainedEntry]);
 
-    expect(fs.existsSync(first)).toBe(false);
-    expectPaths([latest, baseManifest], true);
+  expect(fs.existsSync(first)).toBe(false);
+  expectPaths([latest, baseManifest], true);
 
-    const sibling = f.seed(generation + 1);
-    await collect(3, [{ ...retainedEntry, generation: generation + 1 }]);
+  const sibling = f.seed(generation + 1);
+  await collect(3, [{ ...retainedEntry, generation: generation + 1 }]);
 
-    expectPaths([workspaceDir, latest], false);
-    expect(fs.existsSync(sibling)).toBe(true);
-  },
-);
+  expectPaths([workspaceDir, latest], false);
+  expect(fs.existsSync(sibling)).toBe(true);
+});
 
 it("keeps a retained worker workspace after turn completion until environment teardown", async () => {
   const root = tempDirs.make("node-worker-workspace-retention-active-");
