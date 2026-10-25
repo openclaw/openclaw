@@ -365,6 +365,7 @@ export async function runSessionStartupMigration(params: {
         { agentId: options.agentId, env, storePath: databasePath },
         () => params.assertCurrent?.(),
         (row) => {
+          // Pre-repair rows are valid only while legacy repair never adds or removes `acp`.
           if (
             embeddedAcpSessionKey === undefined &&
             parseSqliteSessionEntryRecord(row)?.acp != null
