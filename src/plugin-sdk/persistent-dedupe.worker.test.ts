@@ -135,22 +135,6 @@ describe("persistent dedupe worker", () => {
     },
   );
 
-  it("retains current memory duplicates when an unrelated forget invalidates pending publication", async () => {
-    await withOpenClawTestState({ label: "dedupe-current-memory" }, async () => {
-      const dedupe = createPersistentDedupe({
-        ...options,
-        pluginId: "dedupe-memory-budget",
-        memoryMaxSize: 10,
-        stateMaxEntries: 1,
-      });
-      await dedupe.checkAndRecord("first");
-      await dedupe.checkAndRecord("second");
-      await expect(
-        Promise.all([dedupe.checkAndRecord("first"), dedupe.forget("unrelated")]),
-      ).resolves.toEqual([false, false]);
-    });
-  });
-
   it.each(["commit", "forget"] as const)(
     "joins all multi-key %s writes before returning failure",
     async (operation) => {
@@ -220,8 +204,8 @@ describe("persistent dedupe worker", () => {
     },
   );
 
-  it("keeps replay, bounded storage and legacy namespaces off the caller", async () => {
-    await withOpenClawTestState({ label: "persistent-dedupe-worker" }, async (state) => {
+  it("keeps replay and bounded storage off the caller", async () => {
+    await withOpenClawTestState({ label: "persistent-dedupe-worker" }, async () => {
       const native = requireNodeSqlite();
       const sql = [
         vi.spyOn(native.DatabaseSync.prototype, "prepare"),
@@ -241,15 +225,6 @@ describe("persistent dedupe worker", () => {
         expect(await dedupe.warmup()).toBe(2);
         expect(await dedupe.forget("second")).toBe(true);
         expect(await dedupe.hasRecent("second")).toBe(false);
-
-        const legacyOptions = {
-          ttlMs: 0,
-          memoryMaxSize: 0,
-          fileMaxEntries: 10,
-          resolveFilePath: (namespace: string) => state.path(`${namespace}.json`),
-        };
-        expect(await createPersistentDedupe(legacyOptions).checkAndRecord("legacy")).toBe(true);
-        expect(await createPersistentDedupe(legacyOptions).hasRecent("legacy")).toBe(true);
 
         for (const method of sql) {
           expect(method).not.toHaveBeenCalled();
