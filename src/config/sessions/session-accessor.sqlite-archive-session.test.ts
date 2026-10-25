@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Worker } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -315,8 +316,9 @@ describe("SQLite transcript archive sessions", () => {
       vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
         const worker = createWorker(...args);
         if (args[1]?.workerData?.operation === "archive-session") {
-          if (carriers.length) {
-            expect(carriers[0].threadId).toBe(-1);
+          const previous = carriers[0];
+          if (previous) {
+            expect(previous.threadId).toBe(-1);
           }
           carriers.push(worker);
         }
@@ -329,7 +331,7 @@ describe("SQLite transcript archive sessions", () => {
             config: maintenanceConfig(fixture.scope.storePath),
           });
           expect(carriers).toHaveLength(1);
-          const carrier = carriers[0];
+          const carrier = expectDefined(carriers[0], "initial archive carrier");
           const leases = () =>
             openOpenClawStateDatabase()
               .db.prepare(
@@ -371,7 +373,7 @@ describe("SQLite transcript archive sessions", () => {
           expect(carriers).toHaveLength(2);
           expect(leases()).toEqual(baselineLeases);
           expect(fixture.snapshot()).toEqual(original);
-          const replacement = carriers[1];
+          const replacement = expectDefined(carriers[1], "replacement archive carrier");
           const replacementExited = once(replacement, "exit");
           await vi.advanceTimersByTimeAsync(5 * 60_000);
           await replacementExited;
