@@ -450,8 +450,8 @@
   height: 16px;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle[aria-expanded="true"],
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle[aria-expanded="true"] {
+.chat-pane__header:not(.chat-pane__header--mobile)
+  :is(.chat-pane__panels-toggle, .chat-details-toggle)[aria-expanded="true"] {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
 }
