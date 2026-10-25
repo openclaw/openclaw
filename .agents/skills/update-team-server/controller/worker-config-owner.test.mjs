@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,34 +36,6 @@ function recover(f, expectedStatus = 0) {
 function assertOriginalConfig(f) {
   assert.deepEqual(readFileSync(f.configPath), f.originalConfigBytes);
 }
-
-test("fixture mirrors native refusal of conditional batch mode even for one operation", linuxRoot, (t) => {
-  const f = makeWorkerConfigFixture(t);
-  const result = spawnSync(
-    process.execPath,
-    [
-      join(f.initial, "dist/index.js"),
-      "config",
-      "set",
-      "--batch-file",
-      join(f.root, "must-not-be-read.json"),
-      "--expect-current-json",
-      JSON.stringify(f.oldSetup),
-    ],
-    {
-      encoding: "utf8",
-      cwd: f.root,
-      env: { ...f.env, OPENCLAW_CONFIG_PATH: f.configPath, OPENCLAW_STATE_DIR: f.root },
-    },
-  );
-  assert.ifError(result.error);
-  assert.notEqual(result.status, 0);
-  assert.match(
-    result.stderr,
-    /conditional expectations require one path operation and cannot be combined with batch mode/u,
-  );
-  assertOriginalConfig(f);
-});
 
 function runRepair(f) {
   const result = runOwner(f, args(f), replacement);

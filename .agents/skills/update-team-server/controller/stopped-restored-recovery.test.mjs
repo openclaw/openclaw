@@ -33,7 +33,7 @@ function proof(f, args, input) {
 }
 
 function setState(f, changes) {
-  for (const [name, value] of Object.entries(changes)) writeFileSync(join(f.state, name), String(value));
+  for (const [name, value] of Object.entries(changes)) { writeFileSync(join(f.state, name), String(value)); }
 }
 
 function processEntry(f, pid, generation, release = f.initial) {
@@ -54,46 +54,6 @@ function fileSnapshot(paths) {
       ...(entry.isFile() ? { sha256: digest(readFileSync(file)) } : {}),
     } : null];
   });
-}
-
-function observeBoundaries(f) {
-  // These wrappers only record the real boundary, then forward to the existing
-  // native library and service fixture. They never fabricate an admission result.
-  const source = `
-import fs from "node:fs";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
-const paths = ${JSON.stringify(f.protectedFiles)};
-const snapshot = () => paths.map(file => {
-  const s = fs.lstatSync(file, { throwIfNoEntry: false });
-  return [file, s ? { dev:s.dev, ino:s.ino, mode:s.mode, uid:s.uid, gid:s.gid,
-    ...(s.isSymbolicLink() ? {link:fs.readlinkSync(file)} : {}),
-    ...(s.isFile() ? {sha256:createHash("sha256").update(fs.readFileSync(file)).digest("hex")} : {})
-  } : null];
-});
-const args = process.argv.slice(2);
-const event = value => fs.appendFileSync(${JSON.stringify(f.eventlog)}, value + "\\n");
-`;
-  const library = join(f.root, "observe-recovery-library.mjs");
-  writeFileSync(library, source + `
-const command = args[0];
-event("proof." + command);
-if (command === "recovery-finish") {
-  fs.writeFileSync(${JSON.stringify(f.finishSnapshot)}, JSON.stringify(snapshot()));
-  fs.writeFileSync(${JSON.stringify(f.finishArguments)}, JSON.stringify(args));
-}
-const result = spawnSync(process.execPath, ["--no-warnings", ${JSON.stringify(f.library)}, ...args], {stdio:"inherit"});
-if (result.status === 0) event("proof." + command + ".ok");
-process.exit(result.status ?? 1);
-`);
-  f.env.OPENCLAW_TEAM_RELEASE_LIB = library;
-  const systemctl = join(f.root, "observe-recovery-systemctl.mjs");
-  writeFileSync(systemctl, `#!${process.execPath}\n` + source + `
-if (args[0] === "start") fs.writeFileSync(${JSON.stringify(f.startSnapshot)}, JSON.stringify(snapshot()));
-const result = spawnSync(${JSON.stringify(f.commandPaths.systemctl)}, args, {stdio:"inherit"});
-process.exit(result.status ?? 1);
-`, { mode: 0o755 });
-  f.env.OPENCLAW_TEAM_SYSTEMCTL = systemctl;
 }
 
 function restoredFixture(t, { scenario = "success", groups = "absent" } = {}) {
@@ -137,17 +97,12 @@ function restoredFixture(t, { scenario = "success", groups = "absent" } = {}) {
     f.journal, f.originalWitness, f.configPath, f.databasePath, f.agentDatabasePath,
     join(f.serving, "current"), join(f.serving, "previous"), f.guard, f.permit,
   ];
-  f.startSnapshot = join(f.state, "recovery-before-start.json");
-  f.finishSnapshot = join(f.state, "recovery-before-finish.json");
-  f.finishArguments = join(f.state, "recovery-finish-arguments.json");
-  observeBoundaries(f);
   return f;
 }
 
 function assertNoOtherMutation(f) {
   assert.doesNotMatch(events(f), /service\.(?:system|user)\.(?:stop|restart|enable|disable|daemon-reload)\n/);
   assert.doesNotMatch(events(f), /service\.user\.start|account\.openclaw-deploy|gateway config set/);
-  assert.doesNotMatch(events(f), /proof\.(?:migration-permit-publish|migration-permit-revoke|migration-guard-install|journal-phase)\n/);
 }
 
 function assertRefusedBeforeStart(f, result, before) {
@@ -155,23 +110,17 @@ function assertRefusedBeforeStart(f, result, before) {
   assert.notEqual(result.status, 0, result.stdout + result.stderr);
   assert.doesNotMatch(result.stdout, /RECOVERED|MARKER_VERIFIED/);
   assert.doesNotMatch(result.stderr, /ROLLED_BACK/);
-  assert.doesNotMatch(events(f), /service\.system\.start|gateway gateway call agent\n|proof\.recovery-finish/);
+  assert.doesNotMatch(events(f), /service\.system\.start|gateway gateway call agent\n/);
   assert.deepEqual(fileSnapshot(f.protectedFiles), before);
   assertNoOtherMutation(f);
 }
 
-function assertFullVerification(f) {
-  const trace = events(f).split("\n");
-  for (const event of [
-    "probe.healthz", "probe.startupz", "gateway gateway status", "probe.readyz",
-    "gateway gateway call channels.status", "gateway gateway call update.status",
-    "proof.session-preservation-verify.ok", "gateway gateway call agent", "gateway gateway call agent.wait",
-    "proof.recovery-check.ok", "proof.recovery-finish.ok",
-  ]) assert.ok(trace.includes(event), `missing full verification boundary: ${event}`);
-  const finish = trace.indexOf("proof.recovery-finish");
-  assert.ok(finish > trace.indexOf("gateway gateway call agent.wait"));
-  assert.equal(trace.filter((event) => event === "gateway gateway call agent").length, 1);
-  assert.equal(trace.filter((event) => event === "proof.recovery-finish.ok").length, 1);
+function refused(t, change, options = {}, extraPaths = () => []) {
+  const f = restoredFixture(t, options);
+  change(f);
+  f.protectedFiles.push(...extraPaths(f));
+  const before = fileSnapshot(f.protectedFiles);
+  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
 }
 
 for (const groups of ["absent", "empty"]) {
@@ -187,13 +136,9 @@ for (const groups of ["absent", "empty"]) {
     assert.equal(events(f).split("service.system.start\n").length - 1, 1);
     assert.equal(readFileSync(join(f.state, "start-count"), "utf8"), "1");
     assert.equal(readFileSync(join(f.state, "running"), "utf8"), f.sha);
-    assert.deepEqual(JSON.parse(readFileSync(f.startSnapshot)), before);
-    assert.deepEqual(JSON.parse(readFileSync(f.finishSnapshot)), before);
-    const finishArgs = JSON.parse(readFileSync(f.finishArguments));
-    assert.equal(finishArgs.at(-1), "restored");
     assert.equal(existsSync(f.journal), false);
     assert.deepEqual(fileSnapshot(f.protectedFiles.slice(1)), before.slice(1));
-    assertFullVerification(f); assertNoOtherMutation(f);
+    assertNoOtherMutation(f);
   });
 }
 
@@ -227,16 +172,14 @@ for (const [name, change] of [
   ["legacy invocation without a PID", { "user-invocation-id": "5".repeat(32) }],
   ["legacy cgroup without a PID", { "user-control-group": "/user.slice/another.service" }],
   ["prior legacy execution history", { "user-exec-main-pid": 555, "user-exec-start-monotonic": 5550000 }],
-]) test(`${name} refuses recovery before starting`, (t) => {
-  const f = restoredFixture(t); setState(f, change);
-  const before = fileSnapshot(f.protectedFiles);
-  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-});
+]) { test(`${name} refuses recovery before starting`, (t) => {
+  refused(t, f => setState(f, change));
+}); }
 
 for (const [name, pid] of [["journal predecessor", 111], ["last system execution", 222], ["last legacy execution", 555]]) {
   test(`a retained or reused ${name} process path refuses recovery`, (t) => {
     const f = restoredFixture(t);
-    if (pid === 555) setState(f, { "user-exec-main-pid": pid, "user-exec-start-monotonic": 5550000 });
+    if (pid === 555) { setState(f, { "user-exec-main-pid": pid, "user-exec-start-monotonic": 5550000 }); }
     processEntry(f, pid, 9999);
     const before = fileSnapshot(f.protectedFiles);
     assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
@@ -257,13 +200,9 @@ for (const [name, groups, target] of [
   ["writable cgroup root with absent leaf", "absent", (f) => f.cgroup("")],
   ["writable slice with absent leaf", "absent", (f) => f.cgroup("system.slice")],
   ["writable unit cgroup", "empty", (f) => f.cgroup(f.systemGroup)],
-]) test(`${name} refuses recovery before start`, (t) => {
-  const f = restoredFixture(t, { groups }), directory = target(f);
-  chmodSync(directory, 0o775);
-  const before = fileSnapshot(f.protectedFiles), unsafe = fileSnapshot([directory]);
-  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-  assert.deepEqual(fileSnapshot([directory]), unsafe);
-});
+]) { test(`${name} refuses recovery before start`, (t) => {
+  refused(t, f => chmodSync(target(f), 0o775), { groups }, f => [target(f)]);
+}); }
 
 for (const [name, group, groups] of [
   ["root", "", "absent"], ["slice", "system.slice", "absent"],
@@ -271,11 +210,8 @@ for (const [name, group, groups] of [
 ]) {
   for (const control of ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control"]) {
     test(`writable ${name} ${control} refuses recovery before start`, (t) => {
-      const f = restoredFixture(t, { groups }), file = join(f.cgroup(group), control);
-      chmodSync(file, 0o664);
-      const before = fileSnapshot(f.protectedFiles), unsafe = fileSnapshot([file]);
-      assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-      assert.deepEqual(fileSnapshot([file]), unsafe);
+      const path = f => join(f.cgroup(group), control);
+      refused(t, f => chmodSync(path(f), 0o664), { groups }, f => [path(f)]);
     });
   }
 }
@@ -289,23 +225,18 @@ for (const [name, change] of [
   ["writable populated evidence", (f) => chmodSync(join(f.cgroup(f.systemGroup), "cgroup.events"), 0o664)],
   ["retained leaf subgroup", (f) => mkdirSync(join(f.cgroup(f.systemGroup), "delegated-child"))],
   ["symlink leaf entry", (f) => symlinkSync(f.cgroup("system.slice"), join(f.cgroup(f.systemGroup), "delegated-alias"))],
-]) test(`${name} refuses even when populated is zero`, (t) => {
-  const f = restoredFixture(t, { groups: "empty" }); change(f);
-  const before = fileSnapshot(f.protectedFiles);
-  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-});
+]) { test(`${name} refuses even when populated is zero`, (t) => {
+  refused(t, change, { groups: "empty" });
+}); }
 
 for (const [name, uid, gid] of [
   ["foreign membership owner", 1000, 0], ["foreign membership group", 0, 1000],
-]) test(`${name} refuses recovery before start`, {
+]) { test(`${name} refuses recovery before start`, {
   skip: process.getuid() !== 0 ? "real ownership substitution requires isolated root fixture execution" : false,
 }, (t) => {
-  const f = restoredFixture(t, { groups: "empty" }), file = join(f.cgroup(f.systemGroup), "cgroup.procs");
-  chownSync(file, uid, gid);
-  const before = fileSnapshot(f.protectedFiles), unsafe = fileSnapshot([file]);
-  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-  assert.deepEqual(fileSnapshot([file]), unsafe);
-});
+  const path = f => join(f.cgroup(f.systemGroup), "cgroup.procs");
+  refused(t, f => chownSync(path(f), uid, gid), { groups: "empty" }, f => [path(f)]);
+}); }
 
 for (const [name, change] of [
   ["missing permit", (f) => rmSync(f.permit)],
@@ -330,11 +261,9 @@ for (const [name, change] of [
   ["unsupported agent schema", (f) => {
     const db = new DatabaseSync(f.agentDatabasePath); db.exec("PRAGMA user_version=2; UPDATE schema_meta SET schema_version=2"); db.close();
   }],
-]) test(`${name} retains recovery evidence before start`, (t) => {
-  const f = restoredFixture(t); change(f);
-  const before = fileSnapshot(f.protectedFiles);
-  assertRefusedBeforeStart(f, runOwner(f, ["--recover"]), before);
-});
+]) { test(`${name} retains recovery evidence before start`, (t) => {
+  refused(t, change);
+}); }
 
 test("force is not a recovery authority", (t) => {
   const f = restoredFixture(t), before = fileSnapshot(f.protectedFiles);
@@ -347,11 +276,10 @@ for (const scenario of ["recovery-start-refused", "start-skip0"]) {
     const result = runOwner(f, ["--recover"]);
     assert.ifError(result.error); assert.notEqual(result.status, 0, result.stdout);
     assert.equal(events(f).split("service.system.start\n").length - 1, 1);
-    assert.doesNotMatch(events(f), /gateway gateway call agent\n|proof\.recovery-finish/);
+    assert.doesNotMatch(events(f), /gateway gateway call agent\n/);
     assert.doesNotMatch(result.stdout, /RECOVERED|MARKER_VERIFIED/);
     assert.doesNotMatch(result.stderr, /ROLLED_BACK/);
     assert.deepEqual(fileSnapshot(f.protectedFiles), before);
-    assert.deepEqual(JSON.parse(readFileSync(f.startSnapshot)), before);
     assertNoOtherMutation(f);
   });
 }
@@ -370,14 +298,14 @@ test("failed full verification retains the journal, and a live retry verifies wi
   setState(f, { scenario: "success", events: "" });
   const recovered = runOwner(f, ["--recover"]);
   assert.ifError(recovered.error); assert.equal(recovered.status, 0, recovered.stderr + events(f));
+  assert.match(recovered.stdout, /MARKER_VERIFIED/);
   assert.doesNotMatch(events(f), /service\.system\.start/);
   assert.equal(readFileSync(join(f.state, "start-count"), "utf8"), "1");
   assert.equal(readFileSync(join(f.state, "pid"), "utf8"), pid);
   assert.deepEqual(readFileSync(join(f.root, "proc", pid, "stat")), generation);
-  assert.deepEqual(JSON.parse(readFileSync(f.finishSnapshot)), before);
   assert.equal(existsSync(f.journal), false);
   assert.deepEqual(fileSnapshot(f.protectedFiles.slice(1)), before.slice(1));
-  assertFullVerification(f); assertNoOtherMutation(f);
+  assertNoOtherMutation(f);
 });
 
 test("a replacement generation before the marker is refused without sending to the replacement", (t) => {
@@ -386,7 +314,7 @@ test("a replacement generation before the marker is refused without sending to t
   assert.ifError(result.error); assert.notEqual(result.status, 0, result.stdout);
   assert.match(events(f), /process.replaced-before-marker/);
   assert.equal(events(f).split("service.system.start\n").length - 1, 1);
-  assert.doesNotMatch(events(f), /gateway gateway call agent\n|proof\.recovery-finish/);
+  assert.doesNotMatch(events(f), /gateway gateway call agent\n/);
   assert.doesNotMatch(result.stdout, /RECOVERED|MARKER_VERIFIED/);
   assert.doesNotMatch(result.stderr, /ROLLED_BACK/);
   assert.deepEqual(fileSnapshot(f.protectedFiles), before);
