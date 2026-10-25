@@ -6,7 +6,6 @@ import type { ExecApprovalRequest, ExecApprovalRequestPayload } from "../app/exe
 import { t } from "../lib/reactive/i18n.ts";
 import { shortenOpaqueIdRuns } from "../lib/session-display.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
-import type { ExecApprovalCardProps } from "./exec-approval-card-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Popover } from "./solid/popover.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
@@ -127,7 +126,7 @@ function renderDetails(content: SolidJSX.Element) {
 
 export function ExecApprovalBody(props: {
   request: ExecApprovalRequestPayload;
-  variant: ExecApprovalCardProps["variant"];
+  variant: "inline" | "modal";
   positionAnchor?: HTMLElement;
   nodeDisplayName?: string;
   lastError?: string;
@@ -286,10 +285,7 @@ export function MobileExecApprovalBody(props: {
   );
 }
 
-export function renderPluginBody(
-  active: ExecApprovalRequest,
-  variant: ExecApprovalCardProps["variant"],
-) {
+export function renderPluginBody(active: ExecApprovalRequest, variant: "inline" | "modal") {
   return (
     <>
       {" "}
