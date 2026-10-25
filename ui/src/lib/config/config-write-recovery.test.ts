@@ -320,7 +320,14 @@ describe("config write recovery", () => {
     await harness.reconnect();
     runtimeConfig.patchForm(["plugins", "entries", "pending", "enabled"], false);
     runtimeConfig.patchForm(["plugins", "entries", "authored", "enabled"], false);
-    expect(state.configForm?.plugins).toMatchObject({ allow: ["authored", "first"] });
+    expect(state.configForm?.plugins).toEqual({
+      allow: ["authored", "first"],
+      entries: {
+        first: { enabled: true },
+        pending: { enabled: false },
+        authored: { enabled: false },
+      },
+    });
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
     expect(submissions).toHaveLength(1);
     await expect(runtimeConfig.save()).resolves.toBe(true);
@@ -359,6 +366,7 @@ describe("config write recovery", () => {
         } else {
           runtimeConfig.patchForm(nodePath, node);
         }
+        expect(state.configFormDirty).toBe(edit !== "revert");
       }
       await harness.reconnect(
         duringLoad
