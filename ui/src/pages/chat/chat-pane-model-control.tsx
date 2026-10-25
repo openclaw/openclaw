@@ -1,6 +1,6 @@
 import { t } from "../../i18n/index.ts";
-import type { ChatComposerSnapshot } from "./chat-composer-snapshot.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
+import type { ChatComposerSnapshot } from "./session-message-cache.ts";
 
 export function ChatPaneModelControl(props: {
   model: Parameters<typeof ChatModelControls>[0] & { snapshot?: ChatComposerSnapshot };

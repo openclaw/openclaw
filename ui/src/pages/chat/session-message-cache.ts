@@ -6,7 +6,6 @@ import {
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
-import type { ChatComposerSnapshot } from "./chat-composer-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
@@ -49,6 +48,9 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
+
+// Display only: the live catalog and session owners still admit every action.
+export type ChatComposerSnapshot = { id: string; provider: string; name: string };
 
 export type ChatSessionSnapshot = {
   composer?: ChatComposerSnapshot | null;

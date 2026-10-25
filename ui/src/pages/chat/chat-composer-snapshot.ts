@@ -6,9 +6,6 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
-// Display only: the live catalog and session owners still admit every action.
-export type ChatComposerSnapshot = { id: string; provider: string; name: string };
-
 export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatalogResult): void {
   if (!host.connected || !host.client?.recoveryScopeReady || result.refreshFailed) {
     return;
