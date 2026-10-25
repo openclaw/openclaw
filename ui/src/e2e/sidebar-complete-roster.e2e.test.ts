@@ -42,13 +42,6 @@ suite.define(() => {
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
       const owner = fixture.sidebarListInput.rows[0]!.owner!;
       const ownerMatch = { ownerId: owner.actor.id };
-      // Involving me excludes off-window child links. Keep an owned roster
-      // larger than a boot page so its children still require a separate read.
-      const ownedRoots = fixture.sidebarListInput.rows.slice(0, fixture.counts.firstPage + 1);
-      const children = fixture.sidebarListInput.rows.filter((row) => childKeys.includes(row.key));
-      for (const row of [...ownedRoots, ...children]) {
-        row.owner = owner;
-      }
       const lists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },

@@ -42,7 +42,13 @@ export function createTeamScaleSessionInventory({
   sidebarPersistentChildren?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
-    "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
+    | "sessions"
+    | "firstPage"
+    | "owners"
+    | "pinned"
+    | "childSessions"
+    | "cronSessions"
+    | "systemSessions",
     number
   >;
 }) {
@@ -100,7 +106,10 @@ export function createTeamScaleSessionInventory({
   const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
   const persistentParent = sidebarPersistentChildren ? sessions[5]! : undefined;
   if (persistentParent) {
-    persistentParent.owner = sessions[0]!.owner;
+    // Fill the owned root window so persistent child details still need a separate query.
+    for (const row of sessions.slice(0, counts.firstPage + 1)) {
+      row.owner = sessions[0]!.owner;
+    }
     persistentParent.participants = [
       { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
     ];
@@ -148,7 +157,7 @@ export function createTeamScaleSessionInventory({
         ? { spawnedBy: parent, parentSessionKey: parent, childOwnerSessionKeys: [parent] }
         : {}),
       ...(!child && !cron ? { createdActor: { type: "system", id: "gateway" } } : {}),
-      ...(persistent ? { owner: sessions[1]!.owner, participants: [] } : {}),
+      ...(persistent ? { owner: persistentParent.owner, participants: [] } : {}),
     });
   }
   for (const parent of [
