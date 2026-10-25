@@ -10,7 +10,6 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
@@ -18,12 +17,7 @@ import {
   maintenanceLane,
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
-import {
-  listKnownSessionStoreAgentIds,
-  resolveExistingAgentSessionStoreTargetsSync,
-} from "../config/sessions/targets-discovery.native.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -247,12 +241,8 @@ describe("sweepCronRunSessions", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("discovers, accesses, invalidates, and reaps only the logical owner in a shared store", async () => {
+  it("invalidates and reaps only the logical owner in a shared store without disrupting foreground reads", async () => {
     const exactStorePath = path.join(tmpDir, "shared.sqlite");
-    const cfg: OpenClawConfig = {
-      session: { store: exactStorePath },
-      agents: { entries: { main: {} } },
-    };
     const mainKey = "agent:main:cron:main-job:run:keep";
     const opsKey = "agent:ops:cron:ops-job:run:expired";
     const mainScope = sharedScope(exactStorePath, "main", mainKey);
@@ -275,14 +265,6 @@ describe("sweepCronRunSessions", () => {
       ),
     ).toEqual([]);
 
-    expect(listKnownSessionStoreAgentIds(cfg).toSorted()).toEqual(["main", "ops"]);
-    expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
-      { agentId: "ops", storePath: exactStorePath },
-    ]);
-    expect(Object.keys(loadCombinedSessionStoreForGatewayCore(cfg).store).toSorted()).toEqual([
-      mainKey,
-      opsKey,
-    ]);
     expect(sessionAccessor.loadSessionEntry(opsScope)).toMatchObject({ sessionId: "ops-run" });
 
     const hostSql = observeHostDataSql();

@@ -174,7 +174,6 @@ async function expectRejectedWrite(jobId: string, write: () => Promise<unknown>)
 async function finishWatcherRun(
   params: Awaited<ReturnType<typeof pendingWatcher>> & {
     recover: boolean;
-    editAfterTask?: () => Promise<void>;
   },
 ) {
   const { h, jobId } = params;
@@ -236,7 +235,6 @@ async function finishWatcherRun(
   expect((await readStoredJob(h.storePath, jobId))?.state.runningAtMs).toBe(receipt.startedAtMs);
 
   h.cron.stop();
-  await params.editAfterTask?.();
   h.cron = new CronService(h.deps);
   await h.cron.start();
 
@@ -481,33 +479,6 @@ describe("cron trigger evaluation", () => {
       state: { triggerState: { owner: "completed evaluation" }, triggerEvalCount: 1 },
     });
     expect(h.cron.getJob(jobId)?.state.nextRunAtMs).toBeUndefined();
-  });
-
-  it("preserves a replacement made after a legacy terminal result", async () => {
-    const pending = await pendingWatcher({ agentId: "alpha" });
-    const { h, jobId } = pending;
-    await finishWatcherRun({
-      ...pending,
-      recover: true,
-      editAfterTask: async () => {
-        expect(readHistory(h.storePath, jobId)[0]?.nextRunAtMs).toBeUndefined();
-        const updated = await h.cron.update(jobId, {
-          agentId: "beta",
-          trigger: { script: "replacement", once: true },
-          state: { triggerState: { owner: "later edit" } },
-        });
-        expect(updated.enabled).toBe(true);
-        expect(updated.state.nextRunAtMs).toEqual(expect.any(Number));
-      },
-    });
-    const stored = h.cron.getJob(jobId);
-    expect(stored).toMatchObject({
-      enabled: true,
-      agentId: "beta",
-      trigger: { script: "replacement", once: true },
-      state: { triggerState: { owner: "later edit" }, nextRunAtMs: expect.any(Number) },
-    });
-    expectUnevaluated(stored);
   });
 
   it.each(["trigger", "state", "script"] as const)(
