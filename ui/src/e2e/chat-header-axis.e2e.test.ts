@@ -102,14 +102,10 @@ suite.define(() => {
     expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
     expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
     expect(geometry.titleWidth).toBeGreaterThan(0);
-    expect(geometry.projectIcon, JSON.stringify(geometry)).toBeCloseTo(geometry.projectText, 1);
-    for (const center of [
-      geometry.projectIcon,
-      geometry.projectText,
-      geometry.parentText,
-      geometry.sessionText,
-    ]) {
-      expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(0, 1);
+    expect(geometry.nav - geometry.projectIcon, JSON.stringify(geometry)).toBeCloseTo(0, 1);
+    // Approved optical alignment lifts lettering without moving the glyphs or hit areas.
+    for (const center of [geometry.projectText, geometry.parentText, geometry.sessionText]) {
+      expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(1, 1);
     }
     const parent = header.locator(".chat-pane__parent-session");
     expect((await parent.textContent())?.trim()).toBe(parentLabel);
