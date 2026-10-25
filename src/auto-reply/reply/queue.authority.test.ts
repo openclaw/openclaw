@@ -34,9 +34,13 @@ import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
+const queueKey = (key: string) => {
+  keys.add(key);
+  return key;
+};
 const createQueueCase = (...args: Parameters<typeof makeQueueCase>) => {
   const q = makeQueueCase(...args);
-  keys.add(q.key);
+  queueKey(q.key);
   return q;
 };
 afterEach(() => {
@@ -644,20 +648,21 @@ describe("followup queue authority", () => {
   });
 
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
-    const run = createRun({
-      prompt: "authority",
-      originatingChannel: "slack",
-      originatingTo: "channel:A",
-    });
     const keyFor = (
       overrides: Partial<FollowupRun> = {},
       runOverrides: Partial<FollowupRun["run"]> = {},
     ) =>
-      resolveFollowupDeliveryStorageKey({
-        ...run,
-        ...overrides,
-        run: { ...run.run, ...runOverrides },
-      });
+      resolveFollowupDeliveryStorageKey(
+        createRun(
+          {
+            prompt: "authority",
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+            ...overrides,
+          },
+          runOverrides,
+        ),
+      );
     const baselineKey = keyFor();
     expect(keyFor({ toolsAllow: ["exec"] })).not.toBe(baselineKey);
     expect(keyFor({ disableTools: true })).not.toBe(baselineKey);

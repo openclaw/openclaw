@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   listMarketplacePlugins: vi.fn(),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
+  pluginLifecycleGateway: vi.fn(),
+  resolvePluginLifecycleGateway: vi.fn(),
 }));
 // mock-isolation: Marketplace fixtures isolate config reads and writes from operator state.
 vi.mock("../config/config.js", () => ({
@@ -56,13 +58,14 @@ vi.mock("../plugins/marketplace.js", () => ({
 vi.mock("../plugins/management-catalog.js", () => ({
   clearManagedPluginCatalogCache: mocks.clearManagedPluginCatalogCache,
 }));
+vi.mock("./plugins-lifecycle-client.js", () => ({
+  resolvePluginLifecycleGateway: mocks.resolvePluginLifecycleGateway,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = mocks.defaultRuntime;
 const loadFeed = mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries;
 const output = () => runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
-const expectJson = (value: object) =>
-  expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining(value));
 const privateUrl = "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag";
 const calendar = {
   name: "@acme/calendar",
@@ -79,6 +82,8 @@ beforeEach(() => {
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   loadFeed.mockReset();
   mocks.listMarketplacePlugins.mockReset();
+  mocks.resolvePluginLifecycleGateway.mockReset().mockResolvedValue(mocks.pluginLifecycleGateway);
+  mocks.pluginLifecycleGateway.mockReset().mockResolvedValue({ runtime: { generation: 4 } });
   vi.unstubAllEnvs();
 });
 afterEach(() => {
@@ -128,6 +133,8 @@ describe("plugins marketplace entries", () => {
             ...calendar,
             version: "1.2.3",
             kind: "plugin",
+            state: "available",
+            publisher: { trust: "official" },
             install: {
               candidates: [
                 { sourceRef: "public-npm", package: "@acme/calendar", version: "1.2.3" },
@@ -139,20 +146,21 @@ describe("plugins marketplace entries", () => {
     );
     await marketplaceCommand(["entries", "--feed-profile", "acme", "--offline", "--json"]);
     expect(loadFeed).toHaveBeenCalledWith({ feedProfile: "acme", offline: true });
-    expectJson({
-      source: "hosted-snapshot",
-      entryCount: 1,
-      entries: [
-        expect.objectContaining({
-          id: "acme-calendar",
-          label: "Acme Calendar",
-          name: "@acme/calendar",
-          version: "1.2.3",
-          kind: "plugin",
-          install: expect.objectContaining({ npmSpec: "@acme/calendar@1.2.3" }),
-        }),
-      ],
-    });
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "hosted-snapshot",
+        entryCount: 1,
+        entries: [
+          expect.objectContaining({
+            id: "acme-calendar",
+            label: "Acme Calendar",
+            name: "@acme/calendar",
+            version: "1.2.3",
+            install: expect.objectContaining({ npmSpec: "@acme/calendar@1.2.3" }),
+          }),
+        ],
+      }),
+    );
   });
 
   it.each(["metadata", "override"])(
@@ -172,10 +180,14 @@ describe("plugins marketplace entries", () => {
       );
       const feedUrl = source === "override" ? rawUrl : undefined;
       await entries({ feedUrl, json: true });
-      expectJson({
-        ...(source === "metadata" ? { metadata: expect.objectContaining({ url: publicUrl }) } : {}),
-        error: `feed fetch failed for ${publicUrl}`,
-      });
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(source === "metadata"
+            ? { metadata: expect.objectContaining({ url: publicUrl }) }
+            : {}),
+          error: `feed fetch failed for ${publicUrl}`,
+        }),
+      );
       expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain("token=secret");
       await entries({ feedUrl });
       expect(output()).toContain(publicUrl);
@@ -225,16 +237,18 @@ describe("plugins marketplace refresh", () => {
         expectedSha256: `sha256:${checksum.toLowerCase()}`,
         requireSnapshotWrite: true,
       });
-      expectJson({
-        source: "hosted",
-        entries: 1,
-        metadata: expect.objectContaining({ checksum: "sha256:abcdef" }),
-      });
+      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "hosted",
+          entries: 1,
+          metadata: expect.objectContaining({ checksum: "sha256:abcdef" }),
+        }),
+      );
       expect(runtime.log).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(
         "Marketplace catalog saved for the next Gateway start.",
       );
-      expect(runtime.exit).not.toHaveBeenCalled();
     },
   );
 
@@ -263,51 +277,70 @@ describe("plugins marketplace refresh", () => {
     });
   });
 
-  it.each(["bundled-fallback", "hosted-snapshot"] as const)(
-    "rejects a pinned %s refresh without corrupting JSON",
-    async (source) => {
-      loadFeed.mockResolvedValue(
-        source === "hosted-snapshot"
-          ? feed({ source })
-          : {
-              source,
-              entries: [{ name: "@openclaw/acpx" }],
-              error: "hosted catalog feed checksum mismatch: expected sha256:expected",
-              metadata: {
-                url: "https://clawhub.ai/v1/feeds/plugins",
-                status: 200,
-                checksum: "sha256:actual",
-              },
-            },
-      );
-      await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-        "exit 1",
-      );
-      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ source }),
-      );
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith(
-        `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${source}).`,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
+  it("rejects a pinned refresh when the feed falls back", async () => {
+    loadFeed.mockResolvedValue({
+      source: "bundled-fallback",
+      entries: [{ name: "@openclaw/acpx" }],
+      error: "hosted catalog feed checksum mismatch: expected sha256:expected",
+      metadata: {
+        url: "https://clawhub.ai/v1/feeds/plugins",
+        status: 200,
+        checksum: "sha256:actual",
+      },
+    });
+    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
+      "exit 1",
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "bundled-fallback" }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects a pinned snapshot without corrupting JSON", async () => {
+    loadFeed.mockResolvedValue(feed({ source: "hosted-snapshot" }));
+    await expect(refresh({ json: true, expectedSha256: "sha256:expected" })).rejects.toThrow(
+      "exit 1",
+    );
+    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ source: "hosted-snapshot" }),
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
+    );
+  });
+
+  it("keeps offline refresh successful and next-start notices off JSON stdout", async () => {
+    loadFeed.mockResolvedValue(feed());
+    mocks.resolvePluginLifecycleGateway.mockResolvedValue(null);
+    await refresh({ json: true });
+    expect(runtime.writeJson).toHaveBeenCalledOnce();
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Marketplace catalog saved for the next Gateway start."),
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });
 
 describe("plugins marketplace list", () => {
   const source = "owner/repo";
   const manifest = {
-    name: "QA \u001b]0;marketplace-title-pwned\u0007Marketplace",
+    name: "QA Marketplace",
     version: "1.0.0",
     plugins: [
-      ["\u001b[31mnumeric\u001b[0m", "\u001b[32m1.2.3\u001b[0m"],
+      ["numeric", "1.2.3"],
       ["prefixed", "v1.2.3"],
       ["missing", undefined],
-    ].map(([name, version], index) => ({
+    ].map(([name, version]) => ({
       name,
       version,
-      description: index === 0 ? "drops \r\n\u0007bell and \u001b[2J clear" : undefined,
       source: { kind: "path", path: "./plugins/demo" },
     })),
   };
@@ -320,7 +353,7 @@ describe("plugins marketplace list", () => {
     );
   }
   it.each([false, true])(
-    "renders versions, preserves JSON and sanitizes terminal output (json=%s)",
+    "renders marketplace versions and routes progress (json=%s)",
     async (json) => {
       result();
       await list(source, { json });
@@ -331,17 +364,54 @@ describe("plugins marketplace list", () => {
         expect(runtime.log.mock.calls.map(([line]) => String(line))).toEqual([
           `Cloning marketplace source ${source}...`,
           expect.stringContaining("QA Marketplace"),
-          "numeric v1.2.3 - drops \\r\\nbell and  clear",
+          "numeric v1.2.3",
           "prefixed v1.2.3",
           "missing",
         ]);
-        expect(output()).not.toContain("\u001b");
-        expect(output()).not.toContain("\u0007");
         expect(runtime.writeJson).not.toHaveBeenCalled();
       }
       expect(runtime.error).not.toHaveBeenCalled();
     },
   );
+
+  it("sanitizes terminal control characters in human output but not JSON", async () => {
+    const injected = {
+      name: "Market\u001b]0;marketplace-title-pwned\u0007place",
+      version: "1.0.0",
+      plugins: [
+        {
+          name: "\u001b[31mred-plugin\u001b[0m",
+          version: "\u001b[32m1.2.3\u001b[0m",
+          description: "drops \r\n\u0007bell and \u001b[2J clear",
+          source: { kind: "path", path: "./plugins/demo" },
+        },
+      ],
+    };
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+
+    await list(source, { json: true });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
+    expect(runtime.log).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    mocks.listMarketplacePlugins.mockImplementationOnce(async () => ({
+      ok: true,
+      sourceLabel: source,
+      manifest: injected,
+    }));
+    await list(source, { json: false });
+    const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(human).not.toContain("\u001b");
+    expect(human).not.toContain("\u0007");
+    expect(human).toContain("Marketplace");
+    expect(human).toContain("red-plugin");
+    expect(human).toContain("v1.2.3");
+    expect(human).toContain("drops \\r\\nbell and  clear");
+  });
 
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";

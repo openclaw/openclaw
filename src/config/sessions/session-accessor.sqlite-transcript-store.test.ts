@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   type OpenClawAgentDatabase,
   openOpenClawAgentDatabase,
@@ -51,7 +52,7 @@ const mediaMessage = (id: string, content: string) =>
 
 it("captures the replacement's stored rows after media normalization and duplicate filtering", async () => {
   await withOpenClawTestState({ label: "replacement-snapshot" }, async (state) => {
-    const { scope, owner: database, replace } = createTranscriptFixture(state, "replacement");
+    const { scope, owner: database, db, replace } = createTranscriptFixture(state, "replacement");
     const message = mediaMessage("answer", "large payload ".repeat(1024));
     const unicode = { type: "custom", id: "unicode", data: "\ud800\u0000" };
     const rows = replace([
@@ -67,7 +68,11 @@ it("captures the replacement's stored rows after media normalization and duplica
     expect(JSON.parse(rows[0]!.eventJson).message).not.toHaveProperty("MediaPaths");
     expect(JSON.parse(rows[1]!.eventJson)).toEqual(unicode);
     expect(rows).toEqual(readTranscriptEventRows(database, scope.sessionId));
+    using work = observeSql(db, ["identityDeletes"], (sql) =>
+      /^delete from "transcript_event_identities" /i.test(sql) ? "identityDeletes" : null,
+    );
     const emptyRows = replace([]);
+    expect(work.counts.identityDeletes).toBe(0);
     expect(emptyRows).toEqual([]);
     expect(readTranscriptEventRows(database, scope.sessionId)).toEqual([]);
     const identities = database.db
@@ -79,7 +84,7 @@ it("captures the replacement's stored rows after media normalization and duplica
 
 it("canonicalizes assistant media at the generic transcript append owner", async () => {
   await withOpenClawTestState({ label: "media-persistence-append" }, async (state) => {
-    const { scope, owner: database, append } = createTranscriptFixture(state, "append-session");
+    const { scope, owner: database, db, append } = createTranscriptFixture(state, "append-session");
     const committedJson = append({ ...mediaMessage("event-1", "append"), timestamp: 1000 });
     const row = database.db
       .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
@@ -98,6 +103,9 @@ it("canonicalizes assistant media at the generic transcript append owner", async
       role: "assistant",
       content: "next",
     });
+    using policy = observeSql(db, ["policy"], (sql) =>
+      sql.includes('"session_key_contract"') ? "policy" : null,
+    );
     const nextJson = append(next);
     expect(nextJson).toBe(JSON.stringify(next));
     expect(
@@ -109,6 +117,11 @@ it("canonicalizes assistant media at the generic transcript append owner", async
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, scope.sessionId)).toBe(generation);
+    expect(policy).toMatchObject({
+      counts: { policy: 0 },
+      rowCounts: { policy: 0 },
+      textBytes: { policy: 0 },
+    });
   });
 });
 
@@ -140,6 +153,15 @@ async function withRewriteFixture(
   );
 }
 
+function observeSql<Key extends string>(
+  db: DatabaseSync,
+  keys: readonly Key[],
+  classify: (sql: string) => Key | null,
+) {
+  const counter = trackSqliteStatementExecutions(db, keys, classify);
+  return { ...counter, [Symbol.dispose]: counter.restore };
+}
+
 function createTranscriptFixture(state: OpenClawTestState, sessionId: string) {
   const scope = {
     agentId: "main",
@@ -164,7 +186,7 @@ function createTranscriptFixture(state: OpenClawTestState, sessionId: string) {
 }
 
 function createRewriteFixture(state: OpenClawTestState, events: readonly unknown[]) {
-  const { scope, owner, db, write, append } = createTranscriptFixture(state, "rewrite");
+  const { scope, owner, db, write } = createTranscriptFixture(state, "rewrite");
   write((database) => {
     appendTranscriptEventsInTransaction(database, scope, events);
   });
@@ -203,10 +225,7 @@ function createRewriteFixture(state: OpenClawTestState, events: readonly unknown
       ]);
     });
   };
-  const rewriteRows = (
-    updates: Parameters<typeof rewriteSqliteTranscriptEventRowsInTransaction>[2],
-  ) => write((database) => rewriteSqliteTranscriptEventRowsInTransaction(database, scope, updates));
-  return { db, snapshot, rewrite, rewriteRows, scope, write, setKeyOwner, append };
+  return { db, snapshot, rewrite, scope, write, setKeyOwner };
 }
 
 it("preserves the generation when initially recording identical model prompt text", async () => {
@@ -261,18 +280,31 @@ it.each([
 it("applies exact bindings across both storage arms", async () => {
   const details = { opaque: "preserved metadata ".repeat(2048) };
   const events = detailedEvents(details);
-  await withRewriteFixture(({ snapshot, scope, rewriteRows }) => {
+  await withRewriteFixture(({ snapshot, scope, write }) => {
     const before = snapshot();
     const first = rewriteMessage(2, { provenance: "first" });
     const last = rewriteMessage(2, { provenance: "last", details });
     const user = rewriteMessage(1, { provenance: "user" });
     expect(before.storage[1]?.event_json === null).toBe(true);
     expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(true);
-    rewriteRows([
-      { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
-      { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
-      { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
-    ]);
+    using work = observeSql(
+      requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db),
+      ["fts", "size"],
+      (sql) =>
+        /\bsession_transcript_fts\b/i.test(sql)
+          ? "fts"
+          : sql.includes('from "transcript_events"') && sql.includes("octet_length")
+            ? "size"
+            : null,
+    );
+    write((database) => {
+      rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
+        { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
+        { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
+        { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
+      ]);
+    });
+    expect(work.counts).toEqual({ fts: 0, size: 0 });
     const after = snapshot();
     expect(after.raw).toEqual([
       before.raw[0],
@@ -307,7 +339,11 @@ it("keeps oversized metadata current but hides changed text until the real worke
     };
     rewrite({ ...rewriteEvents[1], message });
     expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
+    using work = observeSql(db, ["fts"], (sql) =>
+      /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
+    );
     rewrite({ ...rewriteEvents[1], message: { ...message, content: "changed" } });
+    expect(work.counts.fts).toBe(0);
     expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(true);
     expect(() => readActiveTranscriptStats(scope)).toThrow(
       SessionTranscriptProjectionUnavailableError,
@@ -325,18 +361,20 @@ it("keeps oversized metadata current but hides changed text until the real worke
 it("rolls back payload-arm changes and mutation state on later conflict", async () => {
   const details = { opaque: "rollback metadata ".repeat(2048) };
   const events = detailedEvents(details);
-  await withRewriteFixture(({ snapshot, scope, rewriteRows }) => {
+  await withRewriteFixture(({ snapshot, scope, write }) => {
     const before = snapshot();
     const stats = readTranscriptStatsSync(scope);
     expect(() =>
-      rewriteRows([
-        {
-          seq: 1,
-          expectedEventJson: JSON.stringify(events[1]),
-          event: rewriteMessage(1, { content: "edited" }),
-        },
-        { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
-      ]),
+      write((database) => {
+        rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
+          {
+            seq: 1,
+            expectedEventJson: JSON.stringify(events[1]),
+            event: rewriteMessage(1, { content: "edited" }),
+          },
+          { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
+        ]);
+      }),
     ).toThrow(SqliteTranscriptMutationConflictError);
     expect(snapshot()).toEqual(before);
     expect(readTranscriptStatsSync(scope)).toEqual(stats);
@@ -354,36 +392,50 @@ it.each([
     event: { type: "message", id: "user", parentId: "root" },
     messages: 1,
   },
-])("rebuilds changed $name facts", async ({ event, messages }) => {
-  await withRewriteFixture(({ db, rewrite, scope }) => {
-    rewrite(event);
-    const search = db
-      .prepare("SELECT text, timestamp FROM session_transcript_fts ORDER BY message_id")
-      .all();
-    expect(search.map((row) => row.text)).toEqual(["answer"]);
-    expect(
-      db
-        .prepare(
-          "SELECT active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-        )
-        .get(scope.sessionId)?.active_message_count,
-    ).toBe(messages);
-  });
-});
+])(
+  "rebuilds changed $name facts without duplicate FTS invalidation",
+  async ({ event, messages }) => {
+    await withRewriteFixture(({ db, rewrite, scope }) => {
+      using work = observeSql(db, ["deletes"], (sql) =>
+        /^delete from ["`]?session_transcript_fts_rows["`]? /i.test(sql) ? "deletes" : null,
+      );
+      rewrite(event);
+      const search = db
+        .prepare("SELECT text, timestamp FROM session_transcript_fts ORDER BY message_id")
+        .all();
+      expect(search.map((row) => row.text)).toEqual(["answer"]);
+      expect(
+        db
+          .prepare(
+            "SELECT active_message_count FROM session_transcript_index_state WHERE session_id = ?",
+          )
+          .get(scope.sessionId)?.active_message_count,
+      ).toBe(messages);
+      expect(work.counts.deletes).toBeLessThanOrEqual(1);
+    });
+  },
+);
 
-it("repairs maintenance text while preserving recency", async () => {
-  await withRewriteFixture(({ db, scope, snapshot, write }) => {
+it("avoids duplicate FTS invalidation for maintenance text repair and preserves recency", async () => {
+  await withRewriteFixture(({ db, scope, snapshot }) => {
     const before = snapshot();
-    const updates = ([2, 1] as const).map((seq) => ({
-      seq,
-      eventJson: JSON.stringify(
-        rewriteMessage(seq, {
-          content: seq === 2 ? "repaired answer" : "repaired",
-        }),
-      ),
-    }));
-    write((database) =>
-      updateSqliteTranscriptEventJsonInTransaction(database, scope.sessionId, updates),
+    const updates = [
+      {
+        seq: 2,
+        eventJson: JSON.stringify(rewriteMessage(2, { content: "repaired answer" })),
+      },
+      {
+        seq: 1,
+        eventJson: JSON.stringify(rewriteMessage(1, { content: "repaired" })),
+      },
+    ] as const;
+    using work = observeSql(db, ["deletes"], (sql) =>
+      /^delete from ["`]?session_transcript_fts_rows["`]? /i.test(sql) ? "deletes" : null,
+    );
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        updateSqliteTranscriptEventJsonInTransaction(database, scope.sessionId, updates),
+      scope,
     );
     const after = snapshot();
     expect(after.updatedAt).toBe(before.updatedAt! + 1);
@@ -400,6 +452,7 @@ it("repairs maintenance text while preserving recency", async () => {
     expect(
       db.prepare("SELECT text FROM session_transcript_fts WHERE message_id = 'answer'").get()?.text,
     ).toBe("repaired answer");
+    expect(work.counts.deletes).toBeLessThanOrEqual(1);
   });
 });
 
@@ -439,8 +492,14 @@ function replaceTranscriptSuffixForTest(
 }
 
 it.each([0, 1])("preserves an intervening append before replacing prefix %i", async (prefix) => {
-  await withRewriteFixture(({ snapshot, scope, append }) => {
-    append({ type: "custom", id: "intervening", parentId: "answer" });
+  await withRewriteFixture(({ snapshot, scope, write }) => {
+    write((database) => {
+      appendTranscriptEventInTransaction(database, scope, {
+        type: "custom",
+        id: "intervening",
+        parentId: "answer",
+      });
+    });
     const before = snapshot();
     expect(() =>
       replaceTranscriptSuffixForTest(scope, rewriteEvents, rewriteEvents.slice(0, -1), prefix),
@@ -599,7 +658,17 @@ it.each`
       setKeyOwner("duplicate", null);
       setKeyOwner("owner", "old-key");
     }
+    using work = observeSql(db, ["identityDeletes", "ownerReads"], (sql) => {
+      if (/^delete from "transcript_event_identities" /i.test(sql)) {
+        return "identityDeletes";
+      }
+      return /^select "event_id" from "transcript_event_identities" /i.test(sql) &&
+        sql.includes('"message_idempotency_key" =')
+        ? "ownerReads"
+        : null;
+    });
     replaceTranscriptSuffixForTest(scope, events, next);
+    expect(work.counts).toEqual({ identityDeletes: 0, ownerReads: 0 });
     const identities = db
       .prepare(
         "SELECT event_id, seq FROM transcript_event_identities WHERE session_id = ? ORDER BY seq",

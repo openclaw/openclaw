@@ -50,14 +50,6 @@ async function bind(
 const scriptPaths = (binding: Awaited<ReturnType<typeof bind>>) =>
   binding.operands.filter((operand) => !operand.executable).map((operand) => operand.snapshot.path);
 
-const withWorkspace = (run: (cwd: string) => Promise<void>) =>
-  withTempDir("openclaw-system-run-binding-", (cwd) => run(fs.realpathSync(cwd)));
-
-function copyExecutable(source: string, target: string) {
-  fs.copyFileSync(source, target);
-  fs.chmodSync(target, 0o755);
-}
-
 describe("normalizeSystemRunApprovalPlan", () => {
   const emptyFields = {
     commandPreview: null,
@@ -96,29 +88,49 @@ describe("normalizeSystemRunApprovalPlan", () => {
       mutableFileOperand: { argvIndex: 2, path: "/tmp/payload.txt", sha256: "abc123" },
     });
   });
-  it("canonicalizes and deduplicates policy rules using portable UTF-8 ordering", () => {
-    const ordered = [
-      { pattern: "/A" },
-      { pattern: "/A", source: "allow-always" },
-      { pattern: "/A", argPattern: "A" },
-      { pattern: "/A", argPattern: "z" },
-      { pattern: "/a" },
-      { pattern: "/é" },
-      { pattern: "/😀" },
-    ];
+  it.each([
+    [
+      "canonicalizes and deduplicates",
+      "on-miss",
+      [
+        { pattern: "/usr/bin/zsh", source: "allow-always" },
+        { pattern: "/usr/bin/echo" },
+        { pattern: "/usr/bin/echo" },
+      ],
+      [{ pattern: "/usr/bin/echo" }, { pattern: "/usr/bin/zsh", source: "allow-always" }],
+    ],
+    [
+      "uses portable UTF-8 ordering",
+      "always",
+      [
+        { pattern: "/😀" },
+        { pattern: "/A", argPattern: "z" },
+        { pattern: "/é" },
+        { pattern: "/A", source: "allow-always" },
+        { pattern: "/a" },
+        { pattern: "/A" },
+        { pattern: "/A", argPattern: "A" },
+      ],
+      [
+        { pattern: "/A" },
+        { pattern: "/A", source: "allow-always" },
+        { pattern: "/A", argPattern: "A" },
+        { pattern: "/A", argPattern: "z" },
+        { pattern: "/a" },
+        { pattern: "/é" },
+        { pattern: "/😀" },
+      ],
+    ],
+  ])("%s for prepared policy rules", (_name, ask, input, expected) => {
     expect(
       normalizeSystemRunApprovalPlan({
         ...echo,
-        policySnapshot: {
-          ...policy,
-          ask: "always",
-          allowlistRules: [...ordered.toReversed(), ordered[0]],
-        },
+        policySnapshot: { ...policy, ask, allowlistRules: input },
       }),
     ).toEqual({
       ...echo,
       ...emptyFields,
-      policySnapshot: { ...policy, ask: "always", allowlistRules: ordered },
+      policySnapshot: { ...policy, ask, allowlistRules: expected },
     });
   });
   it("falls back to rawCommand", () => {
@@ -146,19 +158,60 @@ describe("normalizeSystemRunApprovalPlan", () => {
   });
 });
 
-describe("buildSystemRunApprovalBinding", () => {
+describe("buildSystemRunApprovalEnvBinding", () => {
+  it.each([
+    {
+      input: { z_key: "b", " bad key ": "ignored", alpha: "a", EMPTY: 1 },
+      equivalent: { alpha: "a", z_key: "b" },
+      keys: ["alpha", "z_key"],
+      changed: { alpha: "changed", z_key: "b" },
+    },
+    {
+      input: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      equivalent: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+      keys: ["ProgramFiles(x86)"],
+      changed: { "ProgramFiles(x86)": "D:\\SDKs" },
+    },
+  ])(
+    "normalizes env keys and binds their values: $keys",
+    ({ input, equivalent, keys, changed }) => {
+      const normalized = buildSystemRunApprovalEnvBinding(input);
+      expect(normalized).toEqual({
+        envHash: buildSystemRunApprovalEnvBinding(equivalent).envHash,
+        envKeys: keys,
+      });
+      expect(normalized.envHash).toBeTypeOf("string");
+      expect(normalized.envHash).toHaveLength(64);
+      expect(normalized.envHash).not.toEqual(buildSystemRunApprovalEnvBinding(changed).envHash);
+    },
+  );
+
   it("returns a null hash when no usable env entries remain", () => {
-    expect(buildSystemRunApprovalEnvBinding(null)).toEqual({ envHash: null, envKeys: [] });
+    expect(buildSystemRunApprovalEnvBinding(null)).toEqual({
+      envHash: null,
+      envKeys: [],
+    });
     expect(buildSystemRunApprovalEnvBinding({ bad: 1 })).toEqual({ envHash: null, envKeys: [] });
   });
-  it("normalizes argv, metadata and usable env entries into a binding", () => {
+});
+
+describe("buildSystemRunApprovalBinding", () => {
+  it("normalizes argv and metadata into a binding", () => {
+    const envBinding = buildSystemRunApprovalEnvBinding({
+      beta: "2",
+      alpha: "1",
+    });
+
     expect(
       buildSystemRunApprovalBinding({
         argv: ["bash", "-lc", 12],
         cwd: " /tmp ",
         agentId: " main ",
         sessionKey: " agent:main:main ",
-        env: { beta: "2", alpha: "1", " bad key ": "ignored", EMPTY: 1 },
+        env: {
+          beta: "2",
+          alpha: "1",
+        },
       }),
     ).toEqual({
       binding: {
@@ -166,17 +219,21 @@ describe("buildSystemRunApprovalBinding", () => {
         cwd: " /tmp ",
         agentId: "main",
         sessionKey: "agent:main:main",
-        envHash: buildSystemRunApprovalEnvBinding({ alpha: "1", beta: "2" }).envHash,
+        envHash: envBinding.envHash,
       },
       envKeys: ["alpha", "beta"],
     });
   });
 
   it("produces distinct bindings for whitespace-distinct cwd values", () => {
-    const bindingFor = (cwd: string) =>
-      buildSystemRunApprovalBinding({ argv: ["echo", "hi"], cwd });
-    const withSpace = bindingFor("/srv/data ");
-    const noSpace = bindingFor("/srv/data");
+    const withSpace = buildSystemRunApprovalBinding({
+      argv: ["echo", "hi"],
+      cwd: "/srv/data ",
+    });
+    const noSpace = buildSystemRunApprovalBinding({
+      argv: ["echo", "hi"],
+      cwd: "/srv/data",
+    });
     expect(withSpace.binding.cwd).toBe("/srv/data ");
     expect(noSpace.binding.cwd).toBe("/srv/data");
     expect(withSpace.binding.cwd).not.toBe(noSpace.binding.cwd);
@@ -192,23 +249,25 @@ describe("matchSystemRunApprovalBinding", () => {
     envHash: "abc",
   };
 
-  it.each([{ cwd: "/var/tmp" }, { agentId: "other" }, { sessionKey: "agent:main:other" }])(
-    "rejects approval binding mismatch: %j",
-    (difference) => {
-      expect(
-        matchSystemRunApprovalBinding({
-          expected,
-          actual: { ...expected, ...difference },
-          actualEnvKeys: ["ALPHA"],
-        }),
-      ).toEqual({
-        ok: false,
-        code: "APPROVAL_REQUEST_MISMATCH",
-        message: "approval id does not match request",
-        details: undefined,
-      });
-    },
-  );
+  it.each([
+    { argv: ["bash", "-lc", "echo bye"] },
+    { cwd: "/var/tmp" },
+    { agentId: "other" },
+    { sessionKey: "agent:main:other" },
+  ])("rejects approval binding mismatch: %j", (difference) => {
+    expect(
+      matchSystemRunApprovalBinding({
+        expected,
+        actual: { ...expected, ...difference },
+        actualEnvKeys: ["ALPHA"],
+      }),
+    ).toEqual({
+      ok: false,
+      code: "APPROVAL_REQUEST_MISMATCH",
+      message: "approval id does not match request",
+      details: undefined,
+    });
+  });
 });
 
 describe("mutable file operand binding", () => {
@@ -280,7 +339,8 @@ describe("mutable file operand binding", () => {
   );
 
   it("binds every script in a compound command and detects drift", async () => {
-    await withWorkspace(async (cwd) => {
+    await withTempDir("openclaw-system-run-binding-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
       const first = path.join(cwd, "first.sh");
       const second = path.join(cwd, "second.py");
       fs.writeFileSync(first, "#!/bin/sh\necho first\n");
@@ -305,11 +365,13 @@ describe("mutable file operand binding", () => {
     ["path-shim", "python payload.py", "bin/python", "payload.py"],
     ["explicit-shim", "./python payload.py", "python", "python"],
   ])("binds %s executables and rejects drift", async (kind, command, file, mutate) => {
-    await withWorkspace(async (cwd) => {
+    await withTempDir("openclaw-system-run-binding-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
       const executable = path.join(cwd, file);
       fs.mkdirSync(path.dirname(executable), { recursive: true });
       if (kind === "native") {
-        copyExecutable(process.execPath, executable);
+        fs.copyFileSync(process.execPath, executable);
+        fs.chmodSync(executable, 0o755);
       } else {
         fs.writeFileSync(
           executable,
@@ -330,8 +392,19 @@ describe("mutable file operand binding", () => {
             }
           : undefined,
       );
-      if (kind.endsWith("shim")) {
-        expect(binding.operands).toHaveLength(2);
+      const operands = binding.operands;
+      if (kind === "wrapper") {
+        expect(operands.map((operand) => operand.snapshot.path)).toContain(
+          fs.realpathSync(executable),
+        );
+      } else if (kind === "direct" || kind === "native") {
+        expect(
+          operands.filter((operand) =>
+            kind === "native" ? operand.executable : !operand.executable,
+          ),
+        ).toHaveLength(1);
+      } else {
+        expect(operands).toHaveLength(kind === "path" ? 1 : 2);
       }
       await expectRevalidation(binding, cwd);
       if (kind === "native") {
@@ -352,7 +425,7 @@ describe("mutable file operand binding", () => {
   });
 
   it("refuses commands whose executable or loading inputs cannot be bound", async () => {
-    await withWorkspace(async (cwd) => {
+    await withTempDir("openclaw-system-run-refusal-", async (cwd) => {
       const files = {
         "init.sh": "echo init\n",
         "job.sh": "echo job\n",
@@ -384,10 +457,14 @@ describe("mutable file operand binding", () => {
       const cases: Array<[input: string | string[], message: string | null, startupEnv?: boolean]> =
         [
           [["sh", "-s", "job.sh"], startup],
+          [["bash", "-se", "job.sh"], startup],
+          [["bash", "-es", "job.sh"], startup],
+          [["bash", "-ls", "job.sh"], startup],
           [["bash", "-lse", "job.sh"], startup],
           ["bash --rcfile init.sh -i job.sh", startup],
           [["bash", "-O", "extglob", "-i", "job.sh"], startup],
           [["bash", "--rcfile", "init.sh", "-c", "echo ok"], startup],
+          [["bash", "-i", "job.sh"], startup],
           [["bash", "-c", "source loaded.sh"], null],
           [["bash", "-c", "echo ok; source loaded.sh"], null],
           [["env", "BASH_ENV=loaded.sh", "bash", "-c", "echo ok"], environment],
@@ -438,7 +515,7 @@ describe("mutable file operand binding", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "fails closed when a script operand is unreadable",
     async () => {
-      await withWorkspace(async (cwd) => {
+      await withTempDir("openclaw-system-run-unreadable-", async (cwd) => {
         const script = path.join(cwd, "unreadable.sh");
         fs.writeFileSync(script, "#!/bin/sh\necho hidden\n", { mode: 0o000 });
         try {
@@ -511,9 +588,11 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
     { name: "direct argv executable", shellCommand: false, prefix: [] },
     { name: "shell env child", shellCommand: true, prefix: ["env"] },
   ])("binds an external command carrier used as $name", ({ shellCommand, prefix }) =>
-    withWorkspace(async (cwd) => {
+    withTempDir("openclaw-wrapper-carrier-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
       const carrierPath = path.join(cwd, "command");
-      copyExecutable("/usr/bin/true", carrierPath);
+      fs.copyFileSync("/usr/bin/true", carrierPath);
+      fs.chmodSync(carrierPath, 0o755);
       const env = { PATH: `${cwd}${path.delimiter}${systemPath}` };
       const argv = [...prefix, "command", "true"];
       const resolution = resolveCommandResolutionFromArgv(argv, cwd, env);
@@ -534,7 +613,7 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
   );
 
   it("rejects an unavailable wrapper even when its final executable resolves", () =>
-    withWorkspace(async (cwd) => {
+    withTempDir("openclaw-wrapper-unavailable-", async (cwd) => {
       const argv = [path.join(cwd, "toybox"), "sh", "-c", "true"];
       const env = { PATH: systemPath };
       const resolution = resolveCommandResolutionFromArgv(argv, cwd, env);
@@ -550,13 +629,16 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
     }));
 
   it("binds original absolute and relative wrapper paths throughout a nested dispatch chain", () =>
-    withWorkspace(async (cwd) => {
+    withTempDir("openclaw-wrapper-original-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
       const binDir = path.join(cwd, "bin");
       fs.mkdirSync(binDir);
       const envPath = path.join(binDir, "env");
       const nicePath = path.join(binDir, "nice");
-      copyExecutable("/usr/bin/env", envPath);
-      copyExecutable("/usr/bin/nice", nicePath);
+      fs.copyFileSync("/usr/bin/env", envPath);
+      fs.copyFileSync("/usr/bin/nice", nicePath);
+      fs.chmodSync(envPath, 0o755);
+      fs.chmodSync(nicePath, 0o755);
       const binding = await bindShell(`'${envPath}' ./bin/nice -n 1 ls`, cwd);
       expect(
         binding.operands
@@ -570,7 +652,8 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
     }));
 
   it("rejects a changed real-file target for a PATH-resolved executable", () =>
-    withWorkspace(async (cwd) => {
+    withTempDir("openclaw-wrapper-realpath-", async (rawCwd) => {
+      const cwd = fs.realpathSync(rawCwd);
       const binDir = path.join(cwd, "bin");
       fs.mkdirSync(binDir);
       const executable = path.join(binDir, "ls");
@@ -587,7 +670,7 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
     }));
 
   it("rejects an unresolved original external wrapper token", () =>
-    withWorkspace(async (cwd) => {
+    withTempDir("openclaw-wrapper-missing-", async (cwd) => {
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "shell", text: "./missing/env ls" },

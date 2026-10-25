@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
@@ -47,15 +48,6 @@ function makeSession(
   };
 }
 
-function makeRuntimeModel() {
-  return makeProviderModelFixture({
-    id: "gpt-4.1",
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  });
-}
-
 const runtimeMocks = vi.hoisted(() => ({
   deliveryContextFromSession: vi.fn(() => ({
     channel: "telegram",
@@ -96,50 +88,66 @@ const runtimeMocks = vi.hoisted(() => ({
     run: (project) =>
       project({
         modelApi: "openai-responses",
-        runtimeModel: makeRuntimeModel(),
+        runtimeModel: makeProviderModelFixture({
+          id: "gpt-4.1",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        }),
       }),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   })),
 }));
 
-function mockRuntime(...keys: (keyof typeof runtimeMocks)[]) {
-  return async <T extends object>(load: () => Promise<T>): Promise<T> =>
-    Object.assign(
-      {},
-      await load(),
-      Object.fromEntries(keys.map((key) => [key, runtimeMocks[key]])),
-    );
-}
-
-vi.mock(
-  import("../../agents/agent-bundle-mcp-tools.js"),
-  mockRuntime(
-    "buildBundleMcpToolsFromCatalog",
-    "peekSessionMcpRuntime",
-    "resolveSessionMcpConfigSummary",
-  ),
-);
-vi.mock(
-  import("../../agents/agent-scope.js"),
-  mockRuntime("resolveAgentDir", "resolveAgentWorkspaceDir", "resolveSessionAgentId"),
-);
-vi.mock(
-  import("../../agents/embedded-agent-runner/effective-tool-policy.js"),
-  mockRuntime("applyFinalEffectiveToolPolicy"),
-);
-vi.mock(import("../../agents/harness/registry.js"), mockRuntime("getRegisteredAgentHarness"));
-vi.mock(
-  import("../../agents/tools-effective-inventory.js"),
-  mockRuntime("resolveEffectiveToolInventory", "acquireEffectiveToolInventoryRuntimeModelContext"),
-);
-vi.mock(import("../../auto-reply/reply/reply-threading.js"), mockRuntime("resolveReplyToMode"));
-vi.mock(import("../../config/config.js"), mockRuntime("resolveRuntimeConfigCacheKey"));
-vi.mock(
-  import("../../plugins/runtime.js"),
-  mockRuntime("getActivePluginChannelRegistryVersion", "getActivePluginRegistryVersion"),
-);
-vi.mock(import("../../utils/delivery-context.read.js"), mockRuntime("deliveryContextFromSession"));
-vi.mock(import("../session-utils.js"), mockRuntime("resolveSessionModelRef"));
+vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-bundle-mcp-tools.js")>()),
+  buildBundleMcpToolsFromCatalog: runtimeMocks.buildBundleMcpToolsFromCatalog,
+  peekSessionMcpRuntime: runtimeMocks.peekSessionMcpRuntime,
+  resolveSessionMcpConfigSummary: runtimeMocks.resolveSessionMcpConfigSummary,
+}));
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
+  resolveAgentDir: runtimeMocks.resolveAgentDir,
+  resolveAgentWorkspaceDir: runtimeMocks.resolveAgentWorkspaceDir,
+  resolveSessionAgentId: runtimeMocks.resolveSessionAgentId,
+}));
+vi.mock("../../agents/embedded-agent-runner/effective-tool-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js")
+  >()),
+  applyFinalEffectiveToolPolicy: runtimeMocks.applyFinalEffectiveToolPolicy,
+}));
+vi.mock("../../agents/harness/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/harness/registry.js")>()),
+  getRegisteredAgentHarness: runtimeMocks.getRegisteredAgentHarness,
+}));
+vi.mock("../../agents/tools-effective-inventory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/tools-effective-inventory.js")>()),
+  resolveEffectiveToolInventory: runtimeMocks.resolveEffectiveToolInventory,
+  acquireEffectiveToolInventoryRuntimeModelContext:
+    runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext,
+}));
+vi.mock("../../auto-reply/reply/reply-threading.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/reply-threading.js")>()),
+  resolveReplyToMode: runtimeMocks.resolveReplyToMode,
+}));
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  resolveRuntimeConfigCacheKey: runtimeMocks.resolveRuntimeConfigCacheKey,
+}));
+vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime.js")>()),
+  getActivePluginChannelRegistryVersion: runtimeMocks.getActivePluginChannelRegistryVersion,
+  getActivePluginRegistryVersion: runtimeMocks.getActivePluginRegistryVersion,
+}));
+vi.mock("../../utils/delivery-context.read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/delivery-context.read.js")>()),
+  deliveryContextFromSession: runtimeMocks.deliveryContextFromSession,
+}));
+vi.mock("../session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils.js")>()),
+  resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
 // mock-isolation: effective-tool policy tests supply session metadata without a database worker.
 vi.mock("../session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (
@@ -148,10 +156,10 @@ vi.mock("../session-utils-store-worker.js", () => ({
     >[0],
   ) => runtimeMocks.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
-vi.mock(
-  import("../node-plugin-tool-snapshot.js"),
-  mockRuntime("getConnectedNodePluginToolsVersion"),
-);
+vi.mock("../node-plugin-tool-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-plugin-tool-snapshot.js")>()),
+  getConnectedNodePluginToolsVersion: runtimeMocks.getConnectedNodePluginToolsVersion,
+}));
 
 const { applyFinalEffectiveToolPolicy } = await vi.importActual<
   typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js")
@@ -518,7 +526,7 @@ describe("tools.effective handler", () => {
     },
   );
 
-  it("preserves MCP identities, ownership and fallback without loading registry metadata", async () => {
+  it("preserves MCP inventory ownership and fallback without loading registry metadata", async () => {
     const registrySnapshot = captureActivePluginRegistrySnapshot();
     onTestFinished(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
     const registry = createEmptyPluginRegistry();
@@ -538,7 +546,12 @@ describe("tools.effective handler", () => {
           const metadataReads = readMetadata.mock.calls.length;
           const result = project({
             modelApi: "openai-responses",
-            runtimeModel: makeRuntimeModel(),
+            runtimeModel: makeProviderModelFixture({
+              id: "gpt-4.1",
+              provider: "openai",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            }),
           });
           if (isMcpProjection) {
             expect(readMetadata.mock.calls).toHaveLength(metadataReads);
@@ -550,7 +563,7 @@ describe("tools.effective handler", () => {
       };
     });
     const tool = {
-      ...createStubTool("collision__alpha-"),
+      ...createStubTool("fixture_lookup"),
       label: "Lookup",
       displaySummary: "Search the fixture.",
     };
@@ -558,10 +571,11 @@ describe("tools.effective handler", () => {
       pluginId: "fixture-plugin",
       optional: false,
       mcp: {
-        serverName: "collision",
-        safeServerName: "collision",
-        toolName: "alpha!",
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup",
         operation: "tool",
+        deniedBySession: true,
       },
     });
     mockMcpConfigSummary();
@@ -569,13 +583,12 @@ describe("tools.effective handler", () => {
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([
       tool,
       { ...createStubTool("other_lookup"), label: "Lookup", description: "Another lookup." },
-      makeMcpTool(undefined, {
-        name: "collision__alpha--2",
-        label: "Lookup",
-        toolName: "alpha?",
-        serverName: "collision",
-        deniedBySession: true,
-      }),
+      {
+        ...createStubTool("invalid"),
+        label: "Invalid",
+        description: "Invalid schema",
+        parameters: Type.Array(Type.String()),
+      },
     ]);
 
     const respond = await invokeTools();
@@ -584,27 +597,58 @@ describe("tools.effective handler", () => {
     expectPayloadGroupIds(respond, ["core", "mcp"]);
     const payload = payloadOf(respond);
     expect(payload.groups[1]?.tools[0]).toEqual({
-      id: "collision__alpha-",
+      id: "fixture_lookup",
       label: "Lookup (bundle-mcp)",
       description: "Search the fixture.",
       rawDescription: "Search the fixture.",
       source: "mcp",
       pluginId: "bundle-mcp",
-      mcpServer: "collision",
-      mcpToolName: "alpha!",
-    });
-    expect(payload.groups[1]?.tools[1]?.label).toBe("Lookup (bundle-mcp)");
-    expect(payload.groups[1]?.tools[2]).toMatchObject({
-      id: "collision__alpha--2",
-      mcpServer: "collision",
-      mcpToolName: "alpha?",
+      mcpServer: "fixture",
+      mcpToolName: "lookup",
       deniedBySession: true,
     });
+    expect(payload.groups[1]?.tools[1]?.label).toBe("Lookup (bundle-mcp)");
+    expect(payload.notices?.[0]?.message).toContain('Tool "invalid" from plugin "bundle-mcp"');
     expect(normalizeTools).toHaveBeenCalledWith(
       expect.objectContaining({ allowRuntimePluginLoad: false }),
     );
     expect(acquisitions).toBe(2);
     expect(mcpProjections).toBe(1);
+  });
+
+  it("preserves raw MCP identities and session denials across sanitized collisions", async () => {
+    const enabled = makeMcpTool(undefined, {
+      name: "collision__alpha-",
+      label: "Alpha bang",
+      toolName: "alpha!",
+      serverName: "collision",
+      deniedBySession: false,
+    });
+    const denied = makeMcpTool(undefined, {
+      name: "collision__alpha--2",
+      label: "Alpha question",
+      toolName: "alpha?",
+      serverName: "collision",
+      deniedBySession: true,
+    });
+    mockMcpTools([enabled, denied], { serverNames: ["collision"] });
+    const payload = payloadOf(await invokeTools());
+    expect(payload?.groups?.[0]?.tools?.[0]).toEqual({
+      id: "exec",
+      label: "Exec",
+      description: "Run shell commands",
+      rawDescription: "Run shell commands",
+      source: "core",
+    });
+    expect(payload?.groups?.[1]?.tools).toMatchObject([
+      { id: "collision__alpha-", mcpServer: "collision", mcpToolName: "alpha!" },
+      {
+        id: "collision__alpha--2",
+        mcpServer: "collision",
+        mcpToolName: "alpha?",
+        deniedBySession: true,
+      },
+    ]);
   });
 
   it("quarantines warm MCP tools with schemas the runtime cannot project", async () => {
@@ -613,9 +657,6 @@ describe("tools.effective handler", () => {
     const respond = await invokeTools();
 
     expectPayloadGroupIds(respond, ["core"], "unsupported-tool-schema:reproProbe__probe_tool");
-    expect(payloadOf(respond).notices?.[0]?.message).toContain(
-      'Tool "reproProbe__probe_tool" from plugin "bundle-mcp"',
-    );
   });
 
   it.each(["empty", "mixed"])(

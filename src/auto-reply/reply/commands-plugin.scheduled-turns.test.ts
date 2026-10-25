@@ -1,8 +1,12 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { listSwarmRunReservationIds } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionChildEntriesReadOnly,
+  loadSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { requestActiveCronJobCancellation } from "../../cron/active-jobs.js";
 import {
   initializeGlobalHookRunner,
@@ -18,27 +22,10 @@ import {
   commandInvocation,
   createContinuation,
   declaredCommand,
-  type Fixture,
   pluginId,
   scheduleRequest,
   withCommandPlugin,
 } from "./commands-plugin.scheduled-turns.test-support.js";
-
-const schedules = (ctx: PluginCommandContext) =>
-  expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
-const nativeRuntime = (ctx: PluginCommandContext) =>
-  expectDefined(ctx.runtimeContext?.subagents, "native child runtime");
-function expectResult(fixture: Fixture, fields: object) {
-  expect(fixture.scheduledResults[0]).toMatchObject(fields);
-}
-const waitForChild = (runId: string) =>
-  vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
-    timeout: 15_000,
-  });
-function installVeto(fixture: Fixture, handler: Parameters<typeof addTestHook>[0]["handler"]) {
-  addTestHook({ registry: fixture.registry, pluginId, hookName: "before_tool_call", handler });
-  initializeGlobalHookRunner(fixture.registry);
-}
 
 // Every test doubles as a no-fallback guard: no scheduled occurrence may reach an ordinary
 // session prompt or the embedded model runner. Model choice is stubbed only for the child
@@ -74,6 +61,7 @@ describe("requester-admitted scheduled commands", () => {
     ["missing scheduled contract", { scheduledContract: false }],
     ["missing manifest capability", { manifestCapabilities: ["subagents"] }],
     ["public scheduling command", { commands: [{ ...declaredCommand, requireAuth: false }] }],
+    ["implicit command auth", { commands: [{ ...declaredCommand, requireAuth: undefined }] }],
     [
       "missing native subagents",
       { commands: [{ ...declaredCommand, runtimeCapabilities: ["scheduledTurns"] }] },
@@ -100,22 +88,34 @@ describe("requester-admitted scheduled commands", () => {
     await withCommandPlugin(async (fixture) => {
       let retained: PluginCommandScheduledTurns | undefined;
       let accepted: { jobId: string } | undefined;
+      let schedulingError: unknown;
       fixture.handler.mockImplementation(async (ctx) => {
-        const scheduling = schedules(ctx);
-        retained = scheduling;
+        // Scheduling stays outside the native helpers, which keep their optional list.
+        const native = expectDefined(ctx.runtimeContext?.subagents, "native helpers");
+        expect(Object.keys(native).toSorted()).toEqual(["collect", "list", "spawn"]);
+        await expect(expectDefined(native.list, "native child list")()).resolves.toEqual([]);
+        const schedules = expectDefined(
+          ctx.runtimeContext?.scheduledTurns,
+          "live schedule capability",
+        );
+        retained = schedules;
         const definition = scheduleRequest();
         const [first, duplicate] = await Promise.all([
-          scheduling.schedule(definition),
-          scheduling.schedule(definition),
-        ]);
+          schedules.schedule(definition),
+          schedules.schedule(definition),
+        ]).catch((error: unknown) => {
+          schedulingError = error;
+          throw error;
+        });
         expect(duplicate).toEqual(first);
         accepted = first;
-        await expect(scheduling.schedule({ ...definition, maxRuns: 3 })).rejects.toThrow(
+        await expect(schedules.schedule({ ...definition, maxRuns: 3 })).rejects.toThrow(
           /different input/,
         );
         return { text: "scheduled" };
       });
       const dispatched = await commandInvocation(fixture).run();
+      expect(schedulingError).toBeUndefined();
       expect(dispatched?.reply?.text).toBe("scheduled");
       const jobs = await fixture.readJobs();
       expect(jobs).toHaveLength(1);
@@ -140,7 +140,7 @@ describe("requester-admitted scheduled commands", () => {
     await withCommandPlugin(async (fixture) => {
       const original = { ...scheduleRequest(), args: "original arguments" };
       fixture.handler.mockImplementation(async (ctx) => {
-        const native = schedules(ctx);
+        const native = expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
         const input = { ...original, schedule: { ...original.schedule } };
         const pending = native.schedule(input);
         input.requestId = "mutated-id";
@@ -171,26 +171,63 @@ describe("requester-admitted scheduled commands", () => {
       });
     });
   });
+  it("does not expose schedules to ordinary commands", async () => {
+    await withCommandPlugin(async (fixture) => {
+      fixture.handler.mockImplementation((ctx) => ({
+        text: String(ctx.runtimeContext?.scheduledTurns !== undefined),
+      }));
+      expect((await commandInvocation(fixture, "/ordinary").run())?.reply?.text).toBe("false");
+      expect(await fixture.readJobs()).toEqual([]);
+    });
+  });
+  it("honors native before-tool denial without creating a fallback job", async () => {
+    await withCommandPlugin(async (fixture) => {
+      addTestHook({
+        registry: fixture.registry,
+        pluginId,
+        hookName: "before_tool_call",
+        handler: async (event: { toolName: string }) =>
+          event.toolName === "automations"
+            ? { block: true, blockReason: "schedule denied" }
+            : undefined,
+      });
+      initializeGlobalHookRunner(fixture.registry);
+      fixture.handler.mockImplementation(async (ctx) => {
+        await expect(
+          expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability").schedule(
+            scheduleRequest(),
+          ),
+        ).rejects.toThrow(/denied|not accepted|blocked/i);
+        return { text: "refused" };
+      });
+      expect((await commandInvocation(fixture).run())?.reply?.text).toBe("refused");
+      expect(await fixture.readJobs()).toEqual([]);
+    });
+  });
   it("lets a refused request retry and bounds continuations per invocation", async () => {
     await withCommandPlugin(async (fixture) => {
       let denials = 1;
-      installVeto(fixture, async (event: { toolName: string }) =>
-        event.toolName === "automations" && denials-- > 0
-          ? { block: true, blockReason: "transient denial" }
-          : undefined,
-      );
+      addTestHook({
+        registry: fixture.registry,
+        pluginId,
+        hookName: "before_tool_call",
+        handler: async (event: { toolName: string }) =>
+          event.toolName === "automations" && denials-- > 0
+            ? { block: true, blockReason: "transient denial" }
+            : undefined,
+      });
+      initializeGlobalHookRunner(fixture.registry);
       fixture.handler.mockImplementation(async (ctx) => {
-        const scheduling = schedules(ctx);
+        const schedules = expectDefined(ctx.runtimeContext?.scheduledTurns, "schedule capability");
         const request = scheduleRequest();
-        await expect(scheduling.schedule(request)).rejects.toThrow(/not accepted|denied|blocked/i);
-        expect(await fixture.readJobs()).toEqual([]);
+        await expect(schedules.schedule(request)).rejects.toThrow(/not accepted|denied|blocked/i);
         // The failed request is not pinned to its rejection; the retry reaches the scheduler.
-        const retried = await scheduling.schedule(request);
-        expect(await scheduling.schedule(request)).toEqual(retried);
+        const retried = await schedules.schedule(request);
+        expect(await schedules.schedule(request)).toEqual(retried);
         for (const requestId of ["second", "third", "fourth"]) {
-          await scheduling.schedule({ ...request, requestId });
+          await schedules.schedule({ ...request, requestId });
         }
-        await expect(scheduling.schedule({ ...request, requestId: "fifth" })).rejects.toThrow(
+        await expect(schedules.schedule({ ...request, requestId: "fifth" })).rejects.toThrow(
           /at most 4 continuations/,
         );
         return { text: "bounded" };
@@ -202,74 +239,164 @@ describe("requester-admitted scheduled commands", () => {
 });
 
 describe("native scheduled command execution", () => {
-  it.each(["original lineage", "demotion while queued"] as const)(
-    "retains scheduled child custody through %s",
-    async (mode) => {
-      guards.stubModelChoice = true;
-      await withCommandPlugin(async (fixture) => {
-        fixture.installAgentTurnFacade();
-        const id = await createContinuation(fixture);
-        // Hold swarm capacity so the accepted child stays queued and never reaches a model.
-        const capacity = holdScheduledChildCapacity(fixture);
-        let childRunId: string | undefined;
-        let childSessionKey: string | undefined;
-        fixture.handler.mockImplementation(async (ctx) => {
-          const native = nativeRuntime(ctx);
-          const child = await native.spawn({
-            requestId: "scheduled-child",
-            task: "Synthetic child kept queued by capacity",
-            context: "isolated",
-          });
-          childRunId = child.runId;
-          childSessionKey = child.childSessionKey;
-          expect(await native.collect({ ids: [child.runId], timeoutSeconds: 0 })).toMatchObject({
-            pending: [child.runId],
-          });
-          return { text: "child accepted" };
+  it("runs the final allowed attempt, then retires the schedule instead of rearming it", async () => {
+    await withCommandPlugin(async (fixture) => {
+      let accepted: { jobId: string } | undefined;
+      fixture.handler.mockImplementation(async (ctx) => {
+        accepted = await expectDefined(
+          ctx.runtimeContext?.scheduledTurns,
+          "schedule capability",
+        ).schedule(scheduleRequest({ maxRuns: 1 }));
+        return { text: "scheduled" };
+      });
+      await commandInvocation(fixture).run();
+      const id = expectDefined(accepted, "durable native schedule").jobId;
+      fixture.handler.mockImplementation(() => ({ text: "final occurrence" }));
+      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+      expect(fixture.scheduledResults).toMatchObject([
+        { status: "ok", outputText: "final occurrence" },
+      ]);
+      const [retired] = await fixture.readJobs();
+      expect(retired).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
+      expect(retired?.state.nextRunAtMs).toBeUndefined();
+      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+      expect(fixture.scheduledResults).toHaveLength(1);
+    });
+  });
+  it("accepts a native child from a scheduled occurrence under the original lineage", async () => {
+    guards.stubModelChoice = true;
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      // Hold swarm capacity so the accepted child stays queued and never reaches a model.
+      const capacity = holdScheduledChildCapacity(fixture);
+      let childRunId: string | undefined;
+      let childSessionKey: string | undefined;
+      fixture.handler.mockImplementation(async (ctx) => {
+        const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
+        const child = await native.spawn({
+          requestId: "scheduled-positive",
+          task: "Synthetic scheduled child; capacity keeps it queued",
+          context: "isolated",
         });
-        try {
-          await fixture.cron.run(id, "force");
-          expectResult(fixture, { status: "ok", outputText: "child accepted" });
-          const runId = expectDefined(childRunId, "accepted child run");
+        childRunId = child.runId;
+        childSessionKey = child.childSessionKey;
+        expect(await native.collect({ ids: [child.runId], timeoutSeconds: 0 })).toMatchObject({
+          pending: [child.runId],
+        });
+        return { text: "child accepted" };
+      });
+      try {
+        await fixture.cron.run(id, "force");
+        capacity.expectWaiting(expectDefined(childRunId, "accepted child run"));
+      } finally {
+        capacity.release();
+      }
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "ok",
+        outputText: "child accepted",
+      });
+      const parent = fixture.params();
+      const child = loadSessionEntry({
+        agentId: "main",
+        sessionKey: expectDefined(childSessionKey, "accepted child session"),
+        storePath: parent.storePath,
+      });
+      expect(child?.spawnedBy).toBe(parent.sessionKey);
+      // The child inherits the stored ceiling minus scheduling: no recursive schedules.
+      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
+        requesterSessionKey: parent.sessionKey,
+        requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
+      });
+    });
+  });
+  /**
+   * Queues one native child from a scheduled occurrence. A published revocation settles the
+   * child while its lane is still full; otherwise it is released and meets its launch check.
+   */
+  async function releaseQueuedScheduledChild(
+    change: "none" | "demotion" | "identity removal" | "unannounced narrowing",
+  ) {
+    guards.stubModelChoice = true;
+    let outcome: unknown;
+    await withCommandPlugin(async (fixture) => {
+      fixture.installAgentTurnFacade();
+      const id = await createContinuation(fixture);
+      // Hold swarm capacity so the child is still queued when its occurrence settles.
+      const capacity = holdScheduledChildCapacity(fixture);
+      let childRunId: string | undefined;
+      fixture.handler.mockImplementation(async (ctx) => {
+        const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
+        const child = await native.spawn({
+          requestId: "scheduled-queued",
+          task: "Synthetic scheduled child released after its occurrence settles",
+          context: "isolated",
+        });
+        childRunId = child.runId;
+        return { text: "child queued" };
+      });
+      const terminal = (runId: string) =>
+        vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
+          timeout: 15_000,
+        });
+      try {
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "ok",
+          outputText: "child queued",
+        });
+        const runId = expectDefined(childRunId, "queued child run");
+        expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
+        capacity.expectWaiting(runId);
+        if (change === "demotion") {
+          fixture.demoteOwner();
+        } else if (change === "identity removal") {
+          fixture.removeOwner();
+        } else if (change === "unannounced narrowing") {
+          // A committed role change that no policy notification announced.
+          const admin = expectDefined(fixture.cfg.gateway?.roles?.definitions.admin, "admin role");
+          admin.scopes = ["operator.read"];
+          await delay(50);
           capacity.expectWaiting(runId);
-          if (mode === "demotion while queued") {
-            expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
-            fixture.demoteOwner();
-            // Revocation, not a freed slot, settles the waiting child.
-            await waitForChild(runId);
-            expect(listSwarmRunReservationIds()).not.toContain(runId);
-            expect(subagentRuns.get(runId)?.execution.outcome).toMatchObject({
-              status: "error",
-              error: "Queued channel operator authority changed; submit a new request.",
-            });
-            return;
-          }
-        } finally {
-          capacity.release();
         }
-        const parent = fixture.params();
-        const child = loadSessionEntry({
-          agentId: "main",
-          sessionKey: expectDefined(childSessionKey, "accepted child session"),
-          storePath: parent.storePath,
-        });
-        expect(child?.spawnedBy).toBe(parent.sessionKey);
-        // The child inherits the stored ceiling minus scheduling: no recursive schedules.
-        expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
-        expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
-          requesterSessionKey: parent.sessionKey,
-          requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
-        });
-        const runId = expectDefined(childRunId, "accepted child run");
-        await waitForChild(runId);
-        // Admission survives occurrence settlement; the fixture has no published reply runtime.
-        expect(subagentRuns.get(runId)?.execution.outcome).toMatchObject({
-          status: "error",
-          error: "published reply runtime missing for main",
-        });
+        if (change === "demotion" || change === "identity removal") {
+          // The revocation, not a freed slot, settles the waiting child.
+          await terminal(runId);
+          expect(listSwarmRunReservationIds()).not.toContain(runId);
+        }
+      } finally {
+        capacity.release();
+      }
+      const runId = expectDefined(childRunId, "queued child run");
+      await terminal(runId);
+      outcome = subagentRuns.get(runId)?.execution.outcome;
+    });
+    return outcome;
+  }
+  it("admits a queued scheduled child's agent turn while its requester stays authorized", async () => {
+    // After its occurrence settled, the child passed the real agent turn's admission
+    // revalidation. This harness publishes no reply runtime, so the turn stops at that next
+    // seam, still before the model runner (the fixture's no-embedded-run guard).
+    await expect(releaseQueuedScheduledChild("none")).resolves.toMatchObject({
+      status: "error",
+      error: "published reply runtime missing for main",
+    });
+  });
+  it.each(["demotion", "identity removal"] as const)(
+    "fails a queued scheduled child on its requester's %s without waiting for capacity",
+    async (change) => {
+      await expect(releaseQueuedScheduledChild(change)).resolves.toMatchObject({
+        status: "error",
+        error: "Queued channel operator authority changed; submit a new request.",
       });
     },
   );
+  it("refuses a queued scheduled child at launch after an unannounced role change", async () => {
+    await expect(releaseQueuedScheduledChild("unannounced narrowing")).resolves.toMatchObject({
+      status: "error",
+      error: "Queued channel operator authority changed; submit a new request.",
+    });
+  });
   it("ends a running scheduled occurrence when its channel requester is demoted", async () => {
     await withCommandPlugin(async (fixture) => {
       const id = await createContinuation(fixture);
@@ -290,7 +417,7 @@ describe("native scheduled command execution", () => {
         fixture.demoteOwner();
         // The occurrence settles while its handler is still awaiting, not when it returns.
         await vi.waitFor(() => expect(settled).toBe(true), { timeout: 10_000 });
-        expectResult(fixture, {
+        expect(fixture.scheduledResults[0]).toMatchObject({
           status: "error",
           error: expect.stringContaining("Queued channel operator authority changed"),
           errorClassification: { kind: "aborted" },
@@ -301,6 +428,76 @@ describe("native scheduled command execution", () => {
         await run;
       }
       expect(await fixture.assistantOutputs()).toEqual(before);
+    });
+  });
+  it("refuses a same-metadata plugin reload before command or input acceptance", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const before = await fixture.userInputs();
+      await fixture.reloadPlugin();
+      fixture.handler.mockClear();
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("original plugin instance was replaced"),
+        errorClassification: { kind: "permanent" },
+        executionStarted: false,
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual(before);
+      expect(await fixture.assistantOutputs()).toEqual([]);
+      // The first refusal retires it; it never errors on toward generic auto-disable.
+      const [retired] = await fixture.readJobs();
+      expect(retired).toMatchObject({ enabled: false });
+      expect(retired?.state.nextRunAtMs).toBeUndefined();
+      expect(retired?.state.autoDisabled).toBeUndefined();
+      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+      expect(fixture.scheduledResults).toHaveLength(1);
+    });
+  });
+  it("routes scheduled child requests through the real native tool veto", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const seen: string[] = [];
+      const acceptedBefore = [...subagentRuns.keys()];
+      addTestHook({
+        registry: fixture.registry,
+        pluginId,
+        hookName: "before_tool_call",
+        handler: async (event: { toolName: string }) => {
+          seen.push(event.toolName);
+          return event.toolName === "sessions_spawn"
+            ? { block: true, blockReason: "scheduled child denied" }
+            : undefined;
+        },
+      });
+      initializeGlobalHookRunner(fixture.registry);
+      fixture.handler.mockImplementation(async (ctx) => {
+        await expect(
+          expectDefined(ctx.runtimeContext?.subagents, "native child runtime").spawn({
+            requestId: "scheduled-veto",
+            task: "Never execute: native hook veto",
+          }),
+        ).rejects.toThrow("Native subagent spawn was not accepted.");
+        return { text: "native child policy enforced" };
+      });
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]?.error).toBeUndefined();
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "ok",
+        outputText: "native child policy enforced",
+      });
+      expect(seen).toEqual(["sessions_spawn"]);
+      expect([...subagentRuns.keys()]).toEqual(acceptedBefore);
+      const parent = fixture.params();
+      expect(
+        await listSessionChildEntriesReadOnly({
+          agentId: "main",
+          sessionKey: parent.sessionKey,
+          storePath: parent.storePath,
+        }),
+      ).toEqual([]);
+      expect((await fixture.readJobs())[0]?.state.pluginCommandRuns).toBe(1);
     });
   });
   it("restores the real requester and commits command output only to the exact parent", async () => {
@@ -318,7 +515,7 @@ describe("native scheduled command execution", () => {
       });
       await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
       expect(fixture.scheduledResults).toHaveLength(1);
-      expectResult(fixture, {
+      expect(fixture.scheduledResults[0]).toMatchObject({
         status: "ok",
         executionStarted: true,
         sessionId: "command-parent",
@@ -370,7 +567,7 @@ describe("native scheduled command execution", () => {
         }
         await running;
         await settled.promise;
-        expectResult(fixture, {
+        expect(fixture.scheduledResults[0]).toMatchObject({
           status: "error",
           executionStarted: true,
           delivered: false,
@@ -401,7 +598,10 @@ describe("native scheduled command execution", () => {
           return { text: "must not commit", continueAgent: true };
         });
         await fixture.cron.run(id, "force");
-        expectResult(fixture, { status: "error", executionStarted: true });
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          executionStarted: true,
+        });
         expect(fixture.scheduledResults[0]?.error).toMatch(
           failure === "thrown failure" ? /synthetic handler failure/ : /cannot continue/,
         );
@@ -409,7 +609,7 @@ describe("native scheduled command execution", () => {
       });
     },
   );
-  it.each(["reset", "revoked operator", "same-metadata plugin reload"] as const)(
+  it.each(["reset", "revoked operator"] as const)(
     "refuses a %s before command or input acceptance",
     async (change) => {
       await withCommandPlugin(async (fixture) => {
@@ -417,30 +617,17 @@ describe("native scheduled command execution", () => {
         const before = await fixture.userInputs();
         if (change === "reset") {
           await fixture.resetParent();
-        } else if (change === "revoked operator") {
-          fixture.revokeOwner();
         } else {
-          await fixture.reloadPlugin();
+          fixture.revokeOwner();
         }
         fixture.handler.mockClear();
         await fixture.cron.run(id, "force");
-        expectResult(fixture, { status: "error", executionStarted: false });
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "error",
+          executionStarted: false,
+        });
         expect(fixture.handler).not.toHaveBeenCalled();
         expect(await fixture.userInputs()).toEqual(before);
-        if (change === "same-metadata plugin reload") {
-          expectResult(fixture, {
-            error: expect.stringContaining("original plugin instance was replaced"),
-            errorClassification: { kind: "permanent" },
-          });
-          expect(await fixture.assistantOutputs()).toEqual([]);
-          // Permanent refusal retires the job without a generic auto-disable cycle.
-          const [retired] = await fixture.readJobs();
-          expect(retired).toMatchObject({ enabled: false });
-          expect(retired?.state.nextRunAtMs).toBeUndefined();
-          expect(retired?.state.autoDisabled).toBeUndefined();
-          await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
-          expect(fixture.scheduledResults).toHaveLength(1);
-        }
       });
     },
   );
