@@ -5,21 +5,15 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import {
   prepareSqliteTargetFromSessionStorePath,
-  resolveSqliteTargetFromSessionStorePath as resolveTarget,
+  resolveSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target.js";
-
-const stores = (...parts: string[]) => path.resolve("tmp", "stores", ...parts);
-const targetPath = (store: string, options: Parameters<typeof resolveTarget>[1] = {}) =>
-  resolveTarget(store, options).path;
-const registration = (agentId: string, file: string) => ({ agentId, path: stores(file) });
-const workerSuffix = (index = 1) => `shared.worker${index === 1 ? "" : `.${index}`}.sqlite`;
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it.each(["(multiple)", "  (multiple)  ", "stores/{agentId}/sessions.json", ""])(
     "rejects non-concrete store selector %j before resolving or opening it",
     async (storePath) => {
-      expect(() => resolveTarget(storePath)).toThrow(
+      expect(() => resolveSqliteTargetFromSessionStorePath(storePath)).toThrow(
         "Session storage requires a concrete store path",
       );
       await expect(prepareSqliteTargetFromSessionStorePath(storePath)).rejects.toThrow(
@@ -28,36 +22,47 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     },
   );
 
-  it.each([
-    ["ops", "configured-default", []],
-    ["main", "ambiguous-registry", ["main", "ops"]],
-  ] as const)(
-    "keeps exact locators shared with owner %s from %s",
-    (agentId, ownerSource, owners) => {
-      const databasePath = stores("shared.sqlite");
-      expect(
-        resolveTarget(databasePath, {
-          agentId: ownerSource === "configured-default" ? "worker" : undefined,
-          defaultAgentId: agentId,
-          ...(owners.length
-            ? {
-                registeredDatabases: owners.map((owner) => ({
-                  agentId: owner,
-                  path: databasePath,
-                })),
-              }
-            : {}),
-        }),
-      ).toMatchObject({ agentId, ownerSource, path: databasePath, shared: true });
-    },
-  );
+  it("assigns a new exact SQLite locator to the configured default without caller capture", () => {
+    const databasePath = path.resolve("tmp", "stores", "new-shared.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        agentId: "worker",
+        defaultAgentId: "ops",
+      }),
+    ).toMatchObject({
+      agentId: "ops",
+      ownerSource: "configured-default",
+      path: databasePath,
+      shared: true,
+    });
+  });
+
+  it("keeps a multiply registered exact SQLite locator shared", () => {
+    const databasePath = path.resolve("tmp", "stores", "existing-shared.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        defaultAgentId: "main",
+        registeredDatabases: [
+          { agentId: "main", path: databasePath },
+          { agentId: "ops", path: databasePath },
+        ],
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      ownerSource: "ambiguous-registry",
+      path: databasePath,
+      shared: true,
+    });
+  });
 
   it("keeps an incognito sentinel owned by its requested agent", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-incognito-target-") };
     const databasePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "ops", env });
 
     expect(
-      resolveTarget(databasePath, {
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
         agentId: "ops",
         defaultAgentId: "main",
         env,
@@ -65,15 +70,40 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     ).toEqual({ agentId: "ops", path: databasePath });
   });
 
-  it.each([
-    ["main.json", "main", "main.sqlite"],
-    ["ops.json", "ops", "ops.ops.sqlite"],
-    ["sessions.json", "main", "openclaw-agent.sqlite"],
-    ["sessions.json", "work", "openclaw-agent.work.sqlite"],
-  ])("resolves custom store %s for %s to %s", (store, agentId, file) => {
-    expect(targetPath(path.join("tmp", "stores", store), { agentId, defaultAgentId: "main" })).toBe(
-      stores(file),
+  it("keeps custom store targets distinct when templates share a directory", () => {
+    const dir = path.join("tmp", "stores");
+
+    expect(resolveSqliteTargetFromSessionStorePath(path.join(dir, "main.json"))).toMatchObject({
+      path: path.resolve(dir, "main.sqlite"),
+    });
+    expect(resolveSqliteTargetFromSessionStorePath(path.join(dir, "worker.json"))).toMatchObject({
+      path: path.resolve(dir, "worker.sqlite"),
+    });
+  });
+
+  it("keeps shared custom store targets distinct by agent", () => {
+    const storePath = path.join("tmp", "stores", "shared-sessions.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "shared-sessions.sqlite"),
+    });
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "shared-sessions.work.sqlite"),
+    });
+  });
+
+  it("keeps basename-matching non-owners on a distinct suffixed target", () => {
+    const storePath = path.join("tmp", "stores", "ops.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path).toBe(
+      path.resolve("tmp", "stores", "ops.sqlite"),
     );
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "ops.ops.sqlite"));
   });
 
   it.each(["ops.sqlite", `${path.sep}ops.sqlite`, `ops.sqlite${path.sep}`])(
@@ -85,18 +115,28 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
         { agentId: "ops", path: `${missingDir}${path.sep}${registeredSuffix}` },
       ];
 
-      for (const [agentId, file] of [
-        ["ops", "ops.sqlite"],
-        ["main", "ops.main.sqlite"],
-      ]) {
-        expect(
-          resolveTarget(storePath, { agentId, defaultAgentId: "main", registeredDatabases }),
-        ).toMatchObject({
-          path: path.join(missingDir, file),
-          ownerSource: "database-registry",
-          unsuffixedOwnerAgentId: "ops",
-        });
-      }
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "ops",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "main",
+          defaultAgentId: "main",
+          registeredDatabases,
+        }),
+      ).toMatchObject({
+        path: path.join(missingDir, "ops.main.sqlite"),
+        ownerSource: "database-registry",
+        unsuffixedOwnerAgentId: "ops",
+      });
     },
   );
 
@@ -110,7 +150,7 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       fs.symlinkSync(target, aliasPath);
 
       expect(
-        resolveTarget(path.join(dir, "missing", "ops.json"), {
+        resolveSqliteTargetFromSessionStorePath(path.join(dir, "missing", "ops.json"), {
           agentId: "main",
           defaultAgentId: "main",
           registeredDatabases: [{ agentId: "ops", path: aliasPath }],
@@ -122,6 +162,19 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       });
     },
   );
+
+  it("skips a conventional suffix persisted for another owner", () => {
+    const storePath = path.join("tmp", "stores", "shared.json");
+    const occupiedPath = path.resolve("tmp", "stores", "shared.worker.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+        registeredDatabases: [{ agentId: "ops", path: occupiedPath }],
+      }).path,
+    ).toBe(path.resolve("tmp", "stores", "shared.worker.2.sqlite"));
+  });
 
   it.each([
     { extension: "sqlite", registeredAgentId: "ops" },
@@ -136,13 +189,16 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       }
       const missingDirectory = path.join(root, "a");
       const resolve = () =>
-        resolveTarget(path.join(missingDirectory, `shared.${extension}`), {
-          agentId: "main",
-          defaultAgentId: "main",
-          registeredDatabases: [
-            { agentId: registeredAgentId, path: path.join(missingDirectory, "unrelated.sqlite") },
-          ],
-        });
+        resolveSqliteTargetFromSessionStorePath(
+          path.join(missingDirectory, `shared.${extension}`),
+          {
+            agentId: "main",
+            defaultAgentId: "main",
+            registeredDatabases: [
+              { agentId: registeredAgentId, path: path.join(missingDirectory, "unrelated.sqlite") },
+            ],
+          },
+        );
 
       expect(resolve).toThrow("Cannot determine whether database paths alias");
       expect(fs.readdirSync(root).toSorted()).toEqual(occupiedNames.toSorted());
@@ -158,60 +214,96 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     },
   );
 
-  for (const [name, agentId, registeredDatabases, expectedFile] of [
+  for (const [name, agentId, registrations, expectedFile] of [
     [
       "does not treat ambiguous suffix registration as ownership",
       "worker",
-      [registration("worker", workerSuffix()), registration("ops", workerSuffix())],
-      workerSuffix(2),
+      [
+        ["worker", "shared.worker.sqlite"],
+        ["ops", "shared.worker.sqlite"],
+      ],
+      "shared.worker.2.sqlite",
     ],
     [
       "does not assign an ambiguously registered unsuffixed target to the default",
       "main",
-      [registration("main", "shared.sqlite"), registration("ops", "shared.sqlite")],
+      [
+        ["main", "shared.sqlite"],
+        ["ops", "shared.sqlite"],
+      ],
       "shared.main.sqlite",
     ],
     [
       "searches past every occupied suffix for the first free target",
       "worker",
-      Array.from({ length: 33 }, (_, offset) => registration("ops", workerSuffix(offset + 1))),
-      workerSuffix(34),
+      Array.from({ length: 33 }, (_, offset) => {
+        const index = offset + 1;
+        const fileName = index === 1 ? "shared.worker.sqlite" : `shared.worker.${index}.sqlite`;
+        return ["ops", fileName] as const;
+      }),
+      "shared.worker.34.sqlite",
     ],
     [
       "ignores a sparse huge suffix when the conventional suffix is free",
       "worker",
-      [registration("ops", workerSuffix(2147483647))],
-      workerSuffix(),
+      [["ops", "shared.worker.2147483647.sqlite"]],
+      "shared.worker.sqlite",
     ],
     [
       "does not treat noncanonical numeric suffix spellings as occupied indices",
       "worker",
-      [registration("ops", workerSuffix()), registration("ops", "shared.worker.02.sqlite")],
-      workerSuffix(2),
+      [
+        ["ops", "shared.worker.sqlite"],
+        ["ops", "shared.worker.02.sqlite"],
+      ],
+      "shared.worker.2.sqlite",
     ],
   ] as const) {
     it(name, () => {
+      const storePath = path.join("tmp", "stores", "shared.json");
+      const registeredDatabases = registrations.map(([registeredAgentId, fileName]) => ({
+        agentId: registeredAgentId,
+        path: path.resolve("tmp", "stores", fileName),
+      }));
+
       expect(
-        targetPath(path.join("tmp", "stores", "shared.json"), {
+        resolveSqliteTargetFromSessionStorePath(storePath, {
           agentId,
           defaultAgentId: "main",
           registeredDatabases,
-        }),
-      ).toBe(stores(expectedFile));
+        }).path,
+      ).toBe(path.resolve("tmp", "stores", expectedFile));
     });
   }
 
-  it.runIf(process.platform !== "win32").each([
-    ["worker", "shared.worker.sqlite", "shared.worker.2.sqlite"],
-    ["main", "shared.sqlite", "shared.main.sqlite"],
-  ])("treats dangling %s target symlinks as occupied", (agentId, occupied, expected) => {
-    const dir = tempDirs.make("openclaw-session-symlink-");
+  it.runIf(process.platform !== "win32")("treats dangling suffix symlinks as occupied", () => {
+    const dir = tempDirs.make("openclaw-session-suffix-symlink-");
     const storePath = path.join(dir, "shared.json");
-    fs.symlinkSync(path.join(dir, "missing-target.sqlite"), path.join(dir, occupied));
-    expect(targetPath(storePath, { agentId, defaultAgentId: "main" })).toBe(
-      path.join(dir, expected),
-    );
+    fs.symlinkSync(path.join(dir, "missing-target.sqlite"), path.join(dir, "shared.worker.sqlite"));
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+      }).path,
+    ).toBe(path.join(dir, "shared.worker.2.sqlite"));
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not assign a dangling unsuffixed symlink to the default",
+    () => {
+      const dir = tempDirs.make("openclaw-session-unsuffixed-symlink-");
+      const storePath = path.join(dir, "shared.json");
+      fs.symlinkSync(path.join(dir, "missing-target.sqlite"), path.join(dir, "shared.sqlite"));
+
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "main",
+          defaultAgentId: "main",
+        }).path,
+      ).toBe(path.join(dir, "shared.main.sqlite"));
+    },
+  );
 
   it("propagates non-missing target-directory inspection errors", () => {
     const dir = tempDirs.make("openclaw-session-suffix-inspection-");
@@ -219,7 +311,7 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     fs.writeFileSync(blocker, "blocked\n");
 
     expect(() =>
-      resolveTarget(path.join(blocker, "shared.json"), {
+      resolveSqliteTargetFromSessionStorePath(path.join(blocker, "shared.json"), {
         agentId: "worker",
         defaultAgentId: "main",
       }),
@@ -233,7 +325,7 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       const storePath = path.join(dir, `invalid\0.${extension}`);
 
       expect(() =>
-        resolveTarget(storePath, {
+        resolveSqliteTargetFromSessionStorePath(storePath, {
           registeredDatabases: [
             { agentId: "main", path: path.join(dir, "invalid\0.sqlite") },
             { agentId: "main", path: path.join(dir, "invalid\0.main.sqlite") },
@@ -243,4 +335,15 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
       ).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
     },
   );
+
+  it("keeps shared custom sessions.json targets distinct by agent", () => {
+    const storePath = path.join("tmp", "stores", "sessions.json");
+
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "openclaw-agent.sqlite"),
+    });
+    expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" })).toMatchObject({
+      path: path.resolve("tmp", "stores", "openclaw-agent.work.sqlite"),
+    });
+  });
 });

@@ -1,6 +1,5 @@
 // Real HTTP/SSRF/NDJSON proof for #122513 and the delta shape used by tool-call-repair.
 import { createServer, type Server } from "node:http";
-import { text } from "node:stream/consumers";
 import type { Tool } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
@@ -33,24 +32,32 @@ afterEach(async () => {
 type CapturedRequest = { tools?: Array<{ function?: { parameters?: unknown } }> };
 async function streamRecords(records: readonly unknown[], tools: Tool[]) {
   const captured = Promise.withResolvers<CapturedRequest>();
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => {
     if (!req.url?.endsWith("/api/chat")) {
       res.writeHead(404).end();
       return;
     }
-    captured.resolve(JSON.parse(await text(req)));
-    res.writeHead(200, { "content-type": "application/x-ndjson" });
-    for (const record of records) {
-      res.write(JSON.stringify(record) + "\n");
-    }
-    res.end();
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      captured.resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      for (const record of records) {
+        res.write(JSON.stringify(record) + "\n");
+      }
+      res.end();
+    });
   });
   servers.push(server);
   const port = await listenOnLoopback(server);
   const baseUrl = `http://127.0.0.1:${port}`;
   const stream = await createOllamaStreamFn(baseUrl)(
     {
-      ...createModel("proof-model", "proof-model", { reasoning: true }),
+      ...createModel("proof-model", "proof-model", {
+        reasoning: true,
+        contextWindow: 65536,
+        maxTokens: 1024,
+      }),
       api: "ollama",
       provider: "ollama",
       baseUrl,
@@ -63,6 +70,8 @@ async function streamRecords(records: readonly unknown[], tools: Tool[]) {
 
 async function runThroughTransport(chunks: readonly string[], tools: Tool[]) {
   const record = (content: string, done = false) => ({
+    model: "proof-model",
+    created_at: "2026-01-01T00:00:00Z",
     message: { role: "assistant", content },
     done,
     ...(done ? { done_reason: "stop", prompt_eval_count: 1, eval_count: 1 } : {}),
@@ -71,16 +80,35 @@ async function runThroughTransport(chunks: readonly string[], tools: Tool[]) {
     [...chunks.map((content) => record(content)), record("", true)],
     tools,
   );
-  const events = await Array.fromAsync(stream);
-  const deltas = events.filter((event) => event.type === "text_delta");
-  const content = events.flatMap((event) => (event.type === "done" ? event.message.content : []));
-  return {
-    deltaText: deltas.map((event) => event.delta).join(""),
-    doneText: content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
-    errors: events.flatMap((event) => (event.type === "error" ? [event.error] : [])),
-    partialCarryingDeltas: deltas.filter((event) => event.partial !== undefined).length,
-    toolCallNames: content.flatMap((block) => (block.type === "toolCall" ? [block.name] : [])),
+  const run = {
+    deltaText: "",
+    doneText: "",
+    errors: Array<unknown>(),
+    partialCarryingDeltas: 0,
+    toolCallNames: Array<string>(),
   };
+  for await (const event of stream) {
+    if (event.type === "text_delta") {
+      run.deltaText += event.delta;
+      if ("partial" in event && event.partial !== undefined) {
+        run.partialCarryingDeltas += 1;
+      }
+    }
+    if (event.type === "error") {
+      run.errors.push(event.error);
+    }
+    if (event.type === "done") {
+      for (const block of event.message.content) {
+        if (block.type === "text") {
+          run.doneText += block.text;
+        }
+        if (block.type === "toolCall") {
+          run.toolCallNames.push(block.name);
+        }
+      }
+    }
+  }
+  return run;
 }
 
 const readTool = {
@@ -152,20 +180,46 @@ const toolCallDispatcherTool = {
     required: ["id"],
     properties: {
       id: { type: "string", description: "Tool search result id or tool name." },
-      args: { type: "object", patternProperties: { "^.*$": {} }, description: "Tool input." },
+      args: {
+        type: "object",
+        patternProperties: { "^.*$": {} },
+        description: "Tool input.",
+      },
     },
   },
 };
 
-it.each([
-  [freeFormExecTool, { command: "uname -r" }],
-  [toolCallDispatcherTool, { id: "openclaw:core:exec", args: { command: "uname -r" } }],
-] as const)(
-  "preserves %s free-form schema and populated arguments over NDJSON (#157039)",
-  async (tool, args) => {
-    const schema = structuredClone(tool.parameters);
-    const { request, toolCall } = await runToolCallScenario(tool, args);
-    expect(request.tools?.[0]?.function?.parameters).toEqual(schema);
-    expect(toolCall).toMatchObject({ name: tool.name, arguments: args });
-  },
-);
+describe("free-form object tool schema over the real Ollama NDJSON transport (#157039)", () => {
+  it("sends the free-form schema unmodified and returns populated tool call arguments", async () => {
+    const toolCallArguments = { command: "uname -r" };
+    const { request, toolCall } = await runToolCallScenario(freeFormExecTool, toolCallArguments);
+
+    expect(request.tools?.[0]?.function?.parameters).toEqual({
+      type: "object",
+      additionalProperties: true,
+    });
+
+    expect(toolCall?.name).toBe("exec");
+    expect(toolCall?.arguments).toEqual(toolCallArguments);
+  });
+
+  it("keeps the real Tool Search dispatcher's nested patternProperties args free-form", async () => {
+    const toolCallArguments = { id: "openclaw:core:exec", args: { command: "uname -r" } };
+    const { request, toolCall } = await runToolCallScenario(
+      toolCallDispatcherTool,
+      toolCallArguments,
+    );
+
+    const parameters = request.tools?.[0]?.function?.parameters as {
+      properties?: { args?: Record<string, unknown> };
+    };
+    expect(parameters.properties?.args).toStrictEqual({
+      type: "object",
+      patternProperties: { "^.*$": {} },
+      description: "Tool input.",
+    });
+
+    expect(toolCall?.name).toBe("dispatch_action");
+    expect(toolCall?.arguments).toEqual(toolCallArguments);
+  });
+});

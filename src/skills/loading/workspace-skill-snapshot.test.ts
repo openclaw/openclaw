@@ -1,20 +1,45 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync, createPathResolutionEnv } from "../../test-utils/env.js";
+import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { useLoadingFixture } from "./loading.test-support.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "../test-support/home-env.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-const fixture = useLoadingFixture("openclaw-skills-snapshot-suite-", "state");
+const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
-const isolatedConfig = { plugins: { enabled: false } };
+let tempHome: TempHomeEnv | null = null;
+let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
+
+beforeAll(async () => {
+  await fixtureSuite.setup();
+  tempHome = await createTempHomeEnv("openclaw-skills-snapshot-home-");
+  skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
+});
+
+afterAll(async () => {
+  if (skillsHomeEnv) {
+    await restoreMockSkillsHomeEnv(skillsHomeEnv);
+    skillsHomeEnv = null;
+  }
+  if (tempHome) {
+    await tempHome.restore();
+    tempHome = null;
+  }
+  await fixtureSuite.cleanup();
+});
 
 async function withWorkspaceHome<T>(workspaceDir: string, cb: () => Promise<T>): Promise<T> {
   return withEnvAsync(createPathResolutionEnv(workspaceDir, { PATH: "" }), cb);
@@ -41,34 +66,45 @@ const CUSTODIAN_SKILL_NAMES = [
 const write = (dir: string, name: string, description: string, body?: string) =>
   writeSkill({ dir: path.join(dir, name), name, description, body });
 const resolveSnapshot = (params: Parameters<typeof resolveReusableWorkspaceSkillSnapshot>[0]) =>
-  withWorkspaceHome(params.workspaceDir, () =>
-    resolveReusableWorkspaceSkillSnapshot({ config: isolatedConfig, watch: false, ...params }),
-  );
+  withWorkspaceHome(params.workspaceDir, () => resolveReusableWorkspaceSkillSnapshot(params));
 const resolveRuntime = (params: Parameters<typeof prepareRuntimeSkillEntries>[0]) =>
   withWorkspaceHome(params.skillsAnchorWorkspace, () => prepareRuntimeSkillEntries(params));
 
 async function createMultiRootFixture() {
-  const agentWorkspaceDir = await fixture.createDir("agent-workspace");
-  const executionWorkspaceDir = await fixture.createDir("execution-workspace");
-  await write(path.join(agentWorkspaceDir, "skills"), "middle", "Agent middle");
-  await write(
-    path.join(executionWorkspaceDir, ".agents", "skills"),
-    "project-only",
-    "Project skill",
-    "# Project project-only instructions\n",
-  );
+  const agentWorkspaceDir = await fixtureSuite.createCaseDir("agent-workspace");
+  const executionWorkspaceDir = await fixtureSuite.createCaseDir("execution-workspace");
+  for (const [workspaceDir, name, description] of [
+    [agentWorkspaceDir, "middle", "Agent middle"],
+    [agentWorkspaceDir, "shared", "Agent shared"],
+    [executionWorkspaceDir, "aardvark", "Execution aardvark"],
+    [executionWorkspaceDir, "shared", "Execution shared"],
+    [executionWorkspaceDir, "zulu", "Execution zulu"],
+  ] as const) {
+    await write(path.join(workspaceDir, "skills"), name, description);
+  }
+  for (const name of ["aardvark", "project-only", "shared"]) {
+    await write(
+      path.join(executionWorkspaceDir, ".agents", "skills"),
+      name,
+      `Project ${name}`,
+      `# Project ${name} instructions\n`,
+    );
+  }
+  const skillFilter = ["aardvark", "middle", "project-only", "shared", "zulu"];
   const { snapshot } = await resolveSnapshot({
     workspaceDir: agentWorkspaceDir,
     executionWorkspaceDir,
-    skillFilter: ["middle", "project-only"],
+    config: { plugins: { enabled: false } },
+    skillFilter,
+    watch: false,
     snapshotVersion: 1,
   });
-  return { agentWorkspaceDir, executionWorkspaceDir, snapshot };
+  return { agentWorkspaceDir, executionWorkspaceDir, skillFilter, snapshot };
 }
 
 describe("buildSkillSnapshot", () => {
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
-    const workspaceDir = await fixture.createDir("custodian-gate");
+    const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {
       await write(path.join(workspaceDir, "custodian-skills"), name, `Custodian ${name}`);
     }
@@ -88,6 +124,7 @@ describe("buildSkillSnapshot", () => {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
       });
     const firstCustodianSnapshot = await snapshotFor("ops");
+    const secondCustodianSnapshot = await snapshotFor("ops");
     const writerSnapshot = await snapshotFor("writer");
     const custodianStatus = statusFor("ops");
     const writerStatus = statusFor("writer");
@@ -96,6 +133,8 @@ describe("buildSkillSnapshot", () => {
     expect(firstCustodianSnapshot.resolvedSkills?.map((skill) => skill.source)).toEqual(
       CUSTODIAN_SKILL_NAMES.map(() => "openclaw-custodian"),
     );
+    expect(secondCustodianSnapshot.skills).toEqual(firstCustodianSnapshot.skills);
+    expect(secondCustodianSnapshot.prompt).toBe(firstCustodianSnapshot.prompt);
     expect(writerSnapshot.skills).toEqual([]);
     expect(writerSnapshot.prompt).toBe("");
     expect(
@@ -116,19 +155,17 @@ describe("buildSkillSnapshot", () => {
       delete coldSnapshot.resolvedSkills;
       const fallback = await resolveRuntime({
         skillsAnchorWorkspace: agentWorkspaceDir,
-        config: isolatedConfig,
+        config: { plugins: { enabled: false } },
         skillsSnapshot: coldSnapshot,
         executionWorkspaceDir,
       });
 
-      expect(fallback.skillEntries.map((entry) => entry.skill.name)).toEqual([
-        "middle",
-        "project-only",
-      ]);
-      expect(fallback.skillEntries.map((entry) => entry.skill.filePath)).toEqual([
-        path.join(agentWorkspaceDir, "skills", "middle", "SKILL.md"),
-        path.join(executionWorkspaceDir, ".agents", "skills", "project-only", "SKILL.md"),
-      ]);
+      expect(fallback.skillEntries.map((entry) => entry.skill.name)).toEqual(
+        snapshot.skills.map((skill) => skill.name),
+      );
+      expect(fallback.skillEntries.map((entry) => entry.skill.filePath)).toEqual(
+        snapshot.resolvedSkills?.map((skill) => skill.filePath),
+      );
       const codeModeSkills = resolveCodeModeSkills({
         skillsPrompt: snapshot.prompt,
         candidates: fallback.skillEntries.map((entry) => entry.skill),
@@ -147,9 +184,9 @@ describe("buildSkillSnapshot", () => {
   ])(
     "honors session skill policy before agent filtering (split=$split, override=$override)",
     async ({ split, override }) => {
-      const workspaceDir = await fixture.createDir("session-policy-agent");
+      const workspaceDir = await fixtureSuite.createCaseDir("session-policy-agent");
       const executionWorkspaceDir = split
-        ? await fixture.createDir("session-policy-execution")
+        ? await fixtureSuite.createCaseDir("session-policy-execution")
         : workspaceDir;
       await write(
         path.join(executionWorkspaceDir, ".agents", "skills"),
@@ -174,29 +211,36 @@ describe("buildSkillSnapshot", () => {
     },
   );
 
-  it("confines sandbox rebuilds to materialized skills despite hydrated host entries", async () => {
-    const { executionWorkspaceDir, snapshot } = await createMultiRootFixture();
-    const workspaceDir = await fixture.createDir("sandbox-materialized");
-    const skillDir = path.join(workspaceDir, "skills", "middle");
-    await writeSkill({ dir: skillDir, name: "middle", description: "Materialized instructions" });
-    const runtime = await resolveRuntime({
-      skillsAnchorWorkspace: workspaceDir,
-      executionWorkspaceDir,
-      config: isolatedConfig,
-      skillsSnapshot: snapshot,
-      sandbox: { enabled: true, skillsWorkspaceDir: workspaceDir },
-    });
-    const entries = await runtime.loadSkillEntries();
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["middle"]);
-    expect(entries[0]?.skill).toMatchObject({
-      filePath: path.join(skillDir, "SKILL.md"),
-      description: "Materialized instructions",
-    });
-  });
+  it.each([false, true])(
+    "confines sandbox rebuilds to materialized skills (hydrated=%s)",
+    async (hydrated) => {
+      const { executionWorkspaceDir, snapshot } = await createMultiRootFixture();
+      const workspaceDir = await fixtureSuite.createCaseDir("sandbox-materialized");
+      const skillDir = path.join(workspaceDir, "skills", "middle");
+      await writeSkill({ dir: skillDir, name: "middle", description: "Materialized instructions" });
+      const skillsSnapshot = { ...snapshot };
+      if (!hydrated) {
+        delete skillsSnapshot.resolvedSkills;
+      }
+      const runtime = await resolveRuntime({
+        skillsAnchorWorkspace: workspaceDir,
+        executionWorkspaceDir,
+        config: { plugins: { enabled: false } },
+        skillsSnapshot,
+        sandbox: { enabled: true, skillsWorkspaceDir: workspaceDir },
+      });
+      const entries = await runtime.loadSkillEntries();
+      expect(entries.map((entry) => entry.skill.name)).toEqual(["middle"]);
+      expect(entries[0]?.skill).toMatchObject({
+        filePath: path.join(skillDir, "SKILL.md"),
+        description: "Materialized instructions",
+      });
+    },
+  );
 
   it("invalidates execution project skills without escaping the selected workspace", async () => {
-    const agentWorkspaceDir = await fixture.createDir("agent-root");
-    const repo = await fixture.createDir("repository");
+    const agentWorkspaceDir = await fixtureSuite.createCaseDir("agent-root");
+    const repo = await fixtureSuite.createCaseDir("repository");
     const executionWorkspaceDir = path.join(repo, "packages", "app");
     const skillDir = path.join(executionWorkspaceDir, ".agents", "skills", "project-only");
     await write(path.join(repo, ".agents", "skills"), "ancestor", "Not selected");
@@ -209,8 +253,9 @@ describe("buildSkillSnapshot", () => {
     const params = {
       workspaceDir: agentWorkspaceDir,
       executionWorkspaceDir,
-      config: isolatedConfig,
+      config: { plugins: { enabled: false } },
       skillFilter: ["ancestor", "project-only"],
+      watch: false,
     };
     const first = await resolveSnapshot(params);
     expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["project-only"]);
@@ -223,15 +268,18 @@ describe("buildSkillSnapshot", () => {
     const sandbox = await resolveRuntime({
       skillsAnchorWorkspace: agentWorkspaceDir,
       executionWorkspaceDir,
-      config: isolatedConfig,
+      config: { plugins: { enabled: false } },
       sandbox: { enabled: true },
     });
     expect(sandbox.skillEntries).toEqual([]);
   });
 
   it("keeps symlinked compatibility skills out of isolated session snapshots", async () => {
-    const home = await fs.realpath(fixture.home);
-    const workspaceDir = await fixture.createDir("workspace");
+    if (!tempHome) {
+      throw new Error("temporary home is unavailable");
+    }
+    const home = await fs.realpath(tempHome.home);
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const compatibilitySkillsDir = path.join(home, ".claude", "skills");
     const personalSkillDir = path.join(compatibilitySkillsDir, "personal-compat");
     await write(compatibilitySkillsDir, "personal-compat", "Personal compatibility skill");

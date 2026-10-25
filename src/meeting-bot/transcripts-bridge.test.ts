@@ -18,6 +18,7 @@ import type { MeetingSessionRecord } from "./session-types.js";
 import {
   createMeetingTranscriptSourceProvider,
   type MeetingDurableTranscriptBridge,
+  type MeetingTranscriptBridgeLogger,
 } from "./transcripts-bridge.js";
 import { createMeetingDurableTranscriptBridge } from "./transcripts-bridge.runtime.js";
 
@@ -25,6 +26,7 @@ let stateDir: string;
 let current: MeetingSessionRecord<"chrome", "agent">;
 let bridge: MeetingDurableTranscriptBridge;
 let store: TranscriptsStore;
+let logger: MeetingTranscriptBridgeLogger;
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
@@ -42,6 +44,7 @@ beforeEach(async () => {
     realtime: { enabled: true, toolPolicy: "safe-read-only" },
     notes: [],
   };
+  logger = { warn: vi.fn() };
   bridge = createBridge();
   store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -61,7 +64,7 @@ afterEach(async () => {
 
 function createBridge(config?: { enabled: boolean }) {
   return createMeetingDurableTranscriptBridge({
-    logger: { warn: vi.fn() },
+    logger,
     options: { providerId: "meeting", providerName: "Meeting", stateDir, config },
   });
 }
@@ -149,6 +152,39 @@ it("retires simultaneous tool subscribers when meeting metadata finalization fai
   expect(stopSource).toHaveBeenCalledOnce();
 });
 
+it("replays stored lines to an attached provider and streams new lines in order", async () => {
+  const onUtterance = vi.fn();
+  const request = attachment("external-1", { onUtterance });
+  await start();
+  await bridge.ingest(current, [{ speaker: "Avery", text: "First line" }]);
+  await expect(bridge.attach(current, request)).resolves.toMatchObject({ ok: true });
+  await bridge.ingest(current, [{ speaker: "Blake", text: "Second line" }]);
+  await expect(
+    bridge.detach({
+      ...request.session,
+      source: { ...request.session.source, agentId: "another-agent" },
+    }),
+  ).resolves.toMatchObject({ ok: false });
+  await expect(bridge.detach(request.session)).resolves.toMatchObject({ ok: true });
+  const replayed = vi.fn();
+  await expect(
+    bridge.attach(current, { ...request, onUtterance: replayed }),
+  ).resolves.toMatchObject({ ok: true });
+  await bridge.stop(current, async () => {});
+
+  expect(onUtterance.mock.calls.map(([utterance]) => utterance)).toMatchObject([
+    { sessionId: "external-1", speaker: { label: "Avery" }, text: "First line" },
+    { sessionId: "external-1", speaker: { label: "Blake" }, text: "Second line" },
+  ]);
+  expect(replayed.mock.calls.map(([utterance]) => utterance.id)).toEqual(
+    onUtterance.mock.calls.map(([utterance]) => utterance.id),
+  );
+  const stored = await store.readSession(current.id);
+  expect(await store.readSummary(stored!)).toMatchObject({
+    summary: { utteranceCount: 2 },
+  });
+});
+
 it("honors the existing global transcripts opt-out", async () => {
   bridge = createBridge({ enabled: false });
   await start();
@@ -233,6 +269,23 @@ it("rejects attachments once finalization begins", async () => {
   await expect(stopping).resolves.toBe(true);
 });
 
+it("drains subscriber delivery before detaching", async () => {
+  const { promise: delivery, resolve: releaseDelivery } = createDeferredCore();
+  const onStatus = vi.fn(async () => {});
+  await start();
+  const request = attachment("external-drain", { onStatus, onUtterance: () => delivery });
+  await bridge.attach(current, request);
+  const ingesting = bridge.ingest(current, [{ text: "pending delivery" }]);
+  const detaching = bridge.detach(request.session);
+  await Promise.resolve();
+  expect(onStatus).toHaveBeenCalledTimes(1);
+  releaseDelivery();
+  await ingesting;
+  await expect(detaching).resolves.toMatchObject({ ok: true });
+
+  expect(onStatus).toHaveBeenCalledTimes(2);
+});
+
 it("does not let terminal subscriber notification block finalization", async () => {
   const onStatus = vi
     .fn()
@@ -248,44 +301,18 @@ it("does not let terminal subscriber notification block finalization", async () 
   expect(onStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each(["live delivery", "attachment replay"])("drains %s before detaching", async (phase) => {
-  const { promise, resolve } = createDeferredCore();
-  const onUtterance = vi.fn(async () => await promise);
-  const onStatus = vi.fn();
+it("queues detach behind a pending attachment replay", async () => {
+  const { promise: replay, resolve: releaseReplay } = createDeferredCore();
+  const onUtterance = vi.fn(async () => await replay);
   await start();
-  const replay = phase === "attachment replay";
-  if (replay) {
-    await bridge.ingest(current, [{ text: "existing row" }]);
-  }
-  const request = attachment("external-pending", { onUtterance, onStatus });
+  await bridge.ingest(current, [{ text: "existing row" }]);
+  const request = attachment("external-pending", { onUtterance });
+
   const attaching = bridge.attach(current, request);
-  if (!replay) {
-    await attaching;
-  }
-  await expect(
-    bridge.detach({
-      ...request.session,
-      source: { ...request.session.source, agentId: "another-agent" },
-    }),
-  ).resolves.toMatchObject({ ok: false });
-  const ingesting = replay ? undefined : bridge.ingest(current, [{ text: "pending delivery" }]);
   const detaching = bridge.detach(request.session);
-  await Promise.resolve();
-  expect(onStatus).toHaveBeenCalledTimes(replay ? 0 : 1);
-  resolve();
+  releaseReplay();
   await expect(attaching).resolves.toMatchObject({ ok: true });
-  await ingesting;
   await expect(detaching).resolves.toMatchObject({ ok: true });
-  expect(onStatus).toHaveBeenCalledTimes(2);
-  const replayed = vi.fn();
-  await expect(
-    bridge.attach(current, { ...request, onUtterance: replayed }),
-  ).resolves.toMatchObject({ ok: true });
-  expect(replayed.mock.calls.map(([utterance]) => utterance.id)).toEqual(
-    onUtterance.mock.calls.map(([utterance]) => utterance.id),
-  );
-  expect(replayed.mock.calls[0]?.[0].sessionId).toBe("external-pending");
-  await expect(bridge.detach(request.session)).resolves.toMatchObject({ ok: true });
   await bridge.ingest(current, [{ text: "after detach" }]);
 
   expect(onUtterance).toHaveBeenCalledOnce();

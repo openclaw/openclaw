@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, matchFilter, type Event, type Filter } from "nostr-tools";
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
@@ -11,42 +11,106 @@ import {
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createBuzzRelayInfoFetchMock, relayMocks } from "./buzz-bus.test-helpers.js";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
+import type { ResolvedBuzzAccount } from "./types.js";
 
-const history = vi.hoisted(() => ({
+const relayMocks = vi.hoisted(() => ({
+  connect: vi.fn<() => Promise<void>>(),
+  auth: vi.fn<() => Promise<string>>(),
+  publish: vi.fn<(event: Event) => Promise<string>>(),
+  send: vi.fn<(message: string) => Promise<void>>(),
+  close: vi.fn(),
+  connected: true,
   storedEvents: [] as Event[],
   messageFilters: [] as Filter[],
+  dropSubscriptionReason: undefined as string | undefined,
 }));
 
+function matchesRelayFilter(event: Event, filter: Filter): boolean {
+  if (filter.kinds && !filter.kinds.includes(event.kind)) {
+    return false;
+  }
+  if (filter.authors && !filter.authors.includes(event.pubkey)) {
+    return false;
+  }
+  for (const [key, values] of Object.entries(filter)) {
+    if (!key.startsWith("#") || !Array.isArray(values)) {
+      continue;
+    }
+    const tagName = key.slice(1);
+    const tagValues = event.tags.filter((tag) => tag[0] === tagName).map((tag) => tag[1] ?? "");
+    if (!tagValues.some((value) => (values as string[]).includes(value))) {
+      return false;
+    }
+  }
+  if (filter.since !== undefined && event.created_at < filter.since) {
+    return false;
+  }
+  if (filter.until !== undefined && event.created_at > filter.until) {
+    return false;
+  }
+  return true;
+}
+
 function selectRelayEvents(filter: Filter): Event[] {
-  const matched = history.storedEvents
-    .filter((event) => matchFilter(filter, event))
+  const matched = relayMocks.storedEvents
+    .filter((event) => matchesRelayFilter(event, filter))
     .toSorted((left, right) => right.created_at - left.created_at);
   return filter.limit === undefined ? matched : matched.slice(0, filter.limit);
 }
 
 vi.mock("nostr-tools", async (importOriginal) => {
-  const { mockBuzzRelay } = await import("./buzz-bus.test-helpers.js");
   const actual = await importOriginal<typeof import("nostr-tools")>();
   return {
     ...actual,
-    ...mockBuzzRelay((filters, handlers) => {
-      for (const filter of filters) {
-        if (filter.kinds?.includes(9)) {
-          history.messageFilters.push(filter);
-        }
-        for (const event of selectRelayEvents(filter)) {
-          handlers.onevent(event);
-        }
+    Relay: class {
+      onauth?: (template: unknown) => Promise<unknown>;
+      idleSince: number | undefined;
+      ongoingOperations = 0;
+      get connected() {
+        return relayMocks.connected;
       }
-      queueMicrotask(() => handlers.oneose?.());
-      return {
-        id: `sub:${history.messageFilters.length}`,
-        close: vi.fn(),
-        closed: false,
-      };
-    }),
+      connect = relayMocks.connect;
+      auth = relayMocks.auth;
+      publish = relayMocks.publish;
+      send = relayMocks.send;
+      close = relayMocks.close;
+      scheduleIdleClose = vi.fn();
+
+      prepareSubscription(
+        filters: Filter[],
+        handlers: {
+          onevent: (event: Event) => void;
+          oneose?: () => void;
+          onclose: (reason: string) => void;
+        },
+      ) {
+        let carriesMessages = false;
+        for (const filter of filters) {
+          if (filter.kinds?.includes(9)) {
+            relayMocks.messageFilters.push(filter);
+            carriesMessages = true;
+          }
+          for (const event of selectRelayEvents(filter)) {
+            handlers.onevent(event);
+          }
+        }
+        queueMicrotask(() => handlers.oneose?.());
+        if (carriesMessages && relayMocks.dropSubscriptionReason) {
+          const reason = relayMocks.dropSubscriptionReason;
+          relayMocks.dropSubscriptionReason = undefined;
+          queueMicrotask(() => {
+            handlers.onclose(reason);
+          });
+        }
+        return {
+          id: `sub:${relayMocks.messageFilters.length}`,
+          close: vi.fn(),
+          closed: false,
+        };
+      }
+    },
   };
 });
 
@@ -71,7 +135,10 @@ import { setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
 
+const BUZZ_MESSAGE_KIND = 9;
+const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
 const ACCOUNT_ID = "default";
+const SECOND_ACCOUNT_ID = "second";
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const SECOND_CHANNEL_ID = "1b8f5c33-9a21-4d0e-8f77-2b6c1d4e5a90";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -85,9 +152,18 @@ const LOOKBACK_SECONDS = 24 * 60 * 60;
 const START_SECONDS = Math.floor(Date.now() / 1_000);
 
 let tempDir: string | undefined;
+let previousStateDir: string | undefined;
 let currentNowMs = START_SECONDS * 1_000;
 let handled: string[] = [];
 let gates = new Map<string, Promise<void>>();
+
+function nowSeconds(): number {
+  return Math.floor(currentNowMs / 1000);
+}
+
+function advanceSeconds(seconds: number): void {
+  currentNowMs += seconds * 1_000;
+}
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
   const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
@@ -96,10 +172,10 @@ function gateHandler(text: string): { settle: () => void; fail: (error: Error) =
 }
 
 function postRoomMessage(text: string, createdAt: number, channelId = CHANNEL_ID): void {
-  history.storedEvents.push(
+  relayMocks.storedEvents.push(
     finalizeEvent(
       {
-        kind: 9,
+        kind: BUZZ_MESSAGE_KIND,
         content: text,
         created_at: createdAt,
         tags: [["h", channelId]],
@@ -110,9 +186,9 @@ function postRoomMessage(text: string, createdAt: number, channelId = CHANNEL_ID
 }
 
 function publishRoomMembership(channelId: string): void {
-  history.storedEvents.push({
+  relayMocks.storedEvents.push({
     id: `membership-${channelId}`,
-    kind: 39_002,
+    kind: BUZZ_ROOM_MEMBERSHIP_KIND,
     pubkey: RELAY_PUBLIC_KEY,
     created_at: START_SECONDS - 3_600,
     content: "",
@@ -125,8 +201,8 @@ function publishRoomMembership(channelId: string): void {
   });
 }
 
-function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]) {
-  const cfg: OpenClawConfig = {
+function buildConfig(channelIds: string[]): OpenClawConfig {
+  return {
     channels: {
       buzz: {
         relayUrl: "wss://buzz.example.com",
@@ -134,24 +210,41 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]) {
         groups: Object.fromEntries(channelIds.map((channelId) => [channelId, {}])),
       },
     },
-  };
-  const account = resolveBuzzAccount({ cfg });
-  const abort = new AbortController();
-  const lifecycle = startBuzzGatewayAccount({
-    ...createStartAccountContext({ account, cfg, abortSignal: abort.signal }),
-    scheduler: createTestPluginServiceScheduler(),
-  });
-  return {
-    lifecycle,
-    stop: async () => {
-      abort.abort();
-      await lifecycle;
-    },
-  };
+  } as OpenClawConfig;
 }
 
-const waitForSettled = (predicate: () => boolean | Promise<boolean>) =>
-  vi.waitUntil(predicate, { interval: 10, timeout: 4_000 });
+function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
+  abort: AbortController;
+  lifecycle: Promise<void>;
+} {
+  const cfg = buildConfig(channelIds);
+  const account = resolveBuzzAccount({ cfg });
+  const abort = new AbortController();
+  const ctx = {
+    scheduler: createTestPluginServiceScheduler(),
+    cfg,
+    accountId: account.accountId,
+    account,
+    runtime: {},
+    abortSignal: abort.signal,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    getStatus: vi.fn(),
+    setStatus: vi.fn(),
+  } as unknown as ChannelGatewayContextV2<ResolvedBuzzAccount>;
+  return { abort, lifecycle: startBuzzGatewayAccount(ctx) };
+}
+
+async function waitForSettled(predicate: () => boolean | Promise<boolean>): Promise<void> {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    if (await predicate()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error("timed out waiting for the Buzz gateway to settle");
+}
 
 async function runGatewayProcess(
   params: { until?: () => boolean | Promise<boolean>; channelIds?: string[] } = {},
@@ -159,46 +252,53 @@ async function runGatewayProcess(
   const channelIds = params.channelIds ?? [CHANNEL_ID];
   const gatewayProcess = startGatewayProcess(channelIds);
   try {
-    await waitForSettled(() => history.messageFilters.length >= channelIds.length);
+    await waitForSettled(() => relayMocks.messageFilters.length >= channelIds.length);
     if (params.until) {
       await waitForSettled(params.until);
     }
   } finally {
-    await gatewayProcess.stop();
+    gatewayProcess.abort.abort();
+    await gatewayProcess.lifecycle;
   }
 }
 
 function roomSubscriptionSince(channelId = CHANNEL_ID): number {
-  const filter = history.messageFilters.find((entry) =>
+  const filter = relayMocks.messageFilters.find((entry) =>
     (entry["#h"] as string[] | undefined)?.includes(channelId),
   );
   expect(filter?.since).toBeTypeOf("number");
   return filter?.since as number;
 }
 
-function nextProcess(seconds = 600): void {
-  history.messageFilters.length = 0;
+async function readWatermark(channelId = CHANNEL_ID): Promise<number | undefined> {
+  const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+  return (await store.lookup(`room:${channelId}`))?.seconds;
+}
+
+function openProcessBoundary(): void {
+  relayMocks.messageFilters.length = 0;
   handled = [];
   gates = new Map();
-  currentNowMs += seconds * 1_000;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   currentNowMs = START_SECONDS * 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => currentNowMs);
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
   // openclaw-temp-dir: allow extension tests cannot import root test helpers.
   tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-coldstart-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  process.env.OPENCLAW_STATE_DIR = tempDir;
   handled = [];
   gates = new Map();
-  history.messageFilters.length = 0;
+  relayMocks.messageFilters.length = 0;
+  relayMocks.dropSubscriptionReason = undefined;
   relayMocks.connected = true;
   relayMocks.connect.mockResolvedValue();
   relayMocks.auth.mockResolvedValue("ok");
   relayMocks.publish.mockResolvedValue("");
   relayMocks.send.mockResolvedValue();
-  history.storedEvents = [];
+  relayMocks.storedEvents = [];
   publishRoomMembership(CHANNEL_ID);
   publishRoomMembership(SECOND_CHANNEL_ID);
   inboundMocks.handleBuzzInbound.mockImplementation(
@@ -229,7 +329,11 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  vi.unstubAllEnvs();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   if (tempDir) {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -241,12 +345,14 @@ describe("Buzz gateway cold-start recovery", () => {
     await runGatewayProcess();
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
 
-    nextProcess();
+    openProcessBoundary();
     postRoomMessage("live-msg", START_SECONDS + 200);
+    advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes("live-msg") });
 
-    nextProcess(7_200);
+    openProcessBoundary();
     postRoomMessage("outage-msg", START_SECONDS + 100);
+    advanceSeconds(7_200);
     await runGatewayProcess({ until: () => handled.includes("outage-msg") });
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
     expect(handled).toContain("outage-msg");
@@ -288,7 +394,7 @@ describe("Buzz gateway cold-start recovery", () => {
     };
 
     const first = await saturate(ACCOUNT_ID);
-    const second = await saturate("second");
+    const second = await saturate(SECOND_ACCOUNT_ID);
 
     expect(first.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
     expect(second.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
@@ -303,10 +409,11 @@ describe("Buzz gateway cold-start recovery", () => {
   it("keeps a room configured after the first start at the current time", async () => {
     await runGatewayProcess();
 
-    nextProcess();
+    openProcessBoundary();
     postRoomMessage("before-second-room-setup", START_SECONDS + 60, SECOND_CHANNEL_ID);
+    advanceSeconds(600);
     await runGatewayProcess({ channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID] });
-    expect(roomSubscriptionSince(SECOND_CHANNEL_ID)).toBe(START_SECONDS + 600);
+    expect(roomSubscriptionSince(SECOND_CHANNEL_ID)).toBe(nowSeconds());
     expect(handled).not.toContain("before-second-room-setup");
     expect(roomSubscriptionSince(CHANNEL_ID)).toBe(START_SECONDS);
   });
@@ -314,7 +421,7 @@ describe("Buzz gateway cold-start recovery", () => {
   it("recovers a replay message still queued when the process stops", async () => {
     await runGatewayProcess();
 
-    nextProcess();
+    openProcessBoundary();
     const queuedText = "queued-msg";
     postRoomMessage(queuedText, START_SECONDS + 100);
     gateHandler(queuedText);
@@ -324,17 +431,19 @@ describe("Buzz gateway cold-start recovery", () => {
       postRoomMessage(text, START_SECONDS + 200 + index);
       settlers.push(gateHandler(text));
     }
+    advanceSeconds(600);
     const gatewayProcess = startGatewayProcess();
     await waitForSettled(() => handled.length === 8);
     expect(handled).not.toContain(queuedText);
     for (const settler of settlers) {
       settler.settle();
     }
-    await gatewayProcess.stop();
-    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
-    expect(await store.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
+    gatewayProcess.abort.abort();
+    await gatewayProcess.lifecycle;
+    expect(await readWatermark()).toBe(START_SECONDS);
 
-    nextProcess();
+    openProcessBoundary();
+    advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes(queuedText) });
     expect(handled).toContain(queuedText);
   });
@@ -380,18 +489,21 @@ describe("Buzz gateway cold-start recovery", () => {
   it("retries a previously failed room message after a process restart", async () => {
     await runGatewayProcess();
 
-    nextProcess();
+    openProcessBoundary();
     postRoomMessage("fail-msg", START_SECONDS + 100);
     postRoomMessage("ok-msg", START_SECONDS + 200);
     const failing = gateHandler("fail-msg");
     const succeeding = gateHandler("ok-msg");
+    advanceSeconds(600);
     const gatewayProcess = startGatewayProcess();
     await waitForSettled(() => handled.includes("fail-msg") && handled.includes("ok-msg"));
     failing.fail(new Error("agent dispatch failed"));
     succeeding.settle();
-    await gatewayProcess.stop();
+    gatewayProcess.abort.abort();
+    await gatewayProcess.lifecycle;
 
-    nextProcess();
+    openProcessBoundary();
+    advanceSeconds(600);
     await runGatewayProcess({ until: () => handled.includes("fail-msg") });
     expect(roomSubscriptionSince()).toBe(START_SECONDS);
     expect(handled).toContain("fail-msg");

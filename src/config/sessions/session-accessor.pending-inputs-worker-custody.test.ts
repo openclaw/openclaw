@@ -18,11 +18,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWorkerWrite as runWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { prepareUserProfileCatalog as prepareProfiles } from "../../state/user-profile-list.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState as withState } from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessage as appendMessage,
@@ -32,7 +32,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources as bindInputs,
-  prepareForeignLiveSessionPendingInputEntries as prepareForeignInputs,
+  prepareForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs as listInputs,
   stageSessionPendingInput as stageInput,
   type SessionPendingInputReceipt,
@@ -52,22 +52,6 @@ function message(runId: string, content: string): PersistedUserTurnMessage {
 async function finish(receipt: SessionPendingInputReceipt | undefined) {
   receipt?.finish("interrupted");
   await receipt?.settled?.();
-}
-async function createReadOnlySession(
-  scope: Parameters<typeof upsertEntry>[0] & { sessionId: string },
-) {
-  await upsertEntry(scope, {
-    sessionId: scope.sessionId,
-    updatedAt: 1,
-    visibility: "read-only",
-    createdActor: { type: "human", source: "profile", id: "another-profile" },
-  });
-}
-async function expectSettledInput(scope: Parameters<typeof readTranscript>[0], content: unknown) {
-  expect(await readTranscript(scope)).toContainEqual(
-    expect.objectContaining({ message: expect.objectContaining({ content }) }),
-  );
-  expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
 }
 function authorizedInput(
   authorization: NonNullable<Awaited<ReturnType<typeof authorizeMutation>>["authorization"]>,
@@ -133,11 +117,13 @@ describe("accepted input worker custody", () => {
     expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
     const workerScope = { ...scope, storePath: custody.facts.databasePath };
-    const readAlias = await prepareForeignInputs(scope);
-    const readCanonical = await prepareForeignInputs(workerScope);
+    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
+    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
     expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
     expect(readCanonical()).toEqual(readAlias());
-    expect(await receipt.run(async () => (await prepareForeignInputs(scope))())).toEqual(new Map());
+    expect(
+      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
+    ).toEqual(new Map());
     const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
       appendSync(workerScope, { message: receipt!.message }),
     );
@@ -149,65 +135,81 @@ describe("accepted input worker custody", () => {
     await receipt.settled?.();
     receipt = undefined;
 
-    await expectSettledInput(scope, input.content);
+    expect(await readTranscript(scope)).toContainEqual(
+      expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
+    );
+    expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
   });
 
   it("appends and finishes pending input through the memory session actor", async () => {
-    await withState({ scenario: "minimal", prepareProfileCatalog: true }, async ({ env }) => {
-      const scope = {
-        agentId: "incognito-agent",
-        env,
-        sessionId: "incognito-session",
-        sessionKey: "agent:incognito-agent:dashboard:incognito-pending-input",
-      };
-      await upsertEntry(scope, { incognito: true, sessionId: scope.sessionId, updatedAt: 1 });
-      const cfg = { ...rolePolicyConfig(), agents: { entries: { "incognito-agent": {} } } };
-      const client = roleClient("view", "incognito-custody");
-      using _ = { [Symbol.dispose]: (await prepareProfiles({ env })).release };
-      client.connect.scopes = ["operator.admin"];
-      const authorization = await authorize(scope, client, cfg);
-      const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
-      try {
-        receipt = await stageInput(scope, input);
-        const admitted = receipt;
-        assert(admitted?.runAsync, "Expected incognito pending input custody");
-        const readForeign = await prepareForeignInputs(scope);
-        const held = new Map([[admitted.inputId, input.message.idempotencyKey]]);
-        expect(readForeign()).toEqual(held);
-        await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-        let effects = 0;
-        await expect(
-          admitted.runAsync(() => {
-            effects++;
-            return appendMessage(scope, { message: admitted.message });
-          }),
-        ).resolves.toMatchObject({ appended: true });
-        expect(readForeign()).toEqual(held);
-        client.connect.scopes = ["operator.read", "operator.write"];
-        await expect(
-          admitted.runAsync(() => {
-            effects++;
-          }),
-        ).rejects.toThrow("was not found");
-        expect(effects).toBe(1);
-        // Revoked execution does not let another turn take still-held input.
-        expect(readForeign()).toEqual(held);
-        admitted.finish("cancelled");
-        expect(readForeign()).toEqual(new Map());
-        await admitted.settled?.();
-        receipt = undefined;
+    await withOpenClawTestState(
+      { scenario: "minimal", prepareProfileCatalog: true },
+      async ({ env }) => {
+        const scope = {
+          agentId: "incognito-agent",
+          env,
+          sessionId: "incognito-session",
+          sessionKey: "agent:incognito-agent:dashboard:incognito-pending-input",
+        };
+        await upsertEntry(scope, { incognito: true, sessionId: scope.sessionId, updatedAt: 1 });
+        const cfg = { ...rolePolicyConfig(), agents: { entries: { "incognito-agent": {} } } };
+        const client = roleClient("view", "incognito-custody");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
+        client.connect.scopes = ["operator.admin"];
+        const authorization = await authorize(scope, client, cfg);
+        const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
+        try {
+          receipt = await stageInput(scope, input);
+          const admitted = receipt;
+          assert(admitted?.runAsync, "Expected incognito pending input custody");
+          const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
+          await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+          let effects = 0;
+          await expect(
+            admitted.runAsync(() => {
+              effects++;
+              return appendMessage(scope, { message: admitted.message });
+            }),
+          ).resolves.toMatchObject({ appended: true });
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
+          client.connect.scopes = ["operator.read", "operator.write"];
+          await expect(
+            admitted.runAsync(() => {
+              effects++;
+            }),
+          ).rejects.toThrow("was not found");
+          expect(effects).toBe(1);
+          // Revoked execution does not let another turn take still-held input.
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
+          admitted.finish("cancelled");
+          expect(readForeign()).toEqual(new Map());
+          await admitted.settled?.();
+          receipt = undefined;
 
-        await expectSettledInput(scope, input.message.content);
-      } finally {
-        await finish(receipt);
-        receipt = undefined;
-      }
-    });
+          expect(await readTranscript(scope)).toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ content: input.message.content }),
+            }),
+          );
+          expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
+        } finally {
+          await finish(receipt);
+          receipt = undefined;
+        }
+      },
+    );
   });
 });
 
 it("refreshes every collected source after a non-revoking profile change", async () => {
-  await withState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     setRuntimeConfigSnapshot(cfg);
     const scope = {
@@ -217,7 +219,12 @@ it("refreshes every collected source after a non-revoking profile change", async
     };
     const first = ensureProfileForEmail("collected-first@example.test");
     const second = ensureProfileForEmail("collected-second@example.test");
-    await createReadOnlySession(scope);
+    await upsertEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "another-profile" },
+    });
     const receipts: SessionPendingInputReceipt[] = [];
     try {
       for (const [index, profile] of [first, second].entries()) {
@@ -252,7 +259,12 @@ it("refreshes every collected source after a non-revoking profile change", async
       ).rejects.toThrow("session is read-only");
       expect(executed).toBe(1);
     } finally {
-      await Promise.all(receipts.map(finish));
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+      }
+      await Promise.all(
+        receipts.flatMap((receipt) => (receipt.settled ? [receipt.settled()] : [])),
+      );
     }
   });
 });
@@ -260,7 +272,7 @@ it("refreshes every collected source after a non-revoking profile change", async
 it.each(["turn", "locked"] as const)(
   "keeps staged input and %s persistence under fresh authority without caller session SQL",
   async (writer) => {
-    await withState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
       const client = roleClient("view", "custody-member");
@@ -270,7 +282,12 @@ it.each(["turn", "locked"] as const)(
         sessionKey: "agent:main:prepared-custody",
         sessionId: "custody-session",
       };
-      await createReadOnlySession(scope);
+      await upsertEntry(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        visibility: "read-only",
+        createdActor: { type: "human", source: "profile", id: "another-profile" },
+      });
       await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
       const authorization = await authorize(scope, client, cfg);
       const queries: string[] = [];
@@ -307,7 +324,7 @@ it.each(["turn", "locked"] as const)(
         const run = <T>(operation: () => T) =>
           admitted!.runAsync ? admitted!.runAsync(operation) : admitted!.run(operation);
         const timing: StoreWriterTiming = {};
-        await run(() => runWorkerWrite(scope, async () => {}, timing));
+        await run(() => runOpenClawAgentWorkerWrite(scope, async () => {}, timing));
         expect(timing.reentrant).toBe(false);
         expect(
           await run(() =>

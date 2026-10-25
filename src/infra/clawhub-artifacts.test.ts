@@ -25,11 +25,14 @@ const digest = (algorithm: string, encoding: "hex" | "base64" = "hex") =>
   createHash(algorithm).update(bytes).digest(encoding);
 
 type TempWorkspace = Awaited<ReturnType<typeof privateTempWorkspace.tempWorkspace>>;
+type ObservedTempWorkspace = Omit<TempWorkspace, "cleanup"> & {
+  cleanup: ReturnType<typeof vi.fn<TempWorkspace["cleanup"]>>;
+};
 
 async function observeTempWorkspace(params: { cleanupFailure?: Error } = {}) {
   const root = await tempDirs.make("openclaw-clawhub-archive-");
   const createWorkspace = privateTempWorkspace.tempWorkspace;
-  let workspace: TempWorkspace | undefined;
+  let workspace: ObservedTempWorkspace | undefined;
   vi.spyOn(privateTempWorkspace, "tempWorkspace").mockImplementation(async (options) => {
     const ownedWorkspace = await createWorkspace({ ...options, rootDir: root });
     workspace = {
@@ -47,7 +50,7 @@ async function observeTempWorkspace(params: { cleanupFailure?: Error } = {}) {
 
   return {
     root,
-    workspace(): TempWorkspace {
+    workspace(): ObservedTempWorkspace {
       if (!workspace) {
         throw new Error("archive acquisition did not create a temporary workspace");
       }
@@ -163,6 +166,30 @@ describe("clawhub artifacts", () => {
     expect(normalizeClawHubSha256Hex("not-a-hash")).toBeNull();
   });
 
+  it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
+    const sha256Hex = digest("sha256");
+    const request = captureClawHubResponse(() =>
+      archiveResponse({
+        "content-type": "application/octet-stream",
+        "X-ClawHub-Artifact-Sha256": sha256Hex,
+      }),
+    );
+    const archive = await downloadClawHubPackageArchive(clawpackOptions);
+
+    await withArchive(archive, async () => {
+      expect(request.url().pathname).toBe("/api/v1/packages/demo/versions/1.2.3/artifact/download");
+      expect(path.basename(archive.archivePath)).toBe("demo-1.2.3.tgz");
+      expect(archive).toMatchObject({
+        artifact: "clawpack",
+        sha256Hex,
+        clawpackHeaderSha256: sha256Hex,
+        npmIntegrity: expect.stringMatching(/^sha512-/),
+        npmShasum: digest("sha1"),
+      });
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
+    });
+  });
+
   it("rejects ClawPack package artifacts when the declared digest does not match the bytes", async () => {
     await expect(
       downloadPackageArchive(
@@ -200,21 +227,17 @@ describe("clawhub artifacts", () => {
     await expect(fs.readdir(observed.root)).resolves.toEqual(["preexisting.txt"]);
   });
 
-  it.each(["clawpack", "clawpack-defaults", "archive"] as const)(
+  it.each(["clawpack", "archive"] as const)(
     "preserves %s bytes, integrity, metadata, and caller-owned cleanup",
-    async (kind) => {
-      const artifact = kind === "archive" ? "archive" : "clawpack";
-      const defaults = kind === "clawpack-defaults";
+    async (artifact) => {
       const observed = await observeTempWorkspace();
       const sha256Digest = digest("sha256");
-      const headers = { "content-type": "application/octet-stream" };
-      const request = captureClawHubResponse(() =>
-        defaults
-          ? archiveResponse({ ...headers, "X-ClawHub-Artifact-Sha256": sha256Digest })
-          : createArchiveResponse(artifact === "clawpack" ? headers : undefined),
+      const response = createArchiveResponse(
+        artifact === "clawpack" ? { "content-type": "application/octet-stream" } : undefined,
       );
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => response);
       const archive = await (artifact === "clawpack"
-        ? downloadClawHubPackageArchive(clawpackOptions)
+        ? downloadPackageArchive(response, clawpackOptions)
         : downloadClawHubGitHubSkillArchive({
             repo: "owner/repo",
             commit: "abc123",
@@ -222,7 +245,7 @@ describe("clawhub artifacts", () => {
       const workspace = observed.workspace();
 
       expect(path.basename(archive.archivePath)).toBe(
-        defaults ? "demo-1.2.3.tgz" : artifact === "clawpack" ? "NUL_.tgz" : "abc123.zip",
+        artifact === "clawpack" ? "NUL_.tgz" : "abc123.zip",
       );
       expect(archive).toMatchObject({
         artifact,
@@ -233,14 +256,11 @@ describe("clawhub artifacts", () => {
       expect(workspace.cleanup).not.toHaveBeenCalled();
 
       if (artifact === "clawpack") {
-        expect(request.url().pathname).toBe(
-          "/api/v1/packages/demo/versions/1.2.3/artifact/download",
-        );
         expect(archive).toMatchObject({
           clawpackHeaderSha256: sha256Digest,
           npmIntegrity: `sha512-${digest("sha512", "base64")}`,
           npmShasum: digest("sha1"),
-          npmTarballName: defaults ? "demo-1.2.3.tgz" : "NUL.tgz",
+          npmTarballName: "NUL.tgz",
         });
       }
 

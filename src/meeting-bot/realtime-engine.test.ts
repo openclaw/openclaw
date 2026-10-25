@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RealtimeVoiceAgentConsultToolPolicy } from "../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "../talk/provider-types.js";
@@ -9,7 +10,6 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
-import { makeBridge, makeVoiceProvider } from "../talk/session-runtime.test-support.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
   startMeetingRealtimeEngine,
@@ -48,6 +48,10 @@ afterEach(async () => {
   }
 });
 
+type PendingWrite = {
+  resolve: () => void;
+};
+
 async function createEngineFixture(
   options: {
     native?: boolean;
@@ -68,10 +72,14 @@ async function createEngineFixture(
   const handleBargeIn = vi.fn();
   const submitToolResult = vi.fn();
   const closeBridge = vi.fn<RealtimeVoiceBridge["close"]>();
-  const bridge = makeBridge({
+  const bridge = {
+    acknowledgeMark: vi.fn(),
     close: closeBridge,
-    ...(options.connect ? { connect: options.connect } : {}),
+    connect: options.connect ?? vi.fn(async () => {}),
     handleBargeIn,
+    isConnected: vi.fn(() => true),
+    sendAudio: vi.fn(),
+    setMediaTimestamp: vi.fn(),
     submitToolResult,
     ...(options.native
       ? {
@@ -79,11 +87,16 @@ async function createEngineFixture(
           handlesInputAudioBargeIn: continuous,
         }
       : {}),
-  });
-  const provider = makeVoiceProvider((request) => {
-    callbacks = request;
-    return bridge;
-  });
+  } satisfies RealtimeVoiceBridge;
+  const provider: RealtimeVoiceProviderPlugin = {
+    id: options.native ? "test-native" : "test",
+    label: options.native ? "Test native voice" : "Test",
+    isConfigured: () => true,
+    createBridge: (request) => {
+      callbacks = request;
+      return bridge;
+    },
+  };
   if (options.native) {
     Object.defineProperty(provider, Symbol.for("openclaw.internal.realtime-voice-provider.v1"), {
       value: {
@@ -99,7 +112,7 @@ async function createEngineFixture(
       },
     });
   }
-  const pendingWrites: Array<{ resolve: () => void }> = [];
+  const pendingWrites: PendingWrite[] = [];
   const writeStarts = new Map<number, ReturnType<typeof createDeferredCore<void>>>();
   const writeStart = (count: number) => {
     let receipt = writeStarts.get(count);
@@ -154,16 +167,18 @@ async function createEngineFixture(
       },
     },
     consultAgent,
-    fullConfig: {},
+    fullConfig: {} as never,
     handleToolCall,
     logger,
     meetingSessionId: "meeting-1",
     ...(options.native ? { requesterSessionKey: "agent:main:requester" } : {}),
-    platform: {
-      displayName: "Test Meeting",
-      logScope: options.native ? "[meeting]" : "[meeting-test]",
-      sessionIdPrefix: options.native ? "meeting" : "meeting-test",
-    },
+    platform: options.native
+      ? { displayName: "Test Meeting", logScope: "[meeting]", sessionIdPrefix: "meeting" }
+      : {
+          displayName: "Test Meeting",
+          logScope: "[meeting-test]",
+          sessionIdPrefix: "meeting-test",
+        },
     providers: [provider],
     runtime: options.native ? createPluginRuntime() : ({} as never),
     tools: [],
@@ -188,6 +203,7 @@ async function createEngineFixture(
     event,
     closeBridge,
     disposeTransport,
+    logger,
     stopTransport,
     beginOutput,
     callbacks: bridgeCallbacks,
@@ -195,25 +211,24 @@ async function createEngineFixture(
     handle,
     handleBargeIn,
     submitToolResult,
-    async expectWrite(count: number, audio?: Buffer) {
+    async waitForWriteStart(count: number) {
       await withinTest(writeStart(count).promise, signal);
       // Give detached work a turn without completing the write.
       await setImmediate();
+    },
+    async expectWrite(count: number, audio?: Buffer) {
+      await this.waitForWriteStart(count);
       expect(writeOutput).toHaveBeenCalledTimes(count);
       if (audio) {
         expect(writeOutput).toHaveBeenLastCalledWith(audio);
       }
     },
-    async overflowOutput(responseId: string | null = "response-1") {
-      const send = (audio: Buffer) =>
-        responseId === null
-          ? bridgeCallbacks.onAudio(audio)
-          : this.sendOutputAudio(audio, responseId);
-      send(Buffer.alloc(48_000, 1));
+    async overflowOutput() {
+      this.sendOutputAudio(Buffer.alloc(48_000, 1), "response-1");
       await this.expectWrite(1);
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_000);
-      send(Buffer.alloc(48_000, 2));
-      send(Buffer.from([3]));
+      this.sendOutputAudio(Buffer.alloc(48_000, 2), "response-1");
+      this.sendOutputAudio(Buffer.from([3]), "response-1");
       await vi.waitFor(() => expect(handleBargeIn).toHaveBeenCalledOnce());
     },
     releaseWrite(index: number) {
@@ -237,37 +252,10 @@ async function createEngineFixture(
       return onHumanBargeIn(audio);
     },
     writeOutput,
-    expectForcedBargeIn() {
-      expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true, force: true });
-    },
-    consult(request: Parameters<NonNullable<typeof bridgeCallbacks.runAgentConsult>>[0]) {
-      const consult = bridgeCallbacks.runAgentConsult;
-      if (!consult) {
-        throw new Error("Expected native agent delegation");
-      }
-      return consult(request);
-    },
   };
 }
 
 describe("meeting realtime engine output ownership", () => {
-  it("keeps playback available after an incomplete provider response", async () => {
-    const fixture = await createEngineFixture();
-    fixture.sendOutputAudio(Buffer.from([1]), "response-1");
-    await fixture.expectWrite(1);
-    fixture.callbacks.onResponseDone?.({
-      status: "incomplete",
-      responseId: "response-1",
-      message: "provider response incomplete",
-    });
-    fixture.event("response.done", "response-1");
-    expect(fixture.handle.getHealth().bridgeClosed).toBe(false);
-    fixture.releaseWrite(0);
-    fixture.sendOutputAudio(Buffer.from([2]), "response-2");
-    await fixture.expectWrite(2, Buffer.from([2]));
-    fixture.releaseWrite(1);
-  });
-
   it("drains provider transcripts before rejected cleanup releases transport", async () => {
     const fixture = await createEngineFixture();
     const providerClosed = createDeferredCore();
@@ -301,6 +289,42 @@ describe("meeting realtime engine output ownership", () => {
       providerClosed.resolve();
       await closing;
     }
+  });
+
+  it("finishes each response once and accepts a later response", async () => {
+    const fixture = await createEngineFixture();
+    fixture.callbacks.onTranscript?.("user", "first turn", true);
+    fixture.announceOutputResponse("response-1");
+    fixture.sendOutputAudio(Buffer.from([1]), "response-1");
+    await fixture.expectWrite(1);
+    fixture.callbacks.onResponseDone?.({
+      status: "incomplete",
+      responseId: "response-1",
+      reason: "max_output_tokens",
+      message: "provider response incomplete",
+    });
+    fixture.event("response.done", "response-1");
+
+    const firstEvents = fixture.handle.getHealth().recentTalkEvents;
+    expect(firstEvents.filter((event) => event.type === "turn.ended")).toHaveLength(1);
+    expect(firstEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(1);
+    expect(firstEvents.filter((event) => event.type === "session.error")).toHaveLength(1);
+    expect(fixture.handle.getHealth().bridgeClosed).toBe(false);
+
+    fixture.releaseWrite(0);
+    fixture.callbacks.onTranscript?.("user", "later turn", true);
+    fixture.announceOutputResponse("response-2");
+    fixture.sendOutputAudio(Buffer.from([2]), "response-2");
+    await fixture.expectWrite(2);
+    fixture.callbacks.onResponseDone?.({ status: "completed", responseId: "response-2" });
+    fixture.event("response.done", "response-2");
+
+    const finalEvents = fixture.handle.getHealth().recentTalkEvents;
+    expect(
+      finalEvents.filter((event) => event.type === "turn.ended" || event.type === "turn.cancelled"),
+    ).toHaveLength(2);
+    expect(finalEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(2);
+    fixture.releaseWrite(1);
   });
 
   it("rearms continuity reset when the provider creates a fresh session before ready", async () => {
@@ -449,67 +473,86 @@ describe("meeting realtime engine output ownership", () => {
     fixture.releaseWrite(1);
   });
 
-  it.each(["bytes", "frames"] as const)(
-    "bounds queued %s and rejects stale output through response.done",
-    async (limit) => {
-      const fixture = await createEngineFixture();
-      const first = Buffer.alloc(48_000, 1);
-      const late = Buffer.from([4]);
-      const fresh = Buffer.from([5]);
+  it("bounds queued bytes and rejects stale output through response.done", async () => {
+    const fixture = await createEngineFixture();
+    const first = Buffer.alloc(48_000, 1);
+    const queued = Buffer.alloc(48_000 * 119, 2);
+    const overflow = Buffer.from([3]);
+    const late = Buffer.from([4]);
+    const fresh = Buffer.from([5]);
 
-      fixture.sendOutputAudio(first, "response-1");
-      await fixture.expectWrite(1);
-      if (limit === "bytes") {
-        fixture.sendOutputAudio(Buffer.alloc(48_000 * 119, 2), "response-1");
-        fixture.sendOutputAudio(Buffer.from([3]), "response-1");
-      } else {
-        for (let index = 1; index < 6_001; index += 1) {
-          fixture.sendOutputAudio(Buffer.from([index]), "response-1");
-        }
-      }
+    fixture.sendOutputAudio(first, "response-1");
+    await fixture.expectWrite(1);
+    fixture.sendOutputAudio(queued, "response-1");
+    fixture.sendOutputAudio(overflow, "response-1");
 
-      await vi.waitFor(() => fixture.expectForcedBargeIn());
-      fixture.callbacks.onClearAudio("barge-in");
-      await vi.waitFor(() => expect(fixture.clearOutput).toHaveBeenCalledOnce());
-      expect(fixture.writeOutput).toHaveBeenLastCalledWith(first);
+    await vi.waitFor(() => {
+      expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+        audioPlaybackActive: true,
+        force: true,
+      });
+    });
+    fixture.callbacks.onClearAudio("barge-in");
+    await vi.waitFor(() => expect(fixture.clearOutput).toHaveBeenCalledOnce());
+    expect(fixture.writeOutput).toHaveBeenLastCalledWith(first);
 
-      fixture.sendOutputAudio(late, "response-1");
-      fixture.event("response.done", "response-1");
-      fixture.sendOutputAudio(fresh, "response-2");
-      fixture.releaseWrite(0);
+    fixture.sendOutputAudio(late, "response-1");
+    fixture.event("response.done", "response-1");
+    fixture.sendOutputAudio(fresh, "response-2");
+    fixture.releaseWrite(0);
 
-      await fixture.expectWrite(2, fresh);
-      expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
-      expect(fixture.clearOutput.mock.invocationCallOrder[1]).toBeLessThan(
-        fixture.writeOutput.mock.invocationCallOrder[1] ?? 0,
-      );
-      expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
-      fixture.releaseWrite(1);
-    },
-  );
+    await fixture.expectWrite(2, fresh);
+    expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+    expect(fixture.clearOutput.mock.invocationCallOrder[1]).toBeLessThan(
+      fixture.writeOutput.mock.invocationCallOrder[1] ?? 0,
+    );
+    expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
+    fixture.releaseWrite(1);
+  });
 
-  it.each(["response-1", null])(
-    "releases backpressured owner %s only for a new response or an anonymous clear fence",
-    async (responseId) => {
-      const fixture = await createEngineFixture();
-      const late = Buffer.from([3]);
-      const fresh = Buffer.from([4]);
-      await fixture.overflowOutput(responseId);
-      fixture.expectForcedBargeIn();
-      if (responseId) {
-        fixture.sendOutputAudio(late, responseId);
-        fixture.sendOutputAudio(fresh, "response-2");
-      } else {
-        fixture.callbacks.onAudio(late);
-        fixture.callbacks.onClearAudio("barge-in");
-        fixture.callbacks.onAudio(fresh);
-      }
-      fixture.releaseWrite(0);
-      await fixture.expectWrite(2, fresh);
-      expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
-      fixture.releaseWrite(1);
-    },
-  );
+  it("accepts a new response owner after backpressure without the stale response terminal", async () => {
+    const fixture = await createEngineFixture();
+    const late = Buffer.from([3]);
+    const fresh = Buffer.from([4]);
+
+    await fixture.overflowOutput();
+    expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+      audioPlaybackActive: true,
+      force: true,
+    });
+
+    fixture.sendOutputAudio(late, "response-1");
+    fixture.sendOutputAudio(fresh, "response-2");
+    fixture.releaseWrite(0);
+
+    await fixture.expectWrite(2, fresh);
+    expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
+    fixture.releaseWrite(1);
+  });
+
+  it("holds anonymous backpressure output until the provider clear fence", async () => {
+    const fixture = await createEngineFixture();
+    const active = Buffer.alloc(48_000, 1);
+    const queued = Buffer.alloc(48_000, 2);
+    const late = Buffer.from([3]);
+    const fresh = Buffer.from([4]);
+
+    fixture.callbacks.onAudio(active);
+    await fixture.expectWrite(1);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_000);
+    fixture.callbacks.onAudio(queued);
+    fixture.callbacks.onAudio(Buffer.from([5]));
+    await vi.waitFor(() => expect(fixture.handleBargeIn).toHaveBeenCalledOnce());
+
+    fixture.callbacks.onAudio(late);
+    fixture.callbacks.onClearAudio("barge-in");
+    fixture.callbacks.onAudio(fresh);
+    fixture.releaseWrite(0);
+
+    await fixture.expectWrite(2, fresh);
+    expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
+    fixture.releaseWrite(1);
+  });
 
   it("plays a long reply that streams ahead of playback", async () => {
     const fixture = await createEngineFixture();
@@ -528,6 +571,24 @@ describe("meeting realtime engine output ownership", () => {
       await fixture.expectWrite(index + 2, chunk);
     }
     fixture.releaseWrite(rest.length);
+  });
+
+  it("bounds queued tiny-frame ownership", async () => {
+    const fixture = await createEngineFixture();
+    fixture.sendOutputAudio(Buffer.from([0]), "response-1");
+    await fixture.expectWrite(1);
+    for (let index = 1; index < 6_001; index += 1) {
+      fixture.sendOutputAudio(Buffer.from([index]), "response-1");
+    }
+
+    await vi.waitFor(() => {
+      expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+        audioPlaybackActive: true,
+        force: true,
+      });
+    });
+    expect(fixture.clearOutput).toHaveBeenCalledOnce();
+    fixture.releaseWrite(0);
   });
 
   it("does not report a deferred cancellation race after response completion", async () => {
@@ -605,37 +666,45 @@ describe("meeting native continuous voice", () => {
     );
   });
 
-  it.each(["incoming audio", "stall timer"] as const)(
-    "recovers native backpressure on %s without provider cancellation",
-    async (trigger) => {
-      vi.useFakeTimers();
-      const pending = createDeferredCore();
-      const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
-      fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
-      fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
-      if (trigger === "incoming audio") {
-        await vi.advanceTimersByTimeAsync(0);
-        vi.setSystemTime(Date.now() + 5_000);
-        fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
-        fixture.callbacks.onAudio(Buffer.alloc(960, 3));
-        await vi.advanceTimersByTimeAsync(0);
-      } else {
-        fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
-        fixture.callbacks.onAudio(Buffer.alloc(48_000, 3));
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect(fixture.transport.clearOutput).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-      }
-      expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
-      const fresh = Buffer.alloc(960, 4);
-      fixture.callbacks.onAudio(fresh);
-      pending.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fixture.transport.writeOutput).toHaveBeenCalledTimes(2);
-      expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
-      expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
-    },
-  );
+  it("recovers local backpressure without waiting for a provider cancellation", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferredCore();
+    const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
+    fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
+    fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(Date.now() + 5_000);
+    fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
+    fixture.callbacks.onAudio(Buffer.alloc(960, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
+    const fresh = Buffer.alloc(960, 4);
+    fixture.callbacks.onAudio(fresh);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.transport.writeOutput).toHaveBeenCalledTimes(2);
+    expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
+    expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
+  });
+
+  it("recovers stuck playback after the provider has finished sending", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferredCore();
+    const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
+    fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
+    for (let index = 1; index <= 3; index += 1) {
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, index));
+    }
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fixture.transport.clearOutput).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
+    const fresh = Buffer.alloc(960, 4);
+    fixture.callbacks.onAudio(fresh);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
+  });
 
   it("refuses mixed loopback input before connecting native voice", async () => {
     const connect = vi.fn(async () => {});
@@ -658,10 +727,12 @@ describe("meeting native continuous voice", () => {
 
   it("enforces the none policy for native delegation", async () => {
     const fixture = await createLiveFixture({ toolPolicy: "none" });
-    expect(fixture.callbacks.runAgentConsult).toBeTypeOf("function");
-    await expect(fixture.consult({ prompt: "Check the project" })).rejects.toThrow(
-      "meeting tool policy",
-    );
+    const consult = fixture.callbacks.runAgentConsult;
+    expect(consult).toBeTypeOf("function");
+    if (!consult) {
+      throw new Error("Expected native agent delegation");
+    }
+    await expect(consult({ prompt: "Check the project" })).rejects.toThrow("meeting tool policy");
     expect(fixture.consultAgent).not.toHaveBeenCalled();
   });
 
@@ -671,7 +742,11 @@ describe("meeting native continuous voice", () => {
       const fixture = await createLiveFixture({ continuous: kind === "native delegation" });
       const stopped = fixture.handle.stop();
       if (kind === "native delegation") {
-        const delegated = fixture.consult({ prompt: "Do not start this late task" });
+        const consult = fixture.callbacks.runAgentConsult;
+        if (!consult) {
+          throw new Error("Expected native agent delegation");
+        }
+        const delegated = consult({ prompt: "Do not start this late task" });
         await expect(delegated).rejects.toThrow("closed");
         expect(fixture.consultAgent).not.toHaveBeenCalled();
       } else {
@@ -695,11 +770,12 @@ describe("meeting native continuous voice", () => {
         consultAgent: () => result.promise,
         cleanup: () => result.resolve({ text: "Cleanup" }),
       });
+      const consult = fixture.callbacks.runAgentConsult;
+      if (!consult) {
+        throw new Error("Expected native agent delegation");
+      }
       const providerAbort = new AbortController();
-      const delegated = fixture.consult({
-        prompt: "Check the project",
-        signal: providerAbort.signal,
-      });
+      const delegated = consult({ prompt: "Check the project", signal: providerAbort.signal });
       const rejected = expect(delegated).rejects.toBeDefined();
       const signal = fixture.consultAgent.mock.calls[0]?.[0].abortSignal;
       expect(signal?.aborted).toBe(false);

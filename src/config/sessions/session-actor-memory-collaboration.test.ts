@@ -202,10 +202,6 @@ describe("memory collaboration through the public adapters", () => {
 
   it("keeps suggestion IDs unique and preserves live dispatch custody and its chosen resolution", async () => {
     const { scope, acquire } = await fixture();
-    const dispatch = (resolution: "send" | "queue" | "edit", now: number) =>
-      claimSessionSuggestionDispatchInWorker(scope, { id: "suggestion", resolution, now });
-    const accept = (token: string) =>
-      finalizeSessionSuggestionClaimInWorker(scope, { id: "suggestion", token, state: "accepted" });
     const sibling = await acquire("second");
     await addSessionSuggestionInWorker(scope, {
       id: "suggestion",
@@ -220,20 +216,51 @@ describe("memory collaboration through the public adapters", () => {
         text: "Duplicate",
       }),
     ).rejects.toThrow("UNIQUE constraint");
-    const claim = await dispatch("send", 10);
+    const claim = await claimSessionSuggestionDispatchInWorker(scope, {
+      id: "suggestion",
+      resolution: "send",
+      now: 10,
+    });
+    expect(claim?.kind).toBe("claimed");
     assert(claim?.kind === "claimed", "Missing dispatch claim");
-    expect(await dispatch("queue", 11)).toEqual({ kind: "busy" });
-    expect(await dispatch("queue", 40_000)).toEqual({ kind: "mismatch", resolution: "send" });
-    expect(await accept("wrong")).toBeNull();
+    expect(
+      await claimSessionSuggestionDispatchInWorker(scope, {
+        id: "suggestion",
+        resolution: "queue",
+        now: 11,
+      }),
+    ).toEqual({ kind: "busy" });
+    expect(
+      await claimSessionSuggestionDispatchInWorker(scope, {
+        id: "suggestion",
+        resolution: "queue",
+        now: 40_000,
+      }),
+    ).toEqual({ kind: "mismatch", resolution: "send" });
+    expect(
+      await finalizeSessionSuggestionClaimInWorker(scope, {
+        id: "suggestion",
+        token: "wrong",
+        state: "accepted",
+      }),
+    ).toBeNull();
     expect(
       await releaseSessionSuggestionDispatchInWorker(scope, {
         id: "suggestion",
         token: claim.token,
       }),
     ).toBe(true);
-    const retry = await dispatch("edit", 50_000);
+    const retry = await claimSessionSuggestionDispatchInWorker(scope, {
+      id: "suggestion",
+      resolution: "edit",
+      now: 50_000,
+    });
     assert(retry?.kind === "claimed", "Missing retry claim");
-    await accept(retry.token);
+    await finalizeSessionSuggestionClaimInWorker(scope, {
+      id: "suggestion",
+      token: retry.token,
+      state: "accepted",
+    });
     expect(await listSessionSuggestions(scope, { pendingOnly: true })).toEqual([]);
     expect(await listSessionSuggestions(scope)).toEqual([
       { id: "suggestion", authorId: "viewer", text: "Try this", createdAt: 1, state: "accepted" },
@@ -242,17 +269,35 @@ describe("memory collaboration through the public adapters", () => {
 
   it("removes reactions with their deleted transcript identities and clears suggestions at reset", async () => {
     const { actor, storage, scope, owner } = await fixture();
-    await commitMemory(storage, "session.metadata.append", {
-      scope: { ...scope, sessionId: "first" },
-      event: JSON.stringify({
-        type: "message",
-        id: "message",
-        parentId: null,
-        timestamp: new Date(1).toISOString(),
-        message: { role: "user", content: "Hello" },
-      }),
-      options: {},
-    });
+    expect(
+      (
+        await actor.appendTranscriptEvent(
+          {
+            commandId: "message",
+            phaseId: "turn",
+            append: {
+              kind: "metadata",
+              input: {
+                scope: { ...scope, sessionId: "first" },
+                event: {
+                  type: "message",
+                  id: "message",
+                  parentId: null,
+                  timestamp: new Date(1).toISOString(),
+                },
+                message: {
+                  messageJson: JSON.stringify({ role: "user", content: "Hello" }),
+                  cwd: "/synthetic",
+                  validateTurn: false,
+                },
+                options: {},
+              },
+            },
+          },
+          authority,
+        )
+      ).kind,
+    ).toBe("committed");
     const reaction = {
       expectedSessionId: "first",
       messageId: "message",
