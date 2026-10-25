@@ -1,17 +1,48 @@
 import path from "node:path";
+import { createStandaloneLexicalBindings } from "./bun-standalone-bindings.mjs";
 
+const unrenderedModuleUrlMarker = "OPENCLAW_UNRENDERED_MODULE_URL:";
+
+export function createUnrenderedModuleUrlBootstrap() {
+  return `globalThis.__openclawStandaloneUnrenderedModuleUrl = (marker) => { throw new Error(marker); };`;
+}
+
+export function assertNoUnrenderedModuleUrls(contents, filename) {
+  if (contents.includes(unrenderedModuleUrlMarker)) {
+    throw new Error(`An unrendered source module URL survived bundling in ${filename}`);
+  }
+}
+
+/**
+ * @param {{
+ *   contents: string,
+ *   filename: string,
+ *   physicalFilename?: string,
+ *   resolveModuleUrl?: () => string | null | undefined,
+ *   runtimeRoot: string,
+ *   embeddedPaths: Record<string, string>,
+ *   moduleAliases: Record<string, string>,
+ *   workerThreadsShim: string,
+ *   parse: import("./bun-standalone-parser.mjs").StandaloneParser,
+ *   sourceType?: "module" | "script",
+ *   preserveTypes?: boolean
+ * }} options
+ */
 export function rewriteStandaloneImports({
   contents: originalContents,
   filename,
+  physicalFilename = filename,
+  resolveModuleUrl,
   runtimeRoot,
   embeddedPaths,
   moduleAliases,
   workerThreadsShim,
   parse,
   sourceType = "module",
+  preserveTypes = false,
 }) {
   let contents = originalContents;
-  const relative = path.relative(runtimeRoot, filename).split(path.sep).join("/");
+  const relative = path.relative(runtimeRoot, physicalFilename).split(path.sep).join("/");
   const generatedTargets = new Set([...Object.values(moduleAliases), workerThreadsShim]);
   const resolverNames = ["openclaw-plugin-sdk-alias", "openclaw-plugin-source-capture"];
   const pluginResolvers = new Set(resolverNames.filter((name) => contents.includes(name)));
@@ -50,9 +81,38 @@ export function rewriteStandaloneImports({
         : [],
     ),
   );
+  let bindings;
   const pending = [{ node: ast, owner: undefined }];
   const edits = [];
   const physicalUrl = `(globalThis.__openclawStandaloneRootUrl + ${JSON.stringify(relative)})`;
+  let moduleUrlExpression;
+  // Most modules need no emitted URL metadata. Resolve only actual import.meta syntax.
+  const importMetaUrl = () => {
+    if (moduleUrlExpression === undefined) {
+      const resolved = resolveModuleUrl?.();
+      if (resolved === null) {
+        // The original URL read was pure. Keep it removable until the bundler
+        // proves it is unused; any surviving marker rejects the build.
+        moduleUrlExpression = `/* @__PURE__ */ globalThis.__openclawStandaloneUnrenderedModuleUrl(${JSON.stringify(unrenderedModuleUrlMarker + relative)})`;
+      } else {
+        const moduleUrl = resolved ?? physicalFilename;
+        moduleUrlExpression = `(globalThis.__openclawStandaloneRootUrl + ${JSON.stringify(path.relative(runtimeRoot, moduleUrl).split(path.sep).join("/"))})`;
+      }
+    }
+    return moduleUrlExpression;
+  };
+  const resolverOwnerType = (node) => {
+    if (node.type === "Identifier") {
+      return `typeof ${node.name}`;
+    }
+    if (node.type === "MemberExpression" && !node.optional) {
+      const key = node.computed ? staticString(node.property) : node.property.name;
+      if (typeof key === "string") {
+        return `(${resolverOwnerType(node.object)})[${JSON.stringify(key)}]`;
+      }
+    }
+    throw new Error("Unsupported typed standalone resolver owner");
+  };
   while (pending.length) {
     const current = pending.pop();
     const node = current.node;
@@ -71,11 +131,10 @@ export function rewriteStandaloneImports({
     ) {
       // CJS aliases bypass Bun's public hook. Map the loader handoff while
       // admission and SDK discovery continue to use physical filenames.
-      edits.push([
-        node.right.start,
-        node.right.start,
-        "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(",
-      ]);
+      const wrapper = preserveTypes
+        ? `((resolve: NonNullable<(${resolverOwnerType(node.left.object)})["_resolveFilename"]>) => function (this: ThisParameterType<typeof resolve>, ...args: Parameters<typeof resolve>): ReturnType<typeof resolve> { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(`
+        : "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(";
+      edits.push([node.right.start, node.right.start, wrapper]);
       edits.push([node.right.end, node.right.end, ")"]);
     }
     if (node.type === "ObjectExpression") {
@@ -106,14 +165,14 @@ export function rewriteStandaloneImports({
       node.object.meta.name === "import"
     ) {
       if (node.property.name === "url") {
-        edits.push([node.start, node.end, physicalUrl]);
+        edits.push([node.start, node.end, importMetaUrl()]);
         continue;
       }
       if (node.property.name === "resolve") {
         edits.push([
           node.start,
           node.end,
-          `globalThis.__openclawStandaloneResolve.bind(null, ${physicalUrl})`,
+          `globalThis.__openclawStandaloneResolve.bind(null, ${importMetaUrl()})`,
         ]);
         continue;
       }
@@ -129,6 +188,30 @@ export function rewriteStandaloneImports({
         node.source.start,
         `globalThis.__openclawStandaloneImport(${physicalUrl}, `,
       ]);
+      if (preserveTypes) {
+        // The thunk preserves TypeScript's original import result type. The loader
+        // never invokes it, so computed specifiers still evaluate exactly once.
+        const tail = contents.slice(node.source.end, node.end - 1).trim();
+        const hasOptions = tail.replace(/^,|,$/g, "").trim().length > 0;
+        const separator = tail.endsWith(",") ? " " : ", ";
+        // Native checking follows literal const types; expose the same edge to
+        // discovery without replacing the runtime expression or its evaluation.
+        const specifier =
+          node.source.type === "Identifier"
+            ? (bindings ??= createStandaloneLexicalBindings(ast)).constantString(node.source)
+            : undefined;
+        const witness =
+          specifier === undefined
+            ? contents.slice(node.start, node.end)
+            : contents.slice(node.start, node.source.start) +
+              JSON.stringify(specifier) +
+              contents.slice(node.source.end, node.end);
+        edits.push([
+          node.end - 1,
+          node.end - 1,
+          `${separator}${hasOptions ? "" : "undefined, "}() => ${witness}`,
+        ]);
+      }
       if (generatedTargets.has(node.source.value)) {
         const entry = path.relative(runtimeRoot, node.source.value).split(path.sep).join("/");
         const embedded = embeddedPaths[entry];

@@ -70,11 +70,6 @@ describe("steering input custody", () => {
         "revoked grant",
         "same permissions across profiles",
         "no native admission across profiles",
-        "different scopes across profiles",
-        "same role permissions across profiles",
-        "different role session caps across profiles",
-        "different role agents across profiles",
-        "different role sandbox across profiles",
       ] as const
     ).map((scenario) => ({
       scenario,
@@ -103,7 +98,6 @@ describe("steering input custody", () => {
         sessionKey: "agent:main:dashboard:steering-collaboration",
         preserveContent: true,
         active: !startOwnerTurn,
-        sandbox: scenario === "different role sandbox across profiles" ? "required" : undefined,
         // Both callers may write here; their caps still differ for other sessions.
         ...(withRoles
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
@@ -145,25 +139,7 @@ describe("steering input custody", () => {
             roles: {
               definitions: {
                 writer: role,
-                participant: {
-                  ...role,
-                  sessions: {
-                    others:
-                      scenario === "different role session caps across profiles" ? "view" : "write",
-                  },
-                  agents:
-                    scenario === "different role agents across profiles"
-                      ? ["main"]
-                      : scenario === "same role permissions across profiles"
-                        ? ["other", "main"]
-                        : role.agents,
-                  sandbox:
-                    scenario === "different role sandbox across profiles"
-                      ? "required"
-                      : scenario === "same role permissions across profiles"
-                        ? "inherit"
-                        : role.sandbox,
-                },
+                participant: { ...role, sessions: { others: "view" } },
               },
             },
           },

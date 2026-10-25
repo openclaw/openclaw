@@ -232,4 +232,15 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     expect(dialog?.textContent).toContain(review.explanation);
     expect(dialog?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
   });
+  view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions button")!.click();
+  await waitForSolid(() =>
+    expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull(),
+  );
+  expect(reviewButton.isConnected).toBe(true);
+  reviewButton.click();
+  await waitForSolid(() => {
+    expect(view.container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      review.explanation,
+    );
+  });
 });

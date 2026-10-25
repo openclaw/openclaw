@@ -1,5 +1,5 @@
 import { skipWhitespace } from "../../../packages/tool-call-repair/src/grammar.js";
-import { findCodeRegions } from "./code-regions.js";
+import { findCodeRegions } from "./code-ranges.js";
 import { createTagNameProbe } from "./tag-name-probe.js";
 
 type FinalTagMatch = {

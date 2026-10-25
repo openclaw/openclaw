@@ -4803,6 +4803,33 @@ Preserve the exact instrumentation patch and compiled build identity. Validate
 all source anchors again when rebasing. Never apply this instrumenter to an
 operator checkout or ship the instrumented build.
 
+Each measured wave also reports `materializationWork` from the production
+session-row work counters: `created` is first construction, `reused` constructs
+and then retains the old graph, `rebuilt` replaces an existing graph, and `skipped`
+retains the old graph without constructing a replacement. Reuse among repeated
+attempts is `(reused + skipped) / (reused + skipped + rebuilt)`; exclude first
+constructions and report an empty denominator as no attempts. `deepComparisons`
+counts whole-materialization comparisons, not individual input-field checks or
+diagnostic sampling. Existing diagnostic memory snapshots include these counters
+and first differing source-field counts sampled on one in 64 rebuilds. The
+`row-or-membership` bucket means source fields were equal; it does not imply the
+materialized row was equal. No values or session identities are sampled.
+
+For a separate development Gateway diagnostic through ordinary WebSocket RPCs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/session-row-materialization-measure.ts \
+  --root /path/to/new-synthetic-state --port 62689 --sessions 32 --lists 100
+```
+
+This launches an isolated source Gateway, waits for admission readiness, and
+reports ordinary reads, cron rename/enable/disable, a changed label, and a repeated
+save of that label. The repeat save may still change persisted metadata. Asserted
+automation and label changes guard against stale reuse. Main CPU per list includes
+the phase's mutation and background work, but excludes the controller process;
+it is not exclusive RPC CPU. Apply the same host isolation, quiet slot and guard
+rules as the compiled diagnostic. Preserve failed setup separately from samples.
+
 ```sh
 node --enable-source-maps --import ./scripts/tsx.mjs \
   scripts/perf/reconnect-read-wave-measure.ts \
