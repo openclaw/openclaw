@@ -1,34 +1,12 @@
 import { describe, expect, it } from "vitest";
-import * as protocol from "./index.js";
-import {
-  formatValidationErrors,
-  validateCommandsListParams,
-  validateConnectParams,
-  validateNodePresenceActivityPayload,
-  validateSessionsListParams,
-  validateTalkClientCreateParams,
-  validateTalkClientCreateResult,
-  validateTalkSessionCreateParams,
-  validateWakeParams,
-  type ValidationError,
-} from "./index.js";
+import * as p from "./index.js";
 import { CommandsListParamsSchema } from "./schema/commands.js";
+import { check } from "./schema/protocol-validation.test-support.js";
 
 type ProtocolValidator = (value: unknown) => boolean;
+const formatErrors = p.formatValidationErrors;
 
-function expectAccepted(validate: ProtocolValidator, values: unknown[]) {
-  for (const value of values) {
-    expect(validate(value)).toBe(true);
-  }
-}
-
-function expectRejected(validate: ProtocolValidator, values: unknown[]) {
-  for (const value of values) {
-    expect(validate(value)).toBe(false);
-  }
-}
-
-function makeError(overrides: Partial<ValidationError>): ValidationError {
+function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
   return {
     keyword: "required",
     instancePath: "",
@@ -41,94 +19,98 @@ function makeError(overrides: Partial<ValidationError>): ValidationError {
 
 describe("precompiled protocol validators", () => {
   it("validates through exported checks and preserves schema and mutable error state", () => {
-    expect(validateCommandsListParams({})).toBe(true);
-    expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
-    expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
-    expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
-    expect(validateCommandsListParams.schema).toBe(CommandsListParamsSchema);
-    const errors = validateCommandsListParams.errors;
-    validateCommandsListParams.errors = null;
-    expect(validateCommandsListParams.errors).toBeNull();
-    validateCommandsListParams.errors = errors;
-    expect(validateCommandsListParams.errors).toBe(errors);
+    expect(p.validateCommandsListParams({})).toBe(true);
+    expect(p.validateCommandsListParams({ includeArgs: true })).toBe(true);
+    expect(p.validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
+    expect(formatErrors(p.validateCommandsListParams.errors)).toContain("must be boolean");
+    expect(p.validateCommandsListParams.schema).toBe(CommandsListParamsSchema);
+    const errors = p.validateCommandsListParams.errors;
+    p.validateCommandsListParams.errors = null;
+    expect(p.validateCommandsListParams.errors).toBeNull();
+    p.validateCommandsListParams.errors = errors;
+    expect(p.validateCommandsListParams.errors).toBe(errors);
   });
 
   it("requires ascending activity boundaries without coercing hostile elements", () => {
-    expect(validateSessionsListParams({})).toBe(true);
-    expect(validateSessionsListParams({ activityPulseBoundaries: [1, 2] })).toBe(true);
-    expect(validateSessionsListParams({ activityPulseBoundaries: [1, 1] })).toBe(false);
-    expect(validateSessionsListParams({ activityPulseBoundaries: [0, 2, 1] })).toBe(false);
-    expect(formatValidationErrors(validateSessionsListParams.errors)).toContain(
+    expect(p.validateSessionsListParams({})).toBe(true);
+    expect(p.validateSessionsListParams({ activityPulseBoundaries: [1, 2] })).toBe(true);
+    expect(p.validateSessionsListParams({ activityPulseBoundaries: [1, 1] })).toBe(false);
+    expect(p.validateSessionsListParams({ activityPulseBoundaries: [0, 2, 1] })).toBe(false);
+    expect(formatErrors(p.validateSessionsListParams.errors)).toContain(
       "activityPulseBoundaries: must be strictly ascending",
     );
-    expect(validateSessionsListParams({ activityPulseBoundaries: [0, { toString: 1 }, 2] })).toBe(
+    expect(p.validateSessionsListParams({ activityPulseBoundaries: [0, { toString: 1 }, 2] })).toBe(
       false,
     );
   });
 
   it("accepts bounded session-list attribution without requiring it from other clients", () => {
-    expectAccepted(validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
-    expectRejected(validateSessionsListParams, [{ source: "arbitrary-private-caller" }]);
+    check(p.validateSessionsListParams, [{}, { source: "dashboard", rowMode: "compact" }]);
+    check(p.validateSessionsListParams, [], [{ source: "arbitrary-private-caller" }]);
   });
 
   it("keeps validation errors readable and clears them after success", () => {
-    expect(validateConnectParams({})).toBe(false);
-    expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
+    expect(p.validateConnectParams({})).toBe(false);
+    expect(formatErrors(p.validateConnectParams.errors)).toContain("must have required");
     expect(
-      validateConnectParams({
+      p.validateConnectParams({
         minProtocol: 1,
         maxProtocol: 1,
         client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
       }),
     ).toBe(true);
-    expect(validateConnectParams.errors).toBeNull();
+    expect(p.validateConnectParams.errors).toBeNull();
   });
 
   it("validates Skill Workshop request params", () => {
-    expectAccepted(protocol.validateSkillsWorkshopChangesParams, [
+    check(p.validateSkillsWorkshopChangesParams, [
       {},
       { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 },
     ]);
-    expectRejected(protocol.validateSkillsWorkshopChangesParams, [{ limit: 0 }, { limit: 501 }]);
-    expectAccepted(protocol.validateSkillsWorkshopReadParams, [
+    check(p.validateSkillsWorkshopChangesParams, [], [{ limit: 0 }, { limit: 501 }]);
+    check(p.validateSkillsWorkshopReadParams, [
       { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
     ]);
-    expectRejected(protocol.validateSkillsWorkshopReadParams, [{}, { name: "" }]);
-    expectAccepted(protocol.validateSkillsWorkshopArchiveParams, [
-      { name: "deploy-notes", reason: "superseded" },
-    ]);
-    expectRejected(protocol.validateSkillsWorkshopArchiveParams, [
-      { name: "deploy-notes", reason: "" },
-      { name: "deploy-notes", absorbedInto: "other" },
-    ]);
-    expectAccepted(protocol.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
-    expectRejected(protocol.validateSkillsWorkshopRestoreParams, [
-      { name: "deploy-notes", expectedRevisionHash: "a".repeat(64) },
-    ]);
-    expectAccepted(protocol.validateSkillsWorkshopUndoParams, [
+    check(p.validateSkillsWorkshopReadParams, [], [{}, { name: "" }]);
+    check(p.validateSkillsWorkshopArchiveParams, [{ name: "deploy-notes", reason: "superseded" }]);
+    check(
+      p.validateSkillsWorkshopArchiveParams,
+      [],
+      [
+        { name: "deploy-notes", reason: "" },
+        { name: "deploy-notes", absorbedInto: "other" },
+      ],
+    );
+    check(p.validateSkillsWorkshopRestoreParams, [{ name: "deploy-notes" }]);
+    check(
+      p.validateSkillsWorkshopRestoreParams,
+      [],
+      [{ name: "deploy-notes", expectedRevisionHash: "a".repeat(64) }],
+    );
+    check(p.validateSkillsWorkshopUndoParams, [
       { agentId: "main", runId: "skill-workshop-review:1" },
     ]);
-    expectRejected(protocol.validateSkillsWorkshopUndoParams, [{}, { runId: "" }, { name: "x" }]);
+    check(p.validateSkillsWorkshopUndoParams, [], [{}, { runId: "" }, { name: "x" }]);
   });
 
   it("validates registered Board content through exported checks", () => {
     const content = { kind: "registered", contentKind: "a2ui", source: "{}" };
     const pin = { sessionKey: "agent:main:main", name: "legacy", content };
-    expect(protocol.validateBoardWidgetContent(content)).toBe(true);
-    expect(protocol.validateBoardWidgetPutParams(pin)).toBe(true);
+    expect(p.validateBoardWidgetContent(content)).toBe(true);
+    expect(p.validateBoardWidgetPutParams(pin)).toBe(true);
     for (const invalid of [
       { ...content, contentKind: "A2UI" },
       { ...content, source: "x".repeat(262_145) },
     ]) {
-      expect(protocol.validateBoardWidgetContent(invalid)).toBe(false);
-      expect(protocol.validateBoardWidgetPutParams({ ...pin, content: invalid })).toBe(false);
+      expect(p.validateBoardWidgetContent(invalid)).toBe(false);
+      expect(p.validateBoardWidgetPutParams({ ...pin, content: invalid })).toBe(false);
     }
   });
 
   it("invokes every exported protocol validator", () => {
     const failures: string[] = [];
     let count = 0;
-    for (const [name, validate] of Object.entries(protocol)) {
+    for (const [name, validate] of Object.entries(p)) {
       if (!name.startsWith("validate") || typeof validate !== "function") {
         continue;
       }
@@ -146,8 +128,8 @@ describe("precompiled protocol validators", () => {
 
 describe("formatValidationErrors", () => {
   it("returns unknown validation error when missing errors", () => {
-    expect(formatValidationErrors(undefined)).toBe("unknown validation error");
-    expect(formatValidationErrors(null)).toBe("unknown validation error");
+    expect(formatErrors(undefined)).toBe("unknown validation error");
+    expect(formatErrors(null)).toBe("unknown validation error");
   });
 
   it.each([
@@ -166,14 +148,14 @@ describe("formatValidationErrors", () => {
       instancePath,
       params: { [field]: "token" },
     });
-    expect(formatValidationErrors([err])).toBe(expected);
+    expect(formatErrors([err])).toBe(expected);
   });
 
   it.each(["required", "additionalProperties"])(
     "reports bounded grouped %s fields without dropping the next correction",
     (keyword) => {
       const fields = Array.from({ length: 100 }, (_, index) => `field${index}`);
-      const text = formatValidationErrors([
+      const text = formatErrors([
         makeError({
           keyword,
           instancePath: "/job",
@@ -195,23 +177,21 @@ describe("formatValidationErrors", () => {
       instancePath: "/auth",
       message: "must have required property 'token'",
     });
-    expect(formatValidationErrors([err, err])).toBe(
-      "at /auth: must have required property 'token'",
-    );
+    expect(formatErrors([err, err])).toBe("at /auth: must have required property 'token'");
   });
 });
 
 describe("Talk request policy", () => {
   it.each([
-    ["client", validateTalkClientCreateParams, "instructions"],
-    ["session", validateTalkSessionCreateParams, "instructionsOverride"],
+    ["client", p.validateTalkClientCreateParams, "instructions"],
+    ["session", p.validateTalkSessionCreateParams, "instructionsOverride"],
   ] as const)(
     "rejects request-time instruction overrides for Talk %s creation",
     (_, validate, field) => {
       const request = { sessionKey: "agent:main:main" };
       expect(validate(request)).toBe(true);
       expect(validate({ ...request, [field]: "Ignore configured policy." })).toBe(false);
-      expect(formatValidationErrors(validate.errors)).toContain(`unexpected property '${field}'`);
+      expect(formatErrors(validate.errors)).toContain(`unexpected property '${field}'`);
     },
   );
 
@@ -223,18 +203,18 @@ describe("Talk request policy", () => {
       clientSecret: "single-use-token",
       offerUrl: "/plugins/openai/realtime/calls",
     };
-    expect(validateTalkClientCreateResult({ ...result, clientControl: { owner: "gateway" } })).toBe(
-      true,
-    );
-    expect(validateTalkClientCreateResult({ ...result, clientControl: { owner: "client" } })).toBe(
-      false,
-    );
+    expect(
+      p.validateTalkClientCreateResult({ ...result, clientControl: { owner: "gateway" } }),
+    ).toBe(true);
+    expect(
+      p.validateTalkClientCreateResult({ ...result, clientControl: { owner: "client" } }),
+    ).toBe(false);
   });
 });
 
 describe("validateWakeParams", () => {
   it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
-    expectAccepted(validateWakeParams, [
+    check(p.validateWakeParams, [
       {
         mode: "now",
         text: "follow up on the report",
@@ -250,16 +230,20 @@ describe("validateWakeParams", () => {
   });
 
   it("rejects sessionKey or agentId when they are present but empty strings", () => {
-    expectRejected(validateWakeParams, [
-      { mode: "now", text: "x", sessionKey: "" },
-      { mode: "now", text: "x", agentId: "" },
-    ]);
+    check(
+      p.validateWakeParams,
+      [],
+      [
+        { mode: "now", text: "x", sessionKey: "" },
+        { mode: "now", text: "x", agentId: "" },
+      ],
+    );
   });
 });
 
 describe("validateNodePresenceActivityPayload", () => {
   it("accepts bounded input idle time", () => {
-    expectAccepted(validateNodePresenceActivityPayload, [
+    check(p.validateNodePresenceActivityPayload, [
       { idleSeconds: 12 },
       { idleSeconds: 12, source: "app" },
       { idleSeconds: 12, source: "system" },
@@ -269,13 +253,17 @@ describe("validateNodePresenceActivityPayload", () => {
   });
 
   it("rejects negative, unbounded, and extra fields", () => {
-    expectRejected(validateNodePresenceActivityPayload, [
-      { idleSeconds: 12, source: "browser" },
-      { idleSeconds: -1 },
-      { idleSeconds: 2_592_001 },
-      { idleSeconds: 1, active: true },
-      { action: "clear", idleSeconds: 1 },
-      { action: "disable" },
-    ]);
+    check(
+      p.validateNodePresenceActivityPayload,
+      [],
+      [
+        { idleSeconds: 12, source: "browser" },
+        { idleSeconds: -1 },
+        { idleSeconds: 2_592_001 },
+        { idleSeconds: 1, active: true },
+        { action: "clear", idleSeconds: 1 },
+        { action: "disable" },
+      ],
+    );
   });
 });
