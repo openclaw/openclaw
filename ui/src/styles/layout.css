@@ -750,10 +750,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* Keep the full resize target on the content side of the boundary so it
-   cannot intercept the sidebar scrollbar. The shell owns the resting line. */
+/* Keep the native-width target on the content side so it clears the sidebar
+   scrollbar without covering controls at the content edge. The shell owns the line. */
 .sidebar-resizer {
-  --resize-handle-size: 14px;
   --resize-handle-rest-color: transparent;
   --resize-handle-line-inline: 0%;
   grid-area: nav;
