@@ -184,7 +184,9 @@ const phases: Array<{ phase: string; startedAt: number; endedAt: number; load1: 
 function setPhase(next: string) {
   const now = Date.now();
   const previous = phases.at(-1);
-  if (previous) previous.endedAt = now;
+  if (previous) {
+    previous.endedAt = now;
+  }
   phase = next;
   phases.push({ phase, startedAt: now, endedAt: now, load1: loadavg()[0] });
   writeFileSync(path.join(output, "phase"), phase);
@@ -262,7 +264,7 @@ async function launch(boot: "seed" | "measure") {
     startAt: performance.now(),
     deadlineAt: performance.now() + 300_000,
     isDone: () =>
-      !!launchError || currentChild.exitCode !== null || currentChild.signalCode !== null,
+      Boolean(launchError) || currentChild.exitCode !== null || currentChild.signalCode !== null,
   });
   assert.equal(ready.status, 200, "Gateway did not become ready; inspect synthetic gateway log");
   const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
@@ -321,15 +323,18 @@ async function launch(boot: "seed" | "measure") {
   assert.ok(isRecord(connected) && isRecord(connected.auth));
   assert.equal(connected.auth.method, "trusted-proxy");
   assert.ok(isStringArray(connected.auth.scopes));
-  for (const scope of scopes)
+  for (const scope of scopes) {
     assert.ok(connected.auth.scopes.includes(scope), `Gateway did not grant ${scope}`);
+  }
 }
 async function stop() {
   client?.close();
   client = undefined;
   database?.close();
   database = undefined;
-  if (!child) return;
+  if (!child) {
+    return;
+  }
   const currentBoot = activeBoot;
   const currentLog = log;
   assert.ok(currentBoot && currentLog, "Gateway launch state is incomplete");
@@ -355,7 +360,9 @@ async function stop() {
       signal: stopped.signal,
     });
     child = undefined;
-    await new Promise<void>((resolve) => currentLog.end(resolve));
+    await new Promise<void>((resolve) => {
+      currentLog.end(resolve);
+    });
     log = undefined;
     activeBoot = undefined;
   }
@@ -376,7 +383,9 @@ function row(conversation: string): HeldRow | undefined {
     WHERE channel = 'webchat' AND account_id = 'default' AND conversation_kind = 'current'
       AND parent_conversation_id IS NULL AND conversation_id = ?`)
     .get(conversation);
-  if (!result) return undefined;
+  if (!result) {
+    return undefined;
+  }
   assert.ok(
     typeof result.binding_id === "string" &&
       typeof result.target_session_key === "string" &&
@@ -404,12 +413,14 @@ function adapterSessionId(targetSessionKey: string): string {
     metadata && typeof metadata.identity_json === "string",
     "Binding target has no ACP identity",
   );
-  const identity: unknown = JSON.parse(metadata.identity_json);
+  const sessionIdentity: unknown = JSON.parse(metadata.identity_json);
   assert.ok(
-    isRecord(identity) && typeof identity.acpxSessionId === "string" && identity.acpxSessionId,
+    isRecord(sessionIdentity) &&
+      typeof sessionIdentity.acpxSessionId === "string" &&
+      sessionIdentity.acpxSessionId,
     "Binding target has no backend ACP session ID",
   );
-  return identity.acpxSessionId;
+  return sessionIdentity.acpxSessionId;
 }
 function sameLogicalRow(before: HeldRow, after: HeldRow | undefined) {
   return (
@@ -420,8 +431,12 @@ function sameLogicalRow(before: HeldRow, after: HeldRow | undefined) {
   );
 }
 function messageText(message: Record<string, unknown>) {
-  if (typeof message.content === "string") return message.content;
-  if (!Array.isArray(message.content)) return "";
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (!Array.isArray(message.content)) {
+    return "";
+  }
   const parts: unknown[] = message.content;
   return parts
     .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
@@ -452,7 +467,9 @@ async function send(sessionKey: string, message: string, expectedReply: string) 
   const history = await request("chat.history", { sessionKey, limit: 20 });
   assert.ok(isRecord(history) && Array.isArray(history.messages), "Native history has no messages");
   const messages: unknown[] = history.messages;
-  const latest = messages.filter((entry) => isRecord(entry) && entry.role === "assistant").at(-1);
+  const latest = messages.findLast(
+    (historyMessage) => isRecord(historyMessage) && historyMessage.role === "assistant",
+  );
   assert.ok(
     isRecord(latest) && messageText(latest).includes(expectedReply),
     "Native reply did not confirm action",
@@ -482,7 +499,9 @@ function summarizeObserver() {
   const execShapes = new Set<string>();
   for (const filename of filenames) {
     for (const line of readFileSync(path.join(output, filename), "utf8").split("\n")) {
-      if (!line) continue;
+      if (!line) {
+        continue;
+      }
       const item: unknown = JSON.parse(line);
       if (isRecord(item) && item.type === "site" && item.method === "exec" && item.ok === true) {
         assert.ok(typeof item.sql === "string");
@@ -545,7 +564,9 @@ function summarizeObserver() {
       bindingUpsertsByOperation: {},
     });
   const operation = (cause: unknown, stack: string[] = []): string => {
-    if (!isRecord(cause)) return "unattributed";
+    if (!isRecord(cause)) {
+      return "unattributed";
+    }
     const discriminators: unknown[] = Array.isArray(cause.payloadDiscriminators)
       ? cause.payloadDiscriminators
       : [];
@@ -557,7 +578,9 @@ function summarizeObserver() {
         typeof pair[1] === "string" &&
         pair[1].startsWith("conversationBindings."),
     );
-    if (Array.isArray(target) && typeof target[1] === "string") return target[1];
+    if (Array.isArray(target) && typeof target[1] === "string") {
+      return target[1];
+    }
     // Frozen314 does not expose discriminators for state-broker execute payloads.
     // Native generic unbind/touch retain these named caller and worker frames.
     const frames = [...(isStringArray(cause.originStack) ? cause.originStack : []), ...stack];
@@ -567,16 +590,18 @@ function summarizeObserver() {
           frame,
         ),
       )
-    )
+    ) {
       return "conversationBindings.touch";
+    }
     if (
       frames.some(
         (frame) =>
           / at removeCurrentConversationBindingsInDatabase \(/u.test(frame) ||
           / at async Object\.unbind \(.*\/session-binding-service[^/]*\.mjs:/u.test(frame),
       )
-    )
+    ) {
       return "conversationBindings.remove";
+    }
     return "other";
   };
   const increment = (map: Record<string, number>, key: string) => {
@@ -587,7 +612,9 @@ function summarizeObserver() {
     const sites = new Map<number, ObservedSite>();
     let main = false;
     for (const line of readFileSync(path.join(output, filename), "utf8").split("\n")) {
-      if (!line) continue;
+      if (!line) {
+        continue;
+      }
       const item: unknown = JSON.parse(line);
       if (isRecord(item) && item.type === "process") {
         assert.ok(
@@ -616,8 +643,12 @@ function summarizeObserver() {
         assert.ok(typeof item.phase === "string");
         const count = phaseCount(item.phase);
         count.requests++;
-        if (main) count.mainRequests++;
-        if (!hasCause(item.cause)) count.unattributedRequests++;
+        if (main) {
+          count.mainRequests++;
+        }
+        if (!hasCause(item.cause)) {
+          count.unattributedRequests++;
+        }
         increment(count.requestsByOperation, operation(item.cause));
       } else if (
         Array.isArray(item) &&
@@ -626,9 +657,11 @@ function summarizeObserver() {
       ) {
         const site = sites.get(item[1]);
         assert.ok(site, "Frozen observer execution references an unknown site");
-        if (site.method === "prepare") continue;
+        if (site.method === "prepare") {
+          continue;
+        }
         const count = phaseCount(item[0]);
-        if (site.ok !== true) {
+        if (!site.ok) {
           count.failedSql++;
           continue;
         }
@@ -643,12 +676,18 @@ function summarizeObserver() {
         }
         for (const sql of split?.pieces ?? [site.sql]) {
           count.sql++;
-          if (main) count.mainSql++;
-          if (!hasCause(site.cause)) count.unattributedSql++;
+          if (main) {
+            count.mainSql++;
+          }
+          if (!hasCause(site.cause)) {
+            count.unattributedSql++;
+          }
           increment(count.sqlByOperation, operation(site.cause, site.stack));
           if (/\binsert\s+into\s+"?current_conversation_bindings"?\b/iu.test(sql)) {
             count.bindingUpserts++;
-            if (main) count.mainBindingUpserts++;
+            if (main) {
+              count.mainBindingUpserts++;
+            }
             increment(count.bindingUpsertsByOperation, operation(site.cause, site.stack));
           }
         }
@@ -681,11 +720,14 @@ function cleanup() {
               `${action.phase} never reached the target owner; no product verdict`,
             );
           }
-          if (count?.sqlCountExact === false)
+          if (count?.sqlCountExact === false) {
             validationErrors.push(
               `${action.phase} contains malformed exec SQL; exact totals unavailable`,
             );
-          if (count?.failedSql) validationErrors.push(`${action.phase} has failed SQL`);
+          }
+          if (count?.failedSql) {
+            validationErrors.push(`${action.phase} has failed SQL`);
+          }
           if (
             values["expect-base"] &&
             (count?.bindingUpsertsByOperation["conversationBindings.remove"] ?? 0) === 0
@@ -727,11 +769,14 @@ function cleanup() {
               );
             }
           }
-          if (!profiles.some((name) => name.startsWith("measure/")))
+          if (!profiles.some((name) => name.startsWith("measure/"))) {
             validationErrors.push("No measurement CPU profiles were emitted");
+          }
         }
       }
-      if (validationErrors.length) evidence.ok = false;
+      if (validationErrors.length) {
+        evidence.ok = false;
+      }
       writeFileSync(
         path.join(output, "result.json"),
         `${JSON.stringify(
