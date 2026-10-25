@@ -11,6 +11,11 @@ export function hasExplicitPluginIdScope(ids?: readonly string[]): boolean {
   return ids !== undefined;
 }
 
+/** True when plugin scope was explicitly provided with at least one id. */
+export function hasNonEmptyPluginIdScope(ids?: readonly string[]): boolean {
+  return ids !== undefined && ids.length > 0;
+}
+
 /** Creates a lookup set for explicit plugin scope, or null when unscoped. */
 export function createPluginIdScopeSet(ids?: readonly string[]): ReadonlySet<string> | null {
   if (ids === undefined) {
