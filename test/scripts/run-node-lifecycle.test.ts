@@ -288,6 +288,10 @@ it.runIf(process.platform !== "win32")(
         "gateway-run-argv.mjs",
         "gateway-shutdown-budget.mjs",
         "node-sqlite.mjs",
+        "node-sqlite-capabilities.mjs",
+        "node-sqlite-capabilities.worker.mjs",
+        "runtime-process-bootstrap.generated.mjs",
+        "runtime-process-scripts.generated.mjs",
       ]) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }

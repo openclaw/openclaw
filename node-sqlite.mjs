@@ -1,34 +1,8 @@
+import { probeSqlite, isSqliteWalResetSafeVersion } from "./node-sqlite-capabilities.mjs";
 import { isSupportedOpenClawNodeVersion, SUPPORTED_NODE_VERSION_RANGE } from "./node-version.mjs";
+import { resolveRuntimeBootstrapEntrypointUrl } from "./runtime-process-bootstrap.generated.mjs";
 
-// Self-contained so a different runtime can execute exactly the same probe with -e.
-function probeSqlite(DatabaseSync) {
-  const result = { available: false, version: null, text: false, blob: false, json: false };
-  let database;
-  try {
-    database = new DatabaseSync(":memory:");
-    result.available = true;
-    const version = database.prepare("SELECT sqlite_version() AS version").get()?.version;
-    result.version = typeof version === "string" ? version : null;
-    const text = "a\u0000b\u0000";
-    const bytes = Buffer.from(text, "utf8");
-    const json = JSON.stringify({ value: text });
-    database.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
-    database.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-    const row = database.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
-    result.text =
-      typeof row?.text_value === "string" &&
-      row.text_value.length === text.length &&
-      Buffer.from(row.text_value, "utf8").equals(bytes);
-    result.blob =
-      row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
-    result.json = row?.json_value === json && JSON.parse(row.json_value).value === text;
-  } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
-  } finally {
-    database?.close();
-  }
-  return result;
-}
+export { isSqliteWalResetSafeVersion };
 
 // The launcher and bundled runtime chunks must share one process-local result.
 const capabilityCacheKey = Symbol.for("openclaw.sqliteCapabilities");
@@ -64,7 +38,7 @@ async function probeCurrentSqlite() {
       return unavailableSqliteCapabilities(new Error("node:sqlite is unavailable"));
     }
     // Keep the real capability check when Node's permission policy forbids workers.
-    if (!process.versions.bun && process.permission?.has("worker") === false) {
+    if (!process.versions.bun && process.permission && !process.permission.has("worker")) {
       return probeSqlite(DatabaseSync);
     }
     const env = Object.fromEntries(
@@ -77,12 +51,10 @@ async function probeCurrentSqlite() {
         ? ["--experimental-sqlite"]
         : [];
     const { Worker } = await import("node:worker_threads");
-    worker = new Worker(
-      `const { parentPort } = require("node:worker_threads");
-       parentPort.postMessage(${SQLITE_CAPABILITY_PROBE});
-       parentPort.close();`,
-      { eval: true, env, execArgv },
-    );
+    worker = new Worker(resolveRuntimeBootstrapEntrypointUrl("sqliteCapabilities"), {
+      env,
+      execArgv,
+    });
   } catch (error) {
     return unavailableSqliteCapabilities(error);
   }
@@ -94,8 +66,8 @@ async function probeCurrentSqlite() {
       failure ??= { error };
       retirement ??= Promise.resolve()
         .then(() => worker.terminate())
-        .catch((error) => {
-          failure ??= { error };
+        .catch((/** @type {unknown} */ retirementError) => {
+          failure ??= { error: retirementError };
         });
     };
     const onMessage = (value) => {
@@ -135,25 +107,6 @@ export function detectCurrentSqliteCapabilities() {
   return Promise.resolve(globalThis[capabilityCacheKey]);
 }
 
-export function isSqliteWalResetSafeVersion(value) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(value.trim());
-  if (!match) {
-    return false;
-  }
-  const [major, minor, patch] = match.slice(1).map(Number);
-  if (![major, minor, patch].every(Number.isSafeInteger)) {
-    return false;
-  }
-  return (
-    major > 3 ||
-    (major === 3 &&
-      (minor > 51 ||
-        (minor === 51 && patch >= 3) ||
-        (minor === 50 && patch >= 7) ||
-        (minor === 44 && patch >= 6)))
-  );
-}
-
 export function nodeRuntimeFailure(version, probe) {
   const label = `Node ${version ?? "unknown"}`;
   if (!probe.available) {
@@ -174,5 +127,3 @@ export function nodeRuntimeFailure(version, probe) {
   }
   return null;
 }
-
-export const SQLITE_CAPABILITY_PROBE = `(${probeSqlite.toString()})(require("node:sqlite").DatabaseSync)`;

@@ -331,6 +331,17 @@ sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:g
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 
+Local repository snapshots, workspace manifest publication, Git history, and
+publication restore use declared module entries. Resident workspace manifest
+computation calls a generated static module with its own imports. Shell snapshots
+capture their filtered environment through a declared entry as well.
+
+Runtime version and SQLite probes execute declared program files with the selected
+external runtime. Metadata inventory uses the image's declared entry when it
+executes the image itself. The npm launcher discovery preload is a generated
+data-URL asset so delayed manager descendants can still load it after discovery
+finishes.
+
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module
 boundaries. The sidecar contains the resources read from disk:

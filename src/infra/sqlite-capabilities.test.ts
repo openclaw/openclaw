@@ -1,15 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { runInNewContext } from "node:vm";
-import { expect, it, vi } from "vitest";
-import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
+import { copyFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
+import { probeSqlite } from "../../node-sqlite-capabilities.mjs";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 type ProbeValue = string | Uint8Array;
 
-function probeSqlite(Database: unknown): unknown {
-  const context = { Buffer, Error, Uint8Array, require: () => ({ DatabaseSync: Database }) };
-  return runInNewContext(SQLITE_CAPABILITY_PROBE, context);
-}
+const temporary = useAutoCleanupTempDirTracker(afterEach);
 
 function runProbe(script: string, env?: NodeJS.ProcessEnv): unknown {
   return JSON.parse(
@@ -164,3 +164,29 @@ it.each([
     });
   },
 );
+
+it("runs the shipped root worker without function source, loaders, or source files", () => {
+  const root = temporary.make("sqlite-capability-bootstrap-");
+  for (const name of [
+    "node-sqlite.mjs",
+    "node-version.mjs",
+    "node-sqlite-capabilities.mjs",
+    "node-sqlite-capabilities.worker.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+  ]) {
+    copyFileSync(new URL("../../" + name, import.meta.url), path.join(root, name));
+  }
+  const output = runProbe(`
+    Function.prototype.toString = () => { throw new Error("function source unavailable"); };
+    process.env.NODE_OPTIONS = "--require /missing-sqlite-preload.cjs";
+    process.env.BUN_OPTIONS = "--preload /missing-sqlite-preload.mjs";
+    const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(pathToFileURL(path.join(root, "node-sqlite.mjs")).href)});
+    const pending = detectCurrentSqliteCapabilities();
+    const capabilities = await pending;
+    process.stdout.write(JSON.stringify({ capabilities, samePending: pending === detectCurrentSqliteCapabilities() }));
+  `);
+  expect(output).toMatchObject({
+    capabilities: { available: true, text: true, blob: true, json: true },
+    samePending: true,
+  });
+});
