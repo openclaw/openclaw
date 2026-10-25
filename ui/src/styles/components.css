@@ -489,6 +489,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
+.settings-save-indicator__spinner svg {
+  animation: btn-spinner-spin 0.7s linear infinite;
+}
+
 @keyframes btn-spinner-spin {
   to {
     transform: rotate(360deg);
@@ -496,7 +500,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .btn__spinner {
+  .btn__spinner,
+  .settings-save-indicator__spinner svg {
     animation: none;
   }
 }

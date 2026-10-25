@@ -5,8 +5,8 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderChatQueueSolid as ChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
-import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
+import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 
 let container: HTMLDivElement;

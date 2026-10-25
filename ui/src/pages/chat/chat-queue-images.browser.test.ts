@@ -13,8 +13,8 @@ import {
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
-import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
+import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 
 const imageData =

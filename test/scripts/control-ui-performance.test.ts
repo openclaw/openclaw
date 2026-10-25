@@ -316,14 +316,10 @@ describe("Control UI performance budgets", () => {
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
-  it("bounds the approved mobile header CSS restoration", () => {
+  it("bounds total CSS at the approved catalog ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
     for (let index = 0; index < 6; index++) {
-      writeAsset(
-        "css-" + index + ".css",
-        index === 0 ? 265_570 : 265_567,
-        index === 0 ? 50_422 : 50_418,
-      );
+      writeAsset("css-" + index + ".css", index === 0 ? 265_570 : 265_567, 50_871);
     }
     const base = collectMetrics(distDir);
     writeAsset("mobile-header.css", 2_066, 845);

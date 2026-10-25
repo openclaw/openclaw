@@ -1664,10 +1664,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--ok);
 }
 
-.settings-save-indicator__spinner svg {
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
 @keyframes settingsSaveIndicatorFade {
   0%,
   88% {
@@ -1682,8 +1678,7 @@ openclaw-settings-save-indicator:empty {
 @media (prefers-reduced-motion: reduce) {
   .settings-save-indicator--saved,
   .settings-save-indicator__claw svg,
-  .settings-save-indicator__claw svg .claw-icon__jaw,
-  .settings-save-indicator__spinner svg {
+  .settings-save-indicator__claw svg .claw-icon__jaw {
     animation: none;
   }
 }
