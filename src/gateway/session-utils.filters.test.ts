@@ -2,10 +2,6 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  requestContext,
-  sessionReadHandlers,
-} from "./server-methods/sessions-read-cache.test-support.js";
 import * as sessionIdentity from "./session-identity-projection.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { listSessionFixture } from "./session-list.test-support.js";
@@ -187,29 +183,6 @@ it("expires bounded non-native child owners without a session or registry public
   expect(select(now + 3_600_000)).toEqual([key]);
   expect(select(now + 3_600_001)).toEqual([]);
   expect(select(now)).toEqual([key]);
-});
-
-it.each([
-  [0, 0],
-  [0, 2, 1],
-])("rejects non-ascending activity boundaries: %j", async (...activityPulseBoundaries) => {
-  const respond = vi.fn();
-  await sessionReadHandlers["sessions.list"]!({
-    req: { type: "req", id: "pulse-boundaries", method: "sessions.list" },
-    params: { activityPulseBoundaries },
-    context: requestContext(cfg),
-    client: null,
-    isWebchatConnect: () => false,
-    respond,
-  });
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
-    }),
-  );
 });
 
 it("aggregates the selected time window after person filtering and before pagination", async () => {

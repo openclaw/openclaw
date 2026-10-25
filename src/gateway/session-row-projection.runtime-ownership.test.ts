@@ -106,17 +106,13 @@ function catalogFor(
   id: string,
   name = id,
 ) {
-  return new Map([
-    [
-      "main",
-      createPreparedGatewayModelCatalog({
-        config,
-        entries: [{ provider: "example", id, name }],
-        pluginRegistry: native.registry,
-        metadataSnapshot: native.metadataSnapshot,
-      }),
-    ],
-  ]);
+  const catalog = createPreparedGatewayModelCatalog({
+    config,
+    entries: [{ provider: "example", id, name }],
+    pluginRegistry: native.registry,
+    metadataSnapshot: native.metadataSnapshot,
+  });
+  return new Map([["main", catalog]]);
 }
 
 function expectListed(respond: ReturnType<typeof vi.fn>, sessions: Record<string, unknown>[]) {

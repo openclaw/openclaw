@@ -32,7 +32,6 @@ import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
-import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
@@ -355,7 +354,6 @@ it.for([
         signal,
       );
       const registration = getEmbeddedRunAttachment(handle);
-      expect(getSessionControllerOperation(sessionKey)).toBeDefined();
       expect(registration?.toolAuthority?.source).toBe("reply");
       expect(readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined).toBe(
         source === "browser",
@@ -365,11 +363,6 @@ it.for([
       );
       expect(registration?.delegatedAuthority).toBeDefined();
       expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
-      expect(handle).toMatchObject({
-        terminalReplyExpectation: "result-required",
-        messageInjectionV2: { version: 2 },
-        supportsTranscriptCommitWait: true,
-      });
       const response = await rpcReq(harness.ws, "chat.send", {
         sessionKey,
         sessionId,

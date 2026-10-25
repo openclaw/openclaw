@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -314,20 +314,11 @@ describe("gateway plugin install authority", () => {
       );
       try {
         await wait(
-          Promise.race([
+          awaitGateBeforeSettlement(
             reached.promise,
-            reply.then((response) => {
-              if ("error" in response) {
-                throw response.error;
-              }
-              throw new Error("Install replied before boundary");
-            }),
-            finished.promise.then(({ error }) => {
-              throw error instanceof Error
-                ? error
-                : new Error("Install settled before boundary", { cause: error });
-            }),
-          ]),
+            Promise.race([request, finished.promise]),
+            "Install settled before boundary",
+          ),
           "install boundary not reached",
         );
         if (action === "disconnect-revoke") {

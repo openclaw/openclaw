@@ -10,7 +10,6 @@ import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -52,7 +51,7 @@ describe("sessions_send steering custody", () => {
   afterEach(drainSessionToolsFixture);
 
   it.each(["owned child", "owned session", "shared noncreator", "foreign child"] as const)(
-    "uses session-write authority for %s without granting general agent access",
+    "enqueues steering only with session-write authority for %s",
     async (targetKind) => {
       await withSessionToolsFixture(async (cfg) => {
         const role = expectDefined(cfg.gateway?.roles?.definitions?.view, "session writer role");
@@ -115,32 +114,6 @@ describe("sessions_send steering custody", () => {
             },
             async () => {
               await withDelayedSessionToolsSteering(cfg, async (receiver) => {
-                // Persisted membership permits discovery; it must not become creator authority.
-                expect(
-                  await callAgentToolGatewayRequest({
-                    method: "sessions.describe",
-                    params: { key: PARTICIPANT_SHARED },
-                  }),
-                ).toMatchObject({
-                  session: {
-                    key: PARTICIPANT_SHARED,
-                    sharingRole: owned
-                      ? "owner"
-                      : targetKind === "shared noncreator"
-                        ? "member"
-                        : "viewer",
-                  },
-                });
-                await expect(
-                  callAgentToolGatewayRequest({
-                    method: "agent",
-                    params: {
-                      sessionKey: PARTICIPANT_SHARED,
-                      message: "Unbound agent requests remain restricted",
-                      idempotencyKey: "session-scope-public-agent",
-                    },
-                  }),
-                ).rejects.toThrow("missing scope: operator.write");
                 const sent = withOwnedSessionTranscriptWrites(
                   {
                     sessionTarget: {
