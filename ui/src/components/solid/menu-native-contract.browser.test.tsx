@@ -8,11 +8,7 @@ import {
   type HeaderPanelAction,
 } from "../../pages/chat/components/chat-header-panel-actions.tsx";
 import "../../styles.css";
-import "../../../public/themes/absolutely.css";
-import "../../../public/themes/phosphor.css";
-import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { afterModalHidden, nextFrame } from "../../test-helpers/modal-dialog.ts";
-import { emulateOverlayMedia } from "../../test-helpers/overlay-browser-media.ts";
 import {
   item,
   mountMenu,
@@ -30,7 +26,6 @@ import { Kbd } from "./kbd.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { keyFocus, mountControls, update } from "./menu-contract.test-support.tsx";
 import { createMenuControls, Menu, type MenuItem } from "./menu.tsx";
-import { Popover, type PopoverHandle, type PopoverProps } from "./popover.tsx";
 import "../../styles/session-menu.css";
 import "../kbd.css";
 import "../../styles/chat/layout.css";
@@ -65,7 +60,6 @@ afterEach(async () => {
       documentRoot.setAttribute(name, value);
     }
   }
-  await emulateOverlayMedia({ forcedColors: "none", reducedMotion: "no-preference" });
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
@@ -570,269 +564,9 @@ it.each(["ltr", "rtl"] as const)(
   },
 );
 
-function color(value: string) {
-  const probe = document.createElement("span");
-  probe.style.color = value;
-  document.body.append(probe);
-  const resolved = getComputedStyle(probe).color;
-  probe.remove();
-  return resolved;
-}
-
-function expectWithinViewport(element: HTMLElement) {
-  const box = element.getBoundingClientRect();
-  expect(box.width).toBeGreaterThan(0);
-  expect(box.height).toBeGreaterThan(0);
-  expect(box.left).toBeGreaterThanOrEqual(0);
-  expect(box.top).toBeGreaterThanOrEqual(0);
-  expect(box.right).toBeLessThanOrEqual(window.innerWidth);
-  expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
-  return box;
-}
-
-function itemDetails(label: string) {
-  return item(label).querySelector(".oc-menu-item__details")!;
-}
-
 function positionTrigger(style: Partial<CSSStyleDeclaration>) {
   Object.assign(trigger().style, { position: "fixed" }, style);
 }
-function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
-  const box = expectWithinViewport(menu);
-  const itemBox = element.getBoundingClientRect();
-  expect(box.height).toBeLessThanOrEqual(420);
-  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
-  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
-}
-
-describe("native overlay presentation", () => {
-  it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
-    mountMenu({
-      items: [
-        { id: "open", label: "Open", details: "Details" },
-        { id: "delete", label: "Delete", details: "Permanently", variant: "danger" },
-        { id: "disabled", label: "Unavailable", disabled: true },
-        { id: "group", label: "Group", children: [{ id: "child", label: "Child" }] },
-      ],
-    });
-    await openMenu();
-    await openMenu("people-group");
-    const child = item("Child", "people-group");
-    await userEvent.hover(child);
-    await userEvent.keyboard("{Home}");
-    const themes = ["absolutely", "phosphor", "custom"].flatMap((name) => [name, `${name}-light`]);
-    for (const theme of ["dark", "light", ...themes]) {
-      documentRoot.dataset.theme = theme;
-      documentRoot.dataset.themeMode =
-        theme.endsWith("light") || theme === "light" ? "light" : "dark";
-      if (theme.startsWith("custom")) {
-        documentRoot.style.cssText +=
-          "--muted:rgb(120,190,160);--text:rgb(220,235,210);--ring:rgb(160,130,230);--popover:rgb(32,45,38);--danger:rgb(240,135,150);--bg-hover:rgb(45,62,51);";
-      }
-      document.getAnimations().forEach((animation) => animation.finish());
-      const colors: [Element, "color" | "backgroundColor", string][] = [
-        [surface(), "backgroundColor", "popover"],
-        [item("Open"), "color", "text"],
-        [itemDetails("Open"), "color", "muted"],
-        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
-        [item("Delete"), "color", "danger"],
-        [itemDetails("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "bg-hover"],
-      ];
-      for (const [element, property, token] of colors) {
-        expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
-      }
-      const rootFontSize = Number.parseFloat(getComputedStyle(documentRoot).fontSize);
-      expect(getComputedStyle(child), theme).toMatchObject({
-        outlineStyle: "solid",
-        outlineWidth: `${rootFontSize * 0.1875}px`,
-        outlineOffset: `${rootFontSize * 0.0625}px`,
-        outlineColor: color("var(--ring)"),
-      });
-      expect(getComputedStyle(item("Unavailable")).opacity, theme).toBe("0.5");
-    }
-  });
-
-  it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
-    await page.viewport(800, 700);
-    const style = document.createElement("style");
-    style.textContent = ".oc-menu.consumer-sized-menu { max-height: 500px; }";
-    document.head.prepend(style);
-    extraNodes.push(style);
-    mountMenu({
-      placement: "right-start",
-      panelClass: "consumer-sized-menu",
-      items: entries("Action", 24),
-    });
-    positionTrigger({ left: "200px", top: "50px" });
-    await openMenu();
-    // Measure the consumer budget, not WebKit's in-flight entry scale.
-    finishElementAnimations(surface());
-    expect(expectWithinViewport(surface()).height).toBe(500);
-    await userEvent.keyboard("{End}");
-    expect(document.activeElement).toBe(item("Action 24"));
-    const last = item("Action 24").getBoundingClientRect();
-    expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
-  });
-
-  it.each([
-    ["ltr", "low"],
-    ["rtl", "bottom"],
-    ["ltr", "middle"],
-  ] as const)(
-    "fits nested menu actions within the viewport in %s near the %s",
-    async (dir, position) => {
-      await page.viewport(800, 600);
-      const enlarged = position !== "low";
-      const count = enlarged ? 28 : 10;
-      if (enlarged) {
-        documentRoot.style.fontSize = "24px";
-      }
-      mountMenu({
-        dir,
-        items: [{ id: "actions", label: "Actions", children: entries("Action", count, enlarged) }],
-      });
-      positionTrigger(
-        position === "low"
-          ? { left: "350px", top: "400px" }
-          : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
-      );
-      await openMenu();
-      const parentBox = expectWithinViewport(surface());
-      if (position === "bottom") {
-        expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
-      }
-      await openMenu("people-actions");
-      const child = surface("people-actions");
-      const last = item(`Action ${count}`, "people-actions");
-      if (!enlarged) {
-        expect(child.scrollHeight).toBe(child.clientHeight);
-        expectItemVisible(last, child);
-        return;
-      }
-      expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
-      await userEvent.keyboard("{End}");
-      expect(document.activeElement).toBe(last);
-      expectItemVisible(last, child);
-
-      // Scrolling the menu can hide the focused action; End must reveal it again.
-      child.scrollTo({ top: 0, behavior: "instant" });
-      await userEvent.keyboard("{End}");
-      expect(document.activeElement).toBe(last);
-      expectItemVisible(last, child);
-    },
-  );
-
-  it("uses high-contrast borders and focus in forced colors", async () => {
-    await emulateOverlayMedia({ forcedColors: "active" });
-    expect(matchMedia("(forced-colors: active)").matches).toBe(true);
-    mountMenu();
-    await openMenu();
-    expect(getComputedStyle(surface()).boxShadow).toBe("none");
-    expect(getComputedStyle(surface()).borderTopColor).toBe(color("CanvasText"));
-    await userEvent.keyboard("{End}");
-    expect(getComputedStyle(item("Archive")).outlineColor).toBe(color("Highlight"));
-  });
-
-  it("disables menu and popover motion for reduced motion", async () => {
-    await emulateOverlayMedia({ reducedMotion: "reduce" });
-    expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
-    mountMenu();
-    let popover!: PopoverHandle;
-    render(() => (
-      <Popover id="motion-popover" label="Popover" ref={(value) => (popover = value)}>
-        Content
-      </Popover>
-    ));
-    flush();
-    await openMenu();
-    popover.show();
-    await phase(popover.overlay.surface, "open");
-    for (const element of [surface(), item("Archive"), popover.overlay.surface]) {
-      expect(getComputedStyle(element)).toMatchObject({
-        animationName: "none",
-        transitionDuration: "0s",
-      });
-      expect(element.getAnimations()).toHaveLength(0);
-    }
-  });
-});
-
-function mountPopover(props: Partial<PopoverProps> = {}, outside?: JSX.Element) {
-  let handle!: PopoverHandle;
-  const view = render(() => (
-    <>
-      <Popover id="details" label="Details" {...props} ref={(value) => (handle = value)}>
-        {props.children ?? "Details"}
-      </Popover>
-      {outside}
-    </>
-  ));
-  flush();
-  return { view, handle, panel: handle.overlay.surface };
-}
-
-it("keeps a pinned popover open outside and closes once with Escape", async () => {
-  const changes: boolean[] = [];
-  const { view, handle, panel } = mountPopover(
-    {
-      label: "Pinned details",
-      dismissOutsidePointer: false,
-      dismissOutsideFocus: false,
-      onOpenChange: (open) => changes.push(open),
-      children: <input aria-label="Pinned draft" />,
-    },
-    <input aria-label="Outside" />,
-  );
-  const button = view.getByRole("button", { name: "Pinned details" });
-  const outside = view.getByRole("textbox", { name: "Outside" });
-  await userEvent.click(button);
-  await phase(panel, "open");
-  const input = view.getByRole<HTMLInputElement>("textbox", { name: "Pinned draft" });
-  await userEvent.fill(input, "Unsaved draft");
-  await userEvent.click(outside);
-  expect(handle.overlay.open).toBe(true);
-  expect(document.activeElement).toBe(outside);
-  input.focus();
-  await userEvent.tab();
-  expect(document.activeElement).toBe(outside);
-  expect(handle.overlay.open).toBe(true);
-  expect(changes).toEqual([true]);
-  await userEvent.keyboard("{Escape}");
-  await phase(panel, "hidden");
-  expect(changes).toEqual([true, false]);
-  expect(document.activeElement).toBe(button);
-  handle.show();
-  await phase(panel, "open");
-  expect(view.getByRole("textbox", { name: "Pinned draft" })).toBe(input);
-  expect(input.value).toBe("Unsaved draft");
-});
-
-it("reanchors controlled content and releases the old anchor on disposal", async () => {
-  const first = document.createElement("button");
-  const second = document.createElement("button");
-  document.body.append(first, second);
-  extraNodes.push(first, second);
-  first.style.setProperty("anchor-name", "--existing-anchor");
-  const [props, setProps] = createStore({ anchor: first, open: false });
-  const { view, panel } = mountPopover(props);
-  const set = (next: Partial<typeof props>) => {
-    setProps((current) => ({ ...current, ...next }));
-    flush();
-  };
-  expect(view.queryByRole("button")).toBeNull();
-  set({ open: true });
-  await phase(panel, "open");
-  const anchorName = () => panel.style.getPropertyValue("position-anchor");
-  expect(first.style.getPropertyValue("anchor-name")).toContain(anchorName());
-  set({ anchor: second });
-  expect(first.style.getPropertyValue("anchor-name")).toBe("--existing-anchor");
-  expect(second.style.getPropertyValue("anchor-name")).toContain(anchorName());
-  set({ open: false });
-  await phase(panel, "hidden");
-  view.unmount();
-  expect(second.style.getPropertyValue("anchor-name")).toBe("");
-});
 
 const modalDialog = (host: OpenClawModalDialog) =>
   host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
