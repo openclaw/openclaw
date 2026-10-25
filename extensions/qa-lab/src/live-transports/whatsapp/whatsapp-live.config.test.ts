@@ -15,8 +15,6 @@ import {
 } from "../../suite-planning.js";
 import { groupJid } from "./runtime.test-support.js";
 import { config, scenario } from "./scenario.test-support.js";
-import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
-import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 
 const audio = (model: string) => ({ provider: "openai", model, capabilities: ["audio" as const] });
 const gateway = { bind: "loopback", gatewayPort: 18789, gatewayToken: "test-token" } as const;
@@ -136,15 +134,8 @@ async function checkBroadcast(roster: "generated" | "explicit", home: string) {
     agents.entries.main = { identity: { name: "Existing" }, model: "mock-openai/custom" };
   }
   const original = structuredClone(base);
-  const cfg = buildWhatsAppQaConfig(base, {
-    allowFrom: ["*"],
-    authDir: path.join(home, "auth"),
-    dmPolicy: "open",
-    groupJid,
-    ownerAllowFrom: ["+15550000001"],
-    overrides: whatsappConversationScenarios.whatsappQaBroadcastGroupFanoutScenario.configOverrides,
-    sutAccountId: "sut",
-  });
+  const overrides = scenario("whatsapp-broadcast-group-fanout").configOverrides;
+  const cfg = config({ groupJid, overrides }, base);
 
   await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
   const snapshot = await readConfigFileSnapshot({ pluginValidation: "core-only", observe: false });
@@ -155,9 +146,8 @@ async function checkBroadcast(roster: "generated" | "explicit", home: string) {
     ...Object.keys(original.agents?.entries ?? {}).map((id) => resolveAgentWorkspaceDir(value, id)),
   ];
   expect(placement(cfg)).toEqual(placement(original));
-  const entries = cfg.agents?.entries ?? {};
-  expect(entries).toMatchObject(original.agents?.entries ?? {});
-  expect(entries).toHaveProperty("qa-second");
+  expect(cfg.agents?.entries).toMatchObject(original.agents?.entries ?? {});
+  expect(cfg.agents?.entries).toHaveProperty("qa-second");
   expect(cfg.broadcast).toEqual({ strategy: "sequential", [groupJid]: ["main", "qa-second"] });
   expect(base).toEqual(original);
 }

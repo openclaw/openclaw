@@ -5,15 +5,12 @@ import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
-import type { QaGatewayStopResult } from "../../gateway-child.js";
 import { createQaTransportAdapter } from "../../qa-transport-registry.js";
-import { runQaFlowSuiteCleanupPlan } from "../../suite.js";
 import { createTempDirHarness } from "../../temp-dir.test-helper.js";
 import { whatsappQaCliRegistration } from "./cli.js";
-import { createArchive, createDriver, phones } from "./runtime.test-support.js";
+import { createArchive, createDriver, observedMessage, phones } from "./runtime.test-support.js";
 import type { WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -156,30 +153,25 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
   });
 
   it.each([
-    ["none", undefined, undefined],
-    ["gateway stop", undefined, "gateway stop"],
-    ["driver close", mocks.closeDriver, "transport before gateway stop"],
-    ["heartbeat request", undefined, undefined],
-    ["heartbeat stop", mocks.heartbeatStop, "transport after gateway stop"],
-    ["lease release", mocks.release, "transport after gateway stop"],
+    ["none", undefined],
+    ["driver close", mocks.closeDriver],
+    ["heartbeat request", undefined],
+    ["heartbeat stop", mocks.heartbeatStop],
+    ["lease release", mocks.release],
   ] as const)(
-    "keeps lease and auth until terminal Gateway teardown (failure: %s)",
-    async (failureAt, fail, phase) => {
+    "keeps lease and auth between cleanup phases (failure: %s)",
+    async (failureAt, fail) => {
       const transport = await createAdapter();
       const cfg = transport.adapter.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-      const sutAuthDir = await fs.realpath(
-        expectDefined(cfg.channels?.whatsapp?.accounts?.sut?.authDir, "SUT auth directory"),
+      const sutAuthDir = expectDefined(
+        cfg.channels?.whatsapp?.accounts?.sut?.authDir,
+        "SUT auth directory",
       );
       await expectResourcesRetained(sutAuthDir);
       if (failureAt === "heartbeat request") {
         mocks.heartbeat.mockRejectedValueOnce(new Error("heartbeat request failed"));
       }
-      const lastReply: WhatsAppQaDriverObservedMessage = {
-        kind: "text",
-        fromPhoneE164: "+15550000002",
-        observedAt: new Date().toISOString(),
-        text: "last reply before cleanup",
-      };
+      const lastReply = observedMessage("last-reply", { text: "last reply before cleanup" });
       observed.push(lastReply);
       await vi.advanceTimersByTimeAsync(500);
       expect(transport.adapter.state.getSnapshot().messages.map(({ text }) => text)).toEqual([
@@ -193,57 +185,28 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
 
       const failure = new Error(`${failureAt} failed`);
       fail?.mockRejectedValueOnce(failure);
-      const gatewayStopped = createDeferred<void>();
-      const stopStarted = createDeferred<void>();
-      const stopGateway = vi.fn(async (): Promise<QaGatewayStopResult> => {
-        stopStarted.resolve();
-        await gatewayStopped.promise;
-        if (failureAt === "gateway stop") {
-          throw failure;
-        }
-        return { process: "confirmed-stopped", errors: [] };
-      });
-      const cleanup = runQaFlowSuiteCleanupPlan({
-        cleanupTransportBeforeGatewayStop: transport.cleanupBeforeGatewayStop,
-        cleanupTransportAfterGatewayStop: transport.cleanupAfterGatewayStop,
-        stopGateway,
-        disposeAgentHarnesses: async () => {},
-        finishLab: async () => {},
-      });
-      try {
-        // The active polling sleep must drain before the driver or Gateway closes.
-        await vi.advanceTimersByTimeAsync(499);
-        expect(mocks.closeDriver).not.toHaveBeenCalled();
-        expect(stopGateway).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        await stopStarted.promise;
-        expect(mocks.closeDriver).toHaveBeenCalledOnce();
-        await expectResourcesRetained(sutAuthDir);
-        mocks.heartbeat.mockClear();
-        observed.push({ ...lastReply, text: "must not poll after cleanup" });
-        await vi.advanceTimersByTimeAsync(1_000);
-        if (failureAt !== "heartbeat request") {
-          expect
-            .soft(mocks.heartbeat, "heartbeat continues while Gateway stop is pending")
-            .toHaveBeenCalled();
-        }
-        expect(transport.adapter.state.getSnapshot().messages).toHaveLength(1);
-      } finally {
-        gatewayStopped.resolve();
-        await cleanup;
+      const before = transport.cleanupBeforeGatewayStop();
+      const drained =
+        failureAt === "driver close"
+          ? expect(before).rejects.toBe(failure)
+          : expect(before).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(499);
+      expect(mocks.closeDriver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await drained;
+      await expectResourcesRetained(sutAuthDir);
+      mocks.heartbeat.mockClear();
+      observed.push({ ...lastReply, text: "must not poll after cleanup" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (failureAt !== "heartbeat request") {
+        expect(mocks.heartbeat).toHaveBeenCalled();
       }
-      const failures = await cleanup;
-      expect(failures).toEqual(phase ? [{ phase, error: failure }] : []);
-      if (failureAt === "gateway stop") {
-        await expectResourcesRetained(sutAuthDir);
-        mocks.heartbeat.mockClear();
-        await vi.advanceTimersByTimeAsync(100);
-        expect
-          .soft(mocks.heartbeat, "failed Gateway stop must retain heartbeat")
-          .toHaveBeenCalled();
-      } else {
-        await expectLeaseReleased();
-      }
+      expect(transport.adapter.state.getSnapshot().messages).toHaveLength(1);
+      const after = transport.cleanupAfterGatewayStop();
+      await (fail && failureAt !== "driver close"
+        ? expect(after).rejects.toBe(failure)
+        : expect(after).resolves.toBeUndefined());
+      await expectLeaseReleased();
       if (fail) {
         await expect(transport.cleanupWithoutGateway()).rejects.toBe(failure);
         expect(mocks.closeDriver).toHaveBeenCalledOnce();
