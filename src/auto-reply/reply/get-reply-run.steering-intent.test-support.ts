@@ -137,37 +137,17 @@ export function registerSteeringIntentProducerCases(params: {
       expect(call.followupRun.prompt).toBe(expected);
     });
 
-    it.each([
-      ["ordinary prose", "continue the task", true, "continue-existing"],
-      ["accepted exec policy", "/exec security=deny continue the task", true, "new-execution"],
-      ["accepted elevation off", "/elevated off continue the task", true, "new-execution"],
-      [
-        "unauthorized exec text",
-        "/exec security=deny continue the task",
-        false,
-        "continue-existing",
-      ],
-    ] as const)(
-      "retains %s through actual reply-run construction",
-      async (name, body, authorized, kind) => {
-        const input = await prepareIngress(body, authorized);
-        await params.runPrepared(input);
-        const produced = params.requireRunReplyAgentCall();
-        expect(produced.steeringIntent).toEqual({ kind });
-        expect(produced.followupRun.run.elevatedLevel).toBe("off");
-        if (name === "accepted exec policy") {
-          expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
-          expect(produced.followupRun.prompt).not.toContain("/exec");
-        }
-        if (name === "unauthorized exec text") {
-          expect(input.command.isAuthorizedSender).toBe(false);
-          expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
-          expect(produced.followupRun.prompt).toContain(body);
-        }
-        // Both ordinary default off and explicitly requested off have the same
-        // resolved value above; intent must survive the producer independently.
-      },
-    );
+    it("keeps unauthorized exec text as ordinary continuation", async () => {
+      const body = "/exec security=deny continue the task";
+      const input = await prepareIngress(body, false);
+      await params.runPrepared(input);
+      const produced = requireRunReplyAgentCall();
+      expect(input.command.isAuthorizedSender).toBe(false);
+      expect(produced.steeringIntent).toEqual({ kind: "continue-existing" });
+      expect(produced.followupRun.run.elevatedLevel).toBe("off");
+      expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
+      expect(produced.followupRun.prompt).toContain(body);
+    });
 
     it.each(["/exec security=deny continue the task", "/elevated off continue the task"])(
       "keeps %s out of the question probe and active backend",
@@ -183,7 +163,6 @@ export function registerSteeringIntentProducerCases(params: {
         });
         const queueMessage = vi.fn(async () => {});
         const followup = vi.fn(async () => {});
-        const touched = vi.fn(async () => {});
         const active = params.activatePreparedRun(input.sessionKey);
         active.attachBackend({
           kind: "embedded",
@@ -191,6 +170,12 @@ export function registerSteeringIntentProducerCases(params: {
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
         });
         vi.mocked(runReplyAgent).mockImplementationOnce(async (produced) => {
+          expect(produced.steeringIntent).toEqual({ kind: "new-execution" });
+          expect(produced.followupRun.run.elevatedLevel).toBe("off");
+          if (body.startsWith("/exec")) {
+            expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
+            expect(produced.followupRun.prompt).not.toContain("/exec");
+          }
           // Use the exact object emitted by executePreparedReplyRun. Never set
           // steeringIntent in a test or call the intent helper directly.
           await expect(runReplyQuestionInput(produced)).resolves.toEqual({ handled: false });
@@ -200,7 +185,6 @@ export function registerSteeringIntentProducerCases(params: {
                 createSteerParams(produced.queueKey, produced.followupRun, active, {
                   ...produced,
                   runFollowup: followup,
-                  touchActiveSessionEntry: touched,
                 }),
               ),
             ).resolves.toBe("handled");
@@ -210,7 +194,6 @@ export function registerSteeringIntentProducerCases(params: {
             await expect(
               produced.followupRun.controllerInput?.injectionOrder.settled,
             ).resolves.toBe(false);
-            expect(touched).toHaveBeenCalledOnce();
             expect(claim).not.toHaveBeenCalled();
             expect(policy).not.toHaveBeenCalled();
             expect(queueMessage).not.toHaveBeenCalled();

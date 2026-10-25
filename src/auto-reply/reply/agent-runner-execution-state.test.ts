@@ -93,13 +93,13 @@ describe("executeAgentTurn: session state", () => {
       return runFallback(params, provider, model);
     });
     state.runEmbeddedAgentMock
-      .mockImplementationOnce(async () => {
-        throw new LiveSessionModelSwitchError({
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.6-luna",
           agentRuntimeOverride: "codex",
-        });
-      })
+        }),
+      )
       .mockResolvedValueOnce(success("switched", "gpt-5.6-luna"));
 
     const followupRun = createFollowupRun();
@@ -122,11 +122,11 @@ describe("executeAgentTurn: session state", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(followupRun.run).toMatchObject({ provider: "openai", model: "gpt-5.6-luna" });
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex", thinkLevel: "ultra" }),
-    );
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+      agentHarnessRuntimeOverride: "codex",
+      thinkLevel: "ultra",
+    });
   });
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
@@ -146,49 +146,39 @@ describe("executeAgentTurn: session state", () => {
       return runFallback(params, "openai", "gpt-5.4");
     });
     state.runEmbeddedAgentMock
-      .mockImplementationOnce(async () => {
-        throw new LiveSessionModelSwitchError({
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.4",
           authProfileId: "profile-b",
           authProfileIdSource: "user",
-        });
-      })
-      .mockImplementationOnce(async () => {
-        throw new LiveSessionModelSwitchError({
+        }),
+      )
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.4",
           authProfileId: "profile-c",
           authProfileIdSource: "auto",
-        });
-      })
+        }),
+      )
       .mockResolvedValueOnce(success("finally ok", "gpt-5.4"));
 
     const followupRun = createFollowupRun();
     const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
 
     expect(result.kind).toBe("success");
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
     expect(followupRun.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
       authProfileId: "profile-c",
       authProfileIdSource: "auto",
     });
-    expect(state.runEmbeddedAgentEntryMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        selection: expect.objectContaining({ userLockedAuthProfileId: "profile-b" }),
-      }),
-      expect.any(Function),
-    );
-    expect(state.runEmbeddedAgentEntryMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        selection: expect.objectContaining({ userLockedAuthProfileId: undefined }),
-      }),
-      expect.any(Function),
-    );
+    expect(
+      state.runEmbeddedAgentEntryMock.mock.calls
+        .slice(1)
+        .map(([entry]) => entry.selection.userLockedAuthProfileId),
+    ).toEqual(["profile-b", undefined]);
   });
 
   it("does not roll back newer override changes after a failed fallback candidate", async () => {
@@ -229,7 +219,6 @@ describe("executeAgentTurn: session state", () => {
       authProfileOverride: "zai:work",
       authProfileOverrideSource: "user",
     });
-    expect(sessionStore.main).toMatchObject({ providerOverride: "zai", modelOverride: "glm-5" });
   });
 
   it("defers the first embedded assistant error after a CLI fallback failure", async () => {

@@ -67,6 +67,18 @@ describe("reply turn admission", () => {
   ) {
     return admitTestReplyTurn({ sessionKey: active.key, sessionId, ...overrides });
   }
+  function abortableWait(
+    active: ReturnType<typeof activeReply>,
+    kind: "visible" | "queued_followup" = "visible",
+  ) {
+    const controller = new AbortController();
+    return {
+      ...observe(
+        admitBehind(active, "waiting-session", { kind, upstreamAbortSignal: controller.signal }),
+      ),
+      abort: () => controller.abort(),
+    };
+  }
   function completeOwned(
     result: Awaited<ReturnType<typeof admitTestReplyTurn>>,
     sessionId?: string,
@@ -164,18 +176,13 @@ describe("reply turn admission", () => {
     const active = activeReply();
     active.setPhase("running");
     active.recordActivity();
-    const abortController = new AbortController();
-    const result = observe(
-      admitBehind(active, "waiting-session", {
-        upstreamAbortSignal: abortController.signal,
-      }),
-    );
+    const result = abortableWait(active);
 
     await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
     expect(result.isSettled()).toBe(false);
     expect(getSessionControllerOperation(active.key)).toBe(active);
 
-    abortController.abort();
+    result.abort();
     expectSkipped(await result.pending, active, "aborted");
   });
 
@@ -187,15 +194,9 @@ describe("reply turn admission", () => {
     const attempt = active.watchdog.attachAttempt({ assertCurrent: () => {} });
     attempt.beginTool({ toolName: "exec", toolCallId: "tool-quiet-1" });
 
-    // 12 minutes of silence with an active tool: past the generic takeover
-    // window but inside the blocked-tool floor — must NOT be reclaimed.
+    // Silence past generic takeover but inside the blocked-tool floor.
     vi.setSystemTime(startedAt + 12 * 60_000);
-    const abortController = new AbortController();
-    const waiting = observe(
-      admitBehind(active, "replacement-quiet-tool", {
-        upstreamAbortSignal: abortController.signal,
-      }),
-    );
+    const waiting = abortableWait(active);
     await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
     expect(waiting.isSettled()).toBe(false);
     expect(cancel).not.toHaveBeenCalled();
@@ -206,36 +207,31 @@ describe("reply turn admission", () => {
     const result = await waiting.pending;
     expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
     completeOwned(result);
-    abortController.abort();
+    waiting.abort();
   });
 
-  it.each(["queued_followup"] as const)(
-    "does not let %s turns reclaim a stale active operation",
-    async (kind) => {
-      vi.useFakeTimers();
-      const cancel = vi.fn();
-      const startedAt = Date.now();
-      const active = activeReply();
-      active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-      active.setPhase("running");
-      vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
+  it("does not let queued followups reclaim a stale active operation", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const startedAt = Date.now();
+    const active = activeReply();
+    active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+    active.setPhase("running");
+    vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
-      const admission = admitBehind(active, "replacement-session", {
-        kind,
-        waitTimeoutMs: 1,
-      });
-      if (kind === "queued_followup") {
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(100);
-      }
-      const result = await admission;
+    const admission = admitBehind(active, "replacement-session", {
+      kind: "queued_followup",
+      waitTimeoutMs: 1,
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await admission;
 
-      expectSkipped(result, active);
-      expect(cancel).not.toHaveBeenCalled();
-      expect(getSessionControllerOperation(active.key)).toBe(active);
-      active.complete();
-    },
-  );
+    expectSkipped(result, active);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(getSessionControllerOperation(active.key)).toBe(active);
+    active.complete();
+  });
 
   it("keeps terminal raw work owned after cleanup grace until its producer settles", async () => {
     vi.useFakeTimers();
@@ -258,15 +254,9 @@ describe("reply turn admission", () => {
 
   it("stops waiting when the caller aborts", async () => {
     const active = activeReply();
-    const abortController = new AbortController();
-    const admitted = admitBehind(active, "waiting-session", {
-      kind: "queued_followup",
-      upstreamAbortSignal: abortController.signal,
-    });
-
-    abortController.abort();
-
-    expectSkipped(await admitted, active, "aborted");
+    const admitted = abortableWait(active, "queued_followup");
+    admitted.abort();
+    expectSkipped(await admitted.pending, active, "aborted");
     active.complete();
   });
 });

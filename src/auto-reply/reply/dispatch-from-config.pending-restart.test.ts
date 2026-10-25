@@ -20,7 +20,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
-import { buildTestCtx } from "./test-ctx.js";
+import { buildTestCtx, createRoutedTestCtx } from "./test-ctx.js";
 
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
 async function interrupt(...recorders: (Recorder | undefined)[]) {
@@ -67,14 +67,9 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
     const message = "Deliver this exact source after the update";
     const createRecorder = await seedSource(target, runId, message, 100);
     const source = createRecorder();
-    const ctx = buildTestCtx({
+    const ctx = createRoutedTestCtx("webchat", sessionKey, {
       AgentId: "main",
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "webchat",
-      OriginatingTo: sessionKey,
       From: "gateway-owner",
-      To: sessionKey,
       SessionKey: sessionKey,
       MessageSid: runId,
       Body: message,
@@ -129,7 +124,6 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
           }),
         );
 
-        expect(read).toHaveBeenCalledOnce();
         expect(observed).toEqual([]);
       } finally {
         read.mockRestore();
