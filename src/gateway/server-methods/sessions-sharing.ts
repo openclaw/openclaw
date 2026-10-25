@@ -176,7 +176,9 @@ function publishSharingChange(params: {
   });
   // Draft recipients cannot receive the scoped row, but still need a redacted
   // catalog invalidation so their next canonical list drops a newly hidden session.
-  emitSessionsChanged(params.context, { reason: "sharing" });
+  // The keyed change above already published this session's row; an unkeyed row
+  // change would retire every other session's in-flight delivery generation.
+  emitSessionsChanged(params.context, { reason: "sharing" }, { preparedPublication: true });
 }
 
 function defineManagedSessionHandler<T extends { sessionKey: string; agentId?: string }>(
