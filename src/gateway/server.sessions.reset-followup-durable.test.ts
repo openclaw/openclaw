@@ -18,6 +18,7 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
+import { installQueueTestPlugin } from "../infra/outbound/deliver.custody.test-support.js";
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
 import { drainPendingDeliveriesCore } from "../infra/outbound/delivery-queue-recovery.js";
@@ -27,7 +28,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -59,9 +59,7 @@ it.each([false, true])(
     });
     const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
     const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("Gateway test state directory is required");
-    }
+    assert(stateDir, "Gateway test state directory is required");
     let offline = true;
     const visible: string[] = [];
     const outbound: ChannelOutboundAdapter = {
@@ -77,15 +75,7 @@ it.each([false, true])(
         return { channel: "matrix", messageId: `sent-${visible.length}` };
       },
     };
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound }),
-        },
-      ]),
-    );
+    installQueueTestPlugin({ outbound });
     const operation = createReplyOperation({
       ...identity,
       sessionId,
