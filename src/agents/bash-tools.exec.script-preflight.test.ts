@@ -276,40 +276,6 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
 
   const tempDirs = createTempDirTracker();
 
-  async function withSpawnFixture(
-    relativePath: string,
-    run: (fixture: {
-      root: string;
-      databasePath: string;
-      sqlitePath: string;
-      markerPath: string;
-      tool: ReturnType<typeof createExecTool>;
-    }) => Promise<void>,
-  ) {
-    await withTempDir("openclaw-exec-live-sqlite-spawn-", async (root) => {
-      const stateDir = path.join(root, "state");
-      // Leave live paths empty: fake database contents would poison the tool's own state access.
-      const databasePath = path.join(stateDir, relativePath);
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      const sqlitePath = path.join(root, "sqlite3");
-      const markerPath = path.join(root, "sqlite-spawned");
-      await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(markerPath)}\n`, {
-        mode: 0o755,
-      });
-      await withEnvAsync(
-        { HOME: root, USERPROFILE: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir },
-        () =>
-          run({
-            root,
-            databasePath,
-            sqlitePath,
-            markerPath,
-            tool: createPreflightTool(),
-          }),
-      );
-    });
-  }
-
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
@@ -413,39 +379,51 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
   });
 
   it.each([false, true])("rejects live SQLite before spawn (URI=%s)", async (uri) => {
-    await withSpawnFixture(
-      "state/openclaw.sqlite",
-      async ({ root, databasePath, sqlitePath, markerPath, tool }) => {
-        const target = uri
-          ? '"file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"'
-          : `:memory: ${quote(`.open ${quote(databasePath)}`)}`;
-        await expect(
-          tool.execute("call-live-sqlite-uri", {
-            command: `${quote(sqlitePath)} ${target}`,
+    await withTempDir("openclaw-exec-live-sqlite-spawn-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const databasePath = path.join(stateDir, "state/openclaw.sqlite");
+      // Leave live paths empty: fake database contents would poison the tool's own state access.
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const sqlitePath = path.join(root, "sqlite3");
+      const markerPath = path.join(root, "sqlite-spawned");
+      await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(markerPath)}\n`, {
+        mode: 0o755,
+      });
+      await withEnvAsync(
+        { HOME: root, USERPROFILE: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir },
+        async () => {
+          const tool = createPreflightTool();
+          const target = uri
+            ? '"file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"'
+            : `:memory: ${quote(`.open ${quote(databasePath)}`)}`;
+          await expect(
+            tool.execute("call-live-sqlite-uri", {
+              command: `${quote(sqlitePath)} ${target}`,
+              workdir: root,
+            }),
+          ).rejects.toThrow(
+            /external sqlite3 cannot open databases under the active OpenClaw state directory/,
+          );
+          await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+          if (!uri) {
+            return;
+          }
+          const copy = await databaseFixture(root, "snapshot/openclaw.sqlite");
+          const privateMarkerPath = path.join(root, "private-spawned");
+          await fs.writeFile(
+            sqlitePath,
+            `#!/bin/sh\nprintf spawned > ${quote(privateMarkerPath)}\n`,
+            {
+              mode: 0o755,
+            },
+          );
+          await tool.execute("call-private-sqlite-uri", {
+            command: `${quote(sqlitePath)} "file:${copy}?mode=ro" "PRAGMA user_version"`,
             workdir: root,
-          }),
-        ).rejects.toThrow(
-          /external sqlite3 cannot open databases under the active OpenClaw state directory/,
-        );
-        await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
-        if (!uri) {
-          return;
-        }
-        const copy = await databaseFixture(root, "snapshot/openclaw.sqlite");
-        const privateMarkerPath = path.join(root, "private-spawned");
-        await fs.writeFile(
-          sqlitePath,
-          `#!/bin/sh\nprintf spawned > ${quote(privateMarkerPath)}\n`,
-          {
-            mode: 0o755,
-          },
-        );
-        await tool.execute("call-private-sqlite-uri", {
-          command: `${quote(sqlitePath)} "file:${copy}?mode=ro" "PRAGMA user_version"`,
-          workdir: root,
-        });
-        await expect(fs.stat(privateMarkerPath)).resolves.toBeDefined();
-      },
-    );
+          });
+          await expect(fs.stat(privateMarkerPath)).resolves.toBeDefined();
+        },
+      );
+    });
   });
 });

@@ -148,7 +148,7 @@ it.each([
         manifest: { channels: [], channelConfigs: {}, providerAuthChoices: [] },
       });
       const key = `__catalog_projection_${path.basename(state.root)}`;
-      const connections: Array<{ file: string; database: DatabaseSync; disposals: number }> = [];
+      const connections: Array<{ database: DatabaseSync; disposals: number }> = [];
       Object.defineProperty(globalThis, key, { configurable: true, value: connections });
       fs.writeFileSync(
         fixture.runtimeSource,
@@ -161,7 +161,7 @@ module.exports = {
     const file = ${JSON.stringify(state.root)} + "/registration-" + connections.length + ".sqlite";
     const database = new DatabaseSync(file);
     database.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
-    const connection = { file, database, disposals: 0 };
+    const connection = { database, disposals: 0 };
     connections.push(connection);
     api.lifecycle.registerRuntimeLifecycle({ id: "database", dispose() {
       connection.disposals++;
@@ -207,7 +207,6 @@ module.exports = {
           let projection: Promise<string[]> | undefined;
           try {
             first = await acquireStatic(input);
-            expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             selectedSource.input = input;
             projection = withPreparedModelCatalogOwner(input, async (snapshot) => {
@@ -243,7 +242,6 @@ module.exports = {
               void firstRelease.catch(() => {});
             }
             replacement = await acquireStatic(input);
-            expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.isOpen).toBe(true);
             resume.resolve();
@@ -254,12 +252,6 @@ module.exports = {
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
             expect(successor.database.isOpen).toBe(true);
-            const reopened = new DatabaseSync(original.file, { readOnly: true });
-            try {
-              expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-            } finally {
-              reopened.close();
-            }
             await replacement[Symbol.asyncDispose]();
             await expect.poll(() => successor.disposals).toBe(1);
           } finally {

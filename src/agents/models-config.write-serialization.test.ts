@@ -242,7 +242,11 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
 });
 
-it("writes privately into the configured default agent dir", async ({ home }) => {
+it("writes privately into the configured default agent dir and repairs a cached file's mode", async ({
+  home,
+}) => {
+  const contents = catalog({});
+  planCatalog("fixture", contents);
   let modeAfterWrite: number | undefined;
   writePrivateStoreTextWriteMock.mockImplementationOnce(async (params: StoreWrite) => {
     await writeActual(params);
@@ -257,7 +261,11 @@ it("writes privately into the configured default agent dir", async ({ home }) =>
     },
   };
 
-  await ensureOpenClawModelsJson(cfg);
+  const first = await ensureOpenClawModelsJson(cfg);
+  expect(first.publishedSource).toEqual({
+    modelsJsonContents: emptyModelsJson,
+    pluginCatalogs: [{ pluginId: "fixture", contents }],
+  });
 
   expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
   const modelsPath = path.join(home, ".openclaw", "agents", "ops", "agent", "models.json");
@@ -270,6 +278,14 @@ it("writes privately into the configured default agent dir", async ({ home }) =>
   await expect(
     fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
   ).rejects.toMatchObject({ code: "ENOENT" });
+  if (process.platform !== "win32") {
+    await fs.chmod(modelsPath, 0o644);
+  }
+  expect(await ensureOpenClawModelsJson(cfg)).toEqual({});
+  expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+  expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
+  expect(await fs.readFile(modelsPath, "utf8")).toBe(emptyModelsJson);
+  await expectPrivate(modelsPath);
 });
 
 it("writes plugin catalogs into SQLite, not files", async ({ agentDir }) => {
@@ -337,28 +353,6 @@ it("plans persisted bytes without repair or fingerprint churn", async ({ agentDi
 
   expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
   expect(readRawCatalogCacheRow(agentDir, "nvidia")).toEqual(unchanged);
-});
-
-it("repairs permissions without cooling the ready cache", async ({ home: _home }) => {
-  const contents = catalog({});
-  planCatalog("fixture", contents);
-  const first = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-  expect(first.publishedSource).toEqual({
-    modelsJsonContents: emptyModelsJson,
-    pluginCatalogs: [{ pluginId: "fixture", contents }],
-  });
-  const modelsPath = path.join(resolveDefaultAgentDir(CUSTOM_PROXY_MODELS_CONFIG), "models.json");
-  const rootContents = await fs.readFile(modelsPath, "utf8");
-  if (process.platform !== "win32") {
-    await fs.chmod(modelsPath, 0o644);
-  }
-  const cached = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-
-  expect(cached).toEqual({});
-  expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
-  expect(writePrivateStoreTextWriteMock).toHaveBeenCalledOnce();
-  expect(await fs.readFile(modelsPath, "utf8")).toBe(rootContents);
-  await expectPrivate(modelsPath);
 });
 
 it.for(["noop", "write"] as const)(
