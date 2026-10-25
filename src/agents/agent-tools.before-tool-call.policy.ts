@@ -43,6 +43,11 @@ import {
   getCodeModeExecBeforeHookMetadataForToolKind,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import {
+  findShellDollarExpansionHazard,
+  formatShellDollarExpansionHazard,
+  isShellDollarExpansionGuardEnabled,
+} from "./shell-dollar-expansion-guard.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -69,8 +74,32 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
 export function hasBeforeToolCallPolicy(): boolean {
   return (
     getGlobalHookRunner()?.hasHooks("before_tool_call") === true ||
-    hasTrustedToolPolicies(getGlobalHookRunnerRegistry() ?? undefined)
+    hasTrustedToolPolicies(getGlobalHookRunnerRegistry() ?? undefined) ||
+    isShellDollarExpansionGuardEnabled()
   );
+}
+
+/**
+ * Veto exec commands whose double-quoted/unquoted text contains `$<digit>`:
+ * the shell expands it to an empty positional parameter, silently corrupting
+ * dollar amounts in messages ("$1,000" -> ",000"). Set
+ * OPENCLAW_EXEC_DOLLAR_GUARD=off to disable.
+ */
+function resolveShellDollarExpansionVeto(
+  toolName: string,
+  toolKind: PluginHookToolKind | undefined,
+  params: unknown,
+): string | undefined {
+  // Code-mode exec runs JavaScript, not a shell command.
+  if (toolName !== "exec" || toolKind === "code_mode_exec") {
+    return undefined;
+  }
+  if (!isShellDollarExpansionGuardEnabled()) {
+    return undefined;
+  }
+  const command = isPlainObject(params) ? params.command : undefined;
+  const hazard = findShellDollarExpansionHazard(command);
+  return hazard ? formatShellDollarExpansionHazard(hazard) : undefined;
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -93,6 +122,20 @@ export async function runBeforeToolCallHook(args: {
     return outcome;
   };
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
+
+  // Agent-authored shell text: "$900" in double quotes reaches the recipient as "00".
+  // A pure check on the command text, so it runs before any plugin or approval policy.
+  const dollarHazard = resolveShellDollarExpansionVeto(toolName, args.toolKind, params);
+  if (dollarHazard) {
+    const outcome: HookOutcome = {
+      blocked: true,
+      kind: "veto",
+      reason: dollarHazard,
+      params,
+    };
+    markPrivateDecision(outcome, "genericDecision");
+    return outcome;
+  }
 
   if (args.ctx?.awaitSessionDiffBaseline) {
     await args.ctx.awaitSessionDiffBaseline();

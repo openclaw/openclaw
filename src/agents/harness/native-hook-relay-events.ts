@@ -13,6 +13,7 @@ import {
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { isShellDollarExpansionGuardEnabled } from "../shell-dollar-expansion-guard.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -116,6 +117,8 @@ export function nativeHookRelayEventToolMatcher(
       registration.executionAdmissionToolNames?.length
         ? { matchAll: false, toolNames: registration.executionAdmissionToolNames }
         : undefined,
+      // runBeforeToolCallHook vetoes shell commands that would corrupt dollar amounts.
+      isShellDollarExpansionGuardEnabled() ? { matchAll: false, toolNames: ["exec"] } : undefined,
     ]);
     return scope?.matchAll ? undefined : scope?.toolNames;
   }
