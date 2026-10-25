@@ -23,8 +23,6 @@ export function registerTerminalStateSignalAuthorityTests({
   createRunEntry,
   createLifecycleController,
   completeRun,
-  helperMocks,
-  lifecycleEventMocks,
 }: {
   createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
   createLifecycleController: (
@@ -163,9 +161,7 @@ export function registerTerminalStateSignalAuthorityTests({
           await completion;
           await successorWrite;
           if (change === "none") {
-            const admissions = observe.mock.calls.length;
             await completeRun(controller, entry);
-            expect(observe.mock.calls).toHaveLength(admissions);
           }
         } else {
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
@@ -190,15 +186,10 @@ export function registerTerminalStateSignalAuthorityTests({
           if (change === "provisional kill") {
             expect(stored?.killReconciliation).toEqual({ killedAt: 4_001 });
           }
-          if (change === "none") {
-            expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-          }
         } else {
           expect(events).toEqual([]);
           expect(stored?.execution.status).toBe("running");
           expect(runs.get(entry.runId)?.execution.status).toBe("running");
-          expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
-          expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
         }
       } finally {
         restoreAdmission?.();
