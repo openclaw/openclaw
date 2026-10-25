@@ -161,11 +161,6 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
   expect(onTypingChange).toHaveBeenLastCalledWith(false);
 });
 
-class DictationAudioContext extends MockDictationAudioContext {
-  override createScriptProcessor = () => super.createScriptProcessor();
-  override createGain = () => super.createGain();
-}
-
 function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number): PointerEvent {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
   Object.defineProperty(event, "pointerId", { value: pointerId });
@@ -195,37 +190,38 @@ afterEach(async () => {
   });
 });
 
-it("keeps composer, send, and queue class lists aligned with refreshed state", async () => {
+it("keeps offline outbox rows editable across connection and sending updates", async () => {
   const {
     container,
     query,
     props: initial,
   } = renderComposer({
     draft: "A draft",
-    queue: [{ id: "a", text: "Queued message", createdAt: 1, sendState: "waiting-idle" }],
+    queue: [
+      { id: "a", text: "first", createdAt: 1, sendState: "waiting-idle" },
+      { id: "b", text: "second", createdAt: 2, sendState: "waiting-idle" },
+    ],
   });
-  const assertClasses = (offline = false) => {
-    expectClasses(
-      query(".agent-chat__input"),
-      "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar" +
-        (offline ? " agent-chat__input--offline" : ""),
-    );
-    expectClasses(
-      query(".chat-send-btn--send"),
-      "chat-send-btn chat-send-btn--send" + (offline ? " chat-send-btn--sending" : ""),
-    );
-    expectClasses(
-      query(".chat-queue__item"),
-      "chat-queue__item chat-queue__item--no-avatar" +
-        (offline ? " chat-queue__item--reconnect" : ""),
-    );
-  };
-  await waitForSolid(() => assertClasses());
+  const assertState = (offline: boolean, sending: boolean) =>
+    expect([
+      query(".agent-chat__input--offline") !== null,
+      query(".chat-send-btn--sending") !== null,
+      query(".chat-queue__item--reconnect") !== null,
+    ]).toEqual([offline, sending, offline]);
+  await waitForSolid(() => expect(query(".chat-queue__item")).not.toBeNull());
+  assertState(false, false);
   renderComposerInto(container, { ...initial, offline: true, sending: true });
-  assertClasses(true);
-  expectClasses(query(".chat-queue__badge"), "chat-queue__badge chat-queue__badge--reconnect");
+  assertState(true, true);
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".chat-queue__badge--reconnect")).toHaveLength(2),
+  );
+  renderComposerInto(container, { ...initial, offline: true });
+  assertState(true, false);
+  expect(query(".agent-chat__composer-status-band")).toBeNull();
+  expect(query<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+  expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
   renderComposerInto(container, initial);
-  assertClasses();
+  assertState(false, false);
 });
 
 it("shows actionable connecting guidance in a visible status region", () => {
@@ -311,26 +307,6 @@ it.each([true, false])(
     expect(onCancel).toHaveBeenCalledOnce();
   },
 );
-
-it("lets queued rows own the offline outbox state", async () => {
-  const { container, query } = renderComposer({
-    offline: true,
-    draft: "Queue this message",
-    queue: [
-      { id: "a", text: "first", createdAt: 1, sendState: "waiting-idle" },
-      { id: "b", text: "second", createdAt: 2, sendState: "waiting-idle" },
-    ],
-    onQueueRemove: vi.fn(),
-  });
-
-  expect(query(".agent-chat__input--offline")).not.toBeNull();
-  expect(query(".agent-chat__composer-status-band")).toBeNull();
-  await waitForSolid(() =>
-    expect(container.querySelectorAll(".chat-queue__badge--reconnect")).toHaveLength(2),
-  );
-  expect(query<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
-  expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
-});
 
 it("releases layout observation when a banner replaces the input", async () => {
   vi.useFakeTimers();
@@ -444,7 +420,7 @@ it("keeps send and dictation distinct for attachment-only drafts", () => {
 
 it("keeps the dictation button stable through hold progress and latch", async () => {
   openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
-  vi.stubGlobal("AudioContext", DictationAudioContext);
+  vi.stubGlobal("AudioContext", MockDictationAudioContext);
   const { query, request } = await mountTalk(
     { transcription: { ready: true } },
     { draft: "Keep this text" },

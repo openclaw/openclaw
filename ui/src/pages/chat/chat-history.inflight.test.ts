@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
 import {
@@ -100,18 +99,6 @@ it("retires an interrupted run after missing its live terminal", async () => {
         lastRunId: "run-interrupted",
         status: "killed",
       },
-      pendingInputs: {
-        items: [
-          {
-            id: "input-interrupted",
-            runId: "queued-input",
-            acceptedAt: 1,
-            state: "interrupted",
-            message: message("user", "Open a PR to fix it"),
-          },
-        ],
-        total: 1,
-      },
     });
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("run-interrupted");
@@ -123,7 +110,6 @@ it("recovers a failure missed before the initial route subscription", async () =
   const history = failedHistory();
   const state = createState(history);
   vi.spyOn(state.client!, "request").mockResolvedValue(history);
-  state.chatSubmissions = createChatSubmissions();
   state.chatSubmissions.retain(
     buildInitialChatSubmission(
       state.sessionKey,

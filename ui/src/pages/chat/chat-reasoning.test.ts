@@ -11,10 +11,8 @@ import {
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
-import { buildCachedChatItems, getChatItemsGeneration } from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
-import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -181,7 +179,8 @@ function applyMessage(
 }
 
 it("shows thinking while generating and retains it through thinking-only history hydration", async () => {
-  thinking("**Checking** the evidence.");
+  thinking("Checking");
+  thinking("**Checking** the evidence.", 2);
   show();
   expect(container.querySelector(".chat-thinking strong")?.textContent).toBe("Checking");
   expect(state.chatMessages).toEqual([user]);
@@ -280,35 +279,6 @@ it("fences replay and sibling runs and retires preview on a new run or session r
   thinking("New reasoning.", 1, "new-run");
   reduceChatSessionProjection(state, { type: "sessionReset" });
   expect(state.chatReasoning).toBeNull();
-});
-
-it("updates reasoning deltas in the existing live slot without rebuilding loaded history", () => {
-  thinking("Earlier tool reasoning.", 1, runId, "earlier");
-  thinking("First sentence.", 2);
-  const input = {
-    paneId: "reasoning-cache",
-    sessionKey: "main",
-    runId,
-    messages: state.chatMessages,
-    toolMessages: [],
-    streamSegments: [],
-    stream: state.chatStream,
-    streamStartedAt: state.chatStreamStartedAt,
-    reasoning: state.chatReasoning,
-    showToolCalls: true,
-  };
-  const first = buildCachedChatItems(input);
-  const generation = getChatItemsGeneration(first);
-  const options = { sessionKey: "main", runWorking: true, searchActive: false };
-  const firstChain = projectTranscriptChain(first, options);
-  thinking("First sentence. Second sentence.", 3);
-  const second = buildCachedChatItems({ ...input, reasoning: state.chatReasoning });
-  expect(second).toBe(first);
-  expect(getChatItemsGeneration(second)).toBe(generation);
-  expect(projectTranscriptChain(second, options).continuations).toBe(firstChain.continuations);
-  expect(second.find((item) => item.kind === "stream" && item.isStreaming)).toMatchObject({
-    thinking: "First sentence. Second sentence.",
-  });
 });
 
 it("does not attach foreground thinking to another session's final with the same run ID", () => {

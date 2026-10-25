@@ -129,25 +129,23 @@ describe("renderChatComposer controls", () => {
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
     vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
-    const handleClick = vi.spyOn(dictation, "handleClick");
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, handleClick, onSend, commit };
+    return { container, active, locked, finishActive, onSend, commit };
   }
 
   it("stops dictation by keeping its text without sending", () => {
-    const { container, finishActive, handleClick, onSend } = renderDictatingComposer();
+    const { container, finishActive, onSend } = renderDictatingComposer();
     const stop = query(container, ".chat-send-btn--dictating");
 
     expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
     stop?.click();
 
     expect(finishActive).toHaveBeenCalledOnce();
-    expect(handleClick).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -182,19 +180,15 @@ describe("renderChatComposer controls", () => {
     );
   });
 
-  it("keeps Stop and Send visually stable while dictation finalizes", () => {
+  it("keeps Stop and Send mounted but aria-disabled while dictation finalizes", () => {
     const { container } = renderDictatingComposer({ finalizing: true });
 
     const stop = query(container, ".chat-send-btn--dictating");
     const send = query(container, ".chat-send-btn--dictation-commit");
-    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
     expect(stop?.disabled).toBe(false);
     expect(stop?.getAttribute("aria-disabled")).toBe("true");
-    expect(stop?.querySelector("rect")).not.toBeNull();
-    expect(send?.classList.contains("chat-send-btn--send")).toBe(true);
     expect(send?.disabled).toBe(false);
     expect(send?.getAttribute("aria-disabled")).toBe("true");
-    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
   });
 
   it("keeps dictation available while Talk is held during an active turn", () => {

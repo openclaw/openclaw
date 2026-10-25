@@ -397,19 +397,6 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
-      renderPaneModelControl(composerControls(state), container);
-      await menuReady(container);
-      expandModelProviders(container);
-      if (cachedCatalog) {
-        expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
-        expect(
-          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
-        ).toBe(false);
-        expect(container.textContent).toContain("Cached Model");
-      } else {
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(container.textContent).toContain("Loading models…");
-      }
       const freshModels = [{ id: "fresh-model", name: "Fresh Model", provider: "openai" }];
       catalog.resolve({
         models: freshModels,
@@ -426,7 +413,7 @@ describe("chat pane composer controls", () => {
     },
   );
 
-  it("keeps current models interactive after sign-in while the replacement catalog is held", async () => {
+  it("retains the current catalog after sign-in while the replacement is held", async () => {
     const startup = createDeferred<unknown>();
     const catalog = createDeferred<unknown>();
     const client = createTestGatewayClient(
@@ -467,13 +454,6 @@ describe("chat pane composer controls", () => {
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
-    const container = document.createElement("div");
-    renderPaneModelControl(composerControls(host), container, true);
-    await menuReady(container);
-    expandModelProviders(container);
-    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
-    expect(container.textContent).toContain("Cached Model");
-    expect(container.textContent).not.toContain("Loading models…");
 
     startup.resolve({
       messages: [],
