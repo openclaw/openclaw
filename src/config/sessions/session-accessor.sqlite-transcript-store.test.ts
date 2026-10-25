@@ -164,7 +164,7 @@ function createTranscriptFixture(state: OpenClawTestState, sessionId: string) {
 }
 
 function createRewriteFixture(state: OpenClawTestState, events: readonly unknown[]) {
-  const { scope, owner, db, write } = createTranscriptFixture(state, "rewrite");
+  const { scope, owner, db, write, append } = createTranscriptFixture(state, "rewrite");
   write((database) => {
     appendTranscriptEventsInTransaction(database, scope, events);
   });
@@ -203,7 +203,10 @@ function createRewriteFixture(state: OpenClawTestState, events: readonly unknown
       ]);
     });
   };
-  return { db, snapshot, rewrite, scope, write, setKeyOwner };
+  const rewriteRows = (
+    updates: Parameters<typeof rewriteSqliteTranscriptEventRowsInTransaction>[2],
+  ) => write((database) => rewriteSqliteTranscriptEventRowsInTransaction(database, scope, updates));
+  return { db, snapshot, rewrite, rewriteRows, scope, write, setKeyOwner, append };
 }
 
 it("preserves the generation when initially recording identical model prompt text", async () => {
@@ -258,20 +261,18 @@ it.each([
 it("applies exact bindings across both storage arms", async () => {
   const details = { opaque: "preserved metadata ".repeat(2048) };
   const events = detailedEvents(details);
-  await withRewriteFixture(({ snapshot, scope, write }) => {
+  await withRewriteFixture(({ snapshot, scope, rewriteRows }) => {
     const before = snapshot();
     const first = rewriteMessage(2, { provenance: "first" });
     const last = rewriteMessage(2, { provenance: "last", details });
     const user = rewriteMessage(1, { provenance: "user" });
     expect(before.storage[1]?.event_json === null).toBe(true);
     expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(true);
-    write((database) => {
-      rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-        { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
-        { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
-        { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
-      ]);
-    });
+    rewriteRows([
+      { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
+      { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
+      { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
+    ]);
     const after = snapshot();
     expect(after.raw).toEqual([
       before.raw[0],
@@ -324,20 +325,18 @@ it("keeps oversized metadata current but hides changed text until the real worke
 it("rolls back payload-arm changes and mutation state on later conflict", async () => {
   const details = { opaque: "rollback metadata ".repeat(2048) };
   const events = detailedEvents(details);
-  await withRewriteFixture(({ snapshot, scope, write }) => {
+  await withRewriteFixture(({ snapshot, scope, rewriteRows }) => {
     const before = snapshot();
     const stats = readTranscriptStatsSync(scope);
     expect(() =>
-      write((database) => {
-        rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-          {
-            seq: 1,
-            expectedEventJson: JSON.stringify(events[1]),
-            event: rewriteMessage(1, { content: "edited" }),
-          },
-          { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
-        ]);
-      }),
+      rewriteRows([
+        {
+          seq: 1,
+          expectedEventJson: JSON.stringify(events[1]),
+          event: rewriteMessage(1, { content: "edited" }),
+        },
+        { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
+      ]),
     ).toThrow(SqliteTranscriptMutationConflictError);
     expect(snapshot()).toEqual(before);
     expect(readTranscriptStatsSync(scope)).toEqual(stats);
@@ -373,22 +372,18 @@ it.each([
 });
 
 it("repairs maintenance text while preserving recency", async () => {
-  await withRewriteFixture(({ db, scope, snapshot }) => {
+  await withRewriteFixture(({ db, scope, snapshot, write }) => {
     const before = snapshot();
-    const updates = [
-      {
-        seq: 2,
-        eventJson: JSON.stringify(rewriteMessage(2, { content: "repaired answer" })),
-      },
-      {
-        seq: 1,
-        eventJson: JSON.stringify(rewriteMessage(1, { content: "repaired" })),
-      },
-    ] as const;
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        updateSqliteTranscriptEventJsonInTransaction(database, scope.sessionId, updates),
-      scope,
+    const updates = ([2, 1] as const).map((seq) => ({
+      seq,
+      eventJson: JSON.stringify(
+        rewriteMessage(seq, {
+          content: seq === 2 ? "repaired answer" : "repaired",
+        }),
+      ),
+    }));
+    write((database) =>
+      updateSqliteTranscriptEventJsonInTransaction(database, scope.sessionId, updates),
     );
     const after = snapshot();
     expect(after.updatedAt).toBe(before.updatedAt! + 1);
@@ -444,14 +439,8 @@ function replaceTranscriptSuffixForTest(
 }
 
 it.each([0, 1])("preserves an intervening append before replacing prefix %i", async (prefix) => {
-  await withRewriteFixture(({ snapshot, scope, write }) => {
-    write((database) => {
-      appendTranscriptEventInTransaction(database, scope, {
-        type: "custom",
-        id: "intervening",
-        parentId: "answer",
-      });
-    });
+  await withRewriteFixture(({ snapshot, scope, append }) => {
+    append({ type: "custom", id: "intervening", parentId: "answer" });
     const before = snapshot();
     expect(() =>
       replaceTranscriptSuffixForTest(scope, rewriteEvents, rewriteEvents.slice(0, -1), prefix),

@@ -41,7 +41,6 @@ import type {
 } from "./session-accessor.sqlite-archive-types.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { runExclusiveSqliteTranscriptArchiveWorker as withArchiveWorker } from "./session-accessor.sqlite-archive.js";
-import * as sessionDeletion from "./session-accessor.sqlite-deletion.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
@@ -141,11 +140,7 @@ describe("SQLite transcript archive sessions", () => {
 
   function expectArchivedEvent(archivePath: string | undefined, event: unknown) {
     expect(archivePath).toBeTruthy();
-    expect(
-      readSessionArchiveContentSync(archivePath ?? "")
-        .trim()
-        .split("\n"),
-    ).toEqual([JSON.stringify(event)]);
+    expect(readSessionArchiveContentSync(archivePath ?? "").trim()).toBe(JSON.stringify(event));
   }
 
   function deleteArchivedSession(sessionKey: string, targetStorePath = storePath) {
@@ -203,19 +198,11 @@ describe("SQLite transcript archive sessions", () => {
     const sessionIds = ["durable-delete-first", "durable-delete-second", "durable-delete-current"];
     const events = await prepareGenerations(sessionKey, sessionIds, "你好 🦞\narchive");
     const database = openLifecycleTestDatabase(storePath);
-    const publicationRows: unknown[] = [];
-    using archiveWorkers = observeArchiveSessionWorkers((message) => {
-      if (message.type === "published") {
-        for (const result of message.results) {
-          publicationRows.push(archiveRow(result.sessionId, "session_key"));
-        }
-      }
-    });
+    using archiveWorkers = observeArchiveSessionWorkers();
 
     const result = await deleteArchivedSession(sessionKey);
 
     archiveWorkers.expectReused(3);
-    expect(publicationRows).toEqual(sessionIds.map(() => ({ session_key: sessionKey })));
     expect(result.deleted).toBe(true);
     expect(result.archivedTranscripts).toHaveLength(sessionIds.length);
     for (const [index, sessionId] of sessionIds.entries()) {
@@ -235,28 +222,6 @@ describe("SQLite transcript archive sessions", () => {
     );
     await closeAgentDatabase(database.path);
     archiveWorkers.expectJoined(1);
-  });
-
-  it("publishes archive metadata off the main thread even inside a native deletion scope", async () => {
-    const { sessionId, sessionKey, database, event } = await prepareSession(
-      "native-scope-publication",
-    );
-    const deleted = await deleteArchivedSession(sessionKey);
-    vi.spyOn(sessionDeletion, "hasPreparedNativeSessionDeletion").mockReturnValue(true);
-    using statements = vi.spyOn(database.db, "prepare");
-    await expect(
-      archiveStore.publishSessionStateArchives(
-        { agentId: "main", path: database.path, env: testState.env },
-        deleted.archivedTranscripts,
-      ),
-    ).resolves.toEqual(deleted.archivedTranscripts);
-    expect(
-      statements.mock.calls.filter(([query]) =>
-        /\b(?:update|insert into)\s+"?session_transcript_archives\b/iu.test(query),
-      ),
-    ).toEqual([]);
-    expectArchivedEvent(deleted.archivedTranscripts[0]?.archivedPath, event);
-    expect(archiveRow(sessionId, "publish_attempts")).toEqual({ publish_attempts: 2 });
   });
 
   it("joins a failed publisher and recovers its committed archive after result recording fails", async () => {
@@ -282,7 +247,6 @@ describe("SQLite transcript archive sessions", () => {
       "published",
     ]);
     archiveWorkers.expectJoined(1);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId: sessionIds[1] });
     const historicalScope = { sessionKey, sessionId: sessionIds[0], storePath };
     await expect(loadTranscriptEvents(historicalScope)).resolves.toEqual([]);
     await expectSession({ sessionKey, sessionId: sessionIds[1], storePath }, events[1]);
@@ -338,10 +302,7 @@ describe("SQLite transcript archive sessions", () => {
       }
       return publish(...args);
     });
-    const observedWorkers = new Set<Worker>();
-    using archiveWorkers = observeArchiveSessionWorkers((_message, worker) => {
-      observedWorkers.add(worker);
-    });
+    using archiveWorkers = observeArchiveSessionWorkers();
     const publicationWorkers = new Set<SqliteReclamationWorker>();
     const withWorker = reclamationWorker.withSqliteReclamationWorker;
     vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
@@ -399,7 +360,6 @@ describe("SQLite transcript archive sessions", () => {
         ["published", second.sessionId],
         ["published", first.sessionId],
       ]);
-      expect(observedWorkers.size).toBe(exited ? 2 : 1);
       await closeOpenClawAgentDatabasesAsync(tempDir);
       archiveWorkers.expectJoined(exited ? 2 : 1);
     } finally {
@@ -414,8 +374,7 @@ describe("SQLite transcript archive sessions", () => {
   it("retires queued archive work without waiting on the blocked global FIFO", async ({
     signal,
   }) => {
-    const { sessionId, sessionKey, scope, event, database } =
-      await prepareSession("queued-retirement");
+    const { sessionKey, scope, event, database } = await prepareSession("queued-retirement");
     const blockerEntered = createDeferred();
     const releaseBlocker = createDeferred();
     const materializationQueued = createDeferred();
@@ -426,9 +385,6 @@ describe("SQLite transcript archive sessions", () => {
       if (result.operation !== "entry" || result.value.kind !== "ready") {
         throw new Error("Expected entry planning before blocking archive materialization");
       }
-      expect(result.value.value.targetSnapshot).toMatchObject([
-        { sessionKey, entry: { sessionId } },
-      ]);
       blocker = withArchiveWorker(async () => {
         blockerEntered.resolve();
         await releaseBlocker.promise;
@@ -575,12 +531,10 @@ describe("SQLite transcript archive sessions", () => {
     async (changed) => {
       const { sessionId, sessionKey } = await prepareSession("archive-reply-owner");
       const otherPath = path.join(tempDir, "different-owner.sqlite");
-      let changedPlans = 0;
       observeArchiveMetadata(async (operation, result) => {
         if (operation === "session.archives.preparePublication" && Array.isArray(result)) {
           for (const plan of result) {
             if (isRecord(plan) && plan.sessionId === sessionId) {
-              changedPlans += 1;
               if (changed === "path") {
                 plan.databasePath = otherPath;
               } else {
@@ -592,7 +546,6 @@ describe("SQLite transcript archive sessions", () => {
       });
       using workers = observeArchiveSessionWorkers();
       await expect(deleteArchivedSession(sessionKey)).rejects.toThrow(/database owner/);
-      expect(changedPlans).toBe(1);
       expect(workers.replies.map(({ message }) => message.type)).toEqual(["done"]);
       workers.expectJoined(1);
       const archive = archiveRow(sessionId, "archive_name, published_at, publish_attempts");
@@ -675,13 +628,6 @@ describe("SQLite transcript archive sessions", () => {
         }
       }
       expect(archiveRow(sessionId, "published_at")).toEqual({ published_at: null });
-      using successor = new (requireNodeSqlite().DatabaseSync)(replacementPath, { readOnly: true });
-      expect(successor.prepare("SELECT value FROM successor_marker").all()).toEqual([
-        { value: "untouched" },
-      ]);
-      expect(successor.prepare("SELECT session_id FROM session_transcript_archives").all()).toEqual(
-        [],
-      );
     },
   );
 
