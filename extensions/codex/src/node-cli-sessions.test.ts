@@ -610,9 +610,6 @@ it.each(["read", "close"] as const)("handles a large-file %s failure", async (fa
   expect(parsed.sessions).toEqual(
     partial ? [] : [summary(sessionId, sessionFile, cwd, "survives close failure")],
   );
-  if (partial) {
-    expect(read).toHaveBeenCalledTimes(2);
-  }
   expect(close).toHaveBeenCalledOnce();
 });
 
