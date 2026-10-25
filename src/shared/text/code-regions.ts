@@ -1,16 +1,17 @@
+export type { CodeRegion } from "./code-ranges.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  findMarkdownCodeRegions as findCodeRegions,
-  parseMarkdownOwnership,
-} from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { parseMarkdownOwnership } from "../../../packages/markdown-core/src/reasoning-tags.js";
 
-export { findCodeRegions };
+export { findCodeRegions } from "./code-ranges.js";
+import { findCodeRegions } from "./code-ranges.js";
 
-/** Public range inputs need only offsets; parser-owned metadata belongs to discovered regions. */
-export interface CodeRegion {
-  start: number;
-  end: number;
-}
+export {
+  isInsideCode,
+  isInsideSettledBlockCode,
+  stripLinesOutsideCode,
+  projectLinesOutsideCode,
+} from "./code-ranges.js";
+import { isInsideCode } from "./code-ranges.js";
 
 /** Index nonempty native parts using the visible text owner's newline separator. */
 export function indexTextParts(parts: readonly string[]) {
@@ -348,51 +349,4 @@ function stripBlockquotePrefixes(text: string) {
 function trailingBlockquoteBoundary(text: string, limit: number) {
   const raw = text.slice(-limit * 8);
   return (raw.includes(">") ? stripBlockquotePrefixes(raw) : raw).slice(-limit);
-}
-
-export function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
-  return regions.some((region) => pos >= region.start && pos < region.end);
-}
-
-/** Appends cannot revoke block code after its opening line; inline ownership can change. */
-export function isInsideSettledBlockCode(
-  pos: number,
-  text: string,
-  regions: ReturnType<typeof findCodeRegions>,
-): boolean {
-  return regions.some(
-    (region) =>
-      region.block &&
-      region.start <= pos &&
-      pos < region.end &&
-      /[\r\n]/.test(text.slice(region.start, pos)),
-  );
-}
-
-/** Removes control lines while retaining literal code and original line endings. */
-export function stripLinesOutsideCode(
-  text: string,
-  shouldStrip: (line: string) => boolean,
-): string {
-  return projectLinesOutsideCode(text, shouldStrip, 0).text;
-}
-
-export function projectLinesOutsideCode(
-  text: string,
-  shouldStrip: (line: string) => boolean,
-  retainStart: number,
-) {
-  let regions: CodeRegion[] | undefined;
-  let retainedOutputStart = retainStart;
-  const projected = text.replace(/[^\n]*(?:\n|$)/g, (raw: string, offset: number) => {
-    const line = raw.endsWith("\n") ? raw.slice(0, -1).replace(/\r$/, "") : raw;
-    if (!shouldStrip(line) || isInsideCode(offset, (regions ??= findCodeRegions(text)))) {
-      return raw;
-    }
-    if (offset < retainStart) {
-      retainedOutputStart -= raw.length;
-    }
-    return "";
-  });
-  return { text: projected, retainStart, retainedOutputStart };
 }

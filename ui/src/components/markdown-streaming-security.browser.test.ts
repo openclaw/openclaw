@@ -2,9 +2,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
 import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import transcriptCorpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownDomParts } from "./markdown.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 type SecurityCase = { name: string; source: string; options?: MarkdownRenderOptions };
 

@@ -18,7 +18,7 @@ import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx"
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+import { ChatWorkingIndicator } from "./chat-working-indicator-lazy.tsx";
 
 const ChatQuestionSummary = lazy(() => import("./chat-question-summary.tsx"), {
   export: "ChatQuestionSummary",
@@ -72,11 +72,6 @@ export function StreamGroupParts(props: {
       )}
     </For>
   );
-}
-
-/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
-export function renderSolidEmptyGroupFooter() {
-  return <div class="chat-group-footer" aria-hidden="true" />;
 }
 
 export function UnplacedSubagentWait(props: {

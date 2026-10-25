@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, useContext } from "solid-js";
+import { createMemo, For, lazy, Loading, Show, useContext } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -17,26 +17,31 @@ import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import {
-  ChatProviderReviewNotice,
-  type ChatProviderReviewOwner,
-} from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatChildAttention } from "./components/chat-child-attention.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
-import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import "../../styles/chat/conversation-notices.css";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
+const ChatProviderReviewNotice = lazy(() => import("./chat-provider-review-controller.tsx"), {
+  export: "ChatProviderReviewNotice",
+});
+
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
+
+const WorkspaceConflictNotice = lazy(() => import("./components/chat-workspace-conflict.tsx"), {
+  export: "WorkspaceConflictNotice",
+});
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;
@@ -63,7 +68,7 @@ type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
     messages: readonly unknown[];
     providerPolicyNotice?: ProviderPolicyNotice | null;
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
-    readProviderReview?: () => ChatProviderReviewOwner;
+    readProviderReview?: () => ChatProviderReviewOwner | undefined;
     runError?: ChatRunError | null;
     onRefresh?: () => void;
     onDismissWorkspaceConflict?: () => void;
@@ -321,7 +326,11 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
         />
       </Show>
       <Show when={props.readProviderReview?.()}>
-        {(owner) => <ChatProviderReviewNotice owner={owner()} />}
+        {(owner) => (
+          <Loading>
+            <ChatProviderReviewNotice owner={owner()} />
+          </Loading>
+        )}
       </Show>
       {renderProviderPolicyNotice(providerPolicyNotice())}
       <Show when={usageLimit()}>
@@ -357,10 +366,14 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
           </>
         )}
       </Show>
-      <WorkspaceConflictNotice
-        conflict={props.workspaceConflict ?? undefined}
-        onDismiss={props.onDismissWorkspaceConflict}
-      />
+      <Show when={props.workspaceConflict}>
+        <ChatLazyBoundary>
+          <WorkspaceConflictNotice
+            conflict={props.workspaceConflict ?? undefined}
+            onDismiss={props.onDismissWorkspaceConflict}
+          />
+        </ChatLazyBoundary>
+      </Show>
       <ChatPlacementStartupNotice
         status={props.placementStartup}
         messages={props.messages}

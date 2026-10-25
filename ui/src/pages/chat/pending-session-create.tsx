@@ -21,7 +21,7 @@ import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
 import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
+import { ChatWorkingIndicator } from "./components/chat-working-indicator-lazy.tsx";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();

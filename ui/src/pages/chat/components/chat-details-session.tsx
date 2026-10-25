@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, lazy } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -19,7 +19,7 @@ import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
-import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
@@ -27,7 +27,8 @@ import type {
   ChatDetailsOutputs,
   ChatDetailsProps,
 } from "./chat-details-types.ts";
-import { ChatOutputsDesktop, getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.ts";
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
@@ -37,6 +38,13 @@ registerEnglishCatalog(registerSessionProgressEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
+
+const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
+  export: "ChatDetailsPeople",
+});
+const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
+  export: "ChatOutputsDesktop",
+});
 
 type Props = {
   props?: ChatDetailsProps;
@@ -367,11 +375,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             </Show>
                           }
                         >
-                          <ChatDetailsPeople
-                            people={desktopPeople()}
-                            ownerIdentity={owner()?.identity}
-                            personActivity={props.props?.personActivity}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatDetailsPeople
+                              people={desktopPeople()}
+                              ownerIdentity={owner()?.identity}
+                              personActivity={props.props?.personActivity}
+                            />
+                          </ChatLazyBoundary>
                           <Show when={count() > people().length}>
                             <div class="chat-details__muted">
                               {t("chat.sessionDetails.moreParticipants", {
@@ -508,7 +518,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           </Show>
                         }
                       >
-                        <ChatOutputsDesktop {...data()} />
+                        <ChatLazyBoundary>
+                          <ChatOutputsDesktop {...data()} />
+                        </ChatLazyBoundary>
                       </ChatDetailsDesktopSection>
                     </Show>
                   )}

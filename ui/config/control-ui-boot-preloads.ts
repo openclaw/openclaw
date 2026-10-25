@@ -16,8 +16,32 @@ const sharedInteractionEntries = new Set([
   "ui/src/components/app-sidebar-online.tsx",
 ]);
 const chatInteractionEntries = new Set([
+  "ui/src/pages/chat/components/chat-composer-context-panel.tsx",
+  "ui/src/pages/chat/components/chat-context-breakdown.tsx",
+  "ui/src/components/markdown-live.ts",
+  // Cached environment facts reveal without another network round trip.
+  "ui/src/pages/chat/components/chat-details-environment-body.tsx",
   "ui/src/pages/chat/chat-pane-session-operations.ts",
   "ui/src/pages/chat/chat-send-delivery.runtime.ts",
+  // Keep the first live reply and common actions to one network round trip.
+  "ui/src/pages/chat/chat-live-events.runtime.ts",
+  "ui/src/pages/chat/tool-stream.ts",
+  "ui/src/pages/chat/chat-command-dispatch.runtime.ts",
+  "ui/src/pages/chat/chat-pane-session-operations.runtime.ts",
+  "ui/src/pages/chat/outbox-payloads.runtime.ts",
+  // Image viewers and provider-review dialogs load only when their own UI is needed.
+  // Rich history and the first reply share these parts. Download them with the
+  // route; a text-only transcript does not need to evaluate their renderers.
+  "ui/src/pages/chat/components/chat-agent-run-frame.tsx",
+  "ui/src/pages/chat/components/chat-async-question-summary.tsx",
+  "ui/src/pages/chat/components/chat-forwarded-attribution.tsx",
+  "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
+  "ui/src/pages/chat/components/chat-message-stream-view.tsx",
+  "ui/src/pages/chat/components/chat-session-activity.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-card-row.solid.tsx",
+  "ui/src/pages/chat/components/chat-work-group-summary.tsx",
+  "ui/src/pages/chat/components/chat-working-indicator.tsx",
+  "ui/src/pages/chat/components/chat-turn-recap-view.tsx",
 ]);
 
 export function collectControlUiStaticAssets(

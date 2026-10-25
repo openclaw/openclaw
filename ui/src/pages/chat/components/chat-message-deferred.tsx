@@ -11,6 +11,12 @@ const Attachment = lazy(() => import("./chat-message-attachments-solid.tsx"), {
   export: "MessageAttachment",
 });
 const Preview = lazy(() => import("./widget-card-view.tsx"), { export: "ToolPreview" });
+const Omitted = lazy(() => import("./chat-message-attachment-status-solid.tsx"), {
+  export: "OmittedMedia",
+});
+const PairingNotices = lazy(() => import("./chat-message-attachment-status-solid.tsx"), {
+  export: "PairingQrNotices",
+});
 const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
@@ -68,5 +74,27 @@ export function ChatClawHubCard(
     <ChatLazyBoundary>
       <Recommendation {...props} />
     </ChatLazyBoundary>
+  );
+}
+
+export function OmittedMedia(
+  props: Parameters<typeof import("./chat-message-attachment-status-solid.tsx").OmittedMedia>[0],
+) {
+  return (
+    <Show when={props.items.length > 0}>
+      <ChatLazyBoundary>
+        <Omitted {...props} />
+      </ChatLazyBoundary>
+    </Show>
+  );
+}
+
+export function PairingQrNotices(props: { count: number }) {
+  return (
+    <Show when={props.count > 0}>
+      <ChatLazyBoundary>
+        <PairingNotices {...props} />
+      </ChatLazyBoundary>
+    </Show>
   );
 }

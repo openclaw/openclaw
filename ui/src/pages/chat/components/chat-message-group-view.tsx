@@ -9,7 +9,7 @@ import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
@@ -33,7 +33,6 @@ import type { MessageActionDetails } from "./chat-message-markdown.types.ts";
 import { GroupMessageReactions } from "./chat-message-reaction-chips-view.tsx";
 import { messageReactionOptions } from "./chat-message-reaction-model.ts";
 import { ChatSendStatus } from "./chat-message-send-status-view.tsx";
-import { renderSolidEmptyGroupFooter, StreamGroupParts } from "./chat-message-stream-view.tsx";
 import type { AssistantMessageDisclosure } from "./chat-message-text-view.tsx";
 import { MessageMeta } from "./chat-message-timestamp-view.tsx";
 import {
@@ -43,10 +42,20 @@ import {
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
-import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
+
+const ForwardedAttribution = lazy(() => import("./chat-forwarded-attribution.tsx"), {
+  export: "ForwardedAttribution",
+});
+const ChatSessionActivity = lazy(() => import("./chat-session-activity.solid.tsx"), {
+  export: "ChatSessionActivity",
+});
+const StreamGroupParts = lazy(() => import("./chat-message-stream-view.tsx"), {
+  export: "StreamGroupParts",
+});
+const TurnRecapRow = lazy(() => import("./chat-turn-recap-view.tsx"), {
+  export: "TurnRecapRow",
+});
 
 const ActivityGroupContent = lazy(() => import("./chat-message-activity-view.tsx"), {
   export: "ActivityGroupContent",
@@ -448,7 +457,9 @@ function FramedMessageGroup(props: {
       </Show>
       <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
         <Show when={frame().forwardedSource}>
-          <ForwardedAttribution group={props.group} options={options()} />
+          <ChatLazyBoundary>
+            <ForwardedAttribution group={props.group} options={options()} />
+          </ChatLazyBoundary>
         </Show>
         <ReplyLineView line={frame().replyLine} actions={options()} elements={replyElements} />
         <Show
@@ -473,25 +484,29 @@ function FramedMessageGroup(props: {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow
-                recap={options().turnRecap!}
-                presentation="continuation"
-                hideDuration={options().hideTurnRecapDuration}
-              />
+              <ChatLazyBoundary>
+                <TurnRecapRow
+                  recap={options().turnRecap!}
+                  presentation="continuation"
+                  hideDuration={options().hideTurnRecapDuration}
+                />
+              </ChatLazyBoundary>
             ) : undefined
           }
         >
-          <StreamGroupParts
-            parts={options().activeContinuation!.parts}
-            options={options().activeContinuation!.options}
-            presentation="continuation"
-          />
+          <ChatLazyBoundary>
+            <StreamGroupParts
+              parts={options().activeContinuation!.parts}
+              options={options().activeContinuation!.options}
+              presentation="continuation"
+            />
+          </ChatLazyBoundary>
         </Show>
       </div>
       <Show when={!frame().isTurnBlock}>
         <Show
           when={!props.group.isStreaming && !options().activeContinuation}
-          fallback={renderSolidEmptyGroupFooter()}
+          fallback={<div class="chat-group-footer" aria-hidden="true" />}
         >
           <div
             class={[
@@ -561,44 +576,46 @@ function SessionActivityGroup(props: {
 }) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
-    <ChatSessionActivity
-      group={props.group}
-      options={options()}
-      renderEntry={(item, index) => {
-        const prepared = createMemo(() => prepareGroupMessage(props.group, item(), options()));
-        let actionOwner: HTMLDivElement | undefined;
-        return {
-          actionsRef: (element: HTMLDivElement) => {
-            actionOwner = element;
-          },
-          content: (
-            <PreparedMessage
-              group={props.group}
-              item={item()}
-              index={index()}
-              prepared={prepared()}
-              options={{
-                ...options(),
-                isForwarded: true,
-                onToggleUserMessageExpanded: undefined,
-                replyLine: resolveGroupReplyLine(
-                  { ...props.group, messages: [item()] },
-                  options().resolveReplyPreview,
-                ),
-              }}
-            />
-          ),
-          actions: (
-            <MessageActions
-              details={prepared().actions}
-              options={options()}
-              actionOwner={() => actionOwner}
-              messageKey={item().key}
-            />
-          ),
-        };
-      }}
-    />
+    <ChatLazyBoundary>
+      <ChatSessionActivity
+        group={props.group}
+        options={options()}
+        renderEntry={(item, index) => {
+          const prepared = createMemo(() => prepareGroupMessage(props.group, item(), options()));
+          let actionOwner: HTMLDivElement | undefined;
+          return {
+            actionsRef: (element: HTMLDivElement) => {
+              actionOwner = element;
+            },
+            content: (
+              <PreparedMessage
+                group={props.group}
+                item={item()}
+                index={index()}
+                prepared={prepared()}
+                options={{
+                  ...options(),
+                  isForwarded: true,
+                  onToggleUserMessageExpanded: undefined,
+                  replyLine: resolveGroupReplyLine(
+                    { ...props.group, messages: [item()] },
+                    options().resolveReplyPreview,
+                  ),
+                }}
+              />
+            ),
+            actions: (
+              <MessageActions
+                details={prepared().actions}
+                options={options()}
+                actionOwner={() => actionOwner}
+                messageKey={item().key}
+              />
+            ),
+          };
+        }}
+      />
+    </ChatLazyBoundary>
   );
 }
 

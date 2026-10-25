@@ -6,6 +6,7 @@ import {
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
 import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import { stripLeadingEmptyLines } from "./strip-leading-empty-lines.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -365,10 +366,6 @@ export function trimTextFilter(
       };
     },
   };
-}
-
-function stripLeadingEmptyLines(text: string): string {
-  return text.trim() ? text.replace(/^(?:[ \t]*\r?\n)+/, "") : "";
 }
 
 export const leadingEmptyLinesTextFilter: TextFilter = {

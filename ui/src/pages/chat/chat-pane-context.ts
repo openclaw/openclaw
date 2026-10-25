@@ -62,8 +62,8 @@ import { currentInlineSessionApproval } from "./session-approval-projection.ts";
 import { retireCachedPairingQr } from "./session-message-cache.ts";
 import { migrateLegacyDockVisibility } from "./sidebar-layout-legacy-migration.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private registeredHumanMentionAccess?: HumanMentionAccess;

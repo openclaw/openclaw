@@ -1,9 +1,11 @@
+import { loadStreamingMarkdown } from "../../components/markdown-live-loader.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   sameQueuedDeliveryVersion,
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import {
@@ -75,17 +77,31 @@ export async function sendQueuedChatMessage(
     }
     ({ item: queued, expectedLeafEntryId } = ready);
   }
-  // The FIFO lane and its visible-history wait exist before loading transport.
-  const { sendPreparedChatQueueItem } = await import("./chat-send-delivery.runtime.ts");
+  // FIFO and visible history are admitted before preparing transport and the first reply.
+  const { sendPreparedChatQueueItem, error: preparationError } = await Promise.all([
+    import("./chat-send-delivery.runtime.ts").then(
+      ({ sendPreparedChatQueueItem }) => sendPreparedChatQueueItem,
+    ),
+    loadStreamingMarkdown(),
+  ]).then(
+    ([sendPreparedChatQueueItem]) => ({ sendPreparedChatQueueItem, error: undefined }),
+    (error: unknown) => ({ sendPreparedChatQueueItem: undefined, error }),
+  );
   if (!connectionIsCurrent()) {
+    return "pending";
+  }
+  const current = readQueuedMessageById(host, id);
+  if (!current || !sameQueuedDeliveryVersion(current, queued)) {
     return "pending";
   }
   if (!retryOwnerIsCurrent()) {
     return "failed";
   }
-  const current = readQueuedMessageById(host, id);
-  if (!current || !sameQueuedDeliveryVersion(current, queued)) {
-    return "pending";
+  if (!sendPreparedChatQueueItem) {
+    const error = formatUiError(preparationError);
+    deliveryStateWriter(host, storageMode, id)("failed", error);
+    surfaceChatDeliveryFailure(host, retrySessionKey, retryAgentId, error);
+    return "failed";
   }
   return sendPreparedChatQueueItem(
     host,

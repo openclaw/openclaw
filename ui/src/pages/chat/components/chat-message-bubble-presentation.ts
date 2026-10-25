@@ -12,7 +12,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { readAsyncQuestions } from "./chat-async-question.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {

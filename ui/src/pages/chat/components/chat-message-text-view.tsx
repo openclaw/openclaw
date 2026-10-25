@@ -14,6 +14,7 @@ import {
   type MarkdownContentValue,
 } from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -77,6 +78,13 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
+  // Live rows have a ChatLazyBoundary. Resolve code there before reading a delta,
+  // then render in the ordinary tracked memo so late highlighting stays reactive.
+  const streaming = createMemo(() =>
+    props.options.isStreaming
+      ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
+      : undefined,
+  );
   const presentation = createMemo(() =>
     prepareMessageMarkdown(
       props.markdown,
@@ -84,6 +92,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.options,
       props.markdownOptions,
       props.duplicateSuffix,
+      streaming()?.toStreamingMarkdownDomParts,
     ),
   );
   return (
