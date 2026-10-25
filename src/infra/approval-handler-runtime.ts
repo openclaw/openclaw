@@ -82,12 +82,6 @@ type WrappedPendingEntry = {
   binding?: unknown;
 };
 
-type ActiveApprovalEntries = {
-  request: ApprovalRequest;
-  approvalKind: ChannelApprovalKind;
-  entries: WrappedPendingEntry[];
-};
-
 type WrappedPendingContent = {
   view: PendingApprovalView;
   payload: unknown;
@@ -248,38 +242,6 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   nowMs?: () => number;
 };
 
-type ChannelApprovalHandlerContentSpec<
-  TPendingContent,
-  TRequest extends ApprovalRequest = ApprovalRequest,
-> = {
-  buildPendingContent: (params: {
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    nowMs: number;
-  }) => TPendingContent | Promise<TPendingContent>;
-};
-
-type ChannelApprovalHandlerLifecycleSpec<
-  TPendingEntry,
-  TPreparedTarget,
-  TPendingContent,
-  TRequest extends ApprovalRequest = ApprovalRequest,
-  TResolved extends ApprovalResolved = ApprovalResolved,
-> = ChannelNativeApprovalDeliveryCallbacks<
-  TPendingEntry,
-  TPreparedTarget,
-  TPendingContent,
-  TRequest
-> & {
-  finalizeResolved: (params: {
-    request: TRequest;
-    resolved: TResolved;
-    entries: TPendingEntry[];
-  }) => Promise<void>;
-  finalizeExpired?: (params: { request: TRequest; entries: TPendingEntry[] }) => Promise<void>;
-  onStopped?: () => Promise<void> | void;
-};
-
 /**
  * Adapter contract used by core to run a channel's native approval delivery lifecycle.
  */
@@ -291,46 +253,32 @@ export type ChannelApprovalHandlerAdapter<
   TResolved extends ApprovalResolved = ApprovalResolved,
 > = {
   runtime: ChannelApprovalHandlerRuntimeSpec<TRequest>;
-  content: ChannelApprovalHandlerContentSpec<TPendingContent, TRequest>;
+  content: {
+    buildPendingContent: (params: {
+      request: TRequest;
+      approvalKind: ChannelApprovalKind;
+      nowMs: number;
+    }) => TPendingContent | Promise<TPendingContent>;
+  };
   transport: ChannelNativeApprovalTransportSpec<
     TPendingEntry,
     TPreparedTarget,
     TPendingContent,
     TRequest
   >;
-  lifecycle: ChannelApprovalHandlerLifecycleSpec<
+  lifecycle: ChannelNativeApprovalDeliveryCallbacks<
     TPendingEntry,
     TPreparedTarget,
     TPendingContent,
-    TRequest,
-    TResolved
-  >;
-};
-
-type ChannelApprovalHandlerAdapterAsync<
-  TPendingEntry,
-  TPreparedTarget,
-  TPendingContent,
-  TRequest extends ApprovalRequest = ApprovalRequest,
-  TResolved extends ApprovalResolved = ApprovalResolved,
-> = Omit<
-  ChannelApprovalHandlerAdapter<
-    TPendingEntry,
-    TPreparedTarget,
-    TPendingContent,
-    TRequest,
-    TResolved
-  >,
-  "runtime"
-> & {
-  runtime: Omit<
-    ChannelApprovalHandlerRuntimeSpec<TRequest>,
-    "isConfigured" | "shouldHandle" | "nativeAdapter"
+    TRequest
   > & {
-    nativeAdapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
-    getRequestConfig?: (request: ApprovalRequest) => OpenClawConfig;
-    isConfigured: () => boolean | Promise<boolean>;
-    shouldHandle: (request: TRequest) => boolean | Promise<boolean>;
+    finalizeResolved: (params: {
+      request: TRequest;
+      resolved: TResolved;
+      entries: TPendingEntry[];
+    }) => Promise<void>;
+    finalizeExpired?: (params: { request: TRequest; entries: TPendingEntry[] }) => Promise<void>;
+    onStopped?: () => Promise<void> | void;
   };
 };
 
@@ -361,13 +309,26 @@ function createChannelApprovalHandlerAsync<
   TRequest extends ApprovalRequest = ApprovalRequest,
   TResolved extends ApprovalResolved = ApprovalResolved,
 >(
-  adapter: ChannelApprovalHandlerAdapterAsync<
-    TPendingEntry,
-    TPreparedTarget,
-    TPendingContent,
-    TRequest,
-    TResolved
-  >,
+  adapter: Omit<
+    ChannelApprovalHandlerAdapter<
+      TPendingEntry,
+      TPreparedTarget,
+      TPendingContent,
+      TRequest,
+      TResolved
+    >,
+    "runtime"
+  > & {
+    runtime: Omit<
+      ChannelApprovalHandlerRuntimeSpec<TRequest>,
+      "isConfigured" | "shouldHandle" | "nativeAdapter"
+    > & {
+      nativeAdapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
+      getRequestConfig?: (request: ApprovalRequest) => OpenClawConfig;
+      isConfigured: () => boolean | Promise<boolean>;
+      shouldHandle: (request: TRequest) => boolean | Promise<boolean>;
+    };
+  },
 ): ChannelApprovalHandler<TRequest, TResolved> {
   return createChannelNativeApprovalRuntimeAsync<
     TPendingEntry,
@@ -429,7 +390,14 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     return null;
   }
   const log = createSubsystemLogger(params.label);
-  const activeEntries = new Map<string, ActiveApprovalEntries>();
+  const activeEntries = new Map<
+    string,
+    {
+      request: ApprovalRequest;
+      approvalKind: ChannelApprovalKind;
+      entries: WrappedPendingEntry[];
+    }
+  >();
   let stopped = false;
   const resolveApprovalKind = (request: ApprovalRequest): ChannelApprovalKind => {
     const normalizedRequest = normalizeApprovalRequest(request);

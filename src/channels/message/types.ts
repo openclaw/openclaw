@@ -34,13 +34,6 @@ export type DurableFinalDeliveryRequirementMap = Partial<
   Record<DurableFinalDeliveryCapability, boolean>
 >;
 
-type DurableFinalDeliveryPayloadShape = {
-  text?: string | null;
-  replyToId?: string | null;
-  mediaUrl?: string | null;
-  mediaUrls?: readonly (string | null | undefined)[] | null;
-};
-
 export type MessageReceiptSourceResult = {
   /** Provider-confirmed intentional omission before dispatch, never an ambiguous send. */
   outcome?: "not_sent";
@@ -131,10 +124,8 @@ export type RenderedMessageBatch<TPayload = unknown> = {
   plan: RenderedMessageBatchPlan;
 };
 
-type LiveMessagePhase = "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
-
 export type LiveMessageState<TPayload = unknown> = {
-  phase: LiveMessagePhase;
+  phase: "idle" | "previewing" | "finalizing" | "finalized" | "cancelled";
   canFinalizeInPlace: boolean;
   receipt?: MessageReceipt;
   lastRendered?: RenderedMessageBatch<TPayload>;
@@ -240,8 +231,6 @@ export const unknownSendReconciliationKinds = [
   "batch",
 ] as const;
 
-type UnknownSendReconciliationKind = (typeof unknownSendReconciliationKinds)[number];
-
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendTextContext<TConfig> & { kind: "text" })
   | (ChannelMessageSendMediaContext<TConfig> & { kind: "media" })
@@ -255,12 +244,6 @@ export type ChannelMessageSendCommitContext<
   result: TSendResult;
   attemptToken?: unknown;
 };
-
-type ChannelMessageSendFailureContext<TConfig = OpenClawConfig> =
-  ChannelMessageSendAttemptContext<TConfig> & {
-    error: unknown;
-    attemptToken?: unknown;
-  };
 
 export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
@@ -309,31 +292,6 @@ export type ChannelMessageDeferredDeliveryAdmissionContext<TConfig = OpenClawCon
   phase: "live" | "recovery";
 };
 
-type ChannelMessageSendLifecycleAdapter<
-  TConfig = OpenClawConfig,
-  TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
-> = {
-  beforeSendAttempt?: (ctx: ChannelMessageSendAttemptContext<TConfig>) => unknown;
-  afterSendSuccess?: (
-    ctx: ChannelMessageSendCommitContext<TConfig, TSendResult>,
-  ) => Promise<void> | void;
-  afterSendFailure?: (ctx: ChannelMessageSendFailureContext<TConfig>) => Promise<void> | void;
-  afterCommit?: (
-    ctx: ChannelMessageSendCommitContext<TConfig, TSendResult>,
-  ) => Promise<void> | void;
-};
-
-type ChannelMessageSendAdapter<
-  TConfig = OpenClawConfig,
-  TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult,
-> = {
-  text?: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<TSendResult>;
-  media?: (ctx: ChannelMessageSendMediaContext<TConfig>) => Promise<TSendResult>;
-  payload?: (ctx: ChannelMessageSendPayloadContext<TConfig>) => Promise<TSendResult>;
-  poll?: (ctx: ChannelMessageSendPollContext<TConfig>) => Promise<TSendResult>;
-  lifecycle?: ChannelMessageSendLifecycleAdapter<TConfig, TSendResult>;
-};
-
 export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
@@ -348,7 +306,9 @@ export type ChannelMessageDurableFinalAdapter = {
     ctx: ChannelMessageDeferredDeliveryAdmissionContext,
   ) => ChannelMessageDeferredDeliveryAdmissionResult;
   /** Send shapes for which reconciliation can prove the complete durable intent. */
-  reconcileUnknownSendKinds?: Partial<Record<UnknownSendReconciliationKind, boolean>>;
+  reconcileUnknownSendKinds?: Partial<
+    Record<(typeof unknownSendReconciliationKinds)[number], boolean>
+  >;
   reconcileUnknownSend?: (
     ctx: ChannelMessageUnknownSendContext,
   ) =>
@@ -404,7 +364,27 @@ export type ChannelMessageAdapterShape<
 > = {
   id?: string;
   durableFinal?: ChannelMessageDurableFinalAdapter;
-  send?: ChannelMessageSendAdapter<TConfig, TSendResult>;
+  send?: {
+    text?: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<TSendResult>;
+    media?: (ctx: ChannelMessageSendMediaContext<TConfig>) => Promise<TSendResult>;
+    payload?: (ctx: ChannelMessageSendPayloadContext<TConfig>) => Promise<TSendResult>;
+    poll?: (ctx: ChannelMessageSendPollContext<TConfig>) => Promise<TSendResult>;
+    lifecycle?: {
+      beforeSendAttempt?: (ctx: ChannelMessageSendAttemptContext<TConfig>) => unknown;
+      afterSendSuccess?: (
+        ctx: ChannelMessageSendCommitContext<TConfig, TSendResult>,
+      ) => Promise<void> | void;
+      afterSendFailure?: (
+        ctx: ChannelMessageSendAttemptContext<TConfig> & {
+          error: unknown;
+          attemptToken?: unknown;
+        },
+      ) => Promise<void> | void;
+      afterCommit?: (
+        ctx: ChannelMessageSendCommitContext<TConfig, TSendResult>,
+      ) => Promise<void> | void;
+    };
+  };
   live?: ChannelMessageLiveAdapterShape;
   receive?: ChannelMessageReceiveAdapterShape;
 };
@@ -415,7 +395,12 @@ export type ChannelMessageAdapter<
 > = TAdapter;
 
 export type DeriveDurableFinalDeliveryRequirementsParams = {
-  payload: DurableFinalDeliveryPayloadShape;
+  payload: {
+    text?: string | null;
+    replyToId?: string | null;
+    mediaUrl?: string | null;
+    mediaUrls?: readonly (string | null | undefined)[] | null;
+  };
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
