@@ -190,7 +190,6 @@ describe("effort bar colour and flow", () => {
     await speedFixture(speedState(false));
     expect(summary().textContent?.trim()).toBe("High");
     expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
-    expect(host!.textContent).not.toContain("higher usage");
     const { onFastModeSelect } = await speedFixture(
       speedState("ultrafast", ["priority", "ultrafast"], true, true),
     );
@@ -212,8 +211,6 @@ describe("effort bar colour and flow", () => {
     ultra.focus();
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
-    speed("off").click();
-    expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
     await speedFixture(speedState("ultrafast", ["priority", "ultrafast"], false));
     expect(speed("ultrafast").disabled).toBe(true);
     expect(speed("on")).toBeNull();

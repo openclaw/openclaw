@@ -104,6 +104,10 @@ async function mountComments(additional: ChatAttachment[] = []) {
   });
   const update = (patch: Partial<Parameters<typeof ChatCommentController>[0]>) =>
     setView((current) => ({ ...current, ...patch }));
+  const updateProps = (patch: Partial<ChatAttachmentControlsProps>) => {
+    update({ props: { ...view().props, ...patch } });
+    flush();
+  };
   mountSolid(() => <ChatSelectionAnnotations {...view().props} />, { container: composer });
   const toast = document.createElement("openclaw-toast-host");
   card.append(controllerContainer, composer, toast);
@@ -126,8 +130,8 @@ async function mountComments(additional: ChatAttachment[] = []) {
   return {
     attachment,
     controller,
-    view,
     update,
+    updateProps,
     composer,
     card,
     toast,
@@ -224,17 +228,13 @@ describe("comment actions outside the transcript", () => {
     const fixture = await mountComments([retainedFile]);
     const originalPayload = getChatAttachmentDataUrl(fixture.attachment)!;
     const originalBytes = Buffer.from(originalPayload.split(",")[1]!, "base64").byteLength;
-    fixture.update({
-      props: {
-        ...fixture.view().props,
-        attachmentLimits: {
-          maxBytes: 10_000,
-          maxImageBytes: 10_000,
-          maxBatchBytes: originalBytes + 5,
-        },
+    fixture.updateProps({
+      attachmentLimits: {
+        maxBytes: 10_000,
+        maxImageBytes: 10_000,
+        maxBatchBytes: originalBytes + 5,
       },
     });
-    flush();
     let action: ChatCommentAction | undefined;
     fixture.composer.addEventListener("openclaw-comment-action", (event) => {
       action = (event as CustomEvent<ChatCommentAction>).detail;
@@ -313,7 +313,6 @@ describe("comment actions outside the transcript", () => {
     fixture.card.prepend(fixture.controller);
     flush();
     await fixture.edit();
-    expect(fixture.input()).not.toBeNull();
     fixture.signalOwner.abort();
     expect(fixture.input()).toBeNull();
   });
@@ -322,8 +321,7 @@ describe("comment actions outside the transcript", () => {
     const fixture = await mountComments();
     await fixture.edit();
     const nextOwner = new AbortController();
-    fixture.update({ props: { ...fixture.view().props, readSignal: nextOwner.signal } });
-    flush();
+    fixture.updateProps({ readSignal: nextOwner.signal });
     expect(fixture.input()).toBeNull();
     await fixture.edit();
     fixture.signalOwner.abort();

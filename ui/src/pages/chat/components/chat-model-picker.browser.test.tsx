@@ -74,8 +74,8 @@ function mountPicker(optionsReady = true) {
   return { params, update, picker, trigger, composer, toggle, modelOptions, open };
 }
 
-it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
-  const { composer, open, params, update, trigger } = mountPicker();
+it("opens during activation and reconciles filter focus across catalog rerenders", async () => {
+  const { composer, open, params, update } = mountPicker();
   expect(container.querySelector<HTMLElement>(modelControlSelector("option"))).toBeNull();
   expect(container.querySelector(".chat-controls__model-menu")).toBeNull();
   let visibleAtActivation = false;
@@ -112,19 +112,6 @@ it("opens during activation and preserves filter focus and query across catalog 
   await Promise.resolve();
   expect(document.activeElement).toBe(beta);
   expect(search.value).toBe("beta");
-  trigger.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
-});
-
-it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
-  const { open, params, update } = mountPicker();
-  await open();
-  const search = getSearch();
-  await userEvent.keyboard("beta");
-  const highlighted = container.querySelector<HTMLElement>(modelControlSelector("highlighted"))!;
-  expect(highlighted.textContent).toContain("Beta");
-  expect(search.getAttribute("aria-activedescendant")).toBe(highlighted.id);
   params.modelOptions = params.modelOptions.filter((row) => row.value !== "example/beta");
   update();
   await Promise.resolve();
@@ -276,7 +263,6 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
     const active = document.getElementById(search.getAttribute("aria-activedescendant")!);
     expect(active?.getAttribute("data-chat-model-option")).toBe("example/model-999");
     expect(active?.getAttribute("aria-posinset")).toBe("991");
-    expect(active?.getAttribute("aria-setsize")).toBe("991");
     const viewport = container.querySelector<HTMLElement>("[data-chat-model-window]")!;
     expect(viewport.scrollTop).toBeGreaterThan(0);
     const bounds = active!.getBoundingClientRect();

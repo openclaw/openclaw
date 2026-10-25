@@ -31,9 +31,9 @@ describe("grouped chat rendering", () => {
     harness.render(harness.renderTestMessageGroup(group, opts));
   }
 
-  it("preserves reference links and one duplicate badge in recovered media", async () => {
+  it("preserves reference links, literal marker text and one duplicate badge in recovered media", async () => {
     const fullText =
-      "[Before][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
+      "[Before OPENCLAWMEDIASLOT0END][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
     const fullMessage = createAssistantMessage(fullText, { timestamp: 1000 });
     const message = createAssistantMessage("Loading preview", {
       timestamp: 1000,
@@ -56,7 +56,7 @@ describe("grouped chat rendering", () => {
         harness
           .elements(".chat-text a, .chat-message-image")
           .map((node) => (node instanceof HTMLImageElement ? "image" : node.textContent)),
-      ).toEqual(["Before", "image", "After"]),
+      ).toEqual(["Before OPENCLAWMEDIASLOT0END", "image", "After"]),
     );
     expect(harness.elements<HTMLAnchorElement>(".chat-text a").map((link) => link.href)).toEqual([
       "https://example.com/proof",
@@ -64,6 +64,7 @@ describe("grouped chat rendering", () => {
     ]);
     harness.expectCount(".chat-duplicate-count", 1);
     expect(harness.view.textContent).not.toContain("Loading preview");
+    expect(harness.view.textContent).not.toContain("OPENCLAWMEDIASLOTX");
   });
 
   it("keeps list structure and its duplicate suffix across an assistant image", async () => {
@@ -97,18 +98,6 @@ describe("grouped chat rendering", () => {
     expect(harness.elementText(".chat-text")?.trim()).toBe("Visible answer");
     await vi.dynamicImportSettled();
     await waitForSolid(() => harness.expectCount(".chat-message-image", 0));
-  });
-
-  it("keeps literal media-marker text distinct from assistant image positions", async () => {
-    harness.renderAssistantMessage(
-      createAssistantMessage(
-        "Literal OPENCLAWMEDIASLOT0END\n\nMEDIA:https://example.com/real.png\n\nDone",
-      ),
-    );
-    expect(harness.view.textContent).toContain("Literal OPENCLAWMEDIASLOT0END");
-    expect(harness.view.textContent).not.toContain("OPENCLAWMEDIASLOTX");
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => harness.expectCount(".chat-message-image", 1));
   });
 
   it("keeps an inline image mounted while the following paragraph streams and completes", async () => {

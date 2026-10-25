@@ -175,10 +175,11 @@ describe("chat transcript full-message recovery", () => {
   });
 
   it.each([
-    { phase: "loading", reconnect: true },
-    { phase: "loaded", reconnect: true },
-    { phase: "loading", reconnect: false },
-  ])("retires $phase recovery (same controller: $reconnect)", async ({ phase, reconnect }) => {
+    { phase: "loading", retirement: "reconnect" },
+    { phase: "loaded", retirement: "reconnect" },
+    { phase: "loading", retirement: "remount" },
+    { phase: "loading", retirement: "prune" },
+  ])("retires $phase recovery on $retirement", async ({ phase, retirement }) => {
     const retired = createDeferred<FullMessageResult>();
     const current = createDeferred<FullMessageResult>();
     const load = vi
@@ -192,21 +193,26 @@ describe("chat transcript full-message recovery", () => {
       await shows(pane, "Retired body.");
     }
 
-    // Reconnect retains presentation; remount also exercises the pane reset.
-    pane.resetPresentationOnDisconnect = !reconnect;
-    pane.remove();
     const oldPane = pane;
-    if (reconnect) {
-      document.body.append(pane);
+    if (retirement === "prune") {
+      await render(pane, { messages: [] });
+      await render(pane, { messages: [previewMessage] });
     } else {
-      pane = mountTranscript("recovery-reconnect", load);
+      // Reconnect retains presentation; remount also exercises the pane reset.
+      pane.resetPresentationOnDisconnect = retirement === "remount";
+      pane.remove();
+      if (retirement === "reconnect") {
+        document.body.append(pane);
+      } else {
+        pane = mountTranscript("recovery-reconnect", load);
+      }
+      await render(pane);
     }
-    await render(pane);
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     await flushDeferredRowPrune();
     expect(pane.textContent).not.toContain("Retired body.");
 
-    if (!reconnect) {
+    if (retirement === "remount") {
       current.resolve(fullMessage("Current body."));
       await shows(pane, "Current body.");
     }
@@ -323,28 +329,5 @@ describe("chat transcript full-message recovery", () => {
     await searchTranscript(pane, "Current source body");
     expect(bubble(pane)?.textContent).toContain("Current source body.");
     expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("fences a pruned request when the same message starts a new recovery", async () => {
-    const first = createDeferred<FullMessageResult>();
-    const second = createDeferred<FullMessageResult>();
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise);
-    const pane = mountTranscript("recovery-pending-pruning", load);
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-
-    await render(pane, { messages: [] });
-    await render(pane, { messages: [previewMessage] });
-    await flushDeferredRowPrune();
-    const updates = vi.spyOn(pane, "requestRender");
-    first.resolve(fullMessage("Obsolete body."));
-    await flushDeferredRowPrune();
-    expect(updates).not.toHaveBeenCalled();
-    expect(pane.textContent).not.toContain("Obsolete body.");
-
-    second.resolve(fullMessage("Replacement body."));
-    await shows(pane, "Replacement body.");
   });
 });

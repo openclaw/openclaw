@@ -126,17 +126,10 @@ describe.runIf(browserMode)("Review header layout", () => {
   });
 
   it("uses available width before truncating and preserves keyboard access to sync actions", async () => {
+    const widthResult = result({ additions: 700, deletions: 120 });
+    widthResult.files = [{ ...addedFile, status: "modified", additions: 700, deletions: 120 }];
     const { panel, button, surface, menuOpen, menuClosed, userEvent } = await mountBrowserPanel({
-      loader: async () =>
-        result({
-          additions: 700,
-          deletions: 120,
-          files: [
-            { path: "added.ts", status: "added", additions: 600, deletions: 0 },
-            { path: "removed.ts", status: "deleted", additions: 0, deletions: 20 },
-            { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
-          ],
-        }),
+      loader: async () => widthResult,
     });
     panel.style.cssText = "display:block;width:1100px;padding:8px";
     await waitForSolid(() =>

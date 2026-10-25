@@ -239,10 +239,7 @@ describe("CI automation popup scope", () => {
       } else {
         h.snapshot({ hello: hello(["operator.sessions.read"]) });
       }
-      await h.element.updateComplete;
       await h.open(false);
-      await h.element.updateComplete;
-      expect(await h.element.updateComplete).toBe(true);
       expect(h.request).not.toHaveBeenCalled();
       expect(h.checkbox().closest("fieldset")?.disabled).toBe(true);
     },

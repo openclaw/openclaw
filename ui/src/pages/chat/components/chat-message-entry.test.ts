@@ -11,6 +11,7 @@ import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
+  requireElement as required,
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
@@ -36,20 +37,12 @@ function saved(
   return { role, content, timestamp, __openclaw };
 }
 
-function required(parent: ParentNode, selector: string) {
-  return expectDefined(parent.querySelector<HTMLElement>(selector), selector);
-}
-
 async function setupEntryTranscript(messages: unknown[] = []) {
   const transcript = createTestTranscript();
-  const props = {
-    ...threadProps("pane-entry", "agent:main:entry", messages),
-    queue: [] as ChatQueueItem[],
-    stream: null as string | null,
-    streamStartedAt: null as number | null,
-    runId: null as string | null,
+  const props = threadProps("pane-entry", "agent:main:entry", messages, {
+    runId: null,
     runWorking: false,
-  };
+  });
   let container = document.body.appendChild(document.createElement("div"));
   let view = createChatThreadHarness(container, transcript);
   onTestFinished(() => {

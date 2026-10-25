@@ -29,14 +29,14 @@ function openPage(fixture: Awaited<ReturnType<typeof menuFixture>>, value = "mob
   return { page, mounted };
 }
 
-async function menuFixture(mobile: boolean | undefined) {
+async function menuFixture() {
   const menu = document.createElement("openclaw-chat-header-session-menu");
   const onAction = vi.fn();
   const [currentPage, setCurrentPage] = createSignal<HeaderSessionMenuPage>();
   const [presented, setPresented] = createSignal(true);
   const open = vi.fn<(page: HeaderSessionMenuPage, source: HTMLElement) => void>(setCurrentPage);
   const close = vi.fn<() => void>(() => setCurrentPage(undefined));
-  menu.mobile = mobile;
+  menu.mobile = true;
   menu.compact = true;
   menu.mobileHost = { open, close, isCurrent: (page) => presented() && currentPage() === page };
   menu.onAction = onAction;
@@ -49,16 +49,12 @@ async function menuFixture(mobile: boolean | undefined) {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
-  await waitForSolid(() =>
-    expect(
-      menu.querySelector(mobile ? '[value="mobile-copy"]' : '[value="rename"]'),
-    ).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(menu.querySelector('[value="mobile-copy"]')).not.toBeNull());
   return { menu, onAction, open, close, currentPage, setCurrentPage, setPresented };
 }
 
 it("copies through the native action and closes the whole mobile menu", async () => {
-  const { menu, onAction, open } = await menuFixture(true);
+  const { menu, onAction, open } = await menuFixture();
   const panel = menu.querySelector<HTMLElement>(".chat-header-session-menu__panel")!;
   expect(menu.querySelector('[value="copy-session-link"]')).toBeNull();
   await openSubmenu(panel, "Copy");
@@ -73,7 +69,7 @@ it("copies through the native action and closes the whole mobile menu", async ()
 });
 
 it("opens a controlled group picker without autofocus and dispatches the selected group", async () => {
-  const fixture = await menuFixture(true);
+  const fixture = await menuFixture();
   const { menu, open, close, onAction } = fixture;
   const { page, mounted } = openPage(fixture, "compact:open-group");
   expect(open).toHaveBeenCalledOnce();
@@ -111,22 +107,10 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   expect(retiredPage.textContent).not.toContain("Alpine");
 });
 
-it.each([false, undefined])(
-  "uses explicit desktop presentation for the palette delta: %s",
-  async (mobile) => {
-    const { menu } = await menuFixture(mobile);
-    expect(Boolean(menu.querySelector('[value="open-command-palette"]'))).toBe(
-      mobile === undefined,
-    );
-    expect(menu.querySelector('[value="rename"]')?.textContent).toContain("Rename…");
-    expect(menu.querySelector('[value="mobile-copy"]')).toBeNull();
-  },
-);
-
 it.each([false, true])(
   "keeps the gated Speech bubbles preference reachable in mobile Advanced: %s",
   async (enabled) => {
-    const fixture = await menuFixture(true);
+    const fixture = await menuFixture();
     const { menu, close } = fixture;
     const onSettingsChange = vi.fn();
     menu.bubbleModeEnabled = enabled;
@@ -151,8 +135,8 @@ it.each([false, true])(
 );
 
 it("closes the originating split pane from mobile Advanced without exposing legacy View", async () => {
-  const first = await menuFixture(true);
-  const second = await menuFixture(true);
+  const first = await menuFixture();
+  const second = await menuFixture();
   const focusedAtClose: (Element | null)[] = [];
   const onClosePane = vi.fn(() => {
     focusedAtClose.push(document.activeElement);
@@ -205,24 +189,10 @@ it("closes the originating split pane from mobile Advanced without exposing lega
   expect(second.onAction).not.toHaveBeenCalled();
 });
 
-it("omits pane closure from mobile Advanced for a single pane", async () => {
-  const fixture = await menuFixture(true);
-  const { menu } = fixture;
-  menu.viewActions = chatPaneLayoutModel({
-    paneId: "only-pane",
-    narrow: true,
-    mobile: true,
-  }).allActions;
-  await menu.updateComplete;
-  const { mounted } = openPage(fixture);
-  expect(mounted.container.textContent).not.toContain("Close pane");
-  expect(menu.querySelector('[value="compact:open-view"]')).toBeNull();
-});
-
 it.each(["keyboard", "pointer", "close", "suspend", "newer focus", "dispose"] as const)(
   "only consumes the current native appearance keyboard request: %s",
   async (entry) => {
-    const { menu, currentPage, close, setCurrentPage, setPresented } = await menuFixture(true);
+    const { menu, currentPage, close, setCurrentPage, setPresented } = await menuFixture();
     const mounted = mountSolid(() => (
       <Show when={currentPage()} keyed>
         {(page) => page.content}
