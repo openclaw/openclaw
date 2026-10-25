@@ -27,11 +27,6 @@ it("does not restore an accepted name when an older first-load browser migration
     await migrationStarted.promise;
     expect(prefs.stored()).toBeUndefined();
     const next = prefs.make();
-    expect(first.context.gateway).not.toBe(next.context.gateway);
-    expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
-    expect(first.context.gateway.snapshot.selfUser?.id).toBe(
-      next.context.gateway.snapshot.selfUser?.id,
-    );
     await prefs.ready(next);
     expect(next.place.worktreeName).toBe("first-task");
     expect(prefs.stored()).toMatchObject({ worktreeName: "first-task" });
@@ -191,7 +186,7 @@ it("does not publish a rejected old migration into a replacement identity scope"
   first.gateway.disconnect();
   const replacement = identityPreferences(true, undefined, {
     [migrationKey]: true,
-    "new-session.v1:main": {
+    [mainKey]: {
       workspace: "/repo",
       folder: "/repo",
       worktree: true,

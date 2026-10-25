@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -50,39 +51,38 @@ function completionFixture(instantKey?: string, navigate = () => Promise.resolve
     clearDraft: vi.fn(async () => {}),
     completeInBackground: () => false,
     finishNavigation: vi.fn(),
+    turn: { text: "private incognito first turn", attachments: [], createdAt: 1 },
   };
   return {
     ...options,
     complete: (
-      turn: Completion["turn"],
-      result: Completion["result"],
+      initialRun: Completion["result"]["initialRun"],
       overrides: Partial<Completion> = {},
-    ) => completeInitialSessionTurn({ ...options, turn, result, ...overrides }),
+    ) =>
+      completeInitialSessionTurn({
+        ...options,
+        result: { key: instantKey ?? "agent:main:dashboard:rejected", initialRun },
+        ...overrides,
+      }),
   };
 }
 
 describe("first-turn publication", () => {
   it("retires an accepted draft before a slow preview route is ready", async () => {
-    let ready!: () => void;
+    const ready = createDeferred();
     const key = "agent:main:accepted-before-preview";
     const { context, client, clearDraft, navigation, complete, instant } = completionFixture(
       key,
-      () =>
-        new Promise<void>((resolve) => {
-          ready = resolve;
-        }),
+      () => ready.promise,
     );
     vi.spyOn(navigation, "navigate").mockResolvedValue();
-    const completion = complete(
-      { text: "Accepted prompt", attachments: [], createdAt: 1 },
-      { key, initialRun: { status: "started", runId: "accepted-run" } },
-    );
+    const completion = complete({ status: "started", runId: "accepted-run" });
     try {
       // Acceptance, not lazy route readiness or storage completion, consumes input.
       expect(clearDraft).toHaveBeenCalledOnce();
       expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
     } finally {
-      ready();
+      ready.resolve();
       await completion;
       instant!.dispose();
     }
@@ -111,14 +111,9 @@ describe("first-turn publication", () => {
         const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
         let current = true;
         const completion = complete(
-          { text: "private incognito first turn", attachments: [], createdAt: 1 },
-          {
-            key,
-            initialRun:
-              status === "started"
-                ? { status, runId: "private-run" }
-                : { status, error: "synthetic denial" },
-          },
+          status === "started"
+            ? { status, runId: "private-run" }
+            : { status, error: "synthetic denial" },
           { isCurrent: () => current },
         );
         queueMicrotask(() => {
@@ -179,13 +174,13 @@ describe("retained launcher rejection", () => {
       onTestFinished(() => releaseChatAttachmentPayloads(attachment ? [attachment] : []));
       const error = current ? "Rejected image" : "First turn denied";
       await complete(
+        { status: "rejected", error },
         {
-          text: current ? "" : "Keep this prompt visible",
-          attachments: attachment ? [attachment] : [],
-          createdAt: 1,
-        },
-        { key: "agent:main:dashboard:rejected", initialRun: { status: "rejected", error } },
-        {
+          turn: {
+            text: current ? "" : "Keep this prompt visible",
+            attachments: attachment ? [attachment] : [],
+            createdAt: 1,
+          },
           isCurrent: () => current,
           completeInBackground: () => true,
           onRejectedPrompt,

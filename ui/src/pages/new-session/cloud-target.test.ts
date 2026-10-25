@@ -106,10 +106,11 @@ describe("cloud target menu", () => {
     );
   });
 
-  it("shows unselected provider defaults as suggestions and selects the provider before an explicit choice", () => {
+  it("selects suggested defaults before editing provider configuration and disables submission edits", () => {
     const onSelect = vi.fn();
     const onSelectOs = vi.fn();
-    const { update, find } = cloud({
+    const onSelectMachine = vi.fn();
+    const { update, find, container } = cloud({
       profiles: [
         {
           id: "aws",
@@ -127,6 +128,7 @@ describe("cloud target menu", () => {
       selectedId: "",
       onSelect,
       onSelectOs,
+      onSelectMachine,
     });
     const suggested = find("os:linux")!;
     expect(suggested.dataset.suggested).toBe("true");
@@ -138,6 +140,13 @@ describe("cloud target menu", () => {
     update({ selectedId: "aws" });
     expect(find("os:linux")?.getAttribute("data-suggested")).toBeNull();
     expect(find("os:linux")?.getAttribute("aria-pressed")).toBe("true");
+    onSelectOs.mockClear();
+    find("machine:standard")!.click();
+    find("os:windows")!.click();
+    expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("standard");
+    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("windows");
+    update({ selectedId: "aws", submitting: true });
+    expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
   });
 
   it.each([
@@ -157,37 +166,6 @@ describe("cloud target menu", () => {
     expect(machineLabel?.classList.contains("new-session-page__fixed-machine")).toBe(true);
     expect(machineLabel?.textContent).toContain(expected);
     expect(machineLabel?.tagName).toBe("SPAN");
-  });
-
-  it("forwards configuration choices and disables them while submitting", () => {
-    const onSelectMachine = vi.fn();
-    const onSelectOs = vi.fn();
-    const { update, find, container } = cloud({
-      profiles: [
-        {
-          id: "aws",
-          providerId: "aws",
-          operatingSystems: [
-            { id: "linux", label: "Linux" },
-            { id: "macos", label: "macOS" },
-          ],
-          machines: [
-            { id: "small", label: "Small" },
-            { id: "large", label: "Large" },
-          ],
-        },
-      ],
-      selectedOs: "linux",
-      selectedMachine: "small",
-      onSelectMachine,
-      onSelectOs,
-    });
-    find("machine:large")!.click();
-    find("os:macos")!.click();
-    expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
-    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
-    update({ submitting: true });
-    expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
   });
 
   it("omits unavailable OS choices even when they are the current selection", () => {

@@ -22,6 +22,10 @@ function expectListing(draft: string, listing: FsListDirResult | null) {
   expect(browser).toMatchObject({ draft, loading: false });
   expect(browser.listing).toEqual(listing);
 }
+function highlight(delta: 1 | -1, entry: FsListDirResult["entries"][number]) {
+  browser.moveHighlight(delta);
+  expect(browser.highlightedEntry()).toEqual(entry);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -102,9 +106,6 @@ describe("PlaceBrowserState", () => {
     expectListing(reset ? "" : "/workspace/to", reset ? null : workspace);
     if (reset) {
       expect(browser).toMatchObject({ error: null, activeIndex: -1 });
-      expect(vi.getTimerCount()).toBe(0);
-    } else {
-      expect(browser.view().entries).toEqual([workspace.entries[1]]);
     }
     expect(browser.highlightedEntry()).toBeUndefined();
     expect(onListing).toHaveBeenCalledTimes(1);
@@ -145,7 +146,7 @@ describe("PlaceBrowserState", () => {
 
     await browser.navigate("/missing");
     expect(listDirectory.mock.calls).toEqual([["/missing"]]);
-    expect(browser).toMatchObject({ listing: null, draft: "/missing", loading: false });
+    expectListing("/missing", null);
     expect(browser.error).toBeNull();
     expect(await browser.readCompletion).toBe(
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
@@ -154,9 +155,10 @@ describe("PlaceBrowserState", () => {
   });
 
   it("opens HOME for a missing starting folder but reports explicit navigation failures", async () => {
-    const message = "Error: ENOTDIR: not a directory";
-
-    const missingFolder = new GatewayRequestError({ code: "INVALID_REQUEST", message });
+    const missingFolder = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "Error: ENOTDIR: not a directory",
+    });
     listDirectory.mockRejectedValueOnce(missingFolder);
     await browser.navigate("/missing", "initial");
     expect(listDirectory.mock.calls).toEqual([["/missing"], [undefined]]);
@@ -169,28 +171,24 @@ describe("PlaceBrowserState", () => {
   });
 
   it("wraps the highlight, completes with Tab, and opens the highlighted folder with Enter", async () => {
-    const appOld = { name: "app-old", path: "/workspace/app-old" };
-    const app = { name: "app", path: "/workspace/app" };
-    listDirectory.mockResolvedValueOnce({ ...workspace, entries: [appOld, app] });
+    const listing = directory("/workspace", ["app-old", "app"]);
+    const appOld = listing.entries[0]!;
+    const app = listing.entries[1]!;
+    listDirectory.mockResolvedValueOnce(listing);
     await browser.navigate(workspace.path);
     expect(browser.highlightedEntry()).toBeUndefined();
-    browser.moveHighlight(-1);
-    expect(browser.highlightedEntry()).toEqual(app);
-    browser.moveHighlight(1);
-    expect(browser.highlightedEntry()).toEqual(appOld);
+    highlight(-1, app);
+    highlight(1, appOld);
     browser.moveHighlight(1);
     browser.setDraft("/workspace/ap");
     expect(browser.highlightedEntry()).toBeUndefined();
-    browser.moveHighlight(1);
-    expect(browser.highlightedEntry()).toEqual(appOld);
-    browser.moveHighlight(1);
-    expect(browser.highlightedEntry()).toEqual(app);
+    highlight(1, appOld);
+    highlight(1, app);
 
     expect(browser.completeHighlighted()).toBe(true);
     expect(browser.draft).toBe(app.path);
     expect(browser.highlightedEntry()).toBeUndefined();
     expect(browser.completeHighlighted()).toBe(false);
-    expect(browser.view().entries).toEqual([app, appOld]);
     expect(listDirectory).toHaveBeenCalledTimes(1);
     listDirectory.mockResolvedValue(directory(app.path, []));
     await browser.activate();

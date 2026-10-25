@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { mount } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { hostedRuntime } from "./placement.test-support.ts";
 
 afterEach(() => {
   cleanupSolid();
@@ -23,8 +24,19 @@ function expectArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp", destinat
   expect(document.activeElement).toBe(destination);
 }
 
-function get(root: Pick<ParentNode, "querySelector">, selector: string) {
-  return expectDefined(root.querySelector<HTMLElement>(selector), selector);
+function get<T extends HTMLElement = HTMLElement>(
+  root: Pick<ParentNode, "querySelector">,
+  selector: string,
+) {
+  return expectDefined(root.querySelector<T>(selector), selector);
+}
+
+async function shown<T extends HTMLElement = HTMLElement>(
+  root: Pick<ParentNode, "querySelector">,
+  selector: string,
+) {
+  await waitForSolid(() => expect(root.querySelector(selector)).not.toBeNull());
+  return get<T>(root, selector);
 }
 
 async function openSettings(host: Pick<ParentNode, "querySelector">) {
@@ -42,15 +54,9 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
     ],
   });
   const settings = await openSettings(host);
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
-  const workspace = get(host, ".palette-session-settings__workspace");
+  const workspace = await shown(host, ".palette-session-settings__workspace");
   const trigger = get(host, ".agent-select__trigger");
-  const remember = expectDefined(
-    host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
-    "remember checkbox",
-  );
+  const remember = get<HTMLInputElement>(host, ".palette-session-settings__remember input");
   expect(remember.disabled).toBe(true);
   expectArrow(workspace, "ArrowDown", trigger);
 
@@ -88,9 +94,7 @@ it("uses current placement and preference retry controls after their branches ch
   });
   await context.agents.refreshList();
   await openSettings(host);
-  await waitForSolid(() =>
-    expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
-  );
+  await shown(host, "[data-required-placement] button");
   const options = expectDefined(host.draft.settingsView(), "palette settings").options;
   options.preferences.failed = true;
   options.onChange();
@@ -107,10 +111,7 @@ it("uses current placement and preference retry controls after their branches ch
   );
   available = false;
   await context.agents.refreshList();
-  await waitForSolid(() =>
-    expect(host.querySelector("[data-required-placement] button")).not.toBeNull(),
-  );
-  const replacementRetry = get(host, "[data-required-placement] button");
+  const replacementRetry = await shown(host, "[data-required-placement] button");
   expectArrow(replacementRetry, "ArrowDown", preferenceRetry);
 
   options.preferences.failed = false;
@@ -119,9 +120,7 @@ it("uses current placement and preference retry controls after their branches ch
   expectArrow(replacementRetry, "ArrowDown", trigger);
   required = false;
   await context.agents.refreshList();
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
+  await shown(host, ".palette-session-settings__workspace");
 });
 
 it("keeps filtered choices and unavailable rows in DOM order before the existing footer", async () => {
@@ -139,11 +138,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
           agentRuntime: { id: "openclaw", source: "model" },
           runtimeChoices: [
             {
-              agentRuntime: {
-                id: "hosted",
-                source: "model",
-                workspaceEnvironment: { kind: "provider-hosted", label: "Hosted" },
-              },
+              agentRuntime: hostedRuntime,
               available: false,
               unavailableReason: "missing-auth",
             },
@@ -166,28 +161,13 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   options.onChange();
   await openSettings(host);
   const retry = get(host, ".palette-session-settings__error button");
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
-  get(host, ".palette-session-settings__workspace").click();
-  await waitForSolid(() =>
-    expect(host.querySelector('[data-machine="local"][data-project="alpha"]')).not.toBeNull(),
-  );
-  await waitForSolid(() =>
-    expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
-  );
+  (await shown(host, ".palette-session-settings__workspace")).click();
+  const alpha = await shown(host, '[data-machine="local"][data-project="alpha"]');
+  const unavailable = await shown<HTMLButtonElement>(host, '[data-machine="runtime:agentsapi"]');
   const content = get(host, ".palette-session-settings__content");
   const back = get(content, ".palette-session-settings__back");
-  const search = expectDefined(
-    content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
-    "settings search",
-  );
+  const search = get<HTMLInputElement>(content, ".palette-session-settings__search");
   const connect = get(content, ":scope > .palette-session-settings__row");
-  const unavailable = expectDefined(
-    content.querySelector<HTMLButtonElement>('[data-machine="runtime:hosted"]'),
-    "unavailable machine",
-  );
-  const alpha = get(content, '[data-machine="local"][data-project="alpha"]');
   const beta = get(content, '[data-machine="local"][data-project="beta"]');
   expect(unavailable.getAttribute("aria-disabled")).toBe("true");
   expect(unavailable.disabled).toBe(false);
@@ -230,11 +210,8 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   await openSettings(host);
   const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
   await draft.gateway.refreshCloudProfiles();
-  get(host, ".palette-session-settings__workspace").click();
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
-  );
-  const search = get(host, ".palette-session-settings__search");
+  (await shown(host, ".palette-session-settings__workspace")).click();
+  const search = await shown(host, ".palette-session-settings__search");
   const choice = get(host, '[data-machine="cloud:aws"]');
   search.focus();
   readCatalog.mockReturnValue(refresh.promise);

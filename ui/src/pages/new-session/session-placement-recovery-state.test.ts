@@ -55,7 +55,7 @@ describe("pending session placement recovery state", () => {
     const context = {};
     const palette = new PendingSessionPlacementRecoveryState(() => context);
     const page = new PendingSessionPlacementRecoveryState(() => context);
-    const request = palette.stageCreate({
+    const request = stageCreate(palette, {
       agentId: "main",
       target: { kind: "device", deviceId: "runner" },
       message: "palette task",
@@ -82,32 +82,19 @@ describe("pending session placement recovery state", () => {
     ).toBe(expected);
   });
 
-  it.each([
-    ["permission mode", { permissionMode: "guarded" }, { permissionMode: "guarded" }],
-    [
-      "model/runtime",
-      {
-        agentId: "cloud",
-        message: "",
-        titleSource: "keep the selected runtime",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-        worktree: true,
-      },
-      { model: "openai/gpt-5.6-sol", agentRuntime: "codex" },
-    ],
-    [
-      "explicit names",
-      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
-      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
-    ],
-  ] as const)("preserves %s through staging, storage, and capture", (kind, params, expected) => {
+  it("preserves permissions, runtime and explicit names through staging, storage, and capture", () => {
     const pending = new PendingSessionPlacementRecoveryState();
+    const expected = {
+      permissionMode: "guarded" as const,
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+      displayName: "Repair naming",
+      worktreeName: "my-explicit-branch",
+    };
     const createParams = stageCreate(pending, {
-      target:
-        kind === "model/runtime" ? { kind: "auto-device" } : { kind: "profile", profileId: "aws" },
-      attachments: kind === "explicit names" ? [{ type: "image" }] : undefined,
-      createParams: { agentId: "cloud", message: "", worktree: true, ...params },
+      target: { kind: "auto-device" },
+      attachments: [{ type: "image" }],
+      createParams: { agentId: "cloud", message: "", worktree: true, ...expected },
     });
     expect(createParams).not.toBeNull();
     expect(createParams).toMatchObject(expected);

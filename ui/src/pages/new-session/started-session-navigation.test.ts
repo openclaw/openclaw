@@ -5,20 +5,18 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ControlUiReadinessOutlet } from "../../app/control-ui-readiness.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createDraftFixture, readyChatRoute } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
 type Fixture = ReturnType<typeof createDraftFixture>;
 const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const pathname = "/chat/main/0f403cb839204cf18eb779f2f00ce488";
-const readyChat = async () =>
-  queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
-function created(context: Fixture["context"], key = sessionKey) {
-  vi.mocked(context.sessions.createResult).mockResolvedValue({
-    key,
-    initialRun: { status: "idle" },
-  });
+function fixture(options?: Parameters<typeof createDraftFixture>[0], key = sessionKey) {
+  const result = createDraftFixture(options);
+  result.create.mockResolvedValue({ key, initialRun: { status: "idle" } });
+  result.navigate.mockImplementation(readyChatRoute);
+  result.flow.setMessage("start this task");
+  return result;
 }
 function expectCalls(context: Fixture["context"], navigations = 1, creates = 1) {
   expect(context.navigateAndWait).toHaveBeenCalledTimes(navigations);
@@ -55,7 +53,7 @@ describe("confirmed session navigation", () => {
     Object.assign(context, { router, routeOutlet });
     vi.mocked(context.navigateAndWait).mockImplementation(async (routeId, options) => {
       const navigation = router.navigate(routeId, context, {}, route(options?.pathname ?? "/chat"));
-      await readyChat();
+      await readyChatRoute();
       await navigation;
     });
 
@@ -102,16 +100,14 @@ describe("confirmed session navigation", () => {
   );
 
   it("hands off the confirmed session without waiting for speculative preloading", async () => {
-    const { context, flow } = createDraftFixture();
-    created(context);
+    const { context, flow, navigate } = fixture();
     const preload = createDeferred();
     vi.mocked(context.preload).mockReturnValue(preload.promise);
-    vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
+    navigate.mockImplementation(async (_routeId, options) => {
       expect(options?.pathname).toBe(pathname);
       expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBe(sessionKey);
-      return readyChat();
+      return readyChatRoute();
     });
-    flow.setMessage("start this task");
     const submission = flow.submit();
     try {
       await vi.waitFor(() => expect(context.navigateAndWait).toHaveBeenCalledOnce());
@@ -125,12 +121,10 @@ describe("confirmed session navigation", () => {
   });
 
   it("surfaces navigation failure after a session has already been created", async () => {
-    const { context, flow } = createDraftFixture();
-    created(context, "agent:main:dashboard:created");
-    vi.mocked(context.navigateAndWait)
+    const { context, flow, navigate } = fixture(undefined, "agent:main:dashboard:created");
+    navigate
       .mockRejectedValueOnce(new Error("Chat route failed to load"))
-      .mockImplementationOnce(readyChat);
-    flow.setMessage("start this task");
+      .mockImplementationOnce(readyChatRoute);
 
     await flow.submit();
 
@@ -155,7 +149,7 @@ describe("confirmed session navigation", () => {
   });
 
   it("keeps a background prompt readable while scope is pending and opens without another create", async () => {
-    const { context, flow } = createDraftFixture({
+    const { context, flow, create } = fixture({
       request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
     });
     const prompt = { type: "text", text: "keep this background prompt visible" };
@@ -164,7 +158,7 @@ describe("confirmed session navigation", () => {
       recoveryScopeReady: false,
     });
     delete context.gateway.snapshot.hello!.auth!.recoveryScope;
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
+    create.mockResolvedValue({
       key: "agent:main:dashboard:background-visible",
       initialRun: { status: "started", runId: "background-run" },
     });
@@ -178,7 +172,6 @@ describe("confirmed session navigation", () => {
       recoveryScopeReady: true,
     });
     expect(flow.pendingMessage?.content).toContainEqual(prompt);
-    vi.mocked(context.navigateAndWait).mockImplementation(readyChat);
     await flow.openSubmittedSession();
     expectCalls(context);
     context.gateway.snapshot.hello!.auth!.recoveryScope = "another-account";
@@ -190,8 +183,7 @@ describe("confirmed session navigation", () => {
   it.each(["handshake", "client", "flow"])(
     "retires a confirmed session handoff on %s replacement during selection",
     async (retire) => {
-      const { context, flow } = createDraftFixture();
-      created(context);
+      const { context, flow } = fixture();
       // Selection publishes synchronously; a subscriber may retire the flow
       // before navigation has claimed the confirmed key.
       vi.mocked(context.gateway.setSessionKey).mockImplementation((key) => {
@@ -222,7 +214,7 @@ describe("confirmed session navigation", () => {
     ],
     ["agent changes", ({ place }: Fixture) => place.selectAgentId("other")],
   ] as const)("never retries a committed session after %s", async (_scenario, retire) => {
-    const fixture = createDraftFixture({
+    const current = fixture({
       scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: ["main", "other"].map((id) => ({
         id,
@@ -230,20 +222,20 @@ describe("confirmed session navigation", () => {
         model: { primary: "openai/test" },
       })),
     });
-    const { context, flow } = fixture;
-    vi.mocked(context.sessions.createResult)
+    const { context, flow, create, navigate } = current;
+    create
       .mockResolvedValueOnce({ key: "agent:main:dashboard:old", initialRun: { status: "idle" } })
       .mockImplementationOnce(async (params) => ({
-        key: `agent:${params?.agentId ?? fixture.place.agentId}:dashboard:new`,
+        key: `agent:${params?.agentId ?? current.place.agentId}:dashboard:new`,
         initialRun: { status: "idle" },
       }));
-    vi.mocked(context.navigateAndWait)
+    navigate
       .mockRejectedValueOnce(new Error("old navigation failed"))
-      .mockImplementationOnce(readyChat);
+      .mockImplementationOnce(readyChatRoute);
     flow.setMessage("the committed task");
     await flow.submit();
 
-    retire(fixture);
+    retire(current);
     expect(flow.canSubmit()).toBe(false);
     await flow.submit();
     expectCalls(context);
@@ -251,9 +243,9 @@ describe("confirmed session navigation", () => {
     await flow.submit();
 
     expectCalls(context, 2, 2);
-    expect(vi.mocked(context.sessions.createResult).mock.calls[1]?.[0]?.message).toBe("a new task");
+    expect(create.mock.calls[1]?.[0]?.message).toBe("a new task");
     expect(context.gateway.snapshot.sessionKey).toBe(
-      `agent:${fixture.place.agentId}:dashboard:new`,
+      `agent:${current.place.agentId}:dashboard:new`,
     );
   });
 });

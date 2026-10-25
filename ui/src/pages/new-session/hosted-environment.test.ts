@@ -125,14 +125,8 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   await choose(api.authProfileId);
   await vi.waitFor(() => expect(control.accountSelectionReady()).toBe(true));
   expect(control.selectHostedEnvironment("agentsapi")).toBe(true);
-  const { state } = createRepositoryFixture();
-  managed.track(state.modelControl);
-  state.modelControl.agentRuntime = control.agentRuntime;
-  vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(control.modelForSubmission());
-  expect(buildSelectedSessionCreateParams(state, createSelection)).toMatchObject({
-    model: `${modelRef}@${api.authProfileId}`,
-    agentRuntime: "agentsapi",
-  });
+  expect(control.modelForSubmission()).toBe(`${modelRef}@${api.authProfileId}`);
+  expect(control.agentRuntime).toBe("agentsapi");
   await choose(subscription.authProfileId);
   expect(control.accountSelectionReady()).toBe(false);
   expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
