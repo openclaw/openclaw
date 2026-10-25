@@ -117,7 +117,7 @@ it.each<[string, TerminalDeliveryInput, Partial<ReturnType<typeof capture>>]>([
   ],
   ["empty", { payloads: [] }, {}],
 ])("persists %s completion facts", (_name, input, expected) => {
-  expect(project(input)).toEqual({ captured: true, ...expected });
+  expect(project(input)).toEqual({ runId: "original", captured: true, ...expected });
 });
 
 it.each<Omit<PayloadOutcome, "index">>([
