@@ -220,7 +220,6 @@ it("keeps cached agent rows while the live roster settles", async () => {
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
-    sessions: saved,
     sections: [
       {
         id: "agent:main:recent",
