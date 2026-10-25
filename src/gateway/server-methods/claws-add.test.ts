@@ -350,7 +350,8 @@ it("keeps the new agent when another automation appears before rollback", async 
     removeAgentJobsTransactional: vi.fn(),
   });
   const request = await applyThrough(
-    (input) => input.rollbackNewAgent!(agentId, { id: agentId }, []),
+    (input) =>
+      input.rollbackNewAgent!(agentId, { id: agentId, workspace: "/tmp/workflow-operator" }, []),
     {
       cron,
     },
