@@ -47,6 +47,8 @@ function expectAccess(scope: string, method: string, params?: unknown, deniedSco
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
+const ownKey = { key: "agent:main:own" };
+const ownSession = { sessionKey: ownKey.key };
 
 function setPluginGatewayMethodScope(
   method: string,
@@ -224,16 +226,11 @@ describe("method scope resolution and authorization", () => {
   });
 
   it.each([
-    [
-      "device dispatch",
-      "sessions.dispatch",
-      { key: "agent:main:thread", deviceId: "device-1" },
-      "operator.write",
-    ],
+    ["device dispatch", "sessions.dispatch", { ...ownKey, deviceId: "device-1" }, "operator.write"],
     [
       "profile dispatch",
       "sessions.dispatch",
-      { key: "agent:main:thread", profileId: "development" },
+      { ...ownKey, profileId: "development" },
       "operator.admin",
     ],
     ["gateway move", "sessions.move", move({ kind: "gateway" }), "operator.write"],
@@ -350,17 +347,13 @@ describe("session-scoped method admission", () => {
   );
 
   it.each([
-    ["sessions.diff", { sessionKey: "agent:main:own" }, true],
-    ["controlUi.sessionPullRequests.subscribe", { sessionKeys: ["agent:main:own"] }, true],
-    ["controlUi.sessionPullRequests.checks", { sessionKey: "agent:main:own" }, true],
-    [
-      "sessions.files.assets",
-      { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },
-      true,
-    ],
+    ["sessions.diff", ownSession, true],
+    ["controlUi.sessionPullRequests.subscribe", { sessionKeys: [ownKey.key] }, true],
+    ["controlUi.sessionPullRequests.checks", ownSession, true],
+    ["sessions.files.assets", { ...ownSession, path: "index.html", refs: ["a.png"] }, true],
     ["config.get", undefined, false],
-    ["controlUi.githubDetail", { sessionKey: "agent:main:own" }, false],
-    ["controlUi.githubPreview", { sessionKey: "agent:main:own" }, false],
+    ["controlUi.githubDetail", ownSession, false],
+    ["controlUi.githubPreview", ownSession, false],
   ] as const)(
     "restricts the narrow read alternative to session and bootstrap methods: %s",
     (method, params, narrow) => {
@@ -393,7 +386,7 @@ describe("session-scoped method admission", () => {
   );
 
   it.each([
-    ["chat.send", { sessionKey: "agent:main:own", message: "hello" }, "operator.write"],
+    ["chat.send", { ...ownSession, message: "hello" }, "operator.write"],
     ["question.resolve", {}, "operator.questions"],
   ] as const)("requires the narrow write grant for %s", (method, params, broad) => {
     admission(method, ["operator.sessions.write"], params).toEqual({
@@ -419,11 +412,11 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.create", { incognito: true }],
-    ["sessions.patch", { key: "agent:main:own", permissionMode: "full" }],
-    ["sessions.patchMany", { targets: [{ key: "agent:main:own" }], patch: { sandboxMode: "off" } }],
-    ["sessions.patch", { key: "agent:main:own", unknownMutation: true }],
-    ["sessions.delete", { key: "agent:main:own" }],
-    ["sessions.delete", { key: "agent:main:own", archivedOnly: true }],
+    ["sessions.patch", { ...ownKey, permissionMode: "full" }],
+    ["sessions.patchMany", { targets: [ownKey], patch: { sandboxMode: "off" } }],
+    ["sessions.patch", { ...ownKey, unknownMutation: true }],
+    ["sessions.delete", ownKey],
+    ["sessions.delete", { ...ownKey, archivedOnly: true }],
     ["agent", { message: "/reset" }],
     ["tools.invoke", {}],
     ["plugins.sessionAction", { pluginId: "custom", actionId: "protected" }],

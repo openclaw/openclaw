@@ -208,16 +208,15 @@ describe("project GitHub search", () => {
     expect(fetchImpl.mock.calls.filter(affiliatedRequest)).toHaveLength(1);
   });
 
-  it("returns anonymous public results with a typed missing-credential state", async () => {
+  it("returns normalized anonymous results in GitHub best-match order", async () => {
     const fetchImpl = fetchReturning(
-      json({
-        items: [
-          {
-            ...repository("openclaw/openclaw", "2026-08-10T00:00:00Z", "  public project  "),
-            html_url: "  https://github.com/openclaw/openclaw  ",
-          },
-        ],
-      }),
+      page(
+        {
+          ...repository("openclaw/openclaw", "2020-01-01T00:00:00Z", "  public project  "),
+          html_url: "  https://github.com/openclaw/openclaw  ",
+        },
+        repository("someone/recently-pushed-fork", "2026-08-25T00:00:00Z"),
+      ),
     );
 
     const result = await search("anonymous-openclaw", fetchImpl);
@@ -230,10 +229,12 @@ describe("project GitHub search", () => {
           webUrl: "https://github.com/openclaw/openclaw",
           description: "public project",
         },
+        { fullName: "someone/recently-pushed-fork" },
       ],
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[0]).toContain("/search/repositories?");
+    expect(requestUrl(fetchImpl.mock.calls[0]?.[0])).not.toContain("sort=");
   });
 
   it("prioritizes matching affiliated repositories and fills from global search", async () => {
@@ -338,21 +339,6 @@ describe("project GitHub search", () => {
     for (const [, init] of fetchImpl.mock.calls) {
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer prepared-native-token");
     }
-  });
-
-  it("preserves GitHub best-match order for global results instead of re-sorting by recency", async () => {
-    const fetchImpl = fetchReturning(
-      page(
-        repository("openclaw/best-match", "2020-01-01T00:00:00Z"),
-        repository("someone/recently-pushed-fork", "2026-08-25T00:00:00Z"),
-      ),
-    );
-    expect(projectNames(await search("best-match", fetchImpl))).toEqual([
-      "openclaw/best-match",
-      "someone/recently-pushed-fork",
-    ]);
-    const searchUrl = requestUrl(fetchImpl.mock.calls[0]?.[0]);
-    expect(searchUrl).not.toContain("sort=");
   });
 
   it.each([

@@ -43,16 +43,12 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             workspaceDir: "",
             onHandle: fixture.owner.setServices,
           });
-          expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-          expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
+          fixture.expectServices({ firstStart: 2, siblingStart: 2 });
         },
       });
-      expect(fixture.firstStop).toHaveBeenCalledOnce();
-      expect(fixture.siblingStop).not.toHaveBeenCalled();
-      expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
+      fixture.expectServices({ firstStop: 1, siblingStop: 0, siblingStart: 2 });
       await fixture.owner.currentServices()?.stop();
-      expect(fixture.firstStop).toHaveBeenCalledOnce();
-      expect(fixture.siblingStop).toHaveBeenCalledOnce();
+      fixture.expectServices({ firstStop: 1, siblingStop: 1 });
       expect(fixture.candidateStop).toHaveBeenCalledOnce();
     });
 
@@ -247,8 +243,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
           expect(fixture.candidates).toHaveLength(0);
           expect(registrations).toBe(1);
-          expect(fixture.firstStart).toHaveBeenCalledOnce();
-          expect(fixture.firstStop).toHaveBeenCalledOnce();
+          fixture.expectServices({ firstStart: 1, firstStop: 1 });
           expect(pendingStop).toHaveBeenCalledOnce();
           expect(fixture.siblingStop).not.toHaveBeenCalled();
         } finally {
@@ -314,8 +309,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         expect(
           fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling"),
         ).toBe(sibling);
-        expect(fixture.siblingStart).toHaveBeenCalledOnce();
-        expect(fixture.siblingStop).not.toHaveBeenCalled();
+        fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
         expect(manager.getRuntimeSnapshot().reloadingChannels?.size).toBe(0);
         await expect(manager.startChannel("first")).rejects.toThrow("reloaded or disabled");
         expect(starts.first).toHaveBeenCalledOnce();
@@ -446,8 +440,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(candidateStart).toHaveBeenCalledTimes(
             boundary === "publish" || boundary === "committed" ? 1 : 0,
           );
-          expect(fixture.siblingStart).toHaveBeenCalledOnce();
-          expect(fixture.siblingStop).not.toHaveBeenCalled();
+          fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
         } finally {
           release.resolve();
           await pending;

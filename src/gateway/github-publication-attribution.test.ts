@@ -57,6 +57,24 @@ function participate(id: string, sessionKey = SESSION_KEY, promptedAt = 1) {
   );
 }
 
+const sessionScope = (sessionKey = SESSION_KEY) => ({ agentId: "main", sessionKey });
+const readSession = (sessionKey = SESSION_KEY) =>
+  loadSessionEntryReadOnly(sessionScope(sessionKey))!;
+const publicShare = (sessionKey = SESSION_KEY) => ({
+  id: "a".repeat(48),
+  sessionId: readSession(sessionKey).sessionId,
+  createdAt: 1,
+});
+
+async function prepareSurface(surface: "local" | "repository") {
+  const repository =
+    surface === "repository" ? await createRepositoryPublicationFixture(checkpoint) : undefined;
+  if (!repository) {
+    await persistPublicationTestSession();
+  }
+  return repository;
+}
+
 async function useRealAttribution() {
   const { prepareGitCoauthorAttribution, resolveGitCoauthorAttribution } = await vi.importActual<
     typeof import("../agents/git-coauthor-attribution.js")
@@ -91,12 +109,10 @@ function afterEffect(
   observe: (...args: Parameters<RecordEffect>) => void,
 ) {
   const wrap =
-    (
-      record: (...args: Parameters<RecordEffect>) => void | Promise<void>,
-    ): ((...args: Parameters<RecordEffect>) => Promise<void>) =>
-    async (effect, observed) => {
-      await record(effect, observed);
-      observe(effect, observed);
+    (record: RecordEffect) =>
+    async (...args: Parameters<RecordEffect>) => {
+      await record(...args);
+      observe(...args);
     };
   const executeLocal = publicationExecutor.executeGitHubPublication;
   const executeRepository = repositoryPublicationExecutor.executeRepositoryGitHubPublication;
@@ -163,11 +179,7 @@ describe("Gateway GitHub publication attribution", () => {
   )(
     "honors opt-out at $surface $boundary without new credited effects",
     async ({ surface, boundary }) => {
-      const repository =
-        surface === "repository" ? await createRepositoryPublicationFixture(checkpoint) : undefined;
-      if (!repository) {
-        await persistPublicationTestSession();
-      }
+      const repository = await prepareSurface(surface);
       const person = await prepareRealPublicationCredit();
       let optedOut = false;
       const revokeCredit = () => {
@@ -323,17 +335,10 @@ describe("Gateway GitHub publication attribution", () => {
       originUrl: "git@github.com:openclaw/openclaw.git",
       fingerprint: worktree.repoFingerprint,
     });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: childKey },
-      {
-        worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" },
-        publicShare: {
-          id: "a".repeat(48),
-          sessionId: loadSessionEntryReadOnly({ agentId: "main", sessionKey: childKey })!.sessionId,
-          createdAt: 1,
-        },
-      },
-    );
+    await upsertSessionEntryCore(sessionScope(childKey), {
+      worktree: { id: worktree.id, branch: BRANCH, repoRoot: "/repo" },
+      publicShare: publicShare(childKey),
+    });
     participate(people[0]!.id, childKey, 2);
     optOut(people[2]!);
     const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
@@ -378,14 +383,9 @@ describe("Gateway GitHub publication attribution", () => {
       ),
     ),
   )("publishes $surface with $state session disclosure", async ({ surface, state }) => {
-    const repository =
-      surface === "repository" ? await createRepositoryPublicationFixture(checkpoint) : undefined;
-    if (!repository) {
-      await persistPublicationTestSession();
-    }
-    const scope = { agentId: "main", sessionKey: SESSION_KEY };
-    const read = () => loadSessionEntryReadOnly(scope)!;
-    const grant = { id: "a".repeat(48), sessionId: read().sessionId, createdAt: 1 };
+    const repository = await prepareSurface(surface);
+    const scope = sessionScope();
+    const grant = publicShare();
     if (state !== "private" && state !== "newly-public") {
       await upsertSessionEntryCore(scope, { publicShare: grant });
     }
@@ -396,7 +396,7 @@ describe("Gateway GitHub publication attribution", () => {
     const change = () => {
       changed = true;
       replaceSessionEntrySync(scope, {
-        ...read(),
+        ...readSession(),
         publicShare:
           state === "newly-public"
             ? grant
@@ -447,14 +447,7 @@ describe("Gateway GitHub publication attribution", () => {
 
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
     await persistPublicationTestSession();
-    const scope = { agentId: "main", sessionKey: SESSION_KEY };
-    await upsertSessionEntryCore(scope, {
-      publicShare: {
-        id: "a".repeat(48),
-        sessionId: loadSessionEntryReadOnly(scope)!.sessionId,
-        createdAt: 1,
-      },
-    });
+    await upsertSessionEntryCore(sessionScope(), { publicShare: publicShare() });
     const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
     const coordinator = createGitHubPublicationCoordinator();
