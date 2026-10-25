@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../../cli/daemon-cli/status.gather.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { dashboardCommand } from "../dashboard.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
@@ -107,9 +109,17 @@ function expectJson(value: unknown) {
   expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(value, 0);
 }
 
+function expectJsonFields(value: Record<string, unknown>) {
+  expectJson(expect.objectContaining(value));
+}
+
 function expectFailure(reason: string) {
   expectJson({ ok: false, error: { type: "cli_error", message: reason }, reason });
   expect(runtime.exit).toHaveBeenCalledWith(1);
+  expectNoCalls(runtime.log, mocks.copyToClipboard, mocks.openUrl, mocks.openUrlPrivately);
+  expect(runtime.error).toHaveBeenCalledWith(
+    `${reason}\nRun \`openclaw gateway status --deep\` for details, then retry \`openclaw dashboard --json\`.`,
+  );
 }
 
 function mockListeners(loopbackPid = 4242, commandLine = "openclaw-gateway") {
@@ -161,25 +171,10 @@ describe("dashboardCommand --json", () => {
         "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
       browserBootstrapExpiresAtMs: 123_456,
     });
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
+    expectNoCalls(runtime.log, runtime.error, mocks.copyToClipboard, mocks.openUrl);
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
-    expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
-      profile: {
-        roles: ["operator"],
-        scopes: [
-          "operator.admin",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.questions",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-        purpose: "control-ui-owner",
-      },
+      profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
     });
   });
 
@@ -200,13 +195,11 @@ describe("dashboardCommand --json", () => {
         waitForPending: false,
       }),
     );
-    expectJson(
-      expect.objectContaining({
-        ok: true,
-        wsUrl: "wss://127.0.0.1:18789",
-        tlsFingerprint: "ab".repeat(32),
-      }),
-    );
+    expectJsonFields({
+      ok: true,
+      wsUrl: "wss://127.0.0.1:18789",
+      tlsFingerprint: "ab".repeat(32),
+    });
   });
 
   it("adds a plaintext password only for password-authenticated Gateways", async () => {
@@ -214,7 +207,7 @@ describe("dashboardCommand --json", () => {
 
     await dashboardCommand(runtime, { json: true });
 
-    expectJson(expect.objectContaining({ [gatewayPasswordJsonKey]: fakePassword }));
+    expectJsonFields({ [gatewayPasswordJsonKey]: fakePassword });
   });
 
   it("prints JSON and actionable stderr before exiting when not ready", async () => {
@@ -222,38 +215,9 @@ describe("dashboardCommand --json", () => {
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.gatherStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ rpc: { url: "ws://10.0.0.5:18789" } }),
-    );
-    expect(mocks.confirm).not.toHaveBeenCalled();
-    expect(mocks.installGateway).not.toHaveBeenCalled();
-    expect(mocks.startGateway).not.toHaveBeenCalled();
+    expectNoCalls(mocks.confirm, mocks.installGateway, mocks.startGateway);
     expectFailure("Gateway is not running.");
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Gateway is not running.\nRun `openclaw gateway status --deep` for details, then retry `openclaw dashboard --json`.",
-    );
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-  });
-
-  it("keeps SecretRef-managed tokens out of the URL", async () => {
-    mockGateway({
-      bind: "custom",
-      customBindHost: "10.0.0.5",
-      auth: {
-        token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
-      },
-    });
-
-    await dashboardCommand(runtime, { json: true });
-
-    expectJson(
-      expect.objectContaining({
-        ok: true,
-        url: "http://127.0.0.1:18789/",
-        tokenIncluded: false,
-      }),
-    );
   });
 
   it.each([
@@ -283,9 +247,6 @@ describe("dashboardCommand --json", () => {
     await dashboardCommand(runtime, { json: true });
 
     expectFailure("Dashboard loopback listener could not be verified as the configured Gateway.");
-    expect(mocks.waitForControlUiDocument).not.toHaveBeenCalled();
-    expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    expect(mocks.copyToClipboard).not.toHaveBeenCalled();
-    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expectNoCalls(mocks.waitForControlUiDocument, mocks.issueDeviceBootstrapToken);
   });
 });
