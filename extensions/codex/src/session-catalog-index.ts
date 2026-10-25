@@ -24,10 +24,7 @@ import {
   type CodexCatalogOrderKey,
 } from "./session-catalog-index-order.js";
 import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
-import type {
-  CodexCatalogIndexRow,
-  CodexCatalogRolloutFingerprint,
-} from "./session-catalog-index-row.js";
+import { CodexCatalogPreviews, type CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import {
   codexCatalogMetadataPage,
   CodexCatalogPersistence,
@@ -62,6 +59,7 @@ const SAFETY_INTERVAL_MS = 15 * 60_000;
 /** One home owns resident queries and authoritative overflow discovery. */
 export class CodexCatalogIndex {
   private readonly rows = new Map<string, CodexCatalogIndexRow>();
+  private readonly previews = new CodexCatalogPreviews();
   private readonly availability = new CodexCatalogAvailability();
   private readonly liveStatus = new CodexCatalogStatusIndex();
   private readonly liveSettings = new CodexCatalogSettingsIndex();
@@ -89,7 +87,7 @@ export class CodexCatalogIndex {
   private readonly unsubscribe: () => void;
   private reconciling: Promise<void> | undefined;
   private reconcilingNative: Promise<void> | undefined;
-  private observedFiles = new Map<string, CodexCatalogRolloutFingerprint>();
+  private observedFiles = new Map<string, NonNullable<CodexCatalogIndexRow["fingerprint"]>>();
   private readonly persistence: CodexCatalogPersistence;
   private readonly obsoleteStoredKeys = new Set<string>();
   private readonly ordering = new CodexCatalogOrdering();
@@ -203,9 +201,11 @@ export class CodexCatalogIndex {
     if (isDeepStrictEqual(previous, row)) {
       return;
     }
+    this.previews.retain(row, previous);
     const oldest = retainCodexCatalogRow(this.rows, row);
     this.overflow ||= this.rows.size >= CODEX_CATALOG_MAX_ROWS;
     if (oldest?.threadId === row.threadId) {
+      this.previews.release(row.preview);
       return;
     }
     if (oldest) {
@@ -219,6 +219,7 @@ export class CodexCatalogIndex {
     // Retention does not withdraw observations supported by an open native connection.
     this.rows.delete(threadId);
     if (row) {
+      this.previews.release(row.preview);
       this.ordering.remove(row);
     }
     this.persistence.remove(threadId);
@@ -301,6 +302,7 @@ export class CodexCatalogIndex {
             this.persistence.put(patched);
           }
           const previous = this.rows.get(patched.threadId);
+          this.previews.retain(patched, previous);
           const evicted = retainCodexCatalogRow(this.rows, patched);
           if (evicted) {
             this.evict(evicted.threadId, evicted);
@@ -489,7 +491,7 @@ export class CodexCatalogIndex {
     const files =
       this.rolloutScanner && !useStateDbOnly
         ? (await this.rolloutScanner.scan(new Set())).files
-        : new Map<string, CodexCatalogRolloutFingerprint>();
+        : new Map<string, NonNullable<CodexCatalogIndexRow["fingerprint"]>>();
     this.assertCurrent();
     let frontier: CodexCatalogOrderKey | undefined;
     const batchOrder = this.ordering.captureBatch(this.availability.complete);
@@ -731,18 +733,18 @@ export class CodexCatalogIndex {
   }
 
   async close(): Promise<void> {
-    const writes = this.retire();
     await Promise.allSettled([
+      this.retire(),
       this.initializing,
       this.restoring,
       this.reconciling,
       this.reconcilingNative,
       this.currencyWork,
       this.safetyRefresh,
-      writes,
       this.events.close(),
     ]);
     this.rows.clear();
+    this.previews.clear();
     this.observedFiles.clear();
     this.ordering.clear();
   }
