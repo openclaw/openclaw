@@ -57,8 +57,8 @@ function profileContext(apiKey: string) {
   };
 }
 
-function answerPayload(text: string) {
-  return { output: [{ type: "message", content: [{ type: "output_text", text }] }] };
+function answerPayload(text: string, content = [{ type: "output_text", text }]) {
+  return { output: [{ type: "message", content }] };
 }
 
 function xaiAnswerResponse(text: string): Response {
@@ -101,11 +101,8 @@ function search(
   return requireXaiWebSearchTool(ctx).execute({ query }, signal ? { signal } : undefined);
 }
 
-const defaultAgentConfig = {
-  agents: {
-    entries: { main: { agentDir: "/tmp/openclaw-xai-main-agent" } },
-  },
-};
+const defaultAgentDir = "/tmp/openclaw-xai-main-agent";
+const defaultAgentConfig = { agents: { entries: { main: { agentDir: defaultAgentDir } } } };
 
 function setupConfig(options: Parameters<typeof xaiPluginConfig>[0]) {
   return {
@@ -282,7 +279,7 @@ describe("xai web search config resolution", () => {
         profileAuth("xai-profile-api-key", "api-key", "xai:key"),
       ],
       expectedAuth: {
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        agentDir: defaultAgentDir,
         profileId: "xai:key",
         lockedProfile: true,
       },
@@ -306,7 +303,7 @@ describe("xai web search config resolution", () => {
     }
     if (profileIds.length) {
       providerAuthMocks.listUsableProviderAuthProfileIdsAsync.mockResolvedValue({
-        agentDir: "/tmp/openclaw-xai-main-agent",
+        agentDir: defaultAgentDir,
         profileIds,
       });
     }
@@ -354,12 +351,7 @@ describe("xai web search config resolution", () => {
     const inlineCitation = { start_index: 0, end_index: 8, url: "https://example.test/source" };
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
-        output: [
-          {
-            type: "message",
-            content: [{ type: "output_text", text: "Grounded" + "x".repeat(25_000) }],
-          },
-        ],
+        ...answerPayload("Grounded" + "x".repeat(25_000)),
         inline_citations: [inlineCitation],
       }),
     );
@@ -510,15 +502,13 @@ describe("xai x_search tool", () => {
 
   it("bounds the actual standalone xAI result after short special tokens expand", async () => {
     installXaiWebSearchFetch({
-      output: [
-        {
-          type: "message",
-          content: Array.from({ length: 6_666 }, () => [
-            { type: "output_text", text: "<s" },
-            { type: "output_text", text: ">" },
-          ]).flat(),
-        },
-      ],
+      ...answerPayload(
+        "",
+        Array.from({ length: 6_666 }, () => [
+          { type: "output_text", text: "<s" },
+          { type: "output_text", text: ">" },
+        ]).flat(),
+      ),
       citations: [citation],
     });
     const { details } = await runXSearch("xai-sanitizer-expansion");
@@ -544,7 +534,6 @@ describe("xai x_search tool", () => {
       query: "dinner recipes",
       ...structuredClone(filters),
     });
-    expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     expect(firstFetchBody(mockFetch)).toMatchObject({
       model: "grok-4.7",

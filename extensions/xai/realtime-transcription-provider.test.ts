@@ -42,6 +42,16 @@ const transcript = (text: string, final = false) => ({
   speech_final: final,
 });
 
+function observeText(matches: (text: string) => boolean) {
+  const done = createDeferred<void>();
+  const callback = vi.fn((text: string) => {
+    if (matches(text)) {
+      done.resolve();
+    }
+  });
+  return { callback, done: done.promise };
+}
+
 afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
@@ -132,25 +142,20 @@ describe("xai realtime transcription provider", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const server = await createRealtimeSttServer();
     const onPartial = vi.fn();
-    const finalTranscript = createDeferred<void>();
-    const onTranscript = vi.fn((text: string) => {
-      if (text === "hello openclaw final") {
-        finalTranscript.resolve();
-      }
-    });
+    const final = observeText((text) => text === "hello openclaw final");
     const onSpeechStart = vi.fn();
 
     const session = createSession(server.baseUrl, {
       providerConfig: { sampleRate: 24000, encoding: "pcm", endpointingMs: 500 },
       onPartial,
-      onTranscript,
+      onTranscript: final.callback,
       onSpeechStart,
     });
 
     session.sendAudio(Buffer.from("queued-before-ready"));
     await session.connect();
     session.sendAudio(Buffer.from("after-ready"));
-    await finalTranscript.promise;
+    await final.done;
     session.close();
     await server.donePromise;
 
@@ -164,9 +169,7 @@ describe("xai realtime transcription provider", () => {
     });
     expect(headers["user-agent"]).toBeUndefined();
     expect(headers.authorization).toBe("Bearer xai-test-key");
-    const audio = Buffer.concat(server.binaryFrames).toString();
-    expect(audio).toContain("queued-before-ready");
-    expect(audio).toContain("after-ready");
+    expect(Buffer.concat(server.binaryFrames).toString()).toBe("queued-before-readyafter-ready");
     expect(onSpeechStart).toHaveBeenCalled();
     expect(onPartial).toHaveBeenCalledWith("hello openclaw");
   });
@@ -249,16 +252,12 @@ describe("xai chunk-final retention", () => {
       ],
     });
     const onPartial = vi.fn();
-    const finalDone = createDeferred<void>();
-    const onTranscript = vi.fn((text: string) => {
-      if (text === "Next turn.") {
-        finalDone.resolve();
-      }
-    });
+    const final = observeText((text) => text === "Next turn.");
+    const onTranscript = final.callback;
     const session = createSession(server.baseUrl, { onPartial, onTranscript });
     await session.connect();
     session.sendAudio(Buffer.from("audio"));
-    await finalDone.promise;
+    await final.done;
     expect(onPartial.mock.calls).toEqual([
       ["First."],
       ["First."],
@@ -278,27 +277,19 @@ describe("xai chunk-final retention", () => {
       transcript("unfinished"),
     ];
     const server = await createRealtimeSttServer({ transcriptionEvents: events });
-    const partialDone = createDeferred<void>();
-    const finalDone = createDeferred<void>();
-    const onPartial = vi.fn((text: string) => {
-      if (text.endsWith("unfinished")) {
-        partialDone.resolve();
-      }
-    });
-    const onTranscript = vi.fn((text: string) => {
-      if (text === "New stream.") {
-        finalDone.resolve();
-      }
-    });
+    const partial = observeText((text) => text.endsWith("unfinished"));
+    const final = observeText((text) => text === "New stream.");
+    const onPartial = partial.callback;
+    const onTranscript = final.callback;
     const session = createSession(server.baseUrl, { onPartial, onTranscript });
     await session.connect();
     session.sendAudio(Buffer.from("first stream"));
-    await partialDone.promise;
+    await partial.done;
     events.splice(0, events.length, transcript("New stream."), transcript("New stream.", true));
     await session.connect();
     expect(onTranscript.mock.calls).toEqual([["Locked."]]);
     session.sendAudio(Buffer.from("replacement stream"));
-    await finalDone.promise;
+    await final.done;
     expect(onPartial).toHaveBeenLastCalledWith("New stream.");
     expect(onTranscript.mock.calls).toEqual([["Locked."], ["New stream."]]);
     session.close();
