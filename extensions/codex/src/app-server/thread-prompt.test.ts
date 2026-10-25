@@ -54,6 +54,32 @@ function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): s
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
+  it.each([false, true])(
+    "routes credential entry to the admitted qualified tool (deferred: %s)",
+    (deferred) => {
+      const instructions = buildDeveloperInstructions(createParams(), {
+        nativeCodeModeEnabled: true,
+        nativeCodeModeOnlyEnabled: true,
+        dynamicTools: [namespace([tool("secrets", {}, deferred)])],
+      });
+      expect(instructions).toContain("use `openclaw.secrets` for masked entry");
+      expect(instructions).toContain("Discover its schema first if deferred");
+      expect(instructions).toContain("check the supported consumer, list metadata");
+      expect(instructions).toContain("ALL_TOOLS");
+    },
+  );
+
+  it.each([
+    { disableTools: false, dynamicTools: [] },
+    { disableTools: true, dynamicTools: [namespace([tool("secrets", {}, true)])] },
+  ])("does not advertise unavailable credential entry: %j", ({ disableTools, dynamicTools }) => {
+    const instructions = buildDeveloperInstructions(createParams({ disableTools }), {
+      dynamicTools,
+    });
+    expect(instructions).not.toContain("for masked entry");
+    expect(instructions).toContain("Use or store credentials the user supplies as requested");
+  });
+
   it.each([false, true])("advertises JavaScript discovery only when enabled (%s)", (enabled) => {
     const instructions = buildDeveloperInstructions(createParams(), {
       nativeCodeModeEnabled: enabled,

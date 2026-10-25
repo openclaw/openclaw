@@ -512,6 +512,7 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     buildCredentialSafetyPrompt({
       controlToolsAvailable: availableTools.has("openclaw") || availableTools.has("gateway"),
+      secretsToolName: availableTools.has("secrets") ? resolveToolName("secrets") : undefined,
     }),
     "",
   ];

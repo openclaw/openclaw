@@ -198,6 +198,7 @@ export function describeSecretsTool(): string {
   return [
     "Protected credentials: `list` metadata first; `request` missing task-needed name + reason via human masked entry; `delete` removes an entry.",
     "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
+    "Chat channels such as Discord and Telegram deliver a Control UI link, requiring enabled Control UI + gateway.publicOrigin. If delivery is blocked, use a trusted Control UI/native app and retry; never ask for the value in chat.",
     "Gateway HTTPS egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
     "Protected entries cannot supply SSH/sudo passwords or subprocess stdin; `${secret:NAME}` is not shell substitution. Check the supported consumer before requesting a credential.",
     SECRET_EGRESS_USAGE_PROMPT,

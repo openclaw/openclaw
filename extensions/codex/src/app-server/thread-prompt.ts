@@ -173,6 +173,7 @@ export function buildDeveloperInstructions(
     buildCredentialSafetyPrompt({
       controlToolsAvailable:
         params.disableTools !== true && (toolNames.has("openclaw") || toolNames.has("gateway")),
+      secretsToolName: params.disableTools !== true ? toolNames.get("secrets") : undefined,
     }),
     nativeCommandGuidance,
     params.gitCoauthorPrompt,

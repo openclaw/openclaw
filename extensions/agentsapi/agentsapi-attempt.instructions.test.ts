@@ -415,6 +415,7 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
     "sessions_send",
     "subagents",
     "gateway",
+    "secrets",
   );
   await fixture.run();
   const instructions = fixture.requests[0]?.agent.instructions;
@@ -422,8 +423,19 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");
+  expect(instructions).toContain("use `secrets` for masked entry");
   expect(instructions).toContain("Fixture Git co-authors: Example <example@example.test>.");
   expect(instructions).toContain("Extra fixture instructions");
+});
+
+it("discovers masked entry without suggesting local Gateway setup in a hosted VM", async () => {
+  const fixture = await createFixture();
+  promptFixture.declarations = toolDeclarations("secrets");
+  await fixture.run();
+  const instructions = fixture.requests[0]?.agent.instructions;
+  expect(instructions).toContain("use `secrets` for masked entry");
+  expect(instructions).not.toContain("openclaw channels add");
+  expect(instructions).not.toContain("openclaw configure");
 });
 
 it("refreshes temporal, delivery, and watched-session context on resumed turns", async () => {
