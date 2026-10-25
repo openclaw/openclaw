@@ -42,8 +42,20 @@ import {
 } from "./usage/usage-page.test-support.ts";
 import "./model-providers/model-providers-page.tsx";
 
-// Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+const mainAgents = { defaultId: "main", agents: [{ id: "main" }] };
+const authStatus = (displayName: string, ts = 1) =>
+  createAuthStatus([{ provider: "openai", displayName }], ts);
+const staleSnapshot = (context: ApplicationContext) => ({
+  ...context.gateway.snapshot,
+  hello: gatewayHelloForMethods([]),
+});
+const agentList = (id: string) => ({
+  defaultId: id,
+  mainKey: `agent:${id}:main`,
+  scope: "all",
+  agents: [{ id }],
+});
 
 function usageResult(key?: string): NonNullable<UsageRouteData["result"]> {
   return {
@@ -51,15 +63,6 @@ function usageResult(key?: string): NonNullable<UsageRouteData["result"]> {
     sessions: key ? [{ key, usage: null }] : [],
   };
 }
-
-const emptySkillLibrary = {
-  entries: [],
-  profileId: null,
-  multipleProfiles: false,
-  defaultTarget: "workspace",
-  canManageWorkspace: true,
-  defaultSelectionLimit: 64,
-} satisfies SkillsLibraryListResult;
 
 function mockClient(handlers: Record<string, () => unknown>, fallback?: () => unknown) {
   const request = vi.fn(async (method: string) => {
@@ -72,10 +75,10 @@ function mockClient(handlers: Record<string, () => unknown>, fallback?: () => un
   return { request, client: { request } as unknown as GatewayBrowserClient };
 }
 
-function modelClient(authStatus: () => unknown, hash: string) {
+function modelClient(loadAuth: () => unknown, hash = "hash") {
   return mockClient(
     {
-      "models.authStatus": authStatus,
+      "models.authStatus": loadAuth,
       "models.list": () => ({ models: [] }),
       "config.get": () => ({ config: {}, hash }),
       "usage.status": () => ({ updatedAt: 2, providers: [] }),
@@ -86,13 +89,24 @@ function modelClient(authStatus: () => unknown, hash: string) {
 }
 
 function skillsClient(handlers: Record<string, () => unknown>) {
-  return mockClient({ "skills.library.list": () => emptySkillLibrary, ...handlers });
+  return mockClient({
+    "skills.library.list": () =>
+      ({
+        entries: [],
+        profileId: null,
+        multipleProfiles: false,
+        defaultTarget: "workspace",
+        canManageWorkspace: true,
+        defaultSelectionLimit: 64,
+      }) satisfies SkillsLibraryListResult,
+    ...handlers,
+  });
 }
 
 function agentContext(client: GatewayBrowserClient) {
   return contextWithClient(client, {
     connected: true,
-    agentsList: { defaultId: "main", agents: [{ id: "main" }] },
+    agentsList: mainAgents,
     selectedAgentId: "main",
   });
 }
@@ -114,10 +128,7 @@ function securityVerdicts(withReasons = false) {
   };
 }
 
-function gatewayWithClient(
-  client: GatewayBrowserClient,
-  connected: boolean,
-): ApplicationContext["gateway"] {
+function gatewayWithClient(client: GatewayBrowserClient, connected: boolean) {
   const source = createApplicationGateway();
   source.publish({
     ...source.gateway.snapshot,
@@ -126,7 +137,7 @@ function gatewayWithClient(
     hello: gatewayHelloForMethods([]),
     sessionKey: "main",
   });
-  return source.gateway;
+  return source;
 }
 
 function contextWithClient(
@@ -137,6 +148,7 @@ function contextWithClient(
     ensureList?: () => Promise<unknown>;
     selectedAgentId?: string | null;
   } = {},
+  source = gatewayWithClient(client, options.connected ?? false),
 ): ApplicationContext {
   const subscribe = () => () => undefined;
   const agentsList = options.agentsList ?? null;
@@ -154,7 +166,7 @@ function contextWithClient(
     router: createRouter<RouteId, ApplicationContext>({
       routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
     }),
-    gateway: gatewayWithClient(client, options.connected ?? false),
+    gateway: source.gateway,
     agents: {
       state: { agentsList, agentsLoading: false, agentsError: null },
       ensureList: options.ensureList ?? vi.fn(async () => agentsList),
@@ -179,9 +191,9 @@ function contextWithMutableGateway(
   client: GatewayBrowserClient,
   options: { agentsList?: unknown; selectedAgentId?: string | null } = {},
 ) {
-  const context = contextWithClient(client, { connected: true, ...options });
-  const { gateway, publish } = createApplicationGateway(context.gateway.snapshot);
-  Object.defineProperty(context, "gateway", { value: gateway });
+  const source = gatewayWithClient(client, true);
+  const context = contextWithClient(client, options, source);
+  const { gateway, publish } = source;
   return {
     context,
     emitConnected(connected: boolean) {
@@ -190,6 +202,10 @@ function contextWithMutableGateway(
         phase: connected ? "connected" : "stopped",
         hello: connected ? gatewayHelloForMethods([]) : gateway.snapshot.hello,
       });
+    },
+    reconnect() {
+      this.emitConnected(false);
+      this.emitConnected(true);
     },
   };
 }
@@ -258,11 +274,11 @@ function mountSkillsPage(
     { wrapper: provider.wrapper },
   );
   let currentContext = context;
+  const page = () => mounted.container.querySelector("openclaw-skills-page")!;
   flush();
   return {
-    find: (selector: string) =>
-      mounted.container.querySelector("openclaw-skills-page")!.querySelector<HTMLElement>(selector),
-    text: () => mounted.container.querySelector("openclaw-skills-page")!.textContent,
+    find: (selector: string) => page().querySelector<HTMLElement>(selector),
+    text: () => page().textContent,
     replaceContext(next: ApplicationContext) {
       retireContext(currentContext);
       currentContext = next;
@@ -298,10 +314,7 @@ it("rejects usage route data from an earlier same-client gateway epoch", async (
   const freshResult = usageResult("fresh");
   const { client } = mockClient({ "sessions.usage": () => freshResult }, () => ({}));
   const context = contextWithClient(client, { connected: true });
-  const page = await mountUsagePage(context, usageResult("stale"), {
-    ...context.gateway.snapshot,
-    hello: gatewayHelloForMethods([]),
-  });
+  const page = await mountUsagePage(context, usageResult("stale"), staleSnapshot(context));
 
   await waitForFast(() =>
     expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
@@ -326,8 +339,7 @@ it("retries a usage load interrupted by a same-client disconnect", async () => {
     expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]);
   void page.refresh();
   await waitForFast(() => expect(usageRequestCount).toBe(1));
-  harness.emitConnected(false);
-  harness.emitConnected(true);
+  harness.reconnect();
 
   await waitForFast(() =>
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
@@ -362,19 +374,14 @@ it("gates same-client usage reconnects by payload age and page visibility", asyn
     sessions: result.sessions,
   });
 
-  // Route data carries only session usage; the page starts its own provider read.
   expect(request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
-  harness.emitConnected(false);
-  harness.emitConnected(true);
-  // Fresh session usage survives a same-client reconnect, even one that interrupts the
-  // page's provider read.
+  harness.reconnect();
   expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toEqual([]);
   request.mockClear();
 
   clock.mockReturnValue(loadedAt + USAGE_PAYLOAD_TTL_MS);
   visibility.mockReturnValue("hidden");
-  harness.emitConnected(false);
-  harness.emitConnected(true);
+  harness.reconnect();
   expect(request).not.toHaveBeenCalled();
 
   visibility.mockReturnValue("visible");
@@ -402,12 +409,8 @@ it("gates same-client usage reconnects by payload age and page visibility", asyn
 it("discards Model Providers work from a replaced source that reuses its client", async () => {
   const staleAuth = deferred<unknown>();
   let authCalls = 0;
-  const { client } = modelClient(
-    () =>
-      ++authCalls === 1
-        ? staleAuth.promise
-        : createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2),
-    "hash",
+  const { client } = modelClient(() =>
+    ++authCalls === 1 ? staleAuth.promise : authStatus("Fresh provider", 2),
   );
   const page = createModelProvidersPage(agentContext(client));
   const providerNames = () => page.view.props.cards.map((card) => card.displayName);
@@ -422,33 +425,21 @@ it("discards Model Providers work from a replaced source that reuses its client"
   await page.updateComplete;
   await waitForFast(() => expect(providerNames()).toContain("Fresh provider"));
 
-  staleAuth.resolve(createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]));
+  staleAuth.resolve(authStatus("Retired provider"));
   await drainPageUpdates(page);
   expect(providerNames()).toContain("Fresh provider");
   expect(providerNames()).not.toContain("Retired provider");
 });
 
 it("rejects Model Providers route data from an earlier same-client gateway epoch", async () => {
-  const { client } = modelClient(
-    () => createAuthStatus([{ provider: "openai", displayName: "Fresh provider" }], 2),
-    "fresh",
-  );
-  const context = contextWithClient(client, {
-    connected: true,
-    selectedAgentId: "main",
-  });
-  const staleData = {
-    ...EMPTY_MODEL_PROVIDERS_DATA,
-    authStatus: createAuthStatus([{ provider: "openai", displayName: "Retired provider" }]),
-  };
+  const { client } = modelClient(() => authStatus("Fresh provider", 2), "fresh");
+  const context = contextWithClient(client, { connected: true, selectedAgentId: "main" });
   const page = createModelProvidersPage(context);
   page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: { ...context.gateway.snapshot, hello: gatewayHelloForMethods([]) },
-    data: staleData,
+    ...createEmptyModelProvidersRouteData(context),
     client,
-    agentId: "main",
-    selectionIntentRevision: context.settingsAgentSelection.intentRevision,
+    gatewaySnapshot: staleSnapshot(context),
+    data: { ...EMPTY_MODEL_PROVIDERS_DATA, authStatus: authStatus("Retired provider") },
   };
 
   mountModelProvidersPage(page);
@@ -468,7 +459,7 @@ it.each([false, true])("hydrates skill verdicts (disconnect: %s)", async (discon
       ++verdictRequests === 1 && disconnect ? pending.promise : verdicts,
   });
   const harness = contextWithMutableGateway(client, {
-    agentsList: { defaultId: "main", agents: [{ id: "main" }] },
+    agentsList: mainAgents,
     selectedAgentId: "main",
   });
   const mounted = mountSkillsPage(
@@ -516,10 +507,7 @@ it("rejects skills route data from an earlier same-client gateway epoch", async 
   const freshReport = skillReport("Fresh skill");
   const { client } = skillsClient({ "skills.status": () => freshReport });
   const context = agentContext(client);
-  const mounted = mountSkillsPage(context, skillReport("Stale skill"), {
-    ...context.gateway.snapshot,
-    hello: gatewayHelloForMethods([]),
-  });
+  const mounted = mountSkillsPage(context, skillReport("Stale skill"), staleSnapshot(context));
   await waitForSolid(() => expect(mounted.text()).toContain("Fresh skill"));
   expect(mounted.text()).not.toContain("Stale skill");
 });
@@ -529,7 +517,7 @@ it("clears sessions loaded by the previous provider", async () => {
   const row = { key: "old", sessionId: "old-session", kind: "direct" as const };
   const stopList = vi.fn();
   const context = createSessionsContext(
-    gatewayWithClient(client, true),
+    gatewayWithClient(client, true).gateway,
     createSessions({
       listSnapshot: () => ({
         result: sessionsResult([row], 1),
@@ -555,8 +543,9 @@ it("clears sessions loaded by the previous provider", async () => {
   );
 
   retireContext(context);
-  // Application contexts are owner-scoped: the keyed provider retires the old page tree.
-  provider.setContext(createSessionsContext(gatewayWithClient(client, false), createSessions()));
+  provider.setContext(
+    createSessionsContext(gatewayWithClient(client, false).gateway, createSessions()),
+  );
   await waitForSolid(() => {
     expect(page()).not.toBe(previousPage);
     expect(previousPage.isConnected).toBe(false);
@@ -634,31 +623,17 @@ it("discards an agent list from a replaced skills source that reuses its client"
     "skills.status": () => skillReport("Replacement agent skill"),
   });
   const context = contextWithClient(client, { connected: true, ensureList });
-  const mounted = mountSkillsPage(context, null, {
-    ...context.gateway.snapshot,
-    hello: gatewayHelloForMethods([]),
-  });
+  const mounted = mountSkillsPage(context, null, staleSnapshot(context));
   await waitForSolid(() => expect(ensureList).toHaveBeenCalled());
-  const replacementAgents = {
-    defaultId: "fresh",
-    mainKey: "agent:fresh:main",
-    scope: "all",
-    agents: [{ id: "fresh" }],
-  };
   mounted.replaceContext(
     contextWithClient(client, {
       connected: true,
-      agentsList: replacementAgents,
+      agentsList: agentList("fresh"),
       selectedAgentId: "fresh",
     }),
   );
   await waitForSolid(() => expect(mounted.text()).toContain("Replacement agent skill"));
-  pending.resolve({
-    defaultId: "stale",
-    mainKey: "agent:stale:main",
-    scope: "all",
-    agents: [{ id: "stale" }],
-  } as unknown as AgentsListResult);
+  pending.resolve(agentList("stale") as unknown as AgentsListResult);
   await pending.promise;
   flush();
   expect(mounted.text()).toContain("Replacement agent skill");
