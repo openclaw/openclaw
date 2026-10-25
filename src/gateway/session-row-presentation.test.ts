@@ -291,6 +291,63 @@ it.each(["running", "queued", "capacity-wait"] as const)(
   },
 );
 
+it("keeps a live controller's child list consistent with the child's session identity", async () => {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const parent = "agent:main:dashboard:navigation-parent";
+    const controller = "agent:main:dashboard:controller";
+    const child = "agent:main:dashboard:controlled-child";
+    const childIdentity = { sessionId: "controlled-child", lifecycleRevision: "generation-1" };
+    const childEntry = { ...childIdentity, updatedAt: Date.now(), parentSessionKey: parent };
+    seedRow(parent, { sessionId: "navigation-parent", updatedAt: Date.now() });
+    seedRow(controller, {
+      sessionId: "controller",
+      updatedAt: Date.now(),
+      label: "Selected controller",
+    });
+    seedRow(child, childEntry);
+    const run = createSubagentRunRecord({
+      runId: "controlled-follow-up",
+      childSessionKey: child,
+      childSessionIdentity: childIdentity,
+      requesterSessionKey: controller,
+      controllerSessionKey: controller,
+      startedAt: Date.now(),
+    });
+    using _ = holdSubagentExecution(run.runId, child);
+    subagentRuns.set(run.runId, run);
+    subagentRuns.commitOwnership(run);
+    try {
+      using projection = await createTestProjection({ cfg: rolePolicyConfig(), modelCatalog: [] });
+      const readController = async () => {
+        const result = await listProjectedSessions({
+          projection,
+          opts: { search: "Selected controller", limit: 1 },
+        });
+        expect(result.sessions).toHaveLength(1);
+        return result.sessions[0]!;
+      };
+      const controllerRow = await readController();
+      expect(projection.snapshot({ agentId: "main", key: child }).row).toMatchObject({
+        ...childIdentity,
+        parentSessionKey: parent,
+        controlOwnerSessionKey: controller,
+      });
+      expect(controllerRow.childSessions).toEqual([child]);
+      expect((await readController()).childSessions).toEqual([child]);
+      // A reset keeps the key and session ID but must revoke the old run's ownership.
+      seedRow(child, { ...childEntry, lifecycleRevision: "generation-2" });
+      expect((await readController()).childSessions).toBeUndefined();
+      expect(projection.snapshot({ agentId: "main", key: parent }).row?.childSessions).toEqual([
+        child,
+      ]);
+    } finally {
+      subagentRuns.delete(run.runId);
+    }
+  });
+});
+
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
   using clock = vi.spyOn(Date, "now");
   clock.mockReturnValue(1_800_000_000_000);
