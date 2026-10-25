@@ -904,6 +904,59 @@ console.log("full-ws loaded without node_modules");
     expect(adapter.transform({ filename, contents: source }).contents).toBe(source);
   });
 
+  it("loads JavaScript behind a native-looking request and preserves native resource resolution", () => {
+    const { root, write, pkg } = fixture();
+    const owner = pkg(
+      "native-looking-name",
+      { main: "index.js" },
+      {
+        "index.js": "module.exports = require('./platform.node');",
+        "platform.node.js": "module.exports = 'JavaScript platform';",
+        "binding.node": "native fixture",
+        "module.wasm": "wasm fixture",
+      },
+    );
+    write(
+      path.join(root, "package.json"),
+      JSON.stringify({ dependencies: { "native-looking-name": "1.0.0" } }),
+    );
+    const filename = path.join(owner, "index.js");
+    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const transformed = adapter.transform({
+      filename,
+      contents: "() => require('./platform.node')",
+    });
+    const { context, root: destination } = evaluate(adapter);
+    Object.assign(context, {
+      require: createRequire(filename),
+      __standaloneNativeCreateRequire: createRequire,
+      commonJsEntries: new Set(),
+      embedded: () => undefined,
+      __openclawStandaloneRootUrl: pathToFileURL(destination + "/").href,
+    });
+    vm.runInContext(
+      createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} }).bootstrap,
+      context,
+    );
+    const load = vm.runInContext(transformed.contents, context);
+    expect(load()).toBe("JavaScript platform");
+    for (const resource of ["binding.node", "module.wasm"]) {
+      const resolve = vm.runInContext(
+        adapter.transform({ filename, contents: `() => require.resolve('./${resource}')` })
+          .contents,
+        context,
+      );
+      expect(resolve()).toBe(
+        `${destination}/native/native-looking-name@1.0.0/native-looking-name/${resource}`,
+      );
+    }
+    const resolveMissing = vm.runInContext(
+      adapter.transform({ filename, contents: "() => require.resolve('./missing.node')" }).contents,
+      context,
+    );
+    expect(() => resolveMissing()).toThrow("Cannot find module './missing.node'");
+  });
+
   it("preserves library aliases while copying their bytes as regular files", () => {
     const { root, write, pkg } = fixture();
     const owner = pkg(
