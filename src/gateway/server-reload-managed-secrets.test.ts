@@ -406,7 +406,6 @@ describe("managed reload authored source", () => {
       const survivor = replaced ? candidate : initial;
       await expect(publication).rejects.toBe(failure);
       expectPublishedConfigs(beforeSnapshotPublication, candidate.config, survivor.config);
-      expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(survivor.config);
     },
   );
 

@@ -431,6 +431,11 @@ it.for([
           client.request("agent.wait", { runId, timeoutMs: 30_000 }),
         ).resolves.toMatchObject({ status: "ok" });
       };
+      const expectReplay = async (suffix: string) => {
+        const runId = `${runPrefix}-${suffix}`;
+        await vi.waitFor(() => expect(startedRuns).toContain(runId), { timeout: 30_000 });
+        await expectRunOk(runId);
+      };
       await gateway.server.startupSettled;
       await recoveryStarted.promise;
       const successor = {
@@ -513,19 +518,10 @@ it.for([
           { runId: `${runPrefix}-peer`, state: "interrupted" },
           { runId: `${runPrefix}-unchanged`, state: "interrupted" },
         ]);
-        await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-recovery-predecessor`), {
-          timeout: 30_000,
-        });
-        await expectRunOk(`${runPrefix}-recovery-predecessor`);
+        await expectReplay("recovery-predecessor");
       }
-      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
-        timeout: 30_000,
-      });
-      await expectRunOk(`${runPrefix}-peer`);
-      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-unchanged`), {
-        timeout: 30_000,
-      });
-      await expectRunOk(`${runPrefix}-unchanged`);
+      await expectReplay("peer");
+      await expectReplay("unchanged");
       expect(providerErrors).toEqual([]);
       expect(startedRuns.slice(0, 3)).toEqual([
         `${runPrefix}-recovery-predecessor`,

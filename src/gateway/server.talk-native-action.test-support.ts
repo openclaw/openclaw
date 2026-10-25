@@ -164,6 +164,10 @@ export async function runTalkCallerReplay({
       }
       throw error;
     });
+  const expectEffects = async (dispatches: number, text: string) => {
+    expect(attempts).toHaveLength(dispatches);
+    expect(await effects()).toBe(text);
+  };
   const settled = () =>
     captureSessionControllerSettlement({
       scope: storePath,
@@ -224,11 +228,7 @@ export async function runTalkCallerReplay({
         ),
       );
       const execTool = tools.find((tool) => tool.name === "exec");
-      attempts.push({
-        caller,
-        runId: params.runId,
-        exec: Boolean(execTool),
-      });
+      attempts.push({ caller, runId: params.runId, exec: Boolean(execTool) });
       const gate = hold;
       gate?.started.resolve();
       await gate?.release.promise;
@@ -320,8 +320,7 @@ export async function runTalkCallerReplay({
           message: "Realtime agent consult completed before the tool result subscription started.",
         },
       });
-      expect(attempts).toHaveLength(dispatches);
-      expect(await effects()).toBe(effectText);
+      await expectEffects(dispatches, effectText);
     };
     const expectDifferentRuns = (a: string | undefined, b: string | undefined) =>
       expect.soft(Boolean(a && b && a !== b)).toBe(true);
@@ -412,8 +411,7 @@ export async function runTalkCallerReplay({
     const beforeFresh = attempts.length;
     const fresh = await runFresh("genuinely-new-call");
     expect(fresh.payload?.runId).not.toBe(first.payload?.runId);
-    expect(attempts).toHaveLength(beforeFresh + 1);
-    expect(await effects()).toBe("effect\neffect\n");
+    await expectEffects(beforeFresh + 1, "effect\neffect\n");
     // Keep a separate, genuinely write-authorized observer solely for agent.wait.
     // The read-only action below is still admitted from its own signed socket.
     const runObserver = peers.writer;
@@ -423,7 +421,6 @@ export async function runTalkCallerReplay({
     const readOnlyRetry = await consult("writer", "active-shared");
     await expectCompletedReplay(readOnlyRetry, beforeReadOnly, beforeReadOnlyEffects);
     const readOnlyFresh = await runFresh("new-read-only-call", false, runObserver);
-    expect(attempts).toHaveLength(beforeReadOnly + 1);
     expect(attempts.at(-1)).toMatchObject({
       caller: "writer",
       exec: false,
@@ -432,7 +429,7 @@ export async function runTalkCallerReplay({
     expect(replies.get(String(readOnlyFresh.payload?.runId))).toMatchObject({
       text: "Caller has no exec capability.",
     });
-    expect(await effects()).toBe(beforeReadOnlyEffects);
+    await expectEffects(beforeReadOnly + 1, beforeReadOnlyEffects);
     await reconnectWriter(["operator.read"]);
     const deniedRetry = await consult("writer", "active-shared");
     const deniedFresh = await consult("writer", "new-without-talk");
@@ -440,8 +437,7 @@ export async function runTalkCallerReplay({
       expect(result.ok).toBe(false);
       expect(result.error?.message).toContain("missing scope: operator.talk");
     }
-    expect(attempts).toHaveLength(beforeReadOnly + 1);
-    expect(await effects()).toBe(beforeReadOnlyEffects);
+    await expectEffects(beforeReadOnly + 1, beforeReadOnlyEffects);
     expect(clients.size).toBe(2);
     const writer = clients.get("writer");
     const reader = clients.get("reader");
@@ -471,11 +467,9 @@ export async function runTalkCallerReplay({
     expect(regeneratedLegacyVoice).toBeTypeOf("string");
     expect(regeneratedLegacyVoice).not.toBe(originalLegacyVoice);
     expect(legacyRetry.ok).toBe(false);
-    expect(attempts).toHaveLength(beforeLegacy + 1);
-    expect(await effects()).toBe(legacyEffects);
+    await expectEffects(beforeLegacy + 1, legacyEffects);
     await runFresh("legacy-new-call", true);
-    expect(attempts).toHaveLength(beforeLegacy + 2);
-    expect(await effects()).toBe(`${legacyEffects}effect\n`);
+    await expectEffects(beforeLegacy + 2, `${legacyEffects}effect\n`);
   } finally {
     hold?.release.resolve();
     observeCaller.mockRestore();
