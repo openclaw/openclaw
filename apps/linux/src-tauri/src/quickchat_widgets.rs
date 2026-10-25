@@ -178,6 +178,10 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         let overlay = gtk::Overlay::new();
         let fixed = gtk::Fixed::new();
         let content: QuickChatContent = gtk::glib::Object::new();
+        // Reparenting clears GTK focus even when the WebView's DOM remains focused.
+        let focused = window
+            .focused_widget()
+            .filter(|focus| focus == &primary || focus.is_ancestor(&primary));
         vbox.remove(&primary);
         // The app owns preferred size; WebKit's natural size must not raise compact-window hints.
         content.set_orientation(gtk::Orientation::Vertical);
@@ -192,6 +196,9 @@ async fn prepare_widget_surface(webview: &Webview) -> Result<(), String> {
         content.show();
         fixed.show();
         overlay.show();
+        if let Some(focused) = focused {
+            focused.grab_focus();
+        }
         let fixed = fixed.downgrade();
         // Give WebKit's IME and widget handlers first refusal; an unhandled key is replayed by WebKit.
         // Primary-view popovers keep their own Escape handling.
