@@ -35,6 +35,8 @@ let delivered = 0;
 let phase = "boot";
 let phaseStart = Date.now();
 const evidence = {
+  harnessVersion: "3.1.4",
+  turns: [],
   children: [] as { name: string; pid: number }[],
   phases: [] as { phase: string; start: number; end: number }[],
   hostSurfaceChanges: 0,
@@ -174,8 +176,7 @@ try {
       String(port),
       "--display-name",
       "synthetic-livepair-node",
-      "--commands",
-      "system.run",
+      "--all-commands",
       "--no-share-installed-apps",
       "--no-desktop-sharing",
     ],
@@ -211,6 +212,10 @@ try {
         .get() as { value_json: string };
       return { surface: row.node_surface_json, revision: revision.value_json };
     };
+    await until(() => {
+      const surface = JSON.parse(read().surface) as { lastHostStats?: unknown };
+      return surface.lastHostStats !== undefined;
+    }, "initial persisted host stats");
     let previous = read();
     setPhase("warm");
     const started = Date.now();
@@ -253,6 +258,9 @@ try {
   await stopChild(gateway, { teardownGraceMs: 30_000, killGraceMs: 2_000 });
   evidence.ok = true;
 } finally {
+  if (phase !== "shutdown") {
+    setPhase("shutdown");
+  }
   client?.close();
   for (const child of children.toReversed()) {
     await stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2_000 });

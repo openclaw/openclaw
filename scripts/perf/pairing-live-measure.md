@@ -4,7 +4,7 @@ This workload uses an isolated Gateway, the bundled iMessage plugin with the exi
 
 ## Acceptance rule (before measurements)
 
-Attribute cold startup separately from a warm 130-second window with one paired node and eight rejected iMessage direct messages at 15-second intervals. The channel uses `allowlist` policy with a configured synthetic sender distinct from those messages. Count SQL statements, worker requests and runtime main-thread statements with the frozen observer. Count successive persisted node surfaces and pairing revisions as changed or unchanged; never report their contents.
+Attribute cold startup separately from a warm 130-second window after the first persisted host-stat sample with one paired node advertising its normal command surface (no command invocation) and eight rejected iMessage direct messages at 15-second intervals. The channel uses `allowlist` policy with a configured synthetic sender distinct from those messages. Count SQL statements, worker requests and runtime main-thread statements with the frozen observer. Count successive persisted node surfaces and pairing revisions as changed or unchanged; never report their contents.
 
 A valid deletion removes one `pairing.allowFrom` request and its SELECT per direct message under open/allowlist policy, while pairing-policy DMs retain their current authorization read. The node heartbeat triplet is retained if its observation timestamp and pairing revision change each minute. Preserve immediate pairing revocation and external-writer visibility; no cache, schema or transaction changes.
 
