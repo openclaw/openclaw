@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,9 +20,10 @@ vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
 
 import { repairLegacyDashboardChatTypes } from "./doctor-session-dashboard-chat-type.js";
 import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
-const dashboardRootKey = (suffix: number) =>
-  `agent:main:dashboard:7d3c1f00-0000-4000-8000-${String(suffix).padStart(12, "0")}`;
+const dashboardRootKey = (suffix: number, agentId = "main") =>
+  `agent:${agentId}:dashboard:7d3c1f00-0000-4000-8000-${String(suffix).padStart(12, "0")}`;
 const ROOT_KEY = dashboardRootKey(1);
 
 // The durable shape v2026.10.6 wrote for a dashboard chat created without a message.
@@ -84,10 +86,7 @@ describe("doctor dashboard chat type backfill", () => {
       "agent:main:discord:group:123": legacyRoot({ sessionId: "channel-key" }),
       "agent:main:main": legacyRoot({ sessionId: "main-key" }),
       "agent:main:dashboard:incognito-7d3c1f00": legacyRoot({ sessionId: "incognito-key" }),
-      [dashboardRootKey(13)]: legacyRoot({
-        sessionId: "other-agent-parent",
-        parentSessionKey: "agent:ops:main",
-      }),
+      [dashboardRootKey(13, "ops")]: legacyRoot({ sessionId: "other-agent-parent" }),
     };
     const settle = async () => {
       await closeOpenClawAgentDatabasesAsync();
@@ -163,5 +162,58 @@ describe("doctor dashboard chat type backfill", () => {
     };
     write(customRows);
     await runRepairCycle(customConfig, read(), customMainKey);
+
+    await state.cleanup();
+    state = await createOpenClawTestState({
+      prefix: "openclaw-doctor-dashboard-chat-type-wiring-",
+    });
+    const doctorFixture = createCanonicalRepairFixture(state.stateDir);
+    const doctorConfig: OpenClawConfig = {
+      ...doctorFixture.cfg,
+      plugins: { enabled: false },
+    };
+    const doctorKey = dashboardRootKey(16);
+    const doctorEntry = legacyRoot({ sessionId: "doctor-wiring" });
+    doctorFixture.insert(doctorKey, doctorEntry);
+    const readDoctorEntry = () => {
+      let result: SessionEntry | undefined;
+      scanDoctorSessionEntriesTolerant(doctorFixture.scope(), ({ entry, sessionKey }) => {
+        if (sessionKey === doctorKey) {
+          result = entry;
+        }
+      });
+      return result;
+    };
+    const runDoctor = async (shouldRepair: boolean) => {
+      await noteSessionTranscriptHealth({
+        cfg: doctorConfig,
+        env: doctorFixture.env,
+        shouldRepair,
+      });
+      await settle();
+    };
+    setRuntimeConfigSnapshot(doctorConfig);
+
+    await runDoctor(false);
+    expect(readDoctorEntry()).toEqual(doctorEntry);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Would record 1 dashboard chat(s)`),
+      "Session chat type",
+    );
+    note.mockClear();
+
+    await runDoctor(true);
+    expect(readDoctorEntry()).toMatchObject({
+      ...doctorEntry,
+      chatType: "direct",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Recorded 1 dashboard chat(s)`),
+      "Session chat type",
+    );
+    note.mockClear();
+
+    await runDoctor(true);
+    expect(note).not.toHaveBeenCalledWith(expect.anything(), "Session chat type");
   });
 });
