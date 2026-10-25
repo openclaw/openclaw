@@ -353,19 +353,33 @@ async function launchNativeVisibilityContext() {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
-  const stopped = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
+  const stopped = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+  let terminationRequested = false;
   let nativeBrowser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | undefined;
   const close = async () => {
     try {
       await nativeBrowser?.close();
     } finally {
       if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
+        terminationRequested = child.kill("SIGTERM");
         await stopped;
       }
       await rm(profile, { recursive: true, force: true });
+    }
+    if (child.pid !== undefined) {
+      const exit = await stopped;
+      await writeFile(
+        path.join(artifactDir, `native-browser-${child.pid}.process.json`),
+        JSON.stringify({ pid: child.pid, ...exit, terminationRequested }, null, 2),
+      );
+      if (
+        !(exit.code === 0 && exit.signal === null) &&
+        !(terminationRequested && exit.signal === "SIGTERM")
+      ) {
+        throw new Error(`Native visibility Chromium exited with ${exit.code}/${exit.signal}`);
+      }
     }
   };
   try {

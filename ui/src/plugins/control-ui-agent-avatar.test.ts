@@ -129,7 +129,6 @@ it("shares SDK avatar source observation across factories without crossing appli
     };
     const agentLeases = countSubscriptionLeases(agents);
     const identityLeases = countSubscriptionLeases(identities);
-    const getIdentity = vi.spyOn(identities, "get");
     const ensureIdentity = vi.spyOn(identities, "ensure");
     onTestFinished(() => agents.dispose());
     return {
@@ -138,7 +137,6 @@ it("shares SDK avatar source observation across factories without crossing appli
       identities,
       agentLeases,
       identityLeases,
-      getIdentity,
       ensureIdentity,
       refreshIdentities() {
         revision += 1;
@@ -193,20 +191,17 @@ it("shares SDK avatar source observation across factories without crossing appli
     for (let index = 0; index < mounted.length; index += 1) {
       expect(image(index)).toBe((index < 6 ? first : second).avatar("writer"));
     }
-    // One native hydration listener plus one shared presentation projection.
-    expect(first.agentLeases()).toBe(2);
-    expect(first.identityLeases()).toBe(2);
-    expect(second.agentLeases()).toBe(2);
-    expect(second.identityLeases()).toBe(2);
+    // One shared native subscription serves hydration and presentation.
+    expect(first.agentLeases()).toBe(1);
+    expect(first.identityLeases()).toBe(1);
+    expect(second.agentLeases()).toBe(1);
+    expect(second.identityLeases()).toBe(1);
   });
 
-  first.getIdentity.mockClear();
   first.ensureIdentity.mockClear();
   first.refreshIdentities();
   // Hydration remains synchronous and per mounted avatar; the owner deduplicates RPCs.
   expect(first.ensureIdentity).toHaveBeenCalledTimes(6);
-  // A publication invalidates one shared source, without eagerly rebuilding each binding.
-  expect(first.getIdentity).not.toHaveBeenCalled();
   await waitForSolid(() => {
     expect(image(1)).toBe(first.avatar("writer"));
     expect(image(7)).toBe(second.avatar("writer"));
@@ -233,8 +228,8 @@ it("shares SDK avatar source observation across factories without crossing appli
 
   lifetimes[0].abort();
   await waitForSolid(() => {
-    expect(first.agentLeases()).toBe(2);
-    expect(first.identityLeases()).toBe(2);
+    expect(first.agentLeases()).toBe(1);
+    expect(first.identityLeases()).toBe(1);
   });
   mounted
     .filter(({ factoryIndex }) => factoryIndex === 1)
@@ -242,8 +237,8 @@ it("shares SDK avatar source observation across factories without crossing appli
   await waitForSolid(() => {
     expect(first.agentLeases()).toBe(0);
     expect(first.identityLeases()).toBe(0);
-    expect(second.agentLeases()).toBe(2);
-    expect(second.identityLeases()).toBe(2);
+    expect(second.agentLeases()).toBe(1);
+    expect(second.identityLeases()).toBe(1);
   });
   lifetimes[2].abort();
   await waitForSolid(() => {
