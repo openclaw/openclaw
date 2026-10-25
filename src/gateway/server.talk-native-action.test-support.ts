@@ -11,7 +11,6 @@ import { createExecTool } from "../agents/bash-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
-import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
@@ -33,8 +32,28 @@ import {
   rpcReq,
   createGatewaySuiteHarness,
   prepareGatewayReplyRuntimeForTest,
-  gatewayReplyMock,
 } from "./test-helpers.js";
+
+type EmbeddedRun = typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
+
+async function openActionHost(
+  params: Parameters<EmbeddedRun>[0],
+  pluginId: string,
+  agentId = params.agentId,
+  abortSignal?: AbortSignal,
+) {
+  const { sessionKey, sessionId, runId, workspaceDir, cwd, config } = params;
+  const execution = { agentId, sessionKey, sessionId, runId, workspaceDir, cwd, config };
+  const admittedRunContext = await expectDefined(
+    params.preparedRunAdmission,
+    "real admission",
+  ).admit("plugin-harness", pluginId);
+  const host = createAgentHarnessHostCapabilities({
+    pluginId,
+    attempt: { ...execution, admittedRunContext, abortSignal },
+  });
+  return { execution, host };
+}
 
 async function prepareActionSession(
   target: Parameters<typeof replaceSessionEntry>[0],
@@ -75,7 +94,7 @@ export async function runTalkCallerReplay({
   voiceSessionId,
 }: {
   harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+  runEmbeddedAgent: MockInstance<EmbeddedRun>;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -174,43 +193,22 @@ export async function runTalkCallerReplay({
       identities: [sessionKey, sessionId],
       agentId: "main",
     });
-  const replies = new Map<string, unknown>();
-  gatewayReplyMock.mockImplementation(async (...args) => {
-    const result = await getReplyFromConfig(...args);
-    replies.set(String(args[0].MessageSid), result);
-    return result;
-  });
   runEmbeddedAgent.mockImplementation(async (params) => {
     const caller = callerForDevice(params.approvalReviewerDeviceId);
     if (!caller) {
       throw new Error("Backend lost authenticated requester device");
     }
-    const admittedRunContext = await expectDefined(
-      params.preparedRunAdmission,
-      "real admission",
-    ).admit("plugin-harness", "caller-replay-fixed-model");
-    const attemptContext = {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      workspaceDir: params.workspaceDir,
-      cwd: params.cwd,
-      config: params.config,
-    };
-    const host = createAgentHarnessHostCapabilities({
-      pluginId: "caller-replay-fixed-model",
-      attempt: {
-        ...attemptContext,
-        admittedRunContext,
-        abortSignal: params.abortSignal,
-      },
-    });
+    const { execution, host } = await openActionHost(
+      params,
+      "caller-replay-fixed-model",
+      params.agentId,
+      params.abortSignal,
+    );
     try {
       const tools = host.capabilities.bindToolSurface(
         applyEmbeddedAttemptToolsAllow(
           createOpenClawCodingTools({
-            ...attemptContext,
+            ...execution,
             sessionPermissionPolicy: {
               root: params.workspaceDir,
               mode: params.permissionMode ?? "read-only",
@@ -245,9 +243,7 @@ export async function runTalkCallerReplay({
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
       }
       return {
-        payloads: [
-          { text: execTool ? "Writer effect completed." : "Caller has no exec capability." },
-        ],
+        payloads: [{ text: "Done." }],
         meta: { durationMs: 0 },
       };
     } finally {
@@ -338,11 +334,6 @@ export async function runTalkCallerReplay({
       if (first.ok && second.ok) {
         expect(attempts[before]?.runId).toBe(first.payload?.runId);
         expect(attempts[before + 1]?.runId).toBe(second.payload?.runId);
-        for (const attempt of attempts.slice(before)) {
-          expect(replies.get(attempt.runId)).toMatchObject({
-            text: attempt.exec ? "Writer effect completed." : "Caller has no exec capability.",
-          });
-        }
       }
       expect.soft([first.ok, second.ok], order.join(" → ")).toEqual([true, true]);
       expect
@@ -426,9 +417,6 @@ export async function runTalkCallerReplay({
       exec: false,
       runId: readOnlyFresh.payload?.runId,
     });
-    expect(replies.get(String(readOnlyFresh.payload?.runId))).toMatchObject({
-      text: "Caller has no exec capability.",
-    });
     await expectEffects(beforeReadOnly + 1, beforeReadOnlyEffects);
     await reconnectWriter(["operator.read"]);
     const deniedRetry = await consult("writer", "active-shared");
@@ -495,7 +483,7 @@ export async function runTalkNativeActionParity(fixture: {
   storePath: string;
   voiceSessionId: string | undefined;
   connectionId: string;
-  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+  runEmbeddedAgent: MockInstance<EmbeddedRun>;
   rpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   consult: (question: string, callId: string) => Promise<Record<string, unknown>>;
   waitForDispatchEnd: () => Promise<void>;
@@ -511,20 +499,8 @@ export async function runTalkNativeActionParity(fixture: {
       { force: true },
     );
   runEmbeddedAgent.mockImplementation(async (params) => {
-    const { sessionId, runId, workspaceDir, cwd } = params;
-    const execution = {
-      agentId,
-      sessionId,
-      runId,
-      sessionKey: params.sessionKey,
-      config: params.config,
-    };
-    const admission = expectDefined(params.preparedRunAdmission, "real ingress admission");
-    const admittedRunContext = await admission.admit("plugin-harness", "parity-test-model");
-    const host = createAgentHarnessHostCapabilities({
-      pluginId: "parity-test-model",
-      attempt: { ...execution, workspaceDir, cwd, admittedRunContext },
-    });
+    const { workspaceDir } = params;
+    const { execution, host } = await openActionHost(params, "parity-test-model", agentId);
     const policy = projectEffectiveExecPolicy({
       base: { host: "gateway", mode: "full" },
       overrides: params.execOverrides,

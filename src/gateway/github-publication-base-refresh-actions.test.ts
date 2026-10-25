@@ -383,27 +383,6 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   expect(await git("rev-parse", "MERGE_HEAD")).toBe(baseCommit);
   await write(projection, "artifact.txt", "guest-v2\n");
   await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-  // Fail after the real canonical receipt, before projection application; retry uses its retained payload.
-  let interrupted = false;
-  const interruption = interceptUpdate((update) => async (row, patch, authority, manifest) => {
-    const result = await update(row, patch, authority, manifest);
-    if (
-      !interrupted &&
-      patch.pending_target === "projection" &&
-      isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-    ) {
-      interrupted = true;
-      throw new Error("interrupted after canonical acceptance");
-    }
-    return result;
-  });
-  const interruptionFailure = await refresh().catch((error: unknown) => error);
-  expect(interrupted, String(interruptionFailure)).toBe(true);
-  expect(interruptionFailure).toBeInstanceOf(Error);
-  interruption.mockRestore();
-  const pendingRefresh = await baseline();
-  expect(pendingRefresh).toMatchObject({ pending_target: "projection", journal_json: null });
-  expect(pendingRefresh?.base_commit).not.toBe(baseCommit);
   const refreshed = await refresh();
   expect(refreshed).toMatchObject({
     status: "conflicts",

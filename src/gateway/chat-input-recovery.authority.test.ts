@@ -52,7 +52,10 @@ import {
   listenProvider,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
-import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+} from "./operator-run-recovery.test-support.js";
 import {
   createChatInputRecovery,
   normalizeChatSendRequest,
@@ -240,22 +243,10 @@ it.for([
       await loadOrCreateDeviceIdentityAsync();
       const cases = [];
       const owner = ensureProfileForEmail("owner@example.test");
-      const device = {
-        deviceId: "revoked-replay-device",
-        publicKey: "synthetic-public-key",
-        roles: ["operator"],
-        approvedScopes: ["operator.read", "operator.write"],
-        tokens: {
-          operator: {
-            token: "synthetic-device-token",
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            createdAtMs: 1,
-          },
-        },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      } satisfies Parameters<typeof createOperatorRecoveryFixture>[0]["device"];
+      const device = pairedOperator();
+      device.approvedScopes = ["operator.read", "operator.write"];
+      expectDefined(device.tokens?.operator, "paired operator token").scopes =
+        device.approvedScopes;
       for (const change of ["unchanged", "role", "device", "membership"] as const) {
         const profile = ensureProfileForEmail(`${change}@example.test`);
         if (change === "unchanged") {
