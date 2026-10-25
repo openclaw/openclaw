@@ -391,7 +391,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: params.progressSummary,
         });
       }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-      interval.unref?.();
+      interval.unref();
       try {
         executed = await params.run();
       } finally {
