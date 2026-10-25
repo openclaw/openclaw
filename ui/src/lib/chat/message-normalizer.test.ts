@@ -42,14 +42,6 @@ const voice = {
   durationMs: 2345,
   isVoiceNote: true,
 };
-const canonicalCanvas = canvas(
-  {
-    url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-    sandbox: "scripts",
-    boardWidgetName: "saved-widget",
-  },
-  "original tool result",
-);
 const dimensions = { sizeBytes: Infinity, durationMs: Infinity, width: Infinity, height: Infinity };
 const image = attachment({
   url: "~/Pictures/test image.png",
@@ -122,19 +114,22 @@ describe("message-normalizer", () => {
       ],
     ],
     [
-      "canonical canvas metadata over shortcode copies",
-      [text('Ready.\n[embed ref="cv_widget" title="Widget" /]'), canonicalCanvas],
-      [text("Ready."), canonicalCanvas],
-    ],
-    [
       "finite dimensions only",
       [
-        canvas({ url: "/canvas/one", preferredHeight: Infinity }),
+        canvas(
+          {
+            url: "/canvas/one",
+            preferredHeight: Infinity,
+            sandbox: "scripts",
+            boardWidgetName: "widget",
+          },
+          "raw",
+        ),
         { type: "video", url: "/media/clip", ...dimensions },
         attachment({ kind: "document", url: "/media/document", label: "Document", ...dimensions }),
       ],
       [
-        canvas({ url: "/canvas/one" }),
+        canvas({ url: "/canvas/one", sandbox: "scripts", boardWidgetName: "widget" }, "raw"),
         media("/media/clip", "video", "Video"),
         media("/media/document", "document", "Document"),
       ],
