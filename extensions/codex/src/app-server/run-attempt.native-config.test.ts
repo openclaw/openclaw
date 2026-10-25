@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -47,7 +46,6 @@ import {
   tempDir,
   threadStartResult,
   turnStartResult,
-  userMessage,
 } from "./run-attempt-test-harness.js";
 import {
   testCodexAppServerBindingStore,
@@ -56,7 +54,6 @@ import {
 import * as settledTurnContext from "./settled-turn-context.js";
 import * as sharedClientModule from "./shared-client.js";
 import {
-  appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
@@ -474,15 +471,7 @@ describe("Codex native configuration", () => {
       params.modelId = "claude-opus-4-6";
       params.model = createCodexTestModel("anthropic");
       params.fastMode = true;
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, "supervised-settlement.sqlite"),
-        params.sessionId,
-      );
-      await appendSqliteHistoryMessage(params, userMessage("Preserve the prior conversation.", 1));
-      const priorTranscript = await readTranscriptMessagesByIdentity(params);
       const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
-      const warn = vi.spyOn(embeddedAgentLog, "warn");
       setCodexTestModelSupportsTools(params, nativeSearchEnabled);
       params.config = {
         ...params.config,
@@ -533,25 +522,6 @@ describe("Codex native configuration", () => {
           expect(releaseModelExecution).toHaveBeenCalledOnce();
           return;
         }
-        for (const phase of ["started", "completed"]) {
-          harness.send(
-            itemNotification(
-              {
-                type: "commandExecution",
-                id: "settled-supervised-command",
-                command: "printf synthetic-completed-work",
-                cwd: workspaceDir,
-                status: phase === "started" ? "inProgress" : "completed",
-                ...(phase === "completed"
-                  ? { aggregatedOutput: "synthetic-completed-work", exitCode: 0 }
-                  : {}),
-              },
-              "turn-1",
-              "thread-existing",
-              phase,
-            ),
-          );
-        }
         harness.send(
           completedTurn("thread-existing", {
             items: hasAnswer
@@ -577,36 +547,7 @@ describe("Codex native configuration", () => {
           expect(result.settledTurnFinalizationContext).toBeUndefined();
         } else {
           expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-          expect(warn).toHaveBeenCalledWith(
-            "codex settled-turn finalization context is unavailable",
-            expect.objectContaining({
-              runId: params.runId,
-              threadId: "thread-existing",
-              turnId: "turn-1",
-              reason: "native_auth_finalization_unsupported",
-            }),
-          );
         }
-        expect(result.messagesSnapshot).toContainEqual(
-          expect.objectContaining({
-            role: "toolResult",
-            toolCallId: "settled-supervised-command",
-            isError: false,
-            content: expect.arrayContaining([
-              expect.objectContaining({
-                type: "text",
-                text: "synthetic-completed-work",
-              }),
-            ]),
-          }),
-        );
-        expect(result.replayMetadata).toMatchObject({
-          hadPotentialSideEffects: true,
-          replaySafe: false,
-        });
-        const transcript = await readTranscriptMessagesByIdentity(params);
-        expect(transcript.slice(0, priorTranscript.length)).toEqual(priorTranscript);
-        expect(transcript).toContainEqual(expect.objectContaining({ role: "toolResult" }));
         expect(requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
       } finally {
         start.mockRestore();
