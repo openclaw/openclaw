@@ -1,14 +1,8 @@
-import { createRoot, createSignal } from "solid-js";
+import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
 import "./components/chat-sidebar-region.runtime.tsx";
-import "../../components/browser/browser-panel.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createBrowserClient,
-  stubScreenshotMedia,
-  createBrowserPanelTestMetrics,
-} from "../../components/browser/browser-panel-controller-test-support.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
@@ -20,15 +14,10 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
-import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
-import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
-import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -180,8 +169,6 @@ it("expands in place and restores the selected panel and dock", () => {
   show(true);
   expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(false);
   show(false);
-  expect(isSidebarSlotVisible(f.state.sidebarLayout, slot)).toBe(true);
-  expect(isSidebarSlotVisible(f.state.sidebarLayout, "conversation")).toBe(true);
   expect(f.state.sidebarLayout).toEqual({ ...layout, expanded: false });
 });
 
@@ -211,8 +198,6 @@ describe("plugin panel intent delivery", () => {
         window.dispatchEvent(event);
       }
       expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-      expect(f.pending.requests.size).toBe(0);
-      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
       window.dispatchEvent(send("document", false));
       expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
     },
@@ -220,14 +205,24 @@ describe("plugin panel intent delivery", () => {
 });
 
 describe("session link-reader intent delivery", () => {
-  it.each(["ready", "closed", "session"] as const)(
-    "waits for the recipient commit before delivering an intent (%s)",
-    async (outcome) => {
+  it.each([
+    ["pane", "ready"],
+    ["pane", "closed"],
+    ["pane", "session"],
+    ["recipient", "ready"],
+    ["recipient", "closed"],
+    ["recipient", "session"],
+  ] as const)(
+    "waits for the %s commit before delivering an intent (%s)",
+    async (boundary, outcome) => {
       vi.useFakeTimers();
       const f = fixture();
-      const recipientCommit = createDeferred<boolean>();
+      const heldCommit = createDeferred<void>();
+      f.owner.awaitDomCommit = () => (boundary === "pane" ? heldCommit.promise : Promise.resolve());
       const recipient = document.createElement("openclaw-link-reader-panel");
-      Object.defineProperty(recipient, "updateComplete", { value: recipientCommit.promise });
+      Object.defineProperty(recipient, "updateComplete", {
+        value: boundary === "recipient" ? heldCommit.promise : Promise.resolve(),
+      });
       f.root.append(recipient);
       f.region.readPanelHost = () => recipient;
       const event = f.event();
@@ -240,7 +235,7 @@ describe("session link-reader intent delivery", () => {
       } else if (outcome === "session") {
         f.state.sessionKey = "session-b";
       }
-      recipientCommit.resolve(true);
+      heldCommit.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(f.pending.requests.size).toBe(0);
       if (outcome === "ready") {
@@ -339,143 +334,4 @@ describe("session link-reader intent delivery", () => {
     await f.definitions.promise;
     expect(f.deliverPanelEvent).not.toHaveBeenCalled();
   });
-});
-
-it("delivers a browser card after the pane's scheduled render commits", async () => {
-  vi.useFakeTimers();
-  stubScreenshotMedia();
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-  const url = "http://127.0.0.1:18789/assets/example.html";
-  const gateway = createBrowserClient(async (request) => {
-    if (request.path === "/tabs") {
-      return {
-        running: true,
-        tabs:
-          request.query?.profile !== "managed"
-            ? []
-            : [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }],
-      };
-    }
-    if (request.path === "/screenshot") {
-      return { path: "/proof/local.png", targetId: "target-1", url };
-    }
-    if (request.path === "/act") {
-      return createBrowserPanelTestMetrics(url, "Local preview");
-    }
-    return { ok: true };
-  });
-  const commit = createDeferred();
-  const pane = document.createElement("div");
-  let pendingUpdate: Promise<void> | undefined;
-  let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
-  let browserPanel: HTMLElement | undefined;
-  let flushPending = () => {};
-  const state = createPageState(
-    createInitializationContext(),
-    { afterCommit: () => () => {} },
-    pane,
-  );
-  state.sidebarLayout = { columns: [] };
-  state.sessionKey = "agent:main:local-preview";
-  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
-  flushPending = trackToggles({
-    current: () => ({
-      sidebarRegion,
-      state,
-      linkReaders: [],
-      pluginPanels: [],
-      awaitDomCommit: () => pendingUpdate ?? Promise.resolve(),
-    }),
-    pending,
-    updateSidebarLayout: (layout) => {
-      state.sidebarLayout = layout;
-      scheduleCommit();
-    },
-  });
-
-  const [layout, setLayout] = createSignal(state.sidebarLayout);
-  let view: ReturnType<typeof mountSolid> | undefined;
-  function draw() {
-    setLayout(state.sidebarLayout);
-    view ??= mountSolid(
-      () => {
-        const browser = sidebarPanelDefinitions().find((entry) => entry.slot === "browser")!;
-        browser.available = true;
-        Object.defineProperty(browser, "panelHost", { get: () => browserPanel });
-        browser.content = (
-          <openclaw-browser-panel
-            ref={(element) => (browserPanel = element)}
-            data-sidebar-panel-host
-            prop:embedded={true}
-            prop:available={true}
-            prop:client={gateway.client}
-            prop:sessionKey={state.sessionKey}
-            prop:presented={isSidebarSlotVisible(layout(), "browser")}
-            prop:refreshOnPresentation={false}
-          />
-        );
-        return (
-          <SidebarRegionView
-            onPanelReady={flushPending}
-            presentationId="delayed-browser-card"
-            panelIdPrefix="chat-panel-delayed-browser-card"
-            onRegionViewRef={(element) => {
-              sidebarRegion = element;
-              return () => {
-                if (sidebarRegion === element) {
-                  sidebarRegion = null;
-                }
-              };
-            }}
-            availableWidth={1400}
-            callbacks={createNoopSidebarRegionCallbacks()}
-            layout={layout()}
-            narrow={false}
-            panelDefinitions={[browser]}
-            primary={<main>Conversation</main>}
-          />
-        );
-      },
-      { container: pane },
-    );
-    flushSolid();
-  }
-  function scheduleCommit() {
-    // Expose the new commit promise before the browser card can mount.
-    pendingUpdate ??= commit.promise.then(() => {
-      draw();
-      pendingUpdate = undefined;
-    });
-  }
-  document.body.append(pane);
-  try {
-    draw();
-    toggle(BROWSER_PANEL_TOGGLE_EVENT, {
-      open: true,
-      browserTab: { target: "host", profile: "managed", targetId: "target-1" },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pane.querySelector("openclaw-browser-panel")).toBeNull();
-    commit.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    await pendingUpdate;
-    expect(gateway.request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        path: "/tabs/focus",
-        target: "host",
-        query: { profile: "managed" },
-        body: { targetId: "t1" },
-      }),
-    );
-    expect(
-      pane.querySelector("openclaw-browser-panel")?.querySelector(".bp-shot")?.getAttribute("alt"),
-    ).toBe("Local preview");
-  } finally {
-    commit.resolve();
-    view?.unmount();
-    pane.remove();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  }
 });

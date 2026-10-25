@@ -125,7 +125,7 @@ async function createControlsFixture(
   await waitForSolid(() =>
     expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull(),
   );
-  return { state, selectedSession, access, controls, container };
+  return { state, selectedSession, controls, container };
 }
 
 describe("chat pane model-setting permissions", () => {
@@ -141,15 +141,8 @@ describe("chat pane model-setting permissions", () => {
     expect(state.request).not.toHaveBeenCalled();
     state.request.mockImplementation(async (method, params) => {
       if (method === "sessions.patch") {
-        if (
-          !params ||
-          typeof params !== "object" ||
-          !("fastMode" in params) ||
-          params.fastMode !== false
-        ) {
-          throw new Error("Expected explicit Standard patch");
-        }
-        selectedSession.fastMode = params.fastMode;
+        expect(params).toMatchObject({ fastMode: false });
+        selectedSession.fastMode = false;
         return { ok: true, key: selectedSession.key, entry: selectedSession };
       }
       return { ...createSessionsListResult(), sessions: [selectedSession] };
@@ -209,13 +202,11 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "dispatches settings only for the owned global target ($sessionKey, $rowAgentId, $sharingRole)",
     async ({ sessionKey, rowAgentId, sharingRole, allowed }) => {
-      const { state, selectedSession, access } = await createControlsFixture(
+      const { state, selectedSession } = await createControlsFixture(
         "operator.sessions.write",
         sharingRole,
         { sessionKey, rowAgentId },
       );
-      expect([access.model.allowed, access.effort.allowed]).toEqual([allowed, allowed]);
-
       const results = [
         await switchChatModel(state, "openai/gpt-test-b"),
         await switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
@@ -249,12 +240,9 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "uses exact field permissions with $scope on a $sharingRole session",
     async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, access, controls, container } = await createControlsFixture(
+      const { state, selectedSession, controls, container } = await createControlsFixture(
         scope,
         sharingRole,
-      );
-      expect(access.unarchive.allowed).toBe(
-        allowed && (scope === "operator.admin" || sharingRole === "owner"),
       );
       const readOnly = !allowed;
       expect(

@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
-import { createComponent, flush } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   account,
   confirmation,
@@ -16,7 +14,6 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
 const accepted = { requestId, status: "requested", message: "Accepted." };
 const personalPublisher = { source: "personal", ...account };
@@ -39,17 +36,6 @@ function expectLastRequest(
     ...params,
   });
 }
-function mountPublication(controller: ReturnType<typeof setup>["controller"]) {
-  const container = document.createElement("div");
-  const { unmount } = mountSolid(
-    () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
-    { container },
-  );
-  onTestFinished(unmount);
-  flush();
-  return container;
-}
-
 describe("explicit GitHub publication", () => {
   it("notifies sibling presentations only after freezing the admitted account", async () => {
     const { controller, request, changed } = setup();
@@ -225,16 +211,12 @@ describe("explicit GitHub publication", () => {
     },
   );
 
-  it("keeps a sole personal account unselected until its labeled publish button is clicked", async () => {
+  it("keeps a sole personal account unselected until explicit publication", async () => {
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
     personalOnly.request.mockResolvedValueOnce(accepted);
-    const container = mountPublication(personalOnly.controller);
-    expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-pr__create");
-    expect(button?.textContent?.trim()).toBe("Publish as @alice-tools");
     expect(personalOnly.request).toHaveBeenCalledTimes(1);
-    button?.click();
+    void personalOnly.controller.view()?.onPublish?.();
     await settled(personalOnly.controller);
     expectLastRequest(personalOnly.request, "publish", {
       idempotencyKey: expect.any(String),

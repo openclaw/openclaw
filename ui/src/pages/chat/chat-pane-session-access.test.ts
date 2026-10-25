@@ -40,8 +40,8 @@ const hello = (
   auth: { role: "operator", scopes: [scope] },
   features: { methods },
 });
-function createPatchPane() {
-  const patch = vi.fn(async () => ({}));
+function createPatchPane(response: object = {}) {
+  const patch = vi.fn(async () => response);
   return {
     patch,
     ...createTestChatPane({
@@ -194,12 +194,7 @@ describe("chat pane session access", () => {
     "keeps header drafts through reconnect and retires them with %s identity",
     async (change) => {
       const modal = createModalDialogTestFixture();
-      const row: GatewaySessionRow = {
-        key: "agent:main:current",
-        sessionId: "current-session",
-        kind: "direct",
-        sharingRole: "owner",
-      };
+      const row = sessionRow({ sessionId: "current-session", sharingRole: "owner" });
       const { pane, patch, groupsPut } = await createHeaderDraftPane(row);
       const connected = {
         ...pane.context.gateway.snapshot,
@@ -274,11 +269,7 @@ describe("chat pane session access", () => {
     "keeps the header group draft after a %s assignment",
     async (outcome) => {
       const modal = createModalDialogTestFixture();
-      const row: GatewaySessionRow = {
-        key: "agent:main:current",
-        sessionId: "current-session",
-        kind: "direct",
-      };
+      const row = sessionRow({ sessionId: "current-session" });
       const { pane, patch } = await createHeaderDraftPane(row);
       patch.mockImplementationOnce(async () => {
         if (outcome === "stale") {
@@ -319,11 +310,7 @@ describe("chat pane session access", () => {
   });
 
   it("restores the exact durable session observed by the composer", async () => {
-    const patch = vi.fn(async () => ({ ok: true }));
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
-    });
+    const { pane, state, patch } = createPatchPane({ ok: true });
     pane.context.gateway.snapshot.hello = hello();
     state.sessionsResult = sessionsResult(
       [
