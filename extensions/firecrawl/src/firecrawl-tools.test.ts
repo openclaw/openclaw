@@ -407,7 +407,8 @@ describe("firecrawl tools", () => {
                   entry === "text tool" ? { url, extractMode: "text", proxy: "invalid" } : input,
                 )
               ).details;
-      const defaults = entry === "text tool";
+      // The fetch-provider tool forwards proxy/cache but not the full scrape option surface.
+      const defaults = entry === "fetch provider" || entry === "text tool";
       expect(response.body()).toEqual({
         url,
         formats: ["markdown"],
