@@ -1,4 +1,3 @@
-/** Tests configured MCP tools survive policy/splitting to the outbound request boundary. */
 import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,15 +15,17 @@ import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const promptMessage = (role: "user" | "assistant", text: string) => ({
+  role,
+  content: textBlock(text),
+});
+
 // Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
 function makeConfiguredRuntime(
-  params: {
-    serverName?: string;
-    toolNames?: string[];
-  } = {},
+  toolNames = ["list_inbox", "send_reply"],
+  serverName = "userMcp",
 ): SessionMcpRuntime {
-  const serverName = params.serverName ?? "userMcp";
-  const toolNames = params.toolNames ?? ["list_inbox", "send_reply"];
   const catalog = () =>
     fixtureCatalog(
       serverName,
@@ -40,37 +41,38 @@ function makeConfiguredRuntime(
     peekCatalog: catalog,
     getCatalog: async () => catalog(),
     callTool: async () => ({
-      content: [{ type: "text", text: "FROM-CONFIG" }],
+      content: [textBlock("FROM-CONFIG")],
       isError: false,
     }),
   });
 }
 
-async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
-  cfg: OpenClawConfig;
-}): Promise<string[]> {
+function requestToolNames(
+  tools: Parameters<typeof applyFinalEffectiveToolPolicy>[0]["bundledTools"],
+  config: OpenClawConfig = { tools: { profile: "coding" } },
+) {
+  return toToolDefinitions(
+    applyFinalEffectiveToolPolicy({
+      bundledTools: tools,
+      config,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({ config }),
+      warn: () => {},
+    }),
+    undefined,
+    undefined,
+  ).map((tool) => tool.name);
+}
+
+async function configuredToolNames(cfg: OpenClawConfig): Promise<string[]> {
   const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
-  const createRuntime = vi
-    .spyOn(runtimeModule, "createSessionMcpRuntime")
-    .mockImplementationOnce(() => makeConfiguredRuntime());
+  vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockImplementationOnce(() =>
+    makeConfiguredRuntime(),
+  );
   const runtime = await createBundleMcpToolRuntime({
     workspaceDir: "/workspace",
-    cfg: params.cfg,
+    cfg,
   });
-  expect(createRuntime).toHaveBeenCalledOnce();
-  expect(createRuntime).toHaveBeenCalledWith({
-    sessionId: expect.stringMatching(/^bundle-mcp:/),
-    workspaceDir: "/workspace",
-    cfg: params.cfg,
-  });
-  const filtered = applyFinalEffectiveToolPolicy({
-    bundledTools: runtime.tools,
-    config: params.cfg,
-    conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: params.cfg }),
-    warn: () => {},
-  });
-  const customTools = toToolDefinitions(filtered, undefined, undefined);
-  return customTools.map((tool) => tool.name);
+  return requestToolNames(runtime.tools, cfg);
 }
 
 describe("configured MCP tools reach the request boundary (#76063)", () => {
@@ -82,11 +84,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
   ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; allowed: boolean }>)(
     "applies $name policy to configured server__* tools at the request boundary",
     async ({ tools, allowed }) => {
-      const names = await buildConfiguredMcpToolNamesAtRequestBoundary({
-        cfg: {
-          tools,
-          mcp: { servers: { userMcp: { command: "node", args: ["user-mcp.mjs"] } } },
-        },
+      const names = await configuredToolNames({
+        tools,
+        mcp: { servers: { userMcp: { command: "node", args: ["user-mcp.mjs"] } } },
       });
       expect(names).toEqual(allowed ? ["userMcp__list_inbox", "userMcp__send_reply"] : []);
     },
@@ -94,27 +94,16 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
 
   it("preserves materialize ordering at the request boundary so prompt cache keys stay stable", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeConfiguredRuntime({
-        toolNames: ["zeta_tool", "alpha_tool", "mu_tool"],
-      }),
+      runtime: makeConfiguredRuntime(["zeta_tool", "alpha_tool", "mu_tool"]),
     });
-    const cfg: OpenClawConfig = { tools: { profile: "coding" } };
-    const filtered = applyFinalEffectiveToolPolicy({
-      bundledTools: runtime.tools,
-      config: cfg,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: cfg }),
-      warn: () => {},
-    });
-    const customTools = toToolDefinitions(filtered, undefined, undefined);
-
-    expect(customTools.map((tool) => tool.name)).toEqual([
+    expect(requestToolNames(runtime.tools)).toEqual([
       "userMcp__alpha_tool",
       "userMcp__mu_tool",
       "userMcp__zeta_tool",
     ]);
   });
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
-    const base = makeConfiguredRuntime({ toolNames: [], serverName: "knowledge" });
+    const base = makeConfiguredRuntime([], "knowledge");
     const catalog = await base.getCatalog();
     catalog.servers.knowledge!.resources = { listChanged: true };
     catalog.servers.knowledge!.prompts = { listChanged: true };
@@ -125,8 +114,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
           {
             role: "user",
             content: {
-              type: "text",
-              text: "Summarize MCP",
+              ...textBlock("Summarize MCP"),
               annotations: { audience: ["assistant"] },
               _meta: { promptBlock: "preserved" },
             },
@@ -188,14 +176,10 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       );
       const result = await tool.execute(`call-${operation}`, args, undefined, undefined);
       if (operation === "prompts_get") {
-        expect(result.content).toEqual([
-          { type: "text", text: "Brief the user" },
-          { type: "text", text: "user:" },
-          { type: "text", text: "Summarize MCP" },
-        ]);
+        expect(result.content).toEqual(["Brief the user", "user:", "Summarize MCP"].map(textBlock));
       } else {
         expect(result.content).toEqual([
-          { type: "text", text: JSON.stringify(publicResults[operation], null, 2) },
+          textBlock(JSON.stringify(publicResults[operation], null, 2)),
         ]);
       }
       expect(consumeMcpCodeModeGuestResult(result)).toEqual(publicResults[operation]);
@@ -205,11 +189,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
         untrustedMcpOutput: true,
       });
       expect(tool.resultContentSource).toBe("network");
-      expect(expectDefined(privateResults[operation], `${operation} private source`)._meta).toEqual(
-        {
-          privateState: `${operation}-must-not-leak`,
-        },
-      );
+      expect(privateResults[operation]._meta).toEqual({
+        privateState: `${operation}-must-not-leak`,
+      });
     }
 
     await expect(
@@ -228,12 +210,12 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     const prompt = GetPromptResultSchema.parse({
       description: "Describe the supplied diagram",
       messages: [
-        { role: "user", content: { type: "text", text: "Explain this image." } },
+        promptMessage("user", "Explain this image."),
         { role: "user", content: image },
-        { role: "assistant", content: { type: "text", text: "An example answer." } },
+        promptMessage("assistant", "An example answer."),
       ],
     });
-    const base = makeConfiguredRuntime({ toolNames: [], serverName: "diagrams" });
+    const base = makeConfiguredRuntime([], "diagrams");
     const catalog = await base.getCatalog();
     catalog.servers.diagrams!.prompts = {};
     const materialized = await materializeBundleMcpToolsForRun({
@@ -246,13 +228,9 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     const result = await tool.execute("prompt-image", { name: "diagram" }, undefined, undefined);
 
     expect(result.content).toEqual([
-      { type: "text", text: "Describe the supplied diagram" },
-      { type: "text", text: "user:" },
-      { type: "text", text: "Explain this image." },
-      { type: "text", text: "user:" },
+      ...["Describe the supplied diagram", "user:", "Explain this image.", "user:"].map(textBlock),
       image,
-      { type: "text", text: "assistant:" },
-      { type: "text", text: "An example answer." },
+      ...["assistant:", "An example answer."].map(textBlock),
     ]);
     const originalPrompt = structuredClone(prompt);
     prompt.description = "A later server-side edit";

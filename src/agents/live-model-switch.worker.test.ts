@@ -21,6 +21,18 @@ import { createAgentPatchedSessionModelRunGuard } from "./session-model-auto-rev
 
 afterEach(() => vi.restoreAllMocks());
 
+function modelGuardFixture() {
+  const warnings = createWarnLogCapture("model-guard-read");
+  onTestFinished(() => warnings.cleanup());
+  const scope = {
+    agentId: "main",
+    storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+    sessionKey: "agent:main:model-guard",
+  };
+  replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+  return { scope, warnings };
+}
+
 describe("live model switch worker persistence", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-switch-worker-");
   const selection = { provider: "openai", model: "gpt-5.4" };
@@ -201,16 +213,8 @@ describe("live model switch worker persistence", () => {
 });
 
 it("propagates model-guard read cancellation instead of treating it as missing metadata", async () => {
-  const warnings = createWarnLogCapture("model-guard-read-cancel");
-  onTestFinished(() => warnings.cleanup());
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:model-guard-cancel",
-    };
-    replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+    const { scope, warnings } = modelGuardFixture();
     const controller = new AbortController();
     const reason = new Error("model read owner cancelled");
     let cancelledAtAdmission = false;
@@ -232,18 +236,12 @@ it("propagates model-guard read cancellation instead of treating it as missing m
 });
 
 it("warns when model rollback preparation fails, not when its marker is absent", async () => {
-  const warnings = createWarnLogCapture("model-guard-read-failure");
-  onTestFinished(() => warnings.cleanup());
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:model-guard-read-error",
-    };
-    replaceSessionEntrySync(scope, { sessionId: "model-guard-session", updatedAt: 1 });
+    const { scope, warnings } = modelGuardFixture();
+    const prepare = (sessionKey: string) =>
+      createAgentPatchedSessionModelRunGuard({ ...scope, sessionKey, cfg: {} });
     for (const sessionKey of [scope.sessionKey, "agent:main:model-guard-missing"]) {
-      await createAgentPatchedSessionModelRunGuard({ ...scope, sessionKey, cfg: {} });
+      await prepare(sessionKey);
     }
     expect(await warnings.findText("model rollback preparation unavailable")).toBeUndefined();
 
@@ -251,11 +249,7 @@ it("warns when model rollback preparation fails, not when its marker is absent",
     probe.admission(workerAdmission, () => {
       throw failure;
     });
-    const guard = await createAgentPatchedSessionModelRunGuard({
-      ...scope,
-      sessionKey: "agent:main:model-guard-unread",
-      cfg: {},
-    });
+    const guard = await prepare("agent:main:model-guard-unread");
     expect(await warnings.findText("model rollback preparation unavailable")).toContain(
       failure.message,
     );
