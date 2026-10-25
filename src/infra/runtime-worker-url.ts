@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.generated.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
@@ -18,11 +19,8 @@ export function resolveRuntimeWorkerUrl(params: {
     return pathToFileURL(path.join(params.root, "dist", params.distWorkerPath));
   }
   const currentPath = fileURLToPath(params.currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
+  const distRoot = resolveRuntimeProcessDistRoot(currentPath);
+  if (distRoot !== undefined) {
     let workerPath = params.distWorkerPath;
     if (params.package) {
       const packageRoot = path.resolve(distRoot, "..");

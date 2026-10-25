@@ -6,7 +6,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import {
   canAutoFollowChat,

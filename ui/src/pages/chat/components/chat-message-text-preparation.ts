@@ -1,12 +1,9 @@
+import type { toStreamingMarkdownDomParts } from "../../../components/markdown-live.ts";
 import {
   MARKDOWN_PARSE_LIMIT,
   type MarkdownRenderOptions,
 } from "../../../components/markdown-render-options.ts";
-import {
-  partitionMarkdownHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownDomParts,
-} from "../../../components/markdown.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
@@ -39,6 +36,8 @@ export function prepareMessageMarkdown(
   opts: MessageTextOptions,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -51,9 +50,13 @@ export function prepareMessageMarkdown(
     : markdownRenderOptions;
   const streaming = opts.isStreaming;
   const prepare = () => {
-    const parts: [MarkdownContent, MarkdownContent] = streaming
-      ? toStreamingMarkdownDomParts(source, options, isAssistant ? messageKey : undefined)
-      : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    let parts: [MarkdownContent, MarkdownContent] =
+      streaming && renderStreaming
+        ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
+        : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    if (mutableStreaming) {
+      parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
+    }
     if (duplicateSuffix) {
       const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
       const template = document.createElement("template");

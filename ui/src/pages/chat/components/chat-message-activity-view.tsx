@@ -20,11 +20,11 @@ import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { descendantCards } from "./chat-message-activity-operation.tsx";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { ToolOutcomeSummary, ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 

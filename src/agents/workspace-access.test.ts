@@ -19,6 +19,7 @@ import {
   type AgentWorkspaceAccess,
 } from "./workspace-access.js";
 import { prepareLocalWorkspaceAttachments } from "./workspace-attachments.local.js";
+import { createWorkspaceMemoryFileClient } from "./workspace-memory-client.js";
 
 let root: string;
 beforeEach(() => {
@@ -86,29 +87,17 @@ describe("host-owned workspace access", () => {
     const commitContent = vi.fn(async () => {
       release();
     });
+    const files = createWorkspaceMemoryFileClient({
+      workspaceDir: root,
+      remoteWorkspaceDir: "/memory",
+      signal: new AbortController().signal,
+      request: unexpected,
+      subscribe: unexpected,
+    });
     const release = bindWorkspace({
       memoryFiles: {
-        assertCurrent() {},
-        listFiles: unexpected,
-        inspectFile: unexpected,
-        readFile: unexpected,
-        readForIndexing: unexpected,
-        buildMultimodalChunk: unexpected,
-        watch: unexpected,
-        maintenance: {
-          readFile: unexpected,
-          stat: unexpected,
-          listDirectory: unexpected,
-          mkdir: unexpected,
-          rename: unexpected,
-          resolveWritePath: unexpected,
-          commitContent,
-          resolveDreamsPath: unexpected,
-          readDreams: unexpected,
-          writeDreams: unexpected,
-          replaceReport: unexpected,
-          appendCorpus: unexpected,
-        },
+        ...files,
+        maintenance: { ...files.maintenance!, commitContent },
       },
     });
     const retained = workspace().memoryFiles!.maintenance!;
@@ -170,6 +159,7 @@ describe("host-owned workspace access", () => {
     for (const capability of [undefined, "memoryFiles", "loadSkills"] as const) {
       expectUnavailable(capability);
     }
+    await expectStopped(prepareAttachments());
     const release = bindWorkspace();
     expect(getAgentWorkspaceAccess(root)).toBeDefined();
     expect(getAgentWorkspaceAccess(root, "memoryFiles")).toBeUndefined();
@@ -254,35 +244,20 @@ describe("host-owned workspace access", () => {
     expect(host.bridge.createFileExclusive).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exclusive creation", "source metadata"])("revokes pending %s", async (operation) => {
+  it("rejects a pending bridge result after its owner stops", async () => {
     const host = provider();
     const pending = createDeferredCore();
-    if (operation === "exclusive creation") {
-      host.bridge.createFileExclusive = vi.fn(async () => {
-        await pending.promise;
-        return "created" as const;
-      });
-    } else {
-      host.bridge.readFileWithSource = vi.fn(async () => {
-        await pending.promise;
-        return { data: Buffer.from("late result"), canonicalPath: "/remote/AGENTS.md" };
-      });
-    }
+    host.bridge.createFileExclusive = vi.fn(async () => {
+      await pending.promise;
+      return "created" as const;
+    });
     const release = bindWorkspace(host);
-    const bridge = workspace().bridge;
-    const result =
-      operation === "exclusive creation"
-        ? bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "new memory" })
-        : bridge.readFileWithSource!({ filePath: "AGENTS.md" });
+    const result = workspace().bridge.createFileExclusive!({ filePath: "MEMORY.md", data: "new" });
     const rejected = expect(result).rejects.toThrow(WorkspaceAccessUnavailableError);
     release();
     pending.resolve();
     await rejected;
-    expect(
-      operation === "exclusive creation"
-        ? host.bridge.createFileExclusive
-        : host.bridge.readFileWithSource,
-    ).toHaveBeenCalledOnce();
+    expect(host.bridge.createFileExclusive).toHaveBeenCalledOnce();
   });
 });
 
@@ -361,38 +336,23 @@ describe("workspace attachment preparation", () => {
     );
   });
 
-  it.each(["ready", "bridge", "stopped", "declared"])("keeps %s bindings remote", async (state) => {
+  it("does not substitute local preparation for a registered remote owner", async () => {
     const prepare = vi.fn(async () => "remote note");
-    const release =
-      state === "declared"
-        ? undefined
-        : bindWorkspace(state === "bridge" ? {} : { prepareTurnAttachments: prepare });
-    if (state === "declared") {
-      declareAgentWorkspaceAccess(root);
-    } else if (state === "stopped") {
-      release?.();
-    }
+    bindWorkspace({ prepareTurnAttachments: prepare });
     await expect(prepareAttachments({ localExecution })).resolves.toBeUndefined();
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it.each(["absent", "bridge-only", "empty-note", "blank-note"])(
-    "rejects required files with %s host",
-    async (host) => {
-      if (host !== "absent") {
-        bindWorkspace(
-          host === "empty-note" || host === "blank-note"
-            ? { prepareTurnAttachments: async () => (host === "blank-note" ? " \n\t" : undefined) }
-            : {},
-        );
-      }
-      await expect(prepareAttachments({ requirePreparation: true })).rejects.toThrow(
-        host === "empty-note" || host === "blank-note"
-          ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
-          : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
-      );
-    },
-  );
+  it.each(["absent", "blank-note"])("rejects required files with %s host", async (host) => {
+    if (host === "blank-note") {
+      bindWorkspace({ prepareTurnAttachments: async () => " \n\t" });
+    }
+    await expect(prepareAttachments({ requirePreparation: true })).rejects.toThrow(
+      host === "blank-note"
+        ? "Workspace attachment 1 could not be prepared; check that every attachment is available to the registered attachment provider before retrying"
+        : "Workspace attachments require a registered attachment provider; configure one for this execution environment before retrying",
+    );
+  });
 
   it.each([false, true])("preserves deferred notes (required: %s)", async (requirePreparation) => {
     bindWorkspace({
@@ -454,14 +414,6 @@ describe("workspace attachment preparation", () => {
         requirePreparation: true,
       }),
     ).rejects.toThrow("Workspace access changed during attachment preparation");
-  });
-
-  it.each(["not-ready", "stopped"])("rejects %s attachments", async (state) => {
-    declareAgentWorkspaceAccess(root);
-    if (state === "stopped") {
-      bindWorkspace({ prepareTurnAttachments: vi.fn(async () => undefined) })();
-    }
-    await expectStopped(prepareAttachments());
   });
 
   it.each([

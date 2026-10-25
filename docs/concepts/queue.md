@@ -105,6 +105,8 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
+Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
+
 The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
 ## Steer and streaming

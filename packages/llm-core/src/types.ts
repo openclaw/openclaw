@@ -322,6 +322,8 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /** Subset of `cacheWrite` written with 5-minute retention when reported. */
+  cacheWrite5m?: number;
   /**
    * Whether usage is complete for this provider response. Missing terminal usage
    * and provisional stream counters are unavailable, including after interruption.

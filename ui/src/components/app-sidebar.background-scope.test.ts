@@ -1,14 +1,13 @@
-/* @vitest-environment jsdom */
-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+/* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
+import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -28,11 +27,12 @@ import {
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { childToggle, mountRoster } from "./app-sidebar-freshness.test-support.ts";
-import "./app-sidebar.tsx";
 import {
   storeSidebarSessionOwnerFilter,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import "./app-sidebar.tsx";
+import { setSessionsStatusFilter } from "./session-organizer-menu.runtime.ts";
 
 type Query = NonNullable<ReturnType<typeof asOptionalRecord>>;
 const makeRow = (key: string, fields: Partial<GatewaySessionRow>): GatewaySessionRow => ({
@@ -87,7 +87,7 @@ describe("AppSidebar automatic list scope replacement", () => {
       const framesClock = createFrameClock();
       vi.stubGlobal("requestAnimationFrame", framesClock.request);
       vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
-      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+      setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
       await settleLitElement(sidebar);
       expect(sidebar.textContent).not.toContain(archivedRow.displayName);
 
@@ -193,7 +193,7 @@ describe("AppSidebar automatic list scope replacement", () => {
     try {
       sidebar.connected = true;
       await settleLitElement(sidebar);
-      sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+      setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
       await vi.advanceTimersByTimeAsync(0);
       await settleLitElement(sidebar);
       expect(sidebar.textContent).toContain("Main archived 1");

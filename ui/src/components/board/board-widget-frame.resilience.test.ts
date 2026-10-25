@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import {
+  acknowledgeWidgetHostInit,
   grantedFrameWidgetFixture,
   createFrameOwner,
   dispatchFrameMessage,
@@ -106,15 +107,7 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
   const channel = new MessageChannel();
   onTestFinished(() => channel.port2.close());
   const initialized = Promise.withResolvers<void>();
-  channel.port2.addEventListener("message", (event) => {
-    if (event.data.type === "openclaw:widget-host-init") {
-      channel.port2.postMessage({
-        type: "openclaw:widget-host-init-ack",
-        ticket: event.data.ticket,
-      });
-      initialized.resolve();
-    }
-  });
+  acknowledgeWidgetHostInit(channel.port2, initialized);
   channel.port2.start();
   notify({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
   await initialized.promise;

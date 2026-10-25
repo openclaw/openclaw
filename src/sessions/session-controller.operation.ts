@@ -287,9 +287,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   };
 
   const abortInternally = (reason?: unknown) => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
+    controller.abort(reason);
   };
 
   const watchdog = createSessionControllerWatchdog({

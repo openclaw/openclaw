@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -53,14 +54,11 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
   }
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(request);
       requests.push({
         method: request.method ?? "",
         url: request.url ?? "",
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: bodyBuffer.toString("utf8"),
       });
       const reply = replies[requests.length - 1];
       if (!reply) {

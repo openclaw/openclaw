@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
 import {
@@ -276,10 +277,13 @@ describe("cache-TTL tool-result projection", () => {
     const state = newState();
     restore(state, checkpoint({ prunedToolResults: [{ key: "tool:old:42", mode: "soft" }] }));
     // SAFETY: older malformed plugin content is handled by the existing replay guard.
-    const original = { ...tool({ id: "old" }), content: null } as unknown as AgentMessage;
+    const original = freezeJsonSnapshot({
+      ...tool({ id: "old" }),
+      content: null,
+    }) as unknown as AgentMessage;
     truncate([original], 128_000, 5_000, 20_000, state);
     const result = truncate(
-      [{ ...original, content: [] } as AgentMessage],
+      [freezeJsonSnapshot({ ...original, content: [] }) as AgentMessage],
       128_000,
       5_000,
       20_000,
