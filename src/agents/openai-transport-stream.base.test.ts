@@ -1,10 +1,10 @@
 import { getAiTransportHost } from "@openclaw/ai";
 import { createAzureOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { assert, describe, expect, it, vi } from "vitest";
+import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { logResponsesFailedNoDetails } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
   resolveAzureOpenAIApiVersion,
-  type OpenAIResponsesOutput,
   makeResponsesModel,
   createResponsesAssistantOutput,
   createAzureResponsesModel,
@@ -19,12 +19,7 @@ async function streamOutput(
   model: Parameters<typeof testing.processResponsesStream>[3] = createAzureResponsesModel(),
   options?: Parameters<typeof testing.processResponsesStream>[4],
 ) {
-  const output: OpenAIResponsesOutput = {
-    ...createResponsesAssistantOutput(createAzureResponsesModel()),
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-  };
+  const output = createAssistantOutput(model);
   await testing.processResponsesStream(
     streamChunks(chunks),
     output,

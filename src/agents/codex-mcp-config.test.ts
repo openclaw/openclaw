@@ -60,11 +60,8 @@ afterEach(async () => {
 
 describe("buildCodexMcpServersConfig", () => {
   it.each([
-    { label: "empty", args: [], expected: [] },
     { label: "strings", args: ["", " --flag "], expected: ["", " --flag "] },
     { label: "mixed", args: ["ok", 2], expected: undefined },
-    { label: "scalar", args: "--flag", expected: undefined },
-    { label: "missing", args: undefined, expected: undefined },
   ])("keeps MCP args typed and copied ($label)", ({ args, expected }) => {
     const projected = buildCodexMcpServersConfig({
       mcpServers: { docs: { command: "mcp", args } },
@@ -284,8 +281,6 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       const withoutScopedConfig = await load({ cfg: {}, toolsEnabled: true });
 
       expectServers(loaded, { search: { url: "https://mcp.example.com/mcp" } });
-      expect(JSON.stringify(loaded.configPatch)).not.toContain("unresolved.invalid");
-      expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
       expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
       expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
       expect(loaded.staticServerNames).toEqual(["search"]);

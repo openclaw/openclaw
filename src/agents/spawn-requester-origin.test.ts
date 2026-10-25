@@ -39,29 +39,11 @@ function expectOrigin(params: Parameters<typeof resolve>[0], accountId: string) 
 
 describe("resolveRequesterOriginForChild", () => {
   it.each([
-    ["channel:conversation-a", "channel"],
-    ["dm:conversation-a", "direct"],
-    ["thread:conversation-a/thread-a", "channel"],
-  ] as const)(
-    "keeps canonical prefixed peer id %s eligible for exact binding lookup",
-    (to, kind) => {
-      expectOrigin(
-        {
-          cfg: { bindings: [binding("qa-channel", "bot-alpha-qa", peer(to, kind))] },
-          requesterChannel: "qa-channel",
-          requesterTo: to,
-        },
-        "bot-alpha-qa",
-      );
-    },
-  );
-
-  it.each([
     {
-      name: "prefers peer-specific binding over channel-only binding",
+      name: "prefers exact peer binding over wildcard and channel-only bindings",
       requesterTo: "!roomA:example.org",
       expected: "bot-alpha-room-a",
-      bindings: [matrixDefault, matrixRoom],
+      bindings: [matrixDefault, matrixWildcard, matrixRoom],
     },
     {
       name: "falls back to channel-only binding when peer does not match",
@@ -76,12 +58,6 @@ describe("resolveRequesterOriginForChild", () => {
       bindings: [matrixDefault, matrixWildcard],
     },
     {
-      name: "prefers exact peer binding over wildcard peer binding",
-      requesterTo: "!roomA:example.org",
-      expected: "bot-alpha-room-a",
-      bindings: [matrixWildcard, matrixRoom],
-    },
-    {
       name: "uses requester roles for role-scoped target-agent accounts",
       requesterChannel: "discord",
       requesterTo: "channel:ops",
@@ -89,6 +65,9 @@ describe("resolveRequesterOriginForChild", () => {
       requesterMemberRoleIds: ["admin"],
       expected: "bot-alpha-admin",
       bindings: [
+        binding("discord", "bot-alpha-other-guild", peer("channel:ops"), {
+          guildId: "guild-other",
+        }),
         binding("discord", "bot-alpha-default"),
         binding("discord", "bot-alpha-admin", peer("channel:ops"), {
           guildId: "guild-current",
@@ -120,67 +99,31 @@ describe("resolveRequesterOriginForChild", () => {
       bindings: [matrixDefault],
     },
   ])("selects target account: $name", ({ name: _name, bindings, expected, ...request }) => {
-    expect(
-      resolve({
+    expectOrigin(
+      {
         requesterChannel: "matrix",
         ...request,
         cfg: { bindings },
-      })?.accountId,
-    ).toBe(expected);
-  });
-
-  it.each([
-    [
-      "preserves canonical peer ids that start with token-colon after a known wrapper",
-      "conversation:a:1:team-thread",
-      "msteams",
-      "channel",
-      "a:1:team-thread",
-      "bot-alpha-teams",
-    ],
-    [
-      "keeps explicit channel prefixes ahead of ids that start with direct marker characters",
-      "channel:@ops",
-      "qa-channel",
-      "channel",
-      "channel:@ops",
-      "bot-alpha-qa",
-    ],
-    [
-      "still peels channel id plus kind wrappers before peer lookup",
-      "line:group:U123example",
-      "line",
-      "group",
-      "U123example",
-      "bot-alpha-line",
-    ],
-  ] as const)("%s", (_name, to, channel, kind, peerId, accountId) => {
-    expectOrigin(
-      {
-        cfg: { bindings: [binding(channel, accountId, peer(peerId, kind))] },
-        requesterChannel: channel,
-        requesterTo: to,
       },
-      accountId,
+      expected,
     );
   });
 
-  it("uses requester group space before selecting a scoped target-agent account", () => {
-    const to = "channel:ops";
+  it.each([
+    ["channel:conversation-a", "qa-channel", "channel", "channel:conversation-a"],
+    ["dm:conversation-a", "qa-channel", "direct", "dm:conversation-a"],
+    ["thread:conversation-a/thread-a", "qa-channel", "channel", "thread:conversation-a/thread-a"],
+    ["conversation:a:1:team-thread", "msteams", "channel", "a:1:team-thread"],
+    ["channel:@ops", "qa-channel", "channel", "channel:@ops"],
+    ["line:group:U123example", "line", "group", "U123example"],
+  ] as const)("resolves wrapped or canonical %s as %s/%s peer %s", (to, channel, kind, peerId) => {
     expectOrigin(
       {
-        cfg: {
-          bindings: [
-            binding("discord", "bot-alpha-other-guild", peer(to), { guildId: "guild-other" }),
-            binding("discord", "bot-alpha-current-guild", peer(to), { guildId: "guild-current" }),
-          ],
-        },
-        requesterChannel: "discord",
-        requesterAccountId: "main-current-guild",
+        cfg: { bindings: [binding(channel, "bot-alpha", peer(peerId, kind))] },
+        requesterChannel: channel,
         requesterTo: to,
-        requesterGroupSpace: "guild-current",
       },
-      "bot-alpha-current-guild",
+      "bot-alpha",
     );
   });
 });

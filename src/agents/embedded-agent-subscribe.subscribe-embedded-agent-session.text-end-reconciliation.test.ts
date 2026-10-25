@@ -190,6 +190,9 @@ it("does not read future blocks from shared mutable text_end partials", async ()
   }
   h.emit({ type: "message_end", message: partial });
   await h.flush(["First", "Second"], true, 2);
+  const completedContent = partial.content;
+  partial.content = [{ type: "text", text: "Rewritten transcript reply" }];
+  expect(h.subscription.getCurrentAttemptAssistant()?.content).toEqual(completedContent);
 });
 
 it.each([
@@ -289,14 +292,4 @@ it("preserves split reply directives after a delivered chunk through text_end", 
     replyToId: "target",
     replyToTag: true,
   });
-});
-
-it("keeps the completed assistant independent from transcript mutation", () => {
-  const { emit, subscription } = setup({}, false);
-  const message = textAssistant("Current run reply");
-  emit({ type: "message_end", message });
-  message.content = [{ type: "text", text: "Rewritten transcript reply" }];
-  expect(subscription.getCurrentAttemptAssistant()?.content).toEqual([
-    { type: "text", text: "Current run reply" },
-  ]);
 });
