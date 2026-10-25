@@ -24,6 +24,8 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
       dropped[kind]++;
     }
   };
+  const recordFrame = (facts: Record<string, ControlUiE2eFailureFact>) =>
+    retain(frames, { at: Date.now(), ...facts }, "frames");
   const recordGateway = (message: unknown) => {
     if (!isRecord(message)) {
       return;
@@ -120,17 +122,12 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
             Array.isArray(value)
               ? value.map((key) => sessionKeys.indexOf(String(key))).filter((index) => index >= 0)
               : [];
-          retain(
-            frames,
-            {
-              at: Date.now(),
-              direction: "sent",
-              request: requestSequence,
-              foreground: keys(params.sessionKeys),
-              passive: keys(params.passiveSessionKeys),
-            },
-            "frames",
-          );
+          recordFrame({
+            direction: "sent",
+            request: requestSequence,
+            foreground: keys(params.sessionKeys),
+            passive: keys(params.passiveSessionKeys),
+          });
         },
         received(frame: unknown) {
           if (!isRecord(frame)) {
@@ -139,11 +136,7 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
           const request = typeof frame.id === "string" ? pending.get(frame.id) : undefined;
           if (frame.type === "res" && request !== undefined) {
             pending.delete(String(frame.id));
-            retain(
-              frames,
-              { at: Date.now(), direction: "received", request, ok: frame.ok === true },
-              "frames",
-            );
+            recordFrame({ direction: "received", request, ok: frame.ok === true });
           }
           if (
             frame.event !== "controlUi.sessionPullRequests.changed" ||
@@ -153,16 +146,11 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
             return;
           }
           const sessions = frame.payload.sessions;
-          retain(
-            frames,
-            {
-              at: Date.now(),
-              direction: "received",
-              event: frame.event,
-              sessions: sessionKeys.map((key) => summarize(sessions[key])),
-            },
-            "frames",
-          );
+          recordFrame({
+            direction: "received",
+            event: frame.event,
+            sessions: sessionKeys.map((key) => summarize(sessions[key])),
+          });
         },
         close: () => pending.clear(),
       };
