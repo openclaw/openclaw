@@ -2295,6 +2295,7 @@ src/config/sessions/session-transcript-worker-read-admission.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
+src/config/sessions/transcript-write-context-store.ts
 src/config/sessions/transcript-write-context.ts
 src/sessions/session-lifecycle-events.ts
 src/sessions/session-row-facts.ts

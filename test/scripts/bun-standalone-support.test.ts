@@ -82,11 +82,11 @@ fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs
   return { root, outputRoot, compileRoot, runtimeRoot, mainEntry, source, compiler };
 }
 
-async function compile(
+function compileOptions(
   input: ReturnType<typeof fixture>,
   overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
-) {
-  const artifacts = await compileStandaloneArtifacts({
+): Parameters<typeof compileStandaloneArtifacts>[0] {
+  return {
     runtimeRoot: input.runtimeRoot,
     outputRoot: input.outputRoot,
     destination: path.join(input.root, "aot"),
@@ -116,7 +116,14 @@ async function compile(
       directories: ["lib"],
     },
     ...overrides,
-  });
+  };
+}
+
+async function compile(
+  input: ReturnType<typeof fixture>,
+  overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
+) {
+  const artifacts = await compileStandaloneArtifacts(compileOptions(input, overrides));
   const [standard, support] = artifacts;
   if (!standard || !support || artifacts.length !== 2) {
     throw new Error("Expected the standard and support fixture artifacts");
@@ -162,6 +169,29 @@ console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, source
     ]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "runs original-source AOT through the shared build owner",
+    async () => {
+      const input = fixture();
+      const seen: object[] = [];
+      const artifacts = await compileStandaloneArtifacts(
+        compileOptions(input, {
+          supportDestination: undefined,
+          async compileAot({ outfile, buildInfo }) {
+            seen.push(buildInfo);
+            fs.writeFileSync(outfile, JSON.stringify(buildInfo));
+          },
+        }),
+      );
+      expect(seen).toHaveLength(1);
+      expect(artifacts.map(({ mode }) => mode)).toEqual(["aot"]);
+      const aot = JSON.parse(fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"));
+      expect(aot.mode).toBe("aot");
+      expect(aot.build.id).toMatch(/^[0-9a-f]{64}$/);
+      expect(aot.build.moduleGraphSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+    },
+  );
   it.skipIf(process.platform === "win32")(
     "publishes matching provenance, resources and debugger sources with distinct compilation modes",
     async () => {

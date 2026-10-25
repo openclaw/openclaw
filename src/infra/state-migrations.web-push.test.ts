@@ -145,9 +145,14 @@ describe("legacy Web Push Doctor migration", () => {
     }
   }
 
-  it.each(["subscriptions", "vapid"] as const)(
-    "retains malformed UTF-8 in %s without importing replacement characters",
-    async (source) => {
+  it.each([
+    { source: "subscriptions", claimed: false },
+    { source: "subscriptions", claimed: true },
+    { source: "vapid", claimed: false },
+    { source: "vapid", claimed: true },
+  ] as const)(
+    "retains malformed UTF-8 in $source without importing replacement characters (claim: $claimed)",
+    async ({ source, claimed }) => {
       const paths = await writeLegacyState({
         subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
         vapid: vapidKeys({ publicKey: "utf8-marker" }),
@@ -156,12 +161,20 @@ describe("legacy Web Push Doctor migration", () => {
       const bytes = await fsp.readFile(sourcePath);
       bytes[bytes.indexOf("utf8-marker")] = 0xff;
       await fsp.writeFile(sourcePath, bytes);
+      const activePath = sourcePath + (claimed ? ".doctor-importing" : "");
+      if (claimed) {
+        await fsp.rename(sourcePath, activePath);
+      }
       const result = await migrate();
       expect(result.changes).toEqual([]);
       expect(result.warningDisposition).toBe("recoverable");
       expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
-      expect(await fsp.readFile(sourcePath)).toEqual(bytes);
-      expectFiles(true, paths.subscriptionsPath, paths.vapidKeysPath);
+      expect(await fsp.readFile(activePath)).toEqual(bytes);
+      expectFiles(
+        true,
+        activePath,
+        source === "subscriptions" ? paths.vapidKeysPath : paths.subscriptionsPath,
+      );
       expect(await listWebPushSubscriptions()).toEqual([]);
       expect(await readPersistedVapidKeyPair()).toBeNull();
     },

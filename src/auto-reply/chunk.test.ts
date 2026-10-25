@@ -145,6 +145,12 @@ describe("resolveTextChunkLimit", () => {
 });
 
 describe("chunkMarkdownText", () => {
+  it("keeps prose after inline triple-backtick code outside fences", () => {
+    expect(
+      chunkMarkdownText("```literal```\nParagraph outside code with ordinary words.", 32),
+    ).toEqual(["```literal```", "Paragraph outside code with", "ordinary words."]);
+  });
+
   it.each(["length", "newline"] as const)("preserves fenced whitespace in %s mode", (mode) => {
     for (const { body, limit, syntheticNewline } of [
       ...["    ", "\t", " \t "].map((indent) => ({
