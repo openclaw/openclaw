@@ -84,6 +84,44 @@ describe("streamed oversized Markdown tables", () => {
     expect(next.metadata[0]?.sourceStart).toBe(0);
   });
 
+  it.each([1, 17, 4096])(
+    "preserves links and source custody in table continuations (%i)",
+    (delta) => {
+      const links = Array.from(
+        { length: 12 },
+        (_, i) => `[R${i}](https://example.com/${i}/${"a".repeat(60)})`,
+      );
+      const linkedTable = [
+        "| Item | Link |",
+        "| --- | --- |",
+        ...links.map((link, i) => `| ${i} | ${link} |`),
+      ].join("\n");
+      const chunker = new EmbeddedBlockChunker({ minChars: 80, maxChars: 240, hardMaxChars: 400 });
+      const output = capture(chunker);
+      for (let offset = 0; offset < linkedTable.length; offset += delta) {
+        chunker.append(linkedTable.slice(offset, offset + delta));
+        output.drain();
+      }
+      output.drain(true);
+
+      expect(output.chunks.length).toBeGreaterThan(1);
+      for (const link of links) {
+        expect(output.chunks.filter((chunk) => chunk.includes(link))).toHaveLength(1);
+      }
+      expect(output.chunks.every((chunk) => chunk.length <= 240)).toBe(true);
+      expect(
+        output.chunks.map((chunk) => convertMarkdownTables(chunk, "bullets")).join("\n"),
+      ).not.toMatch(/^\| \d+/m);
+      expect(output.metadata.map((entry) => entry.sourceText).join("")).toBe(linkedTable);
+      expect(output.metadata.map((entry) => entry.sourceStart)).toEqual([
+        0,
+        ...output.metadata.slice(0, -1).map((entry) => entry.sourceEnd),
+      ]);
+      expect(chunker.consumedLength).toBe(linkedTable.length);
+      expect(chunker.hasBuffered()).toBe(false);
+    },
+  );
+
   it("uses a corrected cumulative snapshot without replaying delivered table rows", () => {
     const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
     const output = capture(chunker);

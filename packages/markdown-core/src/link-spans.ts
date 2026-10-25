@@ -7,9 +7,14 @@ type PositionedMarkdownNode = {
 };
 
 /** Returns parser-owned source spans for inline links, autolinks, and images. */
-export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, number]> {
+export function findMarkdownLinkSourceSpans(
+  markdown: string,
+  options: { html?: boolean } = {},
+): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
-  const tree: PositionedMarkdownNode = fromMarkdown(markdown);
+  const tree: PositionedMarkdownNode = fromMarkdown(markdown, {
+    extensions: options.html === false ? [{ disable: { null: ["htmlFlow", "htmlText"] } }] : [],
+  });
   const pending = [tree];
 
   while (pending.length > 0) {
