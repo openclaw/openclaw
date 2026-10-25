@@ -165,24 +165,22 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     const deadline = performance.now() + 120_000;
     this.port.postMessage({ ...request, id }, []);
     recordWorkerMessage("sqlite_request", "to_worker");
-    // A notify for an earlier request can arrive after this request starts.
-    while (Atomics.load(this.control, 0) !== id) {
-      const observed = Atomics.load(this.service, 0);
+    // Reply notifications belong to this connection; peer death is checked between slices.
+    for (
+      let observed = Atomics.load(this.control, 0);
+      observed !== id;
+      observed = Atomics.load(this.control, 0)
+    ) {
       if (Atomics.load(this.service, 1)) {
         throw this.loseConnection();
-      }
-      if (Atomics.load(this.control, 0) === id) {
-        break;
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) {
         Atomics.store(this.service, 1, 1);
-        Atomics.add(this.service, 0, 1);
-        Atomics.notify(this.service, 0);
         Atomics.notify(this.service, 1);
         throw this.loseConnection();
       }
-      Atomics.wait(this.service, 0, observed, remaining);
+      Atomics.wait(this.control, 0, observed, Math.min(remaining, 50));
     }
     const reply: BridgeReply | undefined = receiveMessageOnPort(this.port)?.message;
     if (reply) {

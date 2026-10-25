@@ -105,7 +105,7 @@ function startPool(): PostgresPoolEndpoints {
     signal: new SharedArrayBuffer(8),
     peers: [],
   }));
-  // A surviving service wakes waiters on abrupt peer death even when MAIN cannot run events.
+  // A surviving service publishes peer death even when MAIN cannot run events.
   for (let i = 0; i < services.length; i++) {
     for (let j = i + 1; j < services.length; j++) {
       const { port1, port2 } = new MessageChannel();
@@ -119,6 +119,7 @@ function startPool(): PostgresPoolEndpoints {
     nextStep: state.nextStep,
   };
   const url = resolveRuntimeProcessEntrypointUrl("postgresBridge");
+  const execArgv = resolveRuntimeWorkerThreadExecArgv(url);
   const workers: Worker[] = [];
   state.endpoints = endpoints;
   state.workers = workers;
@@ -133,7 +134,7 @@ function startPool(): PostgresPoolEndpoints {
         peers: service.peers,
       } satisfies PostgresPoolWorkerData,
       transferList: [service.channel.port2, ...service.peers.map(({ port }) => port)],
-      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+      execArgv,
     });
     trackNativeWorkerForCpu(worker, url);
     worker.unref();
@@ -156,8 +157,6 @@ function startPool(): PostgresPoolEndpoints {
     worker.once("exit", () => {
       exited = true;
       Atomics.store(signal, 1, 1);
-      Atomics.add(signal, 0, 1);
-      Atomics.notify(signal, 0);
       Atomics.notify(signal, 1);
       failedServices.add(index);
     });

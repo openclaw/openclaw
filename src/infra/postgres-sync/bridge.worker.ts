@@ -13,14 +13,11 @@ import type {
   PostgresErrorData,
 } from "./protocol.js";
 
-const { host: serviceHost, signal: serviceSignal, peers }: PostgresPoolWorkerData = workerData;
-const service = new Int32Array(serviceSignal);
+const { host: serviceHost, peers }: PostgresPoolWorkerData = workerData;
 function watchPeer({ port, signal }: PostgresPoolEndpoint) {
   port.on("close", () => {
     const peer = new Int32Array(signal);
     Atomics.store(peer, 1, 1);
-    Atomics.add(peer, 0, 1);
-    Atomics.notify(peer, 0);
     Atomics.notify(peer, 1);
   });
 }
@@ -59,8 +56,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
   function send(reply: BridgeReply) {
     port.postMessage(reply);
     Atomics.store(control, 0, reply.id);
-    Atomics.add(service, 0, 1);
-    Atomics.notify(service, 0);
+    Atomics.notify(control, 0);
   }
 
   async function handleRequest(request: BridgeRequest) {

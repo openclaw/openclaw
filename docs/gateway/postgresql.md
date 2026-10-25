@@ -143,8 +143,11 @@ close their cached connections after three minutes idle or on shutdown. Taking a
 connection from the cache cancels its idle timeout; checked-out connections are
 not expired by this cache.
 
-Gateway workers share four PostgreSQL I/O services per process. This changes
-where connections run, not their exclusive ownership or idle retention. An
+Gateway workers share four PostgreSQL I/O services per process. The Gateway
+starts them when it selects PostgreSQL, overlapping their initialization with
+config and plugin preparation. Replies wake only their own connection; blocked
+callers check for service failure at intervals of at most 50 milliseconds.
+This changes where connections run, not their exclusive ownership or idle retention. An
 externally constructed SDK or plugin worker without inherited pool endpoints
 starts its own four services on first PostgreSQL use. It emits a once-per-thread
 warning and `openclaw.postgres.pool.self-root` diagnostic with the worker label
