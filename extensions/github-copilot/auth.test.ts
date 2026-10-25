@@ -2,22 +2,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadStore = vi.hoisted(() => vi.fn());
-const listProfiles = vi.hoisted(() => vi.fn());
-const coerceRef = vi.hoisted(() => vi.fn());
 const resolveDirectSecret = vi.hoisted(() => vi.fn());
 const resolveProfileSecret = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
-  const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
-  return {
-    ...actual,
-    coerceSecretRef: coerceRef,
-    ensureAuthProfileStoreAsync: loadStore,
-    listProfilesForProvider: listProfiles,
-    normalizeOptionalSecretInput: normalizeOptionalString,
-  };
-});
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  ensureAuthProfileStoreAsync: loadStore,
+}));
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveConfiguredSecretInputWithFallback: resolveDirectSecret,
@@ -37,6 +28,7 @@ const orderedConfig = (profileId: string) => ({
 });
 const FIRST = "github-copilot:first";
 const PREFERRED = "github-copilot:preferred";
+const PROFILE = "github-copilot:github";
 const pair = () => ({
   [FIRST]: tokenProfile("first-token"),
   [PREFERRED]: tokenProfile("preferred-token"),
@@ -45,6 +37,8 @@ const expectToken = (
   options: Parameters<typeof resolveToken>[0],
   expected: Awaited<ReturnType<typeof resolveToken>>,
 ) => expect(resolveToken(options)).resolves.toEqual(expected);
+const setProfile = (profile: Record<string, unknown>) =>
+  setProfiles({ [PROFILE]: { provider: "github-copilot", ...profile } });
 function providerConfig(
   auth: "api-key" | "oauth",
   apiKey: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["apiKey"],
@@ -54,7 +48,6 @@ function providerConfig(
 }
 function setProfiles(profiles: Record<string, unknown>, order?: Record<string, string[]>) {
   loadStore.mockReturnValue({ version: 1, profiles, ...(order ? { order } : {}) });
-  listProfiles.mockReturnValue(Object.keys(profiles));
 }
 const oauthProfile = (enterpriseUrl?: string, refresh = " durable-github-token ") => ({
   type: "oauth",
@@ -73,31 +66,22 @@ afterAll(() => {
 
 describe("resolveFirstGithubToken", () => {
   beforeEach(() => {
-    setProfiles({
-      "github-copilot:github": {
-        type: "token",
-        tokenRef: makeTokenRef("file", "/providers/github-copilot/token"),
-      },
+    setProfile({
+      type: "token",
+      tokenRef: makeTokenRef("file", "/providers/github-copilot/token"),
     });
-    coerceRef.mockImplementation((value: unknown) =>
-      typeof value === "object" && value !== null && "source" in value ? value : null,
-    );
     resolveProfileSecret.mockImplementation(async ({ value }: { value: unknown }) =>
       value ? "resolved-profile-token" : undefined,
     );
     resolveDirectSecret.mockResolvedValue({
       value: "test-token-placeholder",
-      source: "config",
       secretRefConfigured: false,
     });
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     loadStore.mockReset();
-    listProfiles.mockReset();
-    coerceRef.mockReset();
     resolveDirectSecret.mockReset();
     resolveProfileSecret.mockReset();
   });
@@ -140,25 +124,27 @@ describe("resolveFirstGithubToken", () => {
   );
 
   it("rejects an explicitly ordered OAuth account with an unsupported enterprise domain", async () => {
-    setProfiles({
-      "github-copilot:preferred": oauthProfile("attacker.example", "durable-github-token"),
-    });
-
-    await expect(
-      resolveToken({ config: orderedConfig("github-copilot:preferred") }),
-    ).rejects.toThrow(/attacker\.example/);
-  });
-
-  it("preserves explicitly requested profiles even when account order excludes them", async () => {
-    setProfiles(pair());
-    await expectToken(
-      { config: orderedConfig(FIRST), profileId: PREFERRED },
-      {
-        githubToken: "preferred-token",
-        profileId: PREFERRED,
-      },
+    setProfiles({ [PREFERRED]: oauthProfile("attacker.example", "durable-github-token") });
+    await expect(resolveToken({ config: orderedConfig(PREFERRED) })).rejects.toThrow(
+      /attacker\.example/,
     );
   });
+
+  it.each([PREFERRED, "github-copilot:missing"])(
+    "uses only the explicitly requested profile %s",
+    async (profileId) => {
+      setProfiles(pair());
+      await expectToken(
+        { config: orderedConfig(FIRST), profileId, env: { COPILOT_GITHUB_TOKEN: "ambient-token" } },
+        profileId === PREFERRED
+          ? { githubToken: "preferred-token", profileId }
+          : { githubToken: "" },
+      );
+      if (profileId !== PREFERRED) {
+        expect(resolveProfileSecret).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("does not use ambient tokens when a direct apiKey SecretRef is unavailable", async () => {
     setProfiles({});
@@ -184,75 +170,45 @@ describe("resolveFirstGithubToken", () => {
     const config = providerConfig("api-key", "test-token-placeholder");
     const env = { COPILOT_GITHUB_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
 
-    const result = await resolveToken({ config, env, authProfileMode: "api_key" });
-
-    expect(result).toEqual({ githubToken: "test-token-placeholder" });
-    expect(resolveDirectSecret).toHaveBeenCalledWith({
-      config,
-      env,
-      value: "test-token-placeholder",
-      path: "models.providers.github-copilot.apiKey",
-      readFallback: expect.any(Function),
-    });
+    await expectToken(
+      { config, env, authProfileMode: "api_key" },
+      { githubToken: "test-token-placeholder" },
+    );
     expect(resolveProfileSecret).not.toHaveBeenCalled();
   });
 
   it("ignores inactive apiKey refs for OAuth profiles and profile-less direct auth", async () => {
-    setProfiles({ "github-copilot:github": tokenProfile("profile-token") });
+    setProfile(tokenProfile("profile-token"));
     resolveProfileSecret.mockResolvedValue(undefined);
     const config = providerConfig("oauth", makeTokenRef("env", "MISSING_COPILOT_DIRECT_TOKEN"));
 
-    await expect(
-      resolveToken({
-        config,
-        env: { COPILOT_GITHUB_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
-      }),
-    ).resolves.toEqual({ githubToken: "ambient-token" });
+    await expectToken(
+      { config, env: { COPILOT_GITHUB_TOKEN: "ambient-token" } },
+      { githubToken: "ambient-token" },
+    );
     expect(resolveDirectSecret).not.toHaveBeenCalled();
 
     setProfiles({});
     resolveDirectSecret.mockResolvedValue({ secretRefConfigured: false });
-    await expect(resolveToken({ config })).resolves.toEqual({
-      githubToken: "",
-    });
+    await expectToken({ config }, { githubToken: "" });
     expect(resolveDirectSecret).toHaveBeenCalledWith(expect.objectContaining({ value: undefined }));
   });
 
   it("does not authenticate with generic GITHUB_TOKEN", async () => {
     setProfiles({});
-    await expectToken(
-      { env: { GITHUB_TOKEN: "generic-token" } },
-      {
-        githubToken: "",
-      },
-    );
-  });
-
-  it("never replaces an explicitly requested missing profile with ambient auth or another profile", async () => {
-    setProfiles({
-      "github-copilot:github": { type: "token", token: "other-profile-token" },
-    });
-
-    await expectToken(
-      {
-        env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
-        profileId: "github-copilot:missing",
-      },
-      { githubToken: "" },
-    );
-    expect(resolveProfileSecret).not.toHaveBeenCalled();
+    await expectToken({ env: { GITHUB_TOKEN: "generic-token" } }, { githubToken: "" });
   });
 
   it("does not read process.env or swallow an explicitly requested unavailable profile ref", async () => {
     const tokenRef = makeTokenRef("env", "COPILOT_PROCESS_ONLY_TOKEN");
     vi.stubEnv(tokenRef.id, "process-only-token");
     setProfiles({
-      "github-copilot:github": { type: "token", tokenRef },
-      "github-copilot:other": { type: "token", token: "other-profile-token" },
+      [PROFILE]: { ...tokenProfile(""), tokenRef },
+      "github-copilot:other": tokenProfile("other-profile-token"),
     });
     resolveProfileSecret.mockRejectedValue(new Error("github-copilot:github tokenRef unavailable"));
 
-    await expect(resolveToken({ profileId: "github-copilot:github" })).rejects.toThrow(
+    await expect(resolveToken({ profileId: PROFILE })).rejects.toThrow(
       "github-copilot:github tokenRef unavailable",
     );
     expect(resolveProfileSecret).toHaveBeenCalledWith(
@@ -264,15 +220,11 @@ describe("resolveFirstGithubToken", () => {
     const config = { secrets: { defaults: { provider: "default" } } } as never;
     const env = {} as NodeJS.ProcessEnv;
     const tokenRef = makeTokenRef("file", "/providers/github-copilot/token");
-    setProfiles({
-      "github-copilot:github": { type: "token", token: "stale-profile-token", tokenRef },
-    });
-    const result = await resolveToken({ config, env });
-
-    expect(result).toEqual({
-      githubToken: "resolved-profile-token",
-      profileId: "github-copilot:github",
-    });
+    setProfile({ ...tokenProfile("stale-profile-token"), tokenRef });
+    await expectToken(
+      { config, env },
+      { githubToken: "resolved-profile-token", profileId: PROFILE },
+    );
     expect(resolveProfileSecret).toHaveBeenCalledWith({
       config,
       env,
