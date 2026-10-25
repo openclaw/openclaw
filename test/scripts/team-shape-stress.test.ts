@@ -93,6 +93,31 @@ it.each(["one client", "all clients"])(
   },
 );
 
+it.each([false, true])(
+  "keeps an acknowledged injection pending until every client receives it (duplicate: %s)",
+  (duplicate) => {
+    const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
+    receipts.expectInjection("churn", "committed");
+    const pending = ['["churn","committed"]'];
+    // No recent subscriber event is needed for a successful RPC to leave publication pending.
+    expect(receipts.pendingInjections()).toEqual(pending);
+    const payload = { sessionKey: "churn", messageId: "committed" };
+    receipts.observe(0, "session.message", payload);
+    if (duplicate) {
+      receipts.observe(0, "session.message", payload);
+    }
+    expect(receipts.pendingInjections()).toEqual(pending);
+    receipts.observe(1, "session.message", payload);
+    expect(receipts.pendingInjections()).toEqual([]);
+    if (duplicate) {
+      expect(() => receipts.assertComplete()).toThrow("incomplete chat.inject fanout");
+    } else {
+      expect(() => receipts.assertComplete()).not.toThrow();
+      expect(receipts.pendingInjections()).toEqual([]);
+    }
+  },
+);
+
 it.each(["session.message", "sessions.changed"])(
   "rejects different foreground %s deliveries even when aggregate counts match",
   (event) => {

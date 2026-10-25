@@ -4317,14 +4317,16 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+      (!requireSubscriberQuiet ||
+        (performance.now() - lastSubscriberEventAt >= 1000 &&
+          !teamStressFanout?.pendingInjections().length))
     ) {
       return;
     }
     await delay(50);
   }
   throw new Error(
-    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}, pendingInjectionReceipts=${JSON.stringify(teamStressFanout?.pendingInjections() ?? [])}`,
   );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {

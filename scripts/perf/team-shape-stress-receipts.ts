@@ -71,6 +71,12 @@ export function createTeamStressFanoutReceipts(clientCount: number, injectionKey
       // Publication can arrive before chat.inject returns its committed message ID.
       expectedInjections.add(messageKey(sessionKey, messageId));
     },
+    pendingInjections() {
+      return [...expectedInjections].filter((identity) => {
+        const counts = injected.get(identity);
+        return !counts || counts.some((count) => count === 0);
+      });
+    },
     assertComplete() {
       for (const key of requiredEventKeys) {
         for (const event of ["session.message", "sessions.changed"]) {

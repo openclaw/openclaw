@@ -53,7 +53,9 @@ After each workload, subscriber events drain before continuous receipts check
 delivery across all clients. Primary turns require both message and session-change
 events; native subagent parents and children retain per-event delivery parity,
 including child events published before the spawn response. Committed injections
-must arrive exactly once on every client. Timed counts of unrelated background
+must arrive exactly once on every client. The existing bounded drain also waits
+for these receipts: an acknowledged write can still have publication queued.
+Timed counts of unrelated background
 events are diagnostic: a broadcast can cross the timing boundary between socket
 callbacks. Connection and sequence-gap checks remain active throughout.
 
