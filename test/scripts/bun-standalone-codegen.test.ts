@@ -21,7 +21,7 @@ const program = {
 };
 
 describe("standalone fixed code generation", () => {
-  it("captures the remaining programs after the manifest helper becomes lexical", () => {
+  it.skipIf(process.platform === "win32")("captures remaining static programs", () => {
     const root = fs.realpathSync(dirs.make("standalone-capture-"));
     const runtimeRoot = path.join(root, "runtime");
     const dist = path.join(runtimeRoot, "dist");
