@@ -748,6 +748,24 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: refreshSessions,
   },
   {
+    id: "chat-typing",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "Typing preserves the composer draft without sending a chat request.",
+    prepare: prepareChat,
+    run: async (page, gateway) => {
+      const input = page.locator(`${activePane} .agent-chat__composer-combobox textarea`);
+      const sends = (await gateway.getRequests("chat.send")).length;
+      await input.pressSequentially("Synthetic typing 0123456789");
+      await frames(page);
+      if ((await input.inputValue()) !== "Synthetic typing 0123456789") {
+        throw new Error("Typing lost the composer draft");
+      }
+      if ((await gateway.getRequests("chat.send")).length !== sends) {
+        throw new Error("Typing must not send a chat request");
+      }
+    },
+  },
+  {
     id: "session-switch",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Both retained 400-message transcripts become visible in turn.",
