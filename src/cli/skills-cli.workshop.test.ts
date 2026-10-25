@@ -68,7 +68,9 @@ const change = {
   createdAtMs: Date.now() - 5 * 60_000,
 };
 const context = { config: mocks.config, agentId: "writer", actor: "user" };
-const version = { agentId: "main", name: "release-notes", versionId: "v1" };
+const namedSkill = { agentId: "main", name: "release-notes" };
+const version = { ...namedSkill, versionId: "v1" };
+const archivedVersion = (id: string, action: string) => ({ id, action, createdAtMs: 1 });
 const gatewayClosed = () =>
   new GatewayTransportError({
     kind: "closed",
@@ -103,21 +105,13 @@ describe("skills workshop cli", () => {
     [
       "show release-notes --file references/a.md",
       "read",
-      {
-        agentId: "main",
-        name: "release-notes",
-        filePath: "references/a.md",
-      },
+      { ...namedSkill, filePath: "references/a.md" },
     ],
     ["show release-notes --version v1", "read", version],
     [
       "archive release-notes --reason superseded",
       "archive",
-      {
-        agentId: "main",
-        name: "release-notes",
-        reason: "superseded",
-      },
+      { ...namedSkill, reason: "superseded" },
     ],
     ["restore release-notes --version v1", "restore", version],
   ] as const)("routes %s to %s", async (argv, method, params) => {
@@ -158,16 +152,8 @@ describe("skills workshop cli", () => {
         },
       ],
       archived: [
-        {
-          name: "old-deploy",
-          live: false,
-          versions: [{ id: "v2", action: "archive", createdAtMs: 1 }],
-        },
-        {
-          name: "release-notes",
-          live: true,
-          versions: [{ id: "v1", action: "patch", createdAtMs: 1 }],
-        },
+        { name: "old-deploy", live: false, versions: [archivedVersion("v2", "archive")] },
+        { name: "release-notes", live: true, versions: [archivedVersion("v1", "patch")] },
       ],
     });
     await runCli("skills workshop list");

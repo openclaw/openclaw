@@ -33,12 +33,10 @@ export async function startGateway(
   connect?: (frame: Request) => Hello,
   host = "127.0.0.1",
 ) {
-  let connectionCount = 0;
   const calls: string[] = [];
   const wss = new WebSocketServer({ host, port: 0 });
   activeServers.add(wss);
   wss.on("connection", (ws) => {
-    connectionCount += 1;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
@@ -70,9 +68,6 @@ export async function startGateway(
     calls,
     url: "ws://" + host + ":" + port,
     port,
-    get connectionCount() {
-      return connectionCount;
-    },
     close: async () => {
       await closeMinimalGatewayServer(wss);
       activeServers.delete(wss);

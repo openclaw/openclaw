@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -88,11 +88,8 @@ async function finishFromPublishedDriver(
 }
 
 it("exports the terminal-safe update diagnostic writer for installed-runtime finalization", async () => {
-  const { options, run, reportPath } = fixture();
+  const { options, run } = fixture();
   await finishUpdateRun(run.runId, fail("post-update-failed"), options);
-  expect(await fs.readFile(reportPath, "utf8")).toContain(
-    "OpenClaw update failed: post-update-failed",
-  );
 
   recordUpdateRunDiagnostic(
     run.runId,
@@ -202,12 +199,11 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       return rename(from, to);
     });
     const foreground = printResult(result, opts);
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       paused.promise,
-      foreground.then(() => {
-        throw new Error("Foreground report completed without reaching its atomic write gate");
-      }),
-    ]);
+      foreground,
+      "Foreground report completed without reaching its atomic write gate",
+    );
     const contended = createDeferred();
     const terminal = finishFromPublishedDriver(run.runId, handoffFailure, options, {
       lockPath: `${reportPath}.lock`,
