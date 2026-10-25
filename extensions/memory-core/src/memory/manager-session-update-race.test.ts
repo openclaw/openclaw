@@ -698,6 +698,7 @@ describe("memory session update sync", () => {
       // Forget can leave chunks without a source row; published cleanup still owns them.
       writer.prepare("DELETE FROM memory_index_sources WHERE path = ?").run(sessionPath);
       const orphaned = readPublishedSessionIndex(db, sessionPath, "violet");
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
       const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
       const inventory = vi
         .spyOn(MemoryIndexDatabase.prototype, "readSourceState")
