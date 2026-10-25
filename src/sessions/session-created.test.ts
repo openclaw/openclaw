@@ -154,12 +154,10 @@ it.each(["per-sender", "global"] as const)(
         cfg,
       );
     await Promise.all(Array.from({ length: 25 }, (_, index) => createIndexed(index)));
-    expect(() =>
-      enqueueSystemEventWithReceipt("Reminder PING", {
-        sessionKey: queueKey,
-        contextKey: "cron:ping",
-      }),
-    ).not.toThrow();
+    enqueueSystemEventWithReceipt("Reminder PING", {
+      sessionKey: queueKey,
+      contextKey: "cron:ping",
+    });
     const pending = peekSystemEventEntries(queueKey);
     expect(pending).toHaveLength(2);
     for (let index = 0; index < 25; index++) {
