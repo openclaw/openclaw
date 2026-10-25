@@ -17,21 +17,13 @@ const mocks = vi.hoisted(() => ({ convergence: vi.fn() }));
 vi.mock("../../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence: mocks.convergence,
 }));
+import { postCoreConvergenceResult } from "./update-cli-config.test-support.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 function convergenceResult(config: OpenClawConfig) {
-  return {
-    config,
-    configChanges: [],
-    installedPluginIdRecovery: new Map(),
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: {},
-  };
+  return { ...postCoreConvergenceResult(), config };
 }
 
 async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
