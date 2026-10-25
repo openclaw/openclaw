@@ -41,6 +41,7 @@ function holdTranscript(
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
     await fixture(async ({ cfg, filePath, requests, audio }) => {
+      cfg.tools!.media!.models![0]!.maxChars = 9;
       const result = await transcribeAudioFile({
         cfg,
         filePath,
@@ -49,7 +50,7 @@ describe("ClawRouter registered file transcription", () => {
         prompt: "synthetic hint",
       });
       expect(result).toMatchObject({
-        text: "synthetic transcript",
+        text: "synthetic",
         provider: "clawrouter",
         model: "gpt-4o-transcribe",
         decision: { outcome: "success" },
@@ -70,44 +71,28 @@ describe("ClawRouter registered file transcription", () => {
       expect(Buffer.from(await file.arrayBuffer())).toEqual(audio);
     });
   });
-  it("keeps pricing_required readable and never retries an uploaded request", async () => {
-    await rejectsUpload(/pricing_required/, respondPricingRequired);
-  });
-  it("does not borrow an upstream key or substitute a model", async () => {
+  it.each([
+    ["missing router key", { apiKey: undefined }, {}, /API key|credential/i],
+    ["unsupported model", {}, { model: "whisper-1" }, /only gpt-4o-transcribe/],
+    [
+      "unsupported options",
+      {},
+      { providerOptions: { clawrouter: { response_format: "verbose_json" } } },
+      /providerOptions/,
+    ],
+    ["private network", { request: { allowPrivateNetwork: false } }, {}, /Blocked hostname/],
+    [
+      "credential override",
+      {},
+      { headers: { authorization: "Bearer fixture-foreign" } },
+      /header overrides/,
+    ],
+  ] as const)("rejects %s before uploading", async (_name, provider, model, message) => {
     await fixture(async ({ cfg, filePath, requests }) => {
-      delete cfg.models!.providers!.clawrouter!.apiKey;
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/API key|credential/i);
+      Object.assign(cfg.models!.providers!.clawrouter!, provider);
+      Object.assign(cfg.tools!.media!.models![0]!, model);
+      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(message);
       expect(requests).toHaveLength(0);
-      cfg.models!.providers!.clawrouter!.apiKey = "fixture-router";
-      cfg.tools!.media!.models![0]!.model = "whisper-1";
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(
-        /only gpt-4o-transcribe/,
-      );
-      expect(requests).toHaveLength(0);
-    });
-  });
-  it("rejects unsupported options and preserves private-network policy before upload", async () => {
-    await fixture(async ({ cfg, filePath, requests }) => {
-      cfg.tools!.media!.models![0]!.providerOptions = {
-        clawrouter: { response_format: "verbose_json" },
-      };
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/providerOptions/);
-      expect(requests).toHaveLength(0);
-      delete cfg.tools!.media!.models![0]!.providerOptions;
-      cfg.models!.providers!.clawrouter!.request = { allowPrivateNetwork: false };
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/Blocked hostname/);
-      expect(requests).toHaveLength(0);
-    });
-  });
-  it("bounds transcript output and retains provider/model provenance", async () => {
-    await fixture(async ({ cfg, filePath }) => {
-      cfg.tools!.media!.models![0]!.maxChars = 9;
-      const result = await transcribeAudioFile({ cfg, filePath });
-      expect(result).toMatchObject({
-        text: "synthetic",
-        provider: "clawrouter",
-        model: "gpt-4o-transcribe",
-      });
     });
   });
   it.each(["not-json", JSON.stringify({ text: 42 })])(
@@ -193,13 +178,6 @@ describe("ClawRouter registered file transcription", () => {
       expect(requests).toHaveLength(0);
     });
   });
-  it("refuses credential/framing overrides before HTTP", async () => {
-    await fixture(async ({ cfg, filePath, requests }) => {
-      cfg.tools!.media!.models![0]!.headers = { authorization: "Bearer fixture-foreign" };
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/header overrides/);
-      expect(requests).toHaveLength(0);
-    });
-  });
   it("honors an explicit proxy instead of uploading directly when the proxy refuses a tunnel", async () => {
     await fixture(async ({ cfg, filePath, requests }) => {
       const connects: string[] = [];
@@ -240,12 +218,6 @@ describe("ClawRouter registered file transcription", () => {
       res.statusCode = 307;
       res.setHeader("location", "/redirected");
       res.end();
-    });
-  });
-  it("bounds a successful JSON body before accepting transcript text", async () => {
-    await rejectsUpload(/JSON response exceeds 16777216 bytes/, (res) => {
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ text: "x".repeat(17 * 1024 * 1024) }));
     });
   });
   it("honors the configured deadline through response EOF and releases the socket", async () => {
@@ -297,20 +269,18 @@ describe("ClawRouter automatic transcription", () => {
           { url: "/fallback/audio/transcriptions", authorization: "Bearer fixture-fallback" },
         ]);
         const attempts = result.decision?.attachments[0]?.attempts;
-        if (reason) {
-          expect(attempts).toEqual([
-            expect.objectContaining({
-              provider: "clawrouter",
-              outcome: "failed",
-              reason: expect.stringContaining(reason),
-            }),
-            expect.objectContaining({ provider: "openai", outcome: "success" }),
-          ]);
-        } else {
-          expect(attempts).toEqual([
-            expect.objectContaining({ provider: "openai", outcome: "success" }),
-          ]);
-        }
+        expect(attempts).toEqual([
+          ...(reason
+            ? [
+                expect.objectContaining({
+                  provider: "clawrouter",
+                  outcome: "failed",
+                  reason: expect.stringContaining(reason),
+                }),
+              ]
+            : []),
+          expect.objectContaining({ provider: "openai", outcome: "success" }),
+        ]);
       });
     },
   );

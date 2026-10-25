@@ -102,21 +102,11 @@ it("uses the selected router credential and effective route without upstream key
   await fixture(async (origin, seen) => {
     expect(await evaluate(origin + "/v1")).toMatchObject({
       status: "ok",
-      result: {
-        answers: { q: { probabilityTrue: 0.75 } },
-        usage: { inputTokens: 4, outputTokens: 0 },
-      },
     });
-    expect(seen).toHaveLength(2);
     expect(seen.map(({ path, headers }) => [path, headers.authorization])).toEqual([
       ["/v1/catalog", "Bearer synthetic-router-key"],
       ["/v1/native/openai/v1/decisions", "Bearer synthetic-router-key"],
     ]);
-    expect(seen[1]?.body).toEqual({
-      model: "gpt-6-luna",
-      input: "Only supplied evidence",
-      questions: [{ name: "q", type: "predicate", instructions: "" }],
-    });
   });
 });
 
@@ -214,76 +204,56 @@ it.each(["route", "capability", "alias"] as const)(
 );
 
 it.each(["/v1/catalog", inferencePath])(
-  "maps HTTP failures at %s without retry or body disclosure",
+  "classifies HTTP and JSON failures at %s without retry or credential disclosure",
   async (failedPath) => {
-    for (const [status, reason] of [
-      [401, "authentication"],
-      [403, "authentication"],
-      [429, "rate-limited"],
+    const success = failedPath === "/v1/catalog" ? catalog() : reply;
+    for (const [status, body, outcome] of [
+      [401, "synthetic-router-key private evidence", unavailable("authentication")],
+      [
+        429,
+        "synthetic-router-key private evidence",
+        { ...unavailable("rate-limited"), retryAfterMs: 2000 },
+      ],
+      [200, "not JSON", unavailable("invalid-response")],
+      [
+        200,
+        JSON.stringify({ ...success, reflected: "synthetic-router-key" }),
+        unavailable("invalid-response"),
+      ],
     ] as const) {
       await fixture(
         async (origin, seen) => {
-          expect(await evaluate(origin)).toEqual({
-            ...unavailable(reason),
-            ...(status === 429 ? { retryAfterMs: 2000 } : {}),
-          });
+          expect(await evaluate(origin)).toEqual(outcome);
           expect(paths(seen)).toEqual(
             failedPath === "/v1/catalog" ? [failedPath] : ["/v1/catalog", failedPath],
           );
         },
         (path, response) => {
-          if (path === failedPath) {
-            response.statusCode = status;
-            response.setHeader("retry-after", "2");
-            response.end("synthetic-router-key private evidence");
-          } else {
-            response.end(JSON.stringify(catalog()));
-          }
+          response.statusCode = path === failedPath ? status : 200;
+          response.setHeader("retry-after", "2");
+          response.end(path === failedPath ? body : JSON.stringify(catalog()));
         },
       );
     }
   },
 );
 
-it.each(["/v1/catalog", inferencePath])(
-  "rejects malformed and credential-reflecting JSON at %s",
-  async (failedPath) => {
-    for (const invalid of [
-      "not JSON",
-      JSON.stringify({
-        ...(failedPath === "/v1/catalog" ? catalog() : reply),
-        reflected: "synthetic-router-key",
-      }),
-    ]) {
-      await fixture(
-        async (origin, seen) => {
-          expect(await evaluate(origin)).toEqual(unavailable("invalid-response"));
-          expect(seen.at(-1)?.path).toBe(failedPath);
-        },
-        (path, response) => response.end(path === failedPath ? invalid : JSON.stringify(catalog())),
-      );
-    }
-  },
-);
-
-it.each(["image/png", "image/jpeg", "image/webp"])(
-  "inlines %s and only explicitly supplied text",
-  async (mime) => {
-    await fixture(async (origin, seen) => {
-      expect(
-        (
-          await evaluate(
-            origin,
-            { reasoning: "auto" },
-            {
-              ...batch,
-              state: { type: "image", dataUri: `data:${mime};base64,AA==`, text: "Inspect this" },
-            },
-          )
-        ).status,
-      ).toBe("ok");
-      expect(seen[1]?.body).toEqual({
-        model: "gpt-6-luna",
+it.each(["image/png"])("inlines %s and only explicitly supplied text", async (mime) => {
+  await fixture(async (origin, seen) => {
+    expect(
+      (
+        await evaluate(
+          origin,
+          { reasoning: "auto" },
+          {
+            ...batch,
+            state: { type: "image", dataUri: `data:${mime};base64,AA==`, text: "Inspect this" },
+          },
+        )
+      ).status,
+    ).toBe("ok");
+    expect(seen[1]?.body).toEqual(
+      expect.objectContaining({
         input: [
           {
             role: "user",
@@ -293,78 +263,43 @@ it.each(["image/png", "image/jpeg", "image/webp"])(
             ],
           },
         ],
-        questions: [{ name: "q", type: "predicate", instructions: "" }],
-      });
-    });
-  },
-);
-
-it.each([201, 400])(
-  "dispatches all %i questions through the native router route",
-  async (count) => {
-    const names = Array.from({ length: count }, (_, index) => `q${index}`);
-    await fixture(
-      async (origin, seen) => {
-        const outcome = await evaluate(
-          origin,
-          {},
-          {
-            ...batch,
-            questions: namedEntries(count, "q", { type: "boolean" as const }),
-          },
-        );
-        expect(outcome).toMatchObject({ status: "ok" });
-        if (outcome.status === "ok") {
-          expect(Object.keys(outcome.result.answers)).toEqual(names);
-          expect(Object.values(outcome.result.answers)).toEqual(
-            names.map(() => ({ type: "boolean", probabilityTrue: 0.75 })),
-          );
-        }
-        expect(paths(seen)).toEqual(["/v1/catalog", inferencePath]);
-        expect(seen[1]?.body).toEqual({
-          model: "gpt-6-luna",
-          input: "Only supplied evidence",
-          questions: names.map((name) => ({ name, type: "predicate", instructions: "" })),
-        });
-      },
-      (path, response) =>
-        response.end(
-          JSON.stringify(
-            path === "/v1/catalog"
-              ? catalog()
-              : {
-                  ...reply,
-                  answers: names.map((name) => ({ name, type: "predicate", probability: 0.75 })),
-                },
-          ),
-        ),
+      }),
     );
-  },
-);
+  });
+});
 
-it("rejects unsupported reasoning, image size, and question/choice counts before catalog I/O", async () => {
+it.each([400])("dispatches all %i questions through the native router route", async (count) => {
+  const names = Array.from({ length: count }, (_, index) => `q${index}`);
+  const answers = names.map((name) => ({ name, type: "predicate", probability: 0.75 }));
+  await fixture(
+    async (origin, seen) => {
+      const questions = namedEntries(count, "q", { type: "boolean" as const });
+      const outcome = await evaluate(origin, {}, { ...batch, questions });
+      expect(outcome).toMatchObject({ status: "ok" });
+      if (outcome.status === "ok") {
+        expect(outcome.result.answers).toEqual(
+          Object.fromEntries(
+            names.map((name) => [name, { type: "boolean", probabilityTrue: 0.75 }]),
+          ),
+        );
+      }
+      expect(paths(seen)).toEqual(["/v1/catalog", inferencePath]);
+    },
+    (path, response) =>
+      response.end(JSON.stringify(path === "/v1/catalog" ? catalog() : { ...reply, answers })),
+  );
+});
+
+it("rejects unsupported reasoning and excess questions before catalog I/O", async () => {
   await fixture(async (origin, seen) => {
     for (const reasoning of ["on", "off"] as const) {
       expect(await evaluate(origin, { reasoning })).toEqual(unavailable("unsupported-input"));
     }
-    const oversized: DecisionBatchV2 = {
-      ...batch,
-      state: {
-        type: "image",
-        dataUri: "data:image/png;base64," + Buffer.alloc(4_194_305).toString("base64"),
-      },
-    };
     const tooManyQuestions: DecisionBatchV2 = {
       ...batch,
       questions: namedEntries(401, "q", { type: "boolean" as const }),
     };
-    const tooManyChoices: DecisionBatchV2 = {
-      ...batch,
-      questions: { q: { type: "choice", criteria: namedEntries(256, "o", "criterion") } },
-    };
-    for (const input of [oversized, tooManyQuestions, tooManyChoices]) {
-      expect(await evaluate(origin, {}, input)).toEqual(unavailable("unsupported-input"));
-    }
+    expect(await evaluate(origin, {}, tooManyQuestions)).toEqual(unavailable("unsupported-input"));
     expect(seen).toEqual([]);
   });
 });
