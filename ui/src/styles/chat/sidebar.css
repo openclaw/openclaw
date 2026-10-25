@@ -83,6 +83,45 @@
   }
 }
 
+/* New Session attachments use these wrappers before the Chat panels load. */
+.sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--panel);
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--panel);
+}
+
+.sidebar-header .btn {
+  padding: 4px 8px;
+  font-size: var(--control-ui-text-md);
+  min-width: auto;
+  line-height: 1;
+}
+
+.sidebar-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-title {
+  font-weight: 600;
+  font-size: var(--control-ui-text-md);
+}
+
 .sidebar-content {
   flex: 1;
   min-height: 0;
