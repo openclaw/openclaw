@@ -1,8 +1,6 @@
 import { channel } from "node:diagnostics_channel";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   recordControlUiE2eFailureFacts,
   type ControlUiE2eFailureFact,
@@ -155,59 +153,18 @@ export function recordTaskPrDiagnostics(sessionKeys: string[], numbers: number[]
         close: () => pending.clear(),
       };
     },
-    async capture(page: Page, stage: string) {
-      // Freeze the transport evidence before a late reply or diagnostic read can alter it.
-      const details: Record<string, ControlUiE2eFailureFact> = {
-        stage,
-        capturedAt: Date.now(),
-        limit,
-        dropped: { ...dropped },
-        gateway: [...gateway],
-        frames: [...frames],
-      };
-      details.ui = await withTimeout(
-        evaluateControlUiContext(
-          page,
-          (context, { sessionKeys: keys, numbers: expectedNumbers }) => {
-            const card = document.querySelector(".session-progress-hovercard");
-            return {
-              at: Date.now(),
-              gatewayPhase: context.gateway.snapshot.phase,
-              rosterLoading: context.sessions.state.loading,
-              rosterRevision: context.sessions.canonicalListRevision,
-              sessions: keys.map((key, index) => {
-                const row = context.sessions.state.result?.sessions.find(
-                  (candidate) => candidate.key === key,
-                );
-                const summary = context.sessions.pullRequestSummary(key);
-                const element = document.querySelector(
-                  '.sidebar-recent-session[data-session-key="' + key + '"]',
-                );
-                return {
-                  session: index,
-                  rosterPresent: Boolean(row),
-                  pullRequestNumbers:
-                    summary?.numbers.filter((number) => expectedNumbers.includes(number)) ?? [],
-                  projectedRowPresent: Boolean(element),
-                  projectedBadgeCount:
-                    element?.querySelectorAll(".session-row-badge--pull-request").length ?? 0,
-                };
-              }),
-              cardPresent: Boolean(card),
-              cardVisible: card?.checkVisibility({ visibilityProperty: true }) ?? false,
-              projectedDescendants: expectedNumbers.map((number) => ({
-                number,
-                linkCount: card?.querySelectorAll('a[href$="/pull/' + number + '"]').length ?? 0,
-              })),
-              projectedCreateParentPrCount:
-                card?.querySelectorAll('a[href*="/pull/new/"]').length ?? 0,
-            };
-          },
-          { sessionKeys, numbers },
-        ),
-        1_000,
-      ).catch(() => ({ readFailed: true }));
-      recordControlUiE2eFailureFacts(page, { taskPrTrace: details });
+    capture(page: Page, stage: string) {
+      // The caller owns UI, hydration, and Git-operation snapshots; retain only the timeline here.
+      recordControlUiE2eFailureFacts(page, {
+        taskPrTrace: {
+          stage,
+          capturedAt: Date.now(),
+          limit,
+          dropped: { ...dropped },
+          gateway: [...gateway],
+          frames: [...frames],
+        },
+      });
     },
   };
 }
