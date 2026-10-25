@@ -135,20 +135,17 @@ const protectedProcesses = [
 ];
 
 it.each([
-  { executable: "C:\\runtime-b\\bun.exe", expected: "stopped", unreadable: false },
-  { executable: "node.exe", expected: "unknown", unreadable: false },
-  { executable: "C:\\runtime-b\\node.exe", expected: "unknown", unreadable: true },
-])(
-  "classifies $executable (unreadable=$unreadable)",
-  async ({ executable, expected, unreadable }) => {
-    native.state = 3;
-    native.command[0] = executable;
-    native.processes = unreadable
-      ? [...protectedProcesses, { ProcessId: 42, Name: undefined, CommandLine: null }]
-      : protectedProcesses;
-    await expectUnidentified(expected);
-  },
-);
+  ["C:\\runtime-b\\bun.exe", "stopped", false],
+  ["node.exe", "unknown", false],
+  ["C:\\runtime-b\\node.exe", "unknown", true],
+] as const)("classifies %s: %s (unreadable=%s)", async (executable, expected, unreadable) => {
+  native.state = 3;
+  native.command[0] = executable;
+  native.processes = unreadable
+    ? [...protectedProcesses, { ProcessId: 42, Name: undefined, CommandLine: null }]
+    : protectedProcesses;
+  await expectUnidentified(expected);
+});
 
 it.each(["present", "absent", "unavailable"] as const)("pins %s observation", async (initial) => {
   native.changed = initial;
@@ -181,13 +178,9 @@ it("reports the process matching the installed command, excluding its task super
   expect(await readRuntime({})).toMatchObject({ status: "running", pid: 43 });
 });
 
-it("keeps a surviving supervisor without its child unknown", async () => {
-  native.state = 3;
-  native.processes = [processEntry(42, [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG])];
-  await expectUnidentified();
-});
-
-it.each([false, true])("keeps supervisor unknown (env port=%s)", async (envPort) => {
+it.each(["observe", "control", "control-env"])("supervisor unknown: %s", async (mode) => {
+  native.state = mode === "observe" ? 3 : 4;
+  const envPort = mode === "control-env";
   if (envPort) {
     environmentPort();
   }
@@ -198,7 +191,11 @@ it.each([false, true])("keeps supervisor unknown (env port=%s)", async (envPort)
       ...processEntry(42, [...native.command, WINDOWS_TASK_SUPERVISOR_FLAG]),
     },
   ];
-  expect(await controlRuntime()).toMatchObject({ status: "unknown" });
+  if (mode === "observe") {
+    await expectUnidentified();
+  } else {
+    expect(await controlRuntime()).toMatchObject({ status: "unknown" });
+  }
 });
 
 it.each([

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
-import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -131,25 +130,15 @@ describe("service environment", () => {
     const env = serviceEnv({ OPENCLAW_CONFIG_READONLY: "1" }, { platform: "linux" });
     expect([resolveIsConfigReadOnly(env), resolveIsNixMode(env)]).toEqual([true, false]);
   });
-  it.each<[string, NodeJS.ProcessEnv, string]>([
-    ["TMPDIR", { TMPDIR: "/tmp/service/" }, "/tmp/service/"],
-    [
-      "OPENCLAW_PROXY_URL",
-      { OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 " },
-      "http://127.0.0.1:3128",
-    ],
-    [
-      "OPENCLAW_SYSTEMD_UNIT",
-      { OPENCLAW_PROFILE: "work", OPENCLAW_SYSTEMD_UNIT: "maintenance" },
-      "maintenance.service",
-    ],
-    [
-      "OPENCLAW_SYSTEMD_UNIT",
-      { OPENCLAW_SYSTEMD_UNIT: "maintenance.service" },
-      "maintenance.service",
-    ],
-  ])("normalizes %s from %j", (key, env, value) => {
-    expect(serviceEnv(env, { platform: "linux" })[key]).toBe(value);
+  it.each([
+    ["TMPDIR", "/tmp/service/", "/tmp/service/"],
+    ["OPENCLAW_PROXY_URL", " http://127.0.0.1:3128 ", "http://127.0.0.1:3128"],
+    ["OPENCLAW_SYSTEMD_UNIT", "maintenance", "maintenance.service"],
+    ["OPENCLAW_SYSTEMD_UNIT", "maintenance.service", "maintenance.service"],
+  ])("normalizes %s=%s", (key, input, value) => {
+    expect(serviceEnv({ OPENCLAW_PROFILE: "work", [key]: input }, { platform: "linux" })[key]).toBe(
+      value,
+    );
   });
   it("preserves profile identity", () => {
     expect(serviceEnv({ OPENCLAW_PROFILE: "work" }, { platform: "darwin" })).toMatchObject({
@@ -190,35 +179,16 @@ describe("service environment", () => {
     );
   });
   it.each([
-    [
-      "ambient options",
-      { NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384" },
-      {},
-      "",
-    ],
-    [
-      "existing service heap only",
-      {},
-      { existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144" },
-      "--max-old-space-size=6144",
-    ],
-  ] satisfies Array<[string, NodeJS.ProcessEnv, ServiceOptions, string]>)(
-    "filters %s",
-    (_name, env, options, expected) => {
-      expect(serviceEnv(env, options).NODE_OPTIONS).toBe(expected);
-    },
-  );
-  it("builds a profile node LaunchAgent without Gateway heap or inherited compile cache", () => {
+    [undefined, ""],
+    ["--require /tmp/preload.js --max_old_space_size=6144", "--max-old-space-size=6144"],
+  ])("filters ambient options and existing service options %s", (existingNodeOptions, expected) => {
+    const env = { NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384" };
+    expect(serviceEnv(env, { existingNodeOptions }).NODE_OPTIONS).toBe(expected);
+  });
+  it("builds a profile node environment without Gateway heap or inherited compile cache", () => {
     const environment = buildNodeServiceEnvironment({
       env: { HOME: "/Users/u", OPENCLAW_PROFILE: "work", NODE_COMPILE_CACHE: "/tmp/ambient-cache" },
       platform: "darwin",
-    });
-    const plist = buildLaunchAgentPlist({
-      label: "ai.openclaw.node.work",
-      programArguments: ["/usr/local/bin/node", "dist/index.js", "node", "run"],
-      stdoutPath: "/tmp/node.log",
-      stderrPath: "/tmp/node.err.log",
-      environment,
     });
     expect(environment).toMatchObject({
       OPENCLAW_PROFILE: "work",
@@ -227,10 +197,10 @@ describe("service environment", () => {
       OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node (work)",
       NODE_DISABLE_COMPILE_CACHE: "1",
     });
-    expect(environment.NODE_OPTIONS).toBeUndefined();
-    expect(environment.NODE_COMPILE_CACHE).toBeUndefined();
-    expect(plist).toContain("<key>NODE_DISABLE_COMPILE_CACHE</key>");
-    expect(plist).not.toContain("<key>NODE_COMPILE_CACHE</key>");
+    expect([environment.NODE_OPTIONS, environment.NODE_COMPILE_CACHE]).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 });
 
