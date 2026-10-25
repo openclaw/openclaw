@@ -221,14 +221,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
               await error.replacement;
               return dispatch(true);
             }
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, `plugin ${pluginId} is reloading`, {
-                retryable: true,
-                details: { reason: "plugin-reloading" },
-              }),
-            );
+            respondError(respond, ErrorCodes.UNAVAILABLE, `plugin ${pluginId} is reloading`, {
+              retryable: true,
+              details: { reason: "plugin-reloading" },
+            });
             return;
           }
           log.warn(

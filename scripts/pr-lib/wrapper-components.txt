@@ -1597,6 +1597,7 @@ src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
+src/plugins/plugin-instance-replacement.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
