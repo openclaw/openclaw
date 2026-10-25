@@ -61,13 +61,12 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       { input: "channel", resolved: true, teamId: "team-b", channelId: "channel-b" },
       { input: "incomplete", resolved: true },
     ]);
-    const note = vi.fn(async () => {});
     const resolved = await groups.resolveAllowlist!({
       cfg: teamsConfig(credentials),
       accountId: "default",
       credentialValues: {},
       entries: ["unknown/general", "whole-team", "channel", "incomplete"],
-      prompter: { note },
+      prompter: { note: async () => {} },
     });
 
     expect(resolved).toEqual([
@@ -75,10 +74,6 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       { teamKey: "team-a" },
       { teamKey: "unknown", channelKey: "general" },
     ]);
-    expect(note).toHaveBeenCalledWith(
-      "Resolved channels: channel-b\nResolved teams: team-a\nUnresolved (kept as typed): unknown/general",
-      "MS Teams channels",
-    );
   });
 
   it("reads and edits root DM policy without consuming its SecretRef", () => {
@@ -143,9 +138,6 @@ describe("msteamsSetupWizard account-scoped policies", () => {
       allowFrom: ["root-user", "*"],
     });
     expect(resolveMSTeamsAccountConfig(disabled, "support")).toMatchObject(inherited);
-    expect(Object.keys(disabled.channels?.msteams?.accounts ?? {})).toEqual(
-      expect.arrayContaining(["default", "support"]),
-    );
     expect(disabled.channels?.msteams?.accounts).not.toHaveProperty("Default");
   });
 

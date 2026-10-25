@@ -61,10 +61,7 @@ describe("createTeamsReplyStreamController", () => {
     const { stream, ctrl } = acknowledgedController();
     ctrl.onPartialReply({ text: replacement });
     expect(
-      ctrl.preparePayload({
-        text: replacement,
-        mediaUrl: media("replacement"),
-      }),
+      ctrl.preparePayload({ text: replacement, mediaUrl: media("replacement") }),
     ).toBeUndefined();
     stream.acknowledge(replacement);
     stream.close.mockResolvedValueOnce(undefined);
@@ -178,28 +175,21 @@ describe("createTeamsReplyStreamController", () => {
     const stream = makeStream();
     stream.canceled = phase === "canceled";
     const ctrl = makeController(stream, { msteamsConfig: progressConfig });
+    const failure = {
+      itemId: "tool:exec",
+      name: "exec",
+      title: "Exec",
+      phase: "end",
+      status: "failed",
+    };
     if (phase === "settled") {
       expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
       await ctrl.pushPlanProgress([{ step: "Late plan", status: "in_progress" }]);
-      const lateFailure = {
-        itemId: "late-failure",
-        title: "Late failure",
-        phase: "end",
-        status: "failed",
-      };
-      await ctrl.pushItemEvent(lateFailure);
+      await ctrl.pushItemEvent(failure);
       await ctrl.finalize();
       await ctrl.pushPlanProgress([{ step: "Late settled plan", status: "in_progress" }]);
-      await ctrl.pushItemEvent(lateFailure);
-    } else {
-      await ctrl.pushItemEvent({
-        itemId: "tool:exec",
-        name: "exec",
-        title: "Exec",
-        phase: "end",
-        status: "failed",
-      });
     }
+    await ctrl.pushItemEvent(failure);
     expect(stream.update).not.toHaveBeenCalled();
   });
 
