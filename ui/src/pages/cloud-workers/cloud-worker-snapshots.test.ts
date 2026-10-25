@@ -31,6 +31,13 @@ const methods = ["environments.list", "crabbox.images.list", "config.patch"];
 function input(page: Element, label: string) {
   return expectDefined(page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`), label);
 }
+function localSnapshot() {
+  const result = snapshotListFixture();
+  result.images = [
+    { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
+  ];
+  return result;
+}
 
 describe("Cloud environments", () => {
   it("retains a pool draft after a rejected save and permits retry", async () => {
@@ -82,10 +89,7 @@ describe("Cloud environments", () => {
     const inventory = createDeferred<unknown>();
     const images = createDeferred<unknown>();
     const refresh = createDeferred<unknown>();
-    const result = snapshotListFixture();
-    result.images = [
-      { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
-    ];
+    const result = localSnapshot();
     let reads = 0;
     const { page, harness, client } = mountTestPage([...methods, "environments.prepare"], {
       response: (method, params) => {
@@ -124,10 +128,7 @@ describe("Cloud environments", () => {
   it("coalesces inventory refreshes and ignores retired reads while the replacement is pending", async () => {
     const pending = Array.from({ length: 3 }, () => createDeferred<unknown>());
     const inventory = { environments: [], profiles: [] };
-    const result = snapshotListFixture();
-    result.images = [
-      { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
-    ];
+    const result = localSnapshot();
     const advertised = [...methods, "environments.prepare"];
     const withoutImages = advertised.filter((method) => method !== "crabbox.images.list");
     let reads = 0;
@@ -199,19 +200,11 @@ describe("Cloud environments", () => {
   });
 
   it("combines repository defaults, images and workers into one minimal row and shows only the selected details", async () => {
-    const result = snapshotListFixture();
-    result.images = [
-      {
-        ...expectDefined(result.images[0], "App snapshot"),
-        held: false,
-        retirement: undefined,
-        projectRoot: "/projects/app",
-      },
-      {
-        ...expectDefined(result.images[2], "Uncertain snapshot"),
-        projectLabel: "github.com/acme/paused",
-      },
-    ];
+    const result = localSnapshot();
+    result.images.push({
+      ...expectDefined(snapshotListFixture().images[2], "Uncertain snapshot"),
+      projectLabel: "github.com/acme/paused",
+    });
     result.images.push({
       ...result.images[0]!,
       profileKey: "other-profile",
@@ -252,16 +245,17 @@ describe("Cloud environments", () => {
       expect.stringContaining("github.com/acme/readyReady ·"),
     ]);
     expect(rows.every((row) => row.children.length === 2)).toBe(true);
-    expect(sheet(page).textContent).toContain("01234567");
+    const details = sheet(page);
+    expect(details.textContent).toContain("01234567");
     expect(
-      [...sheet(page).querySelectorAll(".cloud-environments__snapshot")].map((row) =>
+      [...details.querySelectorAll(".cloud-environments__snapshot")].map((row) =>
         row.getAttribute("aria-label"),
       ),
     ).toEqual(["linux-build", "arm-build"]);
-    expect(sheet(page).querySelector(".cloud-environments__machine > span")?.textContent).toBe(
+    expect(details.querySelector(".cloud-environments__machine > span")?.textContent).toBe(
       "aws · standard · linux",
     );
-    expect(sheet(page).textContent).not.toContain("Paused: uncertain");
+    expect(details.textContent).not.toContain("Paused: uncertain");
     expect(page.querySelector(".settings-segmented")).toBeNull();
     expect(page.querySelector("details")?.open).toBe(false);
     (rows[2] as HTMLButtonElement).click();
@@ -278,6 +272,7 @@ describe("Cloud environments", () => {
     "renders recorded setup phases and failures with a newer successful profile: %s",
     async (newerSuccessfulProfile) => {
       const result = snapshotListFixture();
+      const phaseDurationsMs = { onCreate: 1200, updateContent: 6400 };
       result.images = [
         {
           ...expectDefined(result.images[0], "App snapshot"),
@@ -285,7 +280,7 @@ describe("Cloud environments", () => {
           retirement: undefined,
           recipePreparation: {
             source: "devcontainer",
-            phaseDurationsMs: { onCreate: 1200, updateContent: 6400 },
+            phaseDurationsMs,
             failure: {
               reason: "Dependency installation failed",
               outputTail: "synthetic package unavailable",
@@ -299,29 +294,27 @@ describe("Cloud environments", () => {
           ...expectDefined(result.images[0], "Failed snapshot"),
           profileKey: "large-profile",
           profileId: "large",
-          recipePreparation: {
-            source: "devcontainer",
-            phaseDurationsMs: { onCreate: 1200, updateContent: 6400 },
-          },
+          recipePreparation: { source: "devcontainer", phaseDurationsMs },
           recipePreparationAtMs: 2000,
         });
       }
       const { page } = mountTestPage(methods, { result });
       await waitText(() => sheet(page), "Dev Container");
+      const details = sheet(page);
       expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
         "github.com/acme/appNeeds attention",
       );
-      expect(
-        sheet(page).querySelector(".cloud-environments__step--longest")?.textContent,
-      ).toContain("updateContentCommand");
-      expect(sheet(page).querySelector(".cloud-environments__output")?.textContent).toBe(
+      expect(details.querySelector(".cloud-environments__step--longest")?.textContent).toContain(
+        "updateContentCommand",
+      );
+      expect(details.querySelector(".cloud-environments__output")?.textContent).toBe(
         "synthetic package unavailable",
       );
       if (newerSuccessfulProfile) {
-        expect(sheet(page).querySelector('[role="alert"]')?.textContent).toContain("linux-build");
+        expect(details.querySelector('[role="alert"]')?.textContent).toContain("linux-build");
       }
-      expect(sheet(page).textContent).not.toContain("MB");
-      expect(sheet(page).textContent).not.toContain("Install dependencies");
+      expect(details.textContent).not.toContain("MB");
+      expect(details.textContent).not.toContain("Install dependencies");
     },
   );
 

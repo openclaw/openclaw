@@ -47,6 +47,21 @@ function localSnapshot() {
   return result;
 }
 
+const rebuildButton = (page: Element) => button(sheet(page), "Rebuild");
+const waitRebuild = (page: Element, disabled = false) =>
+  waitForSolid(() => expect(rebuildButton(page).disabled).toBe(disabled));
+const prepareParams = { profileId: "linux-build", projectPath: "/projects/app" };
+function pendingRebuild() {
+  const preparation = createDeferred<unknown>();
+  return {
+    preparation,
+    ...mountTestPage(methods, {
+      result: localSnapshot(),
+      response: (method) => (method === "environments.prepare" ? preparation.promise : undefined),
+    }),
+  };
+}
+
 it("rebuilds the selected local repository and shows capacity failures", async () => {
   const { page, request } = mountTestPage(methods, {
     result: localSnapshot(),
@@ -60,26 +75,19 @@ it("rebuilds the selected local repository and shows capacity failures", async (
       }
     },
   });
-  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+  await waitRebuild(page);
   click(sheet(page), "Rebuild");
   await waitText(() => page, "The prepared worker pool is full");
   expect(page.querySelector('[role="alert"]')?.textContent).toBe(
     "The prepared worker pool is full. Raise the prepared pool cap or destroy an unused worker, then try again.",
   );
-  expect(request).toHaveBeenCalledWith("environments.prepare", {
-    profileId: "linux-build",
-    projectPath: "/projects/app",
-  });
+  expect(request).toHaveBeenCalledWith("environments.prepare", prepareParams);
 });
 
 it("admits one rebuild when native clicks arrive before the next render", async () => {
-  const preparation = createDeferred<unknown>();
-  const { page, request } = mountTestPage(methods, {
-    result: localSnapshot(),
-    response: (method) => (method === "environments.prepare" ? preparation.promise : undefined),
-  });
+  const { page, request, preparation } = pendingRebuild();
   const rebuild = await waitForSolid(() => {
-    const control = button(sheet(page), "Rebuild");
+    const control = rebuildButton(page);
     expect(control.disabled).toBe(false);
     return control;
   });
@@ -97,22 +105,15 @@ it("admits one rebuild when native clicks arrive before the next render", async 
 });
 
 it("releases a pending rebuild presentation when the same client reconnects", async () => {
-  const preparation = createDeferred<unknown>();
-  const { page, request, harness, client } = mountTestPage(methods, {
-    result: localSnapshot(),
-    response: (method) => (method === "environments.prepare" ? preparation.promise : undefined),
-  });
+  const { page, request, harness, client, preparation } = pendingRebuild();
   try {
-    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+    await waitRebuild(page);
     click(sheet(page), "Rebuild");
-    await waitRequest(request, "environments.prepare", {
-      profileId: "linux-build",
-      projectPath: "/projects/app",
-    });
-    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(true));
+    await waitRequest(request, "environments.prepare", prepareParams);
+    await waitRebuild(page, true);
     harness.publish(false, client, null);
     harness.publish(true, client, gatewayHelloForMethods(methods));
-    await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+    await waitRebuild(page);
   } finally {
     preparation.reject(new Error("Retired rebuild failure"));
     await preparation.promise.catch(() => {});
@@ -135,15 +136,15 @@ it("keeps newer inventory feedback when an earlier rebuild fails", async () => {
       return undefined;
     },
   });
-  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+  await waitRebuild(page);
   click(sheet(page), "Rebuild");
-  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(true));
+  await waitRebuild(page, true);
   const previousReads = reads;
   globalThis.dispatchEvent(new Event("focus"));
   await waitForSolid(() => expect(reads).toBeGreaterThan(previousReads));
   preparation.reject(new Error("Earlier rebuild failure"));
   await preparation.promise.catch(() => {});
-  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+  await waitRebuild(page);
   expect(page.textContent).not.toContain("Earlier rebuild failure");
 });
 
@@ -178,7 +179,7 @@ it("refreshes rebuild eligibility after a machine configuration save", async () 
     },
   });
   await waitText(() => sheet(page), "01234567");
-  expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+  expect(rebuildButton(page).disabled).toBe(true);
   await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
   click(page, "Edit");
   change(
@@ -194,12 +195,9 @@ it("refreshes rebuild eligibility after a machine configuration save", async () 
   );
   await vi.advanceTimersByTimeAsync(250);
   flush();
-  await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
-  button(sheet(page), "Rebuild").click();
-  await waitRequest(request, "environments.prepare", {
-    profileId: "linux-build",
-    projectPath: "/projects/app",
-  });
+  await waitRebuild(page);
+  rebuildButton(page).click();
+  await waitRequest(request, "environments.prepare", prepareParams);
 });
 
 it("keeps unlabeled builds inspectable and actionable in Advanced", async () => {
