@@ -2889,6 +2889,9 @@ importers:
       mdast-util-gfm-table:
         specifier: 2.0.0
         version: 2.0.0(supports-color@10.2.2)
+      micromark:
+        specifier: 4.0.3
+        version: 4.0.3(supports-color@10.2.2)
       micromark-extension-gfm-table:
         specifier: 2.1.2
         version: 2.1.2

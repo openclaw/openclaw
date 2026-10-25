@@ -83,3 +83,15 @@ export function dispatchFrameMessage(
     new MessageEvent("message", { source: frame.contentWindow, ...init }),
   );
 }
+
+export function acknowledgeWidgetHostInit(port: MessagePort, ready: { resolve: () => void }) {
+  port.addEventListener("message", (event) => {
+    if (event.data.type === "openclaw:widget-host-init") {
+      port.postMessage({
+        type: "openclaw:widget-host-init-ack",
+        ticket: event.data.ticket,
+      });
+      ready.resolve();
+    }
+  });
+}

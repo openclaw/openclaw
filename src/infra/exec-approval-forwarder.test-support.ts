@@ -86,34 +86,20 @@ export async function flushPendingDelivery(): Promise<void> {
   await vi.dynamicImportSettled();
 }
 
-function isDiscordExecApprovalClientEnabledForTest(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
+function isExecApprovalClientEnabledForTest(
+  channel: "discord" | "telegram",
+  params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  },
+): boolean {
   const accountId = params.accountId?.trim();
-  const rootConfig = params.cfg.channels?.discord?.execApprovals;
+  const rootConfig = params.cfg.channels?.[channel]?.execApprovals;
+  const accountsKey = channel === "discord" ? "discordAccounts" : "telegramAccounts";
   const accountConfig =
     accountId && accountId !== "default"
       ? (
-          params.cfg.channels?.discordAccounts?.[accountId] as
-            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
-            | undefined
-        )?.execApprovals
-      : undefined;
-  const config = accountConfig ?? rootConfig;
-  return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
-}
-
-function isTelegramExecApprovalClientEnabledForTest(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  const accountId = params.accountId?.trim();
-  const rootConfig = params.cfg.channels?.telegram?.execApprovals;
-  const accountConfig =
-    accountId && accountId !== "default"
-      ? (
-          params.cfg.channels?.telegramAccounts?.[accountId] as
+          params.cfg.channels?.[accountsKey]?.[accountId] as
             | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
             | undefined
         )?.execApprovals
@@ -135,7 +121,7 @@ function shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params: {
   }
   const accountId =
     params.target.accountId?.trim() || params.request.request.turnSourceAccountId?.trim();
-  return isTelegramExecApprovalClientEnabledForTest({ cfg: params.cfg, accountId });
+  return isExecApprovalClientEnabledForTest("telegram", { cfg: params.cfg, accountId });
 }
 
 function buildTelegramExecApprovalPendingPayloadForTest(params: {
@@ -222,7 +208,7 @@ export const discordApprovalPlugin: Pick<
         target: { channel: string; accountId?: string | null };
       }) =>
         target.channel === "discord" &&
-        isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+        isExecApprovalClientEnabledForTest("discord", { cfg, accountId: target.accountId }),
     },
   },
 };

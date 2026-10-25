@@ -518,7 +518,13 @@ export function wrapToolWithBeforeToolCallHook(
           ctx,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
+          recordSkillUsed({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+            result: signal?.aborted ? undefined : result,
+          });
         }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

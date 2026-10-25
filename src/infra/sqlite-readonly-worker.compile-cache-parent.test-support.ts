@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import {
   captureSqliteReadOnlyWorkerLaunch,
   createScopedSqliteReadOnlyWorker,
@@ -62,8 +63,8 @@ const source = path.join(root, "source.sqlite");
 }
 const before = fs.readFileSync(source);
 const cacheEntries = () =>
-  fs
-    .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
+  listDirectoryTreeStrictSync(activeDirectory)
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile()).length;
 let retainedLocation: string | undefined;
 const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());

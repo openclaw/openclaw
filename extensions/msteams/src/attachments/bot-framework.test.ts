@@ -2,6 +2,7 @@ import { useAttachmentTestTransport } from "./transport.test-support.js";
 const installAttachmentTestTransport = useAttachmentTestTransport();
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../../test-support/streaming-error-response.js";
 import { getMSTeamsRuntime, setMSTeamsRuntime } from "../runtime.js";
 import {
   downloadMSTeamsBotFrameworkAttachments as downloadAttachments,
@@ -260,26 +261,19 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     });
 
     it("bounds an unbounded attachmentInfo JSON body and cancels the stream", async () => {
-      const state = { canceled: false, enqueued: 0 };
       const chunkBytes = 1024 * 1024;
-      const stream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (state.enqueued >= 64) {
-            controller.close();
-            return;
-          }
-          state.enqueued += 1;
-          controller.enqueue(new Uint8Array(chunkBytes).fill(0x61));
-        },
-        cancel() {
-          state.canceled = true;
-        },
+      const streamed = createStreamingResponse({
+        status: 200,
+        chunkCount: 64,
+        chunkSize: chunkBytes,
+        byte: 0x61,
+        headers: { "content-type": "application/json" },
       });
       const jsonSpy = vi.spyOn(Response.prototype, "json").mockImplementation(async () => {
         throw new Error("raw response.json() should not be used");
       });
       const fetchFn: typeof fetch = vi.fn(async () => {
-        return new Response(stream, {
+        return new Response(streamed.response.body, {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -295,8 +289,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         expectUnavailableMedia(media, "att-1");
         expect(jsonSpy).not.toHaveBeenCalled();
         // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
-        expect(state.enqueued).toBeLessThan(32);
-        expect(state.canceled).toBe(true);
+        expect(streamed.getReadCount()).toBeLessThan(32);
+        expect(streamed.wasCanceled()).toBe(true);
         expect(warn).toHaveBeenCalledWith(
           "msteams botFramework attachmentInfo parse failed",
           expect.objectContaining({

@@ -40,6 +40,7 @@ import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -281,6 +282,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
 }
 
 async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void> {
+  const remaining = createDoctorServiceInspectionBudget(input.serviceInspectionDeadlineAtMs);
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   if (!resultPath || !input.executor) {
     throw new Error("Update Doctor requires its delegated executor and result path.");
@@ -328,12 +330,15 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      remaining();
       await stopSupervisedPredecessorGateway(input, {
         root: input.root,
         assertCurrent,
+        serviceInspectionBudget: remaining,
         warn: (message) => process.stderr.write(`${message}\n`),
       });
       assertCurrent();
+      const doctorBudget = remaining();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -363,6 +368,8 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
           ...(input.databasePluginOwners
             ? { databasePluginOwners: input.databasePluginOwners }
             : {}),
+          serviceInspectionDeadlineAtMs:
+            doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),

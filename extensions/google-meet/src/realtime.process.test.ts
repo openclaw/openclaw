@@ -220,12 +220,8 @@ afterEach(() => {
 
 it("stops the engine when input fails during provider setup", async () => {
   const { sttSession, logger, transport, start } = agentFixture(true);
-  let finishConnect = () => {};
-  sttSession.connect.mockReturnValue(
-    new Promise<void>((resolve) => {
-      finishConnect = resolve;
-    }),
-  );
+  const { promise: connecting, resolve: finishConnect } = Promise.withResolvers<void>();
+  sttSession.connect.mockReturnValue(connecting);
   const engineResult = start().then(
     () => new Error("Expected Google Meet engine startup to fail"),
     (error: unknown) => error,

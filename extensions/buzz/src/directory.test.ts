@@ -2,7 +2,7 @@ import { getPublicKey, type Event } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { relayMocks } from "./buzz-bus.test-helpers.js";
+import { createBuzzRelayInfoFetchMock, relayMocks } from "./buzz-bus.test-helpers.js";
 import { buzzPlugin } from "./channel.js";
 import type { BuzzConfigInput } from "./config-schema.js";
 import {
@@ -96,15 +96,7 @@ describe("Buzz live directory", () => {
       }),
     ];
     gatewayMocks.activeBus = undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
   });
 
   afterEach(() => {

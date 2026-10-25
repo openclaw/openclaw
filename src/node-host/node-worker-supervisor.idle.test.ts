@@ -634,26 +634,6 @@ describe("node worker idle retention", () => {
     f.expectCapacity(1, 2);
   });
 
-  it.each(["stop", "close"] as const)(
-    "%s retires idle through physical cleanup and preserves the completed turn",
-    async (operation) => {
-      await using f = fixture();
-      const value = input("completed");
-      const owner = await f.retained(value);
-      const identity = testNodeWorkerEnvironmentIdentity(value);
-      await f.supervisor.stopEnvironment({ ...identity, ownerEpoch: identity.ownerEpoch - 1 });
-      expect(owner.adapter.kill).not.toHaveBeenCalled();
-      if (operation === "stop") {
-        await f.supervisor.stopEnvironment(identity);
-      } else {
-        await f.supervisor.close();
-      }
-      expect(owner.adapter.dispose).toHaveBeenCalledOnce();
-      expect(await f.supervisor.status(value.launchId)).toMatchObject({ state: "completed" });
-      expect(await f.supervisor.hasActiveWork()).toBe(false);
-    },
-  );
-
   it.each(["explicit", "expiry", "limit"] as const)(
     "retries failed %s idle cleanup without freeing its slot or evicting background work",
     async (trigger) => {

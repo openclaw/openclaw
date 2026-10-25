@@ -10,6 +10,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -28,6 +29,7 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
@@ -221,6 +223,59 @@ async function embedFixtureArchive(fixture: Fixture) {
 }
 
 describe("cold transcript storage workers", () => {
+  it("reuses cold restoration execution after closing each database lease and preserves every transcript", async () => {
+    const fixture = await createFixture();
+    const storePath = fixture.scope.storePath;
+    const sibling = {
+      ...fixture.scope,
+      sessionKey: "agent:main:second-cold",
+      sessionId: "second-cold",
+    };
+    const siblingEvents = [
+      { type: "session", id: sibling.sessionId },
+      {
+        type: "custom",
+        id: "second-event",
+        customType: "preserved",
+        data: { text: "Second transcript" },
+      },
+    ];
+    replaceSessionEntrySync(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(sibling, siblingEvents);
+    await waitForSessionTranscriptIndexReconcile(fixture.options);
+    replaceSessionEntrySync(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      db.prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      ).run(sibling.sessionId);
+    }, fixture.options);
+    const original = fixture.snapshot();
+    await expect(
+      runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),
+    ).resolves.toEqual({ archivedTranscripts: 2, externalizedTranscripts: 0 });
+    const archiveStarts = () =>
+      getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+        ({ script }) => script === "session-accessor.sqlite-archive.worker.js",
+      )?.started ?? 0;
+    const leases = () =>
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(storePath);
+    const baselineLeases = leases();
+    const before = archiveStarts();
+    expect(before).toBeGreaterThan(0);
+    const first = await loadTranscriptEvents(fixture.scope);
+    expect(first).toHaveLength(3);
+    expect(leases()).toEqual(baselineLeases);
+    expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
+    expect(leases()).toEqual(baselineLeases);
+    expect(fixture.snapshot()).toEqual(original);
+    expect(archiveStarts()).toBe(before);
+    expect(await loadTranscriptEvents(sibling)).toEqual(siblingEvents);
+    expect(archiveStarts()).toBe(before);
+    expect(leases()).toEqual(baselineLeases);
+  });
+
   it.each([
     ["enforce", "1h", true],
     ["warn", "1h", false],

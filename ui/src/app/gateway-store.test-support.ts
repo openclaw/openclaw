@@ -55,6 +55,7 @@ function observeGatewayClient(client: GatewayBrowserClient) {
   Object.defineProperties(client, {
     recoveryScope: { configurable: true, writable: true, value: undefined },
     recoveryScopeReady: { configurable: true, writable: true, value: undefined },
+    connectSent: { configurable: true, value: Promise.resolve(true) },
   });
   const observed = Object.assign(client, {
     testOptions,

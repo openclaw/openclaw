@@ -14,10 +14,8 @@ import {
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import {
-  getOwnedSessionTranscriptWriterFence,
-  runWithoutOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";

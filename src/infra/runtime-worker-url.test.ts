@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, link, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { build } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -15,6 +16,39 @@ import {
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
+
+describe("runtime bootstrap entrypoint URLs", () => {
+  it.each([false, true])("resolves package-owned entries (bundled=%s)", async (bundled) => {
+    await withTempDir("openclaw-bootstrap-urls-", async (root) => {
+      const bootstrap = path.join(root, "runtime-process-bootstrap.generated.mjs");
+      await copyFile(
+        new URL("../../runtime-process-bootstrap.generated.mjs", import.meta.url),
+        bootstrap,
+      );
+      let entry = bootstrap;
+      if (bundled) {
+        entry = path.join(root, "dist", "chunks", "bootstrap.mjs");
+        await build({
+          entryPoints: [bootstrap],
+          outfile: entry,
+          bundle: true,
+          format: "esm",
+          platform: "node",
+        });
+      }
+      const { stdout } = await promisify(execFile)(process.execPath, [
+        "--input-type=module",
+        "-e",
+        `const { resolveRuntimeBootstrapExternalEntrypointUrl, resolveRuntimeBootstrapToolingEntrypointUrl } = await import(${JSON.stringify(pathToFileURL(entry).href)});
+console.log(JSON.stringify({ external: resolveRuntimeBootstrapExternalEntrypointUrl("cliLauncher").href, tooling: resolveRuntimeBootstrapToolingEntrypointUrl("kyselyTypes").href }));`,
+      ]);
+      expect(JSON.parse(stdout)).toEqual({
+        external: pathToFileURL(path.join(root, "openclaw.mjs")).href,
+        tooling: pathToFileURL(path.join(root, "scripts/generate-kysely-types.mts")).href,
+      });
+    });
+  });
+});
 
 describe("resolveRuntimeWorkerUrl", () => {
   it("resolves source siblings and stable packaged worker paths", () => {

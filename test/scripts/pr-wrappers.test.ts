@@ -1314,7 +1314,7 @@ fs.symlinkSync(${JSON.stringify(expected)}, path.join(root, "node_modules/tsx"),
 const workspaceModules = path.join(root, "packages/markdown-core/node_modules");
 fs.mkdirSync(workspaceModules, { recursive: true });
 for (const name of Object.keys(${JSON.stringify(JSON.parse(readScript("packages/markdown-core/package.json")).dependencies)})) {
-  if (!name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
+  if (name !== "micromark" && !name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
   const target = path.join(root, "node_modules/.workspace", name);
   fs.cpSync(fs.realpathSync(path.join(${JSON.stringify(fixture.tooling)}, "packages/markdown-core/node_modules", name)), target, { recursive: true });
   fs.symlinkSync(path.relative(workspaceModules, target), path.join(workspaceModules, name), "dir");
@@ -1364,9 +1364,9 @@ if (process.env.PR_TEST_INSTALL_GATE) {
 
   itPosix("publishes one complete dependency installation when creators overlap", async () => {
     const fixture = makeFrozenDependencyFixture();
-    const gate = join(fixture.root, "install-gate");
-    expect(runCommand("mkfifo", [gate], fixture.env).status).toBe(0);
-    const start = () => {
+    const start = (name: string) => {
+      const gate = join(fixture.root, `install-gate-${name}`);
+      expect(runCommand("mkfifo", [gate], fixture.env).status).toBe(0);
       const child = spawn(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
         cwd: fixture.linked,
         env: {
@@ -1388,12 +1388,12 @@ if (process.env.PR_TEST_INSTALL_GATE) {
         });
         child.on("exit", (code) => reject(new Error(`Installer exited ${code}: ${stderr}`)));
       });
-      return { child, ready, result: once(child, "exit"), errors: () => stderr };
+      return { child, gate, ready, result: once(child, "exit"), errors: () => stderr };
     };
-    const creators = [start(), start()];
+    const creators = [start("first"), start("second")];
     try {
       await Promise.all(creators.map((creator) => creator.ready));
-      await writeFile(gate, "xx");
+      await Promise.all(creators.map((creator) => writeFile(creator.gate, "x")));
       for (const creator of creators) {
         expect((await creator.result)[0], creator.errors()).toBe(2);
         expect(creator.errors()).toContain("running wrapper code materialized from");

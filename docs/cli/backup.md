@@ -757,6 +757,9 @@ agent moves or is removed from configuration. Distinct databases belonging to
 the same agent are captured separately. `--no-include-workspace` preserves this
 database coverage.
 
+SQLite headers identify regular database files even when they use `.db`,
+`.sqlite3`, or no extension. Existing `.sqlite` filename handling is unchanged.
+
 Database files under activated plugins' declared `backupResources` with
 `disposition: "include"` also receive managed snapshots. Workboard declares its
 existing store this way, so its PostgreSQL anchor selects a matched PostgreSQL
@@ -768,7 +771,9 @@ offline with `VACUUM`. Committed write-ahead log (WAL) changes are included,
 deleted-page remnants are removed, and sidecars are omitted. Shared and agent
 databases also receive their existing transient-state sanitization and must match
 their expected role and agent owner. Unsafe aliasing or an owner mismatch stops the backup. A declared plugin database that requires unavailable SQLite capabilities
-also stops the backup rather than falling back to a direct file copy.
+also stops the backup rather than falling back to a direct file copy. Restore
+the required SQLite capabilities or use the plugin's own backup procedure before
+retrying. This also applies to newly recognized database filenames.
 
 Other SQLite files under state and configured agent roots, including their
 sidecars, are copied as opaque bytes. Creation reports each filename in

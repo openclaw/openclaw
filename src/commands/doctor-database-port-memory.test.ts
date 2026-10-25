@@ -205,6 +205,7 @@ it("does not open unrelated, unconfigured, or retained custom-path memory stores
       expect(plugin.open).toHaveBeenCalledTimes(1);
       expect(plugin.open.mock.calls[0]?.[0].agentId).toBe("main");
       expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith({ reason: "cli", force: true });
       expect(close).toHaveBeenCalledTimes(1);
       await expect(
         fs.stat(path.join(state.agentDir("custom"), "openclaw-agent.sqlite")),

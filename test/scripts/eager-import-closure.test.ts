@@ -5,7 +5,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -14,6 +13,7 @@ import {
 import { dirname, join, posix, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -28,7 +28,8 @@ const inventoryCheck =
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
 const filesUnder = (root: string) =>
-  readdirSync(root, { recursive: true, withFileTypes: true })
+  listDirectoryTreeStrictSync(root)
+    .map((entry) => entry.dirent)
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name));
 

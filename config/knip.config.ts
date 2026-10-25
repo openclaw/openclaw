@@ -55,6 +55,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // #183131 invokes this fresh-process cron flake workload by path.
+  "scripts/perf/repeat-cron-test.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -84,6 +86,9 @@ const repositoryScriptEntries = [
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
+  // scripts/perf/README.md invokes this Gateway search-count workload and its worker preload.
+  "scripts/perf/memory-search-status-measure.ts!",
+  "scripts/perf/memory-search-status-observer.cjs!",
   // #180983 invokes this isolated plugin-registration benchmark CLI by path.
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
@@ -106,8 +111,19 @@ const repositoryScriptEntries = [
   "scripts/perf/database-page-cache-measure.ts!",
   // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
   "scripts/perf/acp-ledger-eviction-measure.ts!",
+  "scripts/perf/plugin-blob-registration-measure.ts!",
+  // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/node-worker-journal-measure.ts!",
+  "scripts/perf/orphan-recovery-observer.mjs!",
+  "scripts/perf/session-actor-residency-snapshot.mjs!",
+  "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/ws-counter-stress-preload.ts!",
+  "scripts/perf/ws-counter-stress.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
+  // scripts/perf/pairing-live-measure.md invokes this synthetic pairing workload by path.
+  "scripts/perf/pairing-live-measure.mts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -275,6 +291,18 @@ const repositoryScriptEntries = [
   "scripts/perf/session-initial-context-measure.ts!",
   "scripts/perf/sql-probe-measure.ts!",
   "scripts/perf/workspace-manifest-retention.ts!",
+  // Merged benchmark PRs and source headers invoke these retained workloads by exact path.
+  // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
+  "scripts/bench-filesystem-preconditions.mts!",
+  "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/session-transcript-code-measure.mjs!",
+  "scripts/perf/stall-recorder-cost-preload.mjs!",
+  "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/transcript-session-list-measure.ts!",
+  "scripts/perf/transport-pull-allocation-measure.mjs!",
+  // scripts/perf/README.md invokes this lazy-import probe and its preload by path.
+  "scripts/perf/lazy-import-feature-probe.mjs!",
+  "scripts/perf/lazy-import-trace-preload.mjs!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

@@ -90,6 +90,7 @@ import {
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import {
+  expectResumeRequest,
   expectRetainedSuccessfulThread,
   observeAttemptProjectionReady,
   startClockControlledAttempt,
@@ -163,20 +164,6 @@ import { buildThreadStartParams } from "./thread-requests.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
-
-function expectResumeRequest(
-  requests: Array<{ method: string; params: unknown }>,
-  params: Record<string, unknown>,
-) {
-  const request = requests.find((entry) => entry.method === "thread/resume");
-  if (!request) {
-    throw new Error("Expected thread/resume request");
-  }
-  const requestParams = request.params as Record<string, unknown> | undefined;
-  for (const [key, value] of Object.entries(params)) {
-    expect(requestParams?.[key]).toEqual(value);
-  }
-}
 
 const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -3044,6 +3031,7 @@ describe("runCodexAppServerAttempt", () => {
       error,
     );
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       ...(transient ? ["thread/start"] : ["thread/read", "thread/resume", "thread/inject_items"]),
@@ -3099,6 +3087,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3164,6 +3153,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     await finishRun(run, harness, "thread-existing");
     expect(withoutCodexSkillDiscovery(harness.requests.map((request) => request.method))).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "thread/read",
@@ -3958,8 +3948,9 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSettledFailureClientReplacementTest();
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
       [
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",
@@ -3976,8 +3967,8 @@ describe("runCodexAppServerAttempt", () => {
       runSettledFailureClientReplacementTest({ denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests.map(withoutCodexSkillDiscovery)).toEqual([
-      ["config/read", "configRequirements/read", "thread/read"],
-      ["config/read", "configRequirements/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read", "thread/read"],
+      ["configRequirements/read", "config/read", "configRequirements/read"],
     ]);
   });
 
