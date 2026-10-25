@@ -76,10 +76,22 @@ async function mount(
   await waitForSolid(() => expect(page.querySelector("button")).not.toBeNull());
   return page;
 }
+const mountWorkshop = (overrides: Replies, options?: Parameters<typeof createContext>[1]) =>
+  mount(workshopGateway(overrides), options);
 function button(page: HTMLElement, label: string) {
   return Array.from(page.querySelectorAll("button")).find(
     (entry) => entry.textContent?.trim() === label,
   );
+}
+const text = (page: HTMLElement, selector: string) => page.querySelector(selector)?.textContent;
+const loading = (page: HTMLElement) => page.querySelector(".settings-loading-skeleton");
+const waitText = (page: HTMLElement, value: string) =>
+  waitForSolid(() => expect(page.textContent).toContain(value));
+const waitRequest = (request: ReturnType<typeof requests>, method: string, params: object) =>
+  vi.waitFor(() => expect(request).toHaveBeenCalledWith(`skills.workshop.${method}`, params));
+async function click(page: HTMLElement, label: string) {
+  await vi.waitFor(() => expect(button(page, label)).toBeDefined());
+  button(page, label)!.click();
 }
 
 it("keeps the selected agent loading when the former agent's list fails", async () => {
@@ -92,20 +104,18 @@ it("keeps the selected agent loading when the former agent's list fails", async 
   });
   const context = createContext(request);
   const page = await mount(context);
-  expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+  expect(loading(page)).not.toBeNull();
   context.agentSelection.set("scout");
   flush();
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith("skills.workshop.list", { agentId: "scout" }),
-  );
+  await waitRequest(request, "list", { agentId: "scout" });
   previousList.reject(new Error("Former agent list failed"));
   await previousList.promise.catch(() => undefined);
   await waitForSolid(() => {
     expect(page.textContent).not.toContain("Former agent list failed");
-    expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    expect(loading(page)).not.toBeNull();
   });
   selectedList.resolve({ ...list, agentId: "scout", skills: [], archived: [] });
-  await waitForSolid(() => expect(page.querySelector(".settings-loading-skeleton")).toBeNull());
+  await waitForSolid(() => expect(loading(page)).toBeNull());
   expect(page.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -127,12 +137,8 @@ it("shows a failed configuration read and retries only when requested", async ()
   await initialLoad;
   flush();
   expect(configRead).toHaveBeenCalledOnce();
-  expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-    "Configuration temporarily unavailable",
-  );
-  const retry = button(page, "Retry");
-  expect(retry).toBeDefined();
-  retry!.click();
+  expect(text(page, '[role="alert"]')).toContain("Configuration temporarily unavailable");
+  await click(page, "Retry");
   expect(configRead).toHaveBeenCalledTimes(2);
   await runtimeConfig.ensureLoaded();
   flush();
@@ -145,11 +151,8 @@ it("shows a failed configuration read and retries only when requested", async ()
 it("undoes restoring an archived skill by archiving it again", async () => {
   const request = workshopGateway({}, [{ ...change, action: "restore", versionId: undefined }]);
   const page = await mount(request, mutationAccess);
-  await vi.waitFor(() => expect(button(page, "Undo")).toBeDefined());
-  button(page, "Undo")?.click();
-  await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith("skills.workshop.archive", skillTarget),
-  );
+  await click(page, "Undo");
+  await waitRequest(request, "archive", skillTarget);
 });
 
 it("keeps a new agent's restore pending when the former agent's archive fails", async () => {
@@ -162,8 +165,7 @@ it("keeps a new agent's restore pending when the former agent's archive fails", 
   });
   const context = createContext(request, mutationAccess);
   const page = await mount(context);
-  await vi.waitFor(() => expect(button(page, "Archive")).toBeDefined());
-  button(page, "Archive")!.click();
+  await click(page, "Archive");
   flush();
   context.agentSelection.set("scout");
   flush();
@@ -194,7 +196,7 @@ it.each([
     ...mutationAccess,
     scopes,
   });
-  await vi.waitFor(() => expect(page.textContent).toContain(change.summary));
+  await waitText(page, change.summary);
   expect(button(page, "Undo")).toBeUndefined();
 });
 
@@ -208,9 +210,7 @@ it("opens the skill a chat notice links to, even when it is archived", async () 
         {
           name: "release-notes",
           live: false,
-          versions: [
-            { ...version, id: archivedVersion, action: "archive", createdAtMs: Date.now() },
-          ],
+          versions: [{ ...version, id: archivedVersion, action: "archive" }],
         },
       ],
     },
@@ -218,14 +218,12 @@ it("opens the skill a chat notice links to, even when it is archived", async () 
     "skills.workshop.read": { content: "", files: ["SKILL.md"] },
   });
   const page = await mount(request, { search: "?skill=release-notes" });
-  await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith("skills.workshop.read", {
-      ...skillTarget,
-      name: "release-notes",
-      filePath: "SKILL.md",
-      versionId: archivedVersion,
-    }),
-  );
+  await waitRequest(request, "read", {
+    ...skillTarget,
+    name: "release-notes",
+    filePath: "SKILL.md",
+    versionId: archivedVersion,
+  });
   expect(request).not.toHaveBeenCalledWith(
     "skills.workshop.read",
     expect.objectContaining({ name: SKILL }),
@@ -236,20 +234,17 @@ it("opens the skill a chat notice links to, even when it is archived", async () 
 it("compares a saved version's own metadata against today's", async () => {
   const skillFile = (description: string) =>
     `---\nname: ${SKILL}\ndescription: ${description}\n---\n\nSynthetic procedure`;
-  const request = workshopGateway({
+  const page = await mountWorkshop({
     "skills.workshop.read": ({ versionId }) => ({
       ...skillRead,
       content: skillFile(versionId ? "Synthetic old summary" : skill.description),
     }),
   });
-  const page = await mount(request);
-  await vi.waitFor(() => expect(page.textContent).toContain("Synthetic procedure"));
+  await waitText(page, "Synthetic procedure");
   page.querySelectorAll<HTMLButtonElement>(".sw-tab")[2]!.click();
   flush();
   button(page, "Compare")!.click();
-  await vi.waitFor(() =>
-    expect(page.querySelector(".sw-detail__desc")?.textContent).toBe("Synthetic old summary"),
-  );
+  await vi.waitFor(() => expect(text(page, ".sw-detail__desc")).toBe("Synthetic old summary"));
   const diffText = (kind: "remove" | "add") =>
     Array.from(
       page.querySelectorAll(`.sw-diff__line--${kind} .sw-diff__text`),
@@ -260,86 +255,79 @@ it("compares a saved version's own metadata against today's", async () => {
   expect(page.querySelector(".sw-diff__same")).toBeNull();
 });
 
-it("switches the learning mode through the config key", async () => {
-  const runtimeConfig = createRuntimeConfigStub({
-    sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-  });
-  const page = await mount(workshopGateway(), { methods: ["config.patch"], runtimeConfig });
-  expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
-  button(page, "Off")?.click();
-  await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
-  expect(runtimeConfig.patch).toHaveBeenCalledExactlyOnceWith({
-    raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
-    note: "Disable Skill Workshop learning",
-  });
-});
-
 it("shows loading while retrying a failed library read", async () => {
   const retry = createDeferredCore<SkillsWorkshopListResult>();
   const read = vi
     .fn()
     .mockRejectedValueOnce(new Error("Library unavailable"))
     .mockReturnValue(retry.promise);
-  const request = workshopGateway({
+  const page = await mountWorkshop({
     "skills.workshop.list": read,
     "skills.workshop.read": skillRead,
   });
-  const page = await mount(request);
-  await waitForSolid(() => expect(page.textContent).toContain("Library unavailable"));
+  await waitText(page, "Library unavailable");
   button(page, "Retry")!.click();
   await waitForSolid(() => {
     expect(page.textContent).not.toContain("Library unavailable");
-    expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    expect(loading(page)).not.toBeNull();
   });
   expect(button(page, "Learn from history")).toBeDefined();
   retry.resolve(list);
-  await waitForSolid(() => expect(page.textContent).toContain("Synthetic procedure"));
+  await waitText(page, "Synthetic procedure");
   expect(read).toHaveBeenCalledTimes(2);
 });
 
 it("retires a failed file read when another skill is selected", async () => {
   const previous = createDeferredCore<typeof skillRead>();
-  const request = workshopGateway({
+  const page = await mountWorkshop({
     "skills.workshop.list": { ...list, skills: [skill, { ...skill, name: "release-notes" }] },
     "skills.workshop.read": (params) =>
       "name" in params && params.name === SKILL
         ? previous.promise
         : { ...skillRead, content: "Release notes procedure" },
   });
-  const page = await mount(request);
-  await waitForSolid(() =>
-    expect(page.querySelector(".sw-detail__title")?.textContent).toBe(SKILL),
-  );
+  await waitForSolid(() => expect(text(page, ".sw-detail__title")).toBe(SKILL));
   const next = Array.from(page.querySelectorAll<HTMLButtonElement>(".sw-row__main")).find((entry) =>
     entry.textContent?.includes("release-notes"),
   )!;
   next.click();
-  await waitForSolid(() => expect(page.textContent).toContain("Release notes procedure"));
+  await waitText(page, "Release notes procedure");
   previous.reject(new Error("Retired file unavailable"));
   await previous.promise.catch(() => undefined);
   flush();
   expect(page.textContent).not.toContain("Retired file unavailable");
-  expect(page.querySelector(".sw-detail__title")?.textContent).toBe("release-notes");
+  expect(text(page, ".sw-detail__title")).toBe("release-notes");
 });
 
-it("optimistically selects a learning mode and restores the owner value after rejection", async () => {
+it.each([true, false])("sets learning mode (accepted: %s)", async (accepted) => {
   const patch = createDeferredCore<boolean>();
   const runtimeConfig = createRuntimeConfigStub({
     sourceConfig: { skills: { workshop: { autonomous: { mode: "auto" } } } },
     patch: vi.fn(() => patch.promise),
   });
   runtimeConfig.state.lastError = "Mode update refused";
-  const page = await mount(workshopGateway({ "skills.workshop.read": skillRead }), {
-    methods: ["config.patch"],
-    runtimeConfig,
-  });
+  const page = await mountWorkshop(
+    { "skills.workshop.read": skillRead },
+    {
+      methods: ["config.patch"],
+      runtimeConfig,
+    },
+  );
+  expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
   button(page, "Off")!.click();
   await waitForSolid(() => {
     expect(button(page, "Off")?.getAttribute("aria-pressed")).toBe("true");
     expect(button(page, "Off")?.getAttribute("aria-disabled")).toBe("true");
   });
-  expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-  patch.resolve(false);
+  expect(runtimeConfig.patch).toHaveBeenCalledExactlyOnceWith({
+    raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    note: "Disable Skill Workshop learning",
+  });
+  patch.resolve(accepted);
+  if (accepted) {
+    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalled());
+    return;
+  }
   await waitForSolid(() => {
     expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
     expect(button(page, "Auto")?.getAttribute("aria-disabled")).toBeNull();
