@@ -31,15 +31,18 @@ class FixtureWorker extends EventEmitter implements WorkerLifecycle {
   }
   ready = () => this.emit("message", { status: "ready" });
 
-  complete() {
+  complete(error?: string) {
     this.ready();
-    this.reply();
+    this.reply(error);
   }
 
-  reply() {
+  reply(error?: string) {
     const task = this.input;
     assert(task, "No worker task was dispatched");
-    this.emit("message", { taskId: task.taskId, status: "ok", value: task.input });
+    this.emit("message", {
+      taskId: task.taskId,
+      ...(error ? { status: "failed", error } : { status: "ok", value: task.input }),
+    });
   }
 
   ref() {}
@@ -307,16 +310,21 @@ it("keeps a failed native stop latched until a successful rotation joins it", as
   await expect(recovered).resolves.toBe("recovered");
 });
 
-it("does not latch malformed task input", async () => {
-  const { pool, workers } = createPool();
+it("does not latch malformed task input or an ordinary failure from a ready worker", async () => {
+  const { pool, workers, createWorker } = createPool();
   await expect(
     pool.run("malformed transfer", {
       transferList: () => fail("invalid transfer input"),
     }),
   ).rejects.toThrow("invalid transfer input");
+  const failed = pool.run("ordinary task failure", {});
+  const failedResult = expect(failed).rejects.toMatchObject({ code: "failed" });
+  workers[1]!.complete("invalid task data");
+  await failedResult;
   const recovered = pool.run("valid task", {});
-  workers[1]!.complete();
+  workers[1]!.reply();
   await expect(recovered).resolves.toBe("valid task");
+  expect(createWorker).toHaveBeenCalledTimes(2);
 });
 
 it.each([true, false])("waits for both capacities (local first=%s)", async (localFirst) => {
