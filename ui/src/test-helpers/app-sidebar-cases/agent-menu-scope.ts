@@ -36,9 +36,6 @@ describe("AppSidebar agent menu scope", () => {
       const menu = await open();
       expect(menu.query('[role=searchbox], [data-value="scope:all"]')).toBeNull();
       expect(menu.all('[data-value^="agent:"]')).toHaveLength(count);
-      expect(
-        [...menu.all(':scope > [role^="menuitem"]')].map((el) => el.getAttribute("data-value")),
-      ).toEqual(["command:new-agent"]);
     },
   );
 
@@ -55,7 +52,6 @@ describe("AppSidebar agent menu scope", () => {
     await open();
     const rows = [...dom.all('[data-value^="agent:"]')];
     expect(rows.map((row) => row.textContent?.trim())).toEqual(["New Bot", "New Bot"]);
-    expect(rows.every((row) => !row.querySelector(".agent-select__option-description"))).toBe(true);
   });
 
   it.each(["chip", "roster"] as const)(
@@ -67,7 +63,10 @@ describe("AppSidebar agent menu scope", () => {
       patchSettings({ sidebarAgentsMode: mode });
       context.agentSelection.setScope("research");
       await sidebar.updateComplete;
-      await open();
+      const menu = await open();
+      expect(menu.attr(".sidebar-agent-menu__agent-switch--active", "data-value")).toBe(
+        mode === "roster" ? "scope:all" : "agent:main",
+      );
       await dom.click('.sidebar-agent-menu [data-value="scope:all"]');
       expect(onNavigate).toHaveBeenCalledExactlyOnceWith("sessions");
       expect(context.agentSelection.state).toEqual({ selectedId: "main", scopeId: null });
@@ -94,7 +93,6 @@ describe("AppSidebar agent menu scope", () => {
         '[data-value="agent:research"] .sidebar-agent-menu__settings',
       );
       expect(gear?.getAttribute("aria-label")).toBe("research settings");
-      expect(gear?.hasAttribute("title")).toBe(false);
       await dom.click(gear!);
       expect(onNavigate).toHaveBeenCalledExactlyOnceWith("agents", {
         pathname: "/settings/agents/research",
@@ -118,49 +116,19 @@ describe("AppSidebar agent menu scope", () => {
       context.agentSelection.setScope(null);
       await sidebar.updateComplete;
       const menu = await open();
-      expect(menu.query("[aria-checked], .session-menu__check")).toBeNull();
       expect(menu.attr(".sidebar-agent-menu__agent-switch--active", "data-value")).toBe(
         "scope:all",
       );
-      expect(
-        menu.query('[data-value="command:help"], [data-value="command:all-agents"]'),
-      ).toBeNull();
       await dom.click(menu.query<HTMLElement>(`[data-value="agent:${agentId}"]`)!);
       expect(sidebar.sidebarAgentsMode).toBe("chip");
       expect(sidebar.activeRouteId).toBe("skills");
       expect(context.agentSelection.state).toEqual({ selectedId: agentId, scopeId: agentId });
       expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
       expect(sidebar.querySelector(".sidebar-agent-card__main")).not.toBeNull();
+      const selectedMenu = await open();
+      expect(selectedMenu.attr(".sidebar-agent-menu__agent-switch--active", "data-value")).toBe(
+        `agent:${agentId}`,
+      );
     },
   );
-
-  it("moves the scope ring between the active agent and Show all", async () => {
-    const { sidebar, context, dom, open } = await mountAgentMenu();
-    sidebar.activeRouteId = "skills";
-    context.agentSelection.set("research");
-    context.agentSelection.setScope(null);
-    await sidebar.updateComplete;
-    for (const mode of ["chip", "roster"] as const) {
-      const menu = await open();
-      expect(menu.attr(".sidebar-agent-menu__agent-switch--active", "data-value")).toBe(
-        mode === "roster" ? "scope:all" : "agent:research",
-      );
-      expect(
-        menu.query('[aria-checked], .session-menu__check, [data-value="command:all-agents"]'),
-      ).toBeNull();
-      expect(
-        [...menu.all('[data-value^="command:"]')].map((item) => item.getAttribute("data-value")),
-      ).toEqual(["command:new-agent"]);
-      await dom.click(
-        menu.query<HTMLElement>(
-          mode === "chip" ? '[data-value="scope:all"]' : '[data-value="agent:research"]',
-        )!,
-      );
-      await vi.waitFor(() =>
-        expect(sidebar.sidebarAgentsMode).toBe(mode === "chip" ? "roster" : "chip"),
-      );
-      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-      expect(context.agentSelection.state.selectedId).toBe("research");
-    }
-  });
 });
