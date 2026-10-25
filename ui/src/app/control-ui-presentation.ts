@@ -20,7 +20,7 @@ const ACCENT_CSS_VARIABLES = [
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
-const systemChromeRevisions = new WeakMap<HTMLElement, string>();
+const systemChromeRevisions = new WeakMap<HTMLElement, { source: string; palette: string }>();
 
 // Project the independently rendered shell into the static document's chrome and head metadata.
 export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: boolean): void {
@@ -35,13 +35,17 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
   const narrow = globalThis.matchMedia?.(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
-  const revision = JSON.stringify([
-    root.dataset.theme,
-    root.dataset.themeMode,
-    controlUiPaletteStyle(root),
-    narrow && hasChatShell,
-  ]);
-  if (!paletteChanged && systemChromeRevisions.get(root) === revision) {
+  const revision = (style: string | null) =>
+    JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrow && hasChatShell]);
+  const source = revision(root.getAttribute("style"));
+  const previous = systemChromeRevisions.get(root);
+  // Most shell commits do not touch styles. Keep that path free of declaration scans.
+  if (!paletteChanged && previous?.source === source) {
+    return;
+  }
+  const palette = revision(controlUiPaletteStyle(root));
+  if (!paletteChanged && previous?.palette === palette) {
+    systemChromeRevisions.set(root, { source, palette });
     return;
   }
   const computedStyle = getComputedStyle(root);
@@ -58,7 +62,7 @@ export function syncControlUiSystemChrome(paletteChanged = false, chatShell?: bo
     meta.content = background;
     meta.removeAttribute("media");
   }
-  systemChromeRevisions.set(root, revision);
+  systemChromeRevisions.set(root, { source: revision(root.getAttribute("style")), palette });
 }
 
 export function applyControlUiAccent(userAccent?: string): void {
