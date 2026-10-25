@@ -226,6 +226,11 @@ it(
                   expectedOwnerId: "forged",
                 }),
             );
+          const refused = await createGatewayTool({ senderIsOwner: false }).execute("cleanup", {
+            action: "update.cleanup",
+            senderIsOwner: true,
+          });
+          expect(refused.details).toMatchObject({ ok: false, code: "owner_required" });
           const preview = await invoke(true);
           expect(preview.details).toMatchObject({ status: "preview", totals: { removedFiles: 0 } });
           expect(captureBytes(oldCapture)).toEqual(originalBytes);
@@ -324,6 +329,9 @@ it(
             observation.beforeAdmission = () => {};
             commands.ownerAllowFrom = ["owner"];
           }
+          console.info(
+            "cleanup RPC proof: allowed deletion; non-admin and wrong owner denied; real device revocation after one removal prevented subsequent deletion; current capture and successful outcome retained",
+          );
         } finally {
           observation.beforeAdmission = () => {};
           observation.request = () => {};

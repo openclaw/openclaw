@@ -55,10 +55,8 @@ function createCoordinator(
   }: Partial<CoordinatorOptions["params"]> = {},
   options: Partial<Omit<CoordinatorOptions, "params">> = {},
 ) {
-  const {
-    logReload = { info: vi.fn(), warn: vi.fn() },
-    requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const })),
-  } = params;
+  const logReload = { info: vi.fn(), warn: vi.fn() };
+  const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   const coordinator = createGatewayRestartCoordinator({
     params: { logReload, requestRecoveryRestart, ...params, scheduler },
     reloadSignal: options.reloadSignal ?? beginGatewayReloadLifecycle(),
@@ -135,19 +133,48 @@ describe("gateway restart readiness preflight", () => {
     expect(coordinator.hasOutstandingGatewayRestart()).toBe(false);
   });
 
-  it("keeps serving while restart preparation is pending", async () => {
-    const coordinator = createCoordinator();
-    expect(coordinator.request(() => new Promise<OpenClawConfig>(() => {})).status).toBe(
-      "accepted",
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(coordinator.requestRecoveryRestart).not.toHaveBeenCalled();
-    expect(coordinator.logReload.warn).toHaveBeenLastCalledWith(
-      expect.stringMatching(
-        /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
-      ),
-    );
-  });
+  it.each(["failed", "pending"] as const)(
+    "keeps serving while restart preflight is %s",
+    async (state) => {
+      const pending = state === "pending";
+      const assertRestartReady = vi
+        .fn<() => Promise<void> | void>()
+        .mockRejectedValueOnce(new Error("state schema is noncanonical"))
+        .mockResolvedValue(undefined);
+      const prepareRuntimeConfig = vi.fn(() =>
+        pending ? new Promise<OpenClawConfig>(() => {}) : Promise.resolve({}),
+      );
+      const coordinator = createCoordinator(pending ? {} : { assertRestartReady });
+      const { logReload, requestRecoveryRestart } = coordinator;
+      expect(coordinator.request(prepareRuntimeConfig).status).toBe("accepted");
+      await vi.advanceTimersByTimeAsync(pending ? 30_000 : 0);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      if (pending) {
+        expect(logReload.warn).toHaveBeenLastCalledWith(
+          expect.stringMatching(
+            /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
+          ),
+        );
+        return;
+      }
+      expect(assertRestartReady).toHaveBeenCalledOnce();
+      expect(prepareRuntimeConfig).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "gateway restart preflight failed: Error: state schema is noncanonical",
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(assertRestartReady).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.info).not.toHaveBeenCalledWith(
+        "all operations and replies completed; restarting gateway now",
+      );
+      coordinator.request(prepareRuntimeConfig);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(assertRestartReady).toHaveBeenCalledTimes(2);
+      expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
+      expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    },
+  );
 
   it("prepares outside the restart-signal fence so lease holders can finish", async () => {
     // A config reload holds the plugin lifecycle lease and needs root admission
@@ -177,16 +204,46 @@ describe("gateway restart readiness preflight", () => {
     expect(logReload.warn).not.toHaveBeenCalledWith(expect.stringContaining("failed"));
   });
 
+  it("keeps the timed-out deferral cancellable so a later request can supersede it", async () => {
+    const cancel = vi.fn();
+    const deferSpy = vi.spyOn(restartModule, "deferGatewayRestartUntilIdle");
+    let capturedHooks: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]["hooks"];
+    deferSpy.mockImplementation(
+      (opts: Parameters<typeof restartModule.deferGatewayRestartUntilIdle>[0]) => {
+        capturedHooks = opts.hooks;
+        return { cancel };
+      },
+    );
+    const activeCounts = { ...zeroActiveCounts, totalActive: 1, agentRuns: 1 };
+    const coordinator = createCoordinator(
+      { assertRestartReady: vi.fn(), requestRecoveryRestart: vi.fn() },
+      {
+        getActiveCounts: () => activeCounts,
+        formatDeferredWorkStatus: () => "1 active agent run",
+      },
+    );
+
+    const prepareRuntimeConfig = async () => ({});
+    coordinator.request(prepareRuntimeConfig);
+    expect(deferSpy).toHaveBeenCalledOnce();
+
+    capturedHooks?.onTimeout?.(1, 300_000);
+
+    coordinator.request(prepareRuntimeConfig);
+
+    expect(cancel).toHaveBeenCalled();
+  });
   it("forces the restart at the deadline when production timeout diagnostics cannot inspect work", async () => {
     const queueSize = getTotalQueueSize.mockReturnValue(1);
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const reloadSignal = beginGatewayReloadLifecycle();
     const tracker = createGatewayActiveWorkTracker({ params: { logReload }, reloadSignal });
-    const { request, requestRecoveryRestart } = createCoordinator(
-      { logReload },
+    const coordinator = createCoordinator(
+      { logReload, requestRecoveryRestart },
       { reloadSignal, ...tracker },
     );
-    expect(request().status).toBe("accepted");
+    expect(coordinator.request().status).toBe("accepted");
     queueSize.mockImplementation(() => {
       throw new Error("pending-work store unavailable");
     });

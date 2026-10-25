@@ -199,6 +199,39 @@ it("does not replay a nested failure reconciled before the outer callback return
   expect(result).toBe("reconciled");
 });
 
+it("checks shared nested authority once per assertion and revalidates after awaits", async () => {
+  const includePath = path.join(fixture.root, "include.json");
+  fs.writeFileSync(includePath, "{}\n");
+  const refusal = new Error("nested authority revoked");
+  const authority = vi.fn<() => void>();
+  let captured: (() => void) | undefined;
+  await lock(async () => {
+    await lock(
+      async () => {
+        captured = captureConfigWriteLockGuard(includePath);
+        if (!captured) {
+          throw new Error("Missing nested source guard");
+        }
+        authority.mockClear();
+        for (const calls of [1, 2]) {
+          captured();
+          expect(authority).toHaveBeenCalledTimes(calls);
+          await Promise.resolve();
+        }
+        authority.mockImplementation(() => {
+          throw refusal;
+        });
+        expect(captured).toThrow(refusal);
+        expect(authority).toHaveBeenCalledTimes(3);
+      },
+      authority,
+      includePath,
+    );
+  }, authority);
+  expect(captured).toThrow("Config write has no live source ownership for this path.");
+  expect(authority).toHaveBeenCalledTimes(3);
+});
+
 it("retains ordered refusal latches when a composed authority was checked earlier", async () => {
   const events: string[] = [];
   const refusal = new Error("composed authority revoked");

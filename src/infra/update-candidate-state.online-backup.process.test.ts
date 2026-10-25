@@ -70,6 +70,16 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
+function checkDatabase(db: ReturnType<typeof openNodeSqliteDatabase>) {
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  expect(db.prepare("SELECT rowid, value FROM evidence").all()).toEqual([
+    { rowid: 71, value: "preserved" },
+  ]);
+  expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
+    bytes: 4194304,
+  });
+}
+
 it.for(["snapshot", "discover"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
@@ -85,9 +95,10 @@ it.for(["snapshot", "discover"] as const)(
       const targetStateDir = path.join(root, "candidate");
       const candidateRoot = path.join(root, "package");
       const shared = path.join(stateDir, "state", "openclaw.sqlite");
-      await fs.mkdir(path.dirname(shared), { recursive: true });
-      {
-        using db = openNodeSqliteDatabase(shared);
+      const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      for (const file of [shared, agent]) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        using db = openNodeSqliteDatabase(file);
         db.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA user_version = 3;
@@ -95,7 +106,13 @@ it.for(["snapshot", "discover"] as const)(
           INSERT INTO witness VALUES (1, 0, 0), (2, 0, 0);
           CREATE TABLE payload (bytes BLOB);
           INSERT INTO payload VALUES (zeroblob(4194304));
+          CREATE TABLE evidence(value TEXT);
+          INSERT INTO evidence(rowid, value) VALUES(71, 'preserved');
         `);
+        if (file === shared) {
+          db.exec("CREATE TABLE agent_databases (path TEXT);");
+          db.prepare("INSERT INTO agent_databases VALUES (?)").run(path.relative(stateDir, agent));
+        }
       }
       await fs.mkdir(candidateRoot);
       await fs.mkdir(targetStateDir);
@@ -111,43 +128,55 @@ it.for(["snapshot", "discover"] as const)(
       import { DatabaseSync } from "node:sqlite";
       import { setTimeout as sleep } from "node:timers/promises";
       ${fixtureReceiptClientSource(receipts.endpoint)}
-      const file = ${JSON.stringify(shared)};
-      const db = new DatabaseSync(file);
+      const files = ${JSON.stringify([shared, agent])};
+      const stores = files.map(file => new DatabaseSync(file));
       try {
-        db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
+        for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
         fs.writeFileSync(${JSON.stringify(progress)}, "");
         let generation = 0;
         while (!fs.existsSync(${JSON.stringify(stop)})) {
+          for (const db of stores) {
             db.exec("BEGIN IMMEDIATE");
             db.prepare("UPDATE witness SET generation = ?, inverse = ?").run(generation, -generation);
             db.exec("COMMIT");
+          }
           fs.appendFileSync(${JSON.stringify(progress)}, String(generation++) + "\\n");
           if (generation === 1) {
             fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
             sendReceipt(${JSON.stringify(ready)}, "ready");
           }
+          for (const file of files) {
             if (fs.statSync(file + "-wal").size > 16 * 1024 * 1024) {
               throw new Error("bounded writer WAL exceeded 16 MiB");
             }
+          }
           await sleep(10);
         }
         process.stdout.write(JSON.stringify({ generation }));
       } finally {
-        db.close();
+        for (const db of stores) db.close();
       }
     `,
       );
       const preload = path.join(root, "slow-source-copy.cjs");
+      const backups = path.join(root, "backups.jsonl");
       // Reproduce a busy family changing during raw copy without replacing SQLite or its worker.
       await fs.writeFile(
         preload,
         `
       const fs = require("node:fs");
+      const sqlite = require("node:sqlite");
+      const backup = sqlite.backup;
+      sqlite.backup = async function(source, destination, ...args) {
+        fs.appendFileSync(${JSON.stringify(backups)}, JSON.stringify({ destination }) + "\\n");
+        return backup(source, destination, ...args);
+      };
       const opened = new Map();
       const open = fs.openSync, read = fs.readSync, close = fs.closeSync;
+      const sources = new Set(${JSON.stringify([shared, agent])});
       fs.openSync = function(file, ...args) {
         const fd = open.call(this, file, ...args);
-        if (String(file) === ${JSON.stringify(shared)}) opened.set(fd, true);
+        if (sources.has(String(file))) opened.set(fd, true);
         return fd;
       };
       fs.readSync = function(fd, buffer, offset, length, position) {
@@ -198,6 +227,7 @@ it.for(["snapshot", "discover"] as const)(
           databaseInventory: [...inventory.databases.keys()],
         };
       }
+      await fs.writeFile(backups, "");
       const writing = runCommandBuffered([process.execPath, writer], {
         signal,
         timeoutMs: 30_000,
@@ -216,13 +246,17 @@ it.for(["snapshot", "discover"] as const)(
           .filter((line) => line.startsWith("State schema progress: "))
           .map((line) => JSON.parse(line.slice("State schema progress: ".length)));
         const completed = progressFrames.filter((entry) => entry.snapshot?.status === "completed");
-        expect(completed).toHaveLength(1);
+        expect(completed).toHaveLength(mode === "snapshot" ? 2 : 1);
         for (const { snapshot } of completed) {
           expect(snapshot.copiedBytes).toBeGreaterThan(4194304);
           expect(snapshot.copiedPages).toBeGreaterThan(0);
           expect(snapshot.copiedPages).toBe(snapshot.totalPages);
           expect(snapshot.elapsedMs).toBeGreaterThanOrEqual(0);
         }
+        // One fresh materialization per source; verification consumes that private image.
+        expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
+          mode === "snapshot" ? 2 : 1,
+        );
         const observedAfter = await readWriterGeneration(progress);
         expect(observedAfter).toBeGreaterThan(before);
         // A committed generation can precede its watermark; join the writer before bounding copies.
@@ -237,31 +271,38 @@ it.for(["snapshot", "discover"] as const)(
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),
           );
-          expect(snapshot.versions).toContainEqual(
-            expect.objectContaining({ path: shared, userVersion: 3 }),
+          expect(snapshot.versions).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ path: shared, userVersion: 3 }),
+              expect.objectContaining({ path: agent, userVersion: 3 }),
+            ]),
           );
-          using db = openNodeSqliteDatabase(
-            path.join(targetStateDir, path.relative(stateDir, shared)),
-            { readOnly: true },
-          );
-          expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-          const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
-          expect(rows).toHaveLength(2);
-          expect(rows[0]).toEqual(rows[1]);
-          expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
-          expect(rows[0]?.generation).toBeLessThanOrEqual(after);
-          expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
+          for (const source of [shared, agent]) {
+            using db = openNodeSqliteDatabase(
+              path.join(targetStateDir, path.relative(stateDir, source)),
+              { readOnly: true },
+            );
+            checkDatabase(db);
+            const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toEqual(rows[1]);
+            expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
+            expect(rows[0]?.generation).toBeLessThanOrEqual(after);
+            expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
+          }
         }
       } finally {
         await fs.writeFile(stop, "stop");
         const ended = await writing;
         expect(ended.code, ended.stderr.toString()).toBe(0);
       }
-      using db = openNodeSqliteDatabase(shared, { readOnly: true });
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(
-        db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
-      ).toEqual({ n: 0 });
+      for (const source of [shared, agent]) {
+        using db = openNodeSqliteDatabase(source, { readOnly: true });
+        checkDatabase(db);
+        expect(
+          db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
+        ).toEqual({ n: 0 });
+      }
     }, signal));
   },
 );

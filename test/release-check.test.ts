@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,12 +19,17 @@ import {
   writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempRoots: string[] = [];
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function fixture(files: Record<string, string> = {}) {
-  const root = tempDirs.make("openclaw-release-check-");
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+  tempRoots.push(root);
   for (const [file, content] of Object.entries(files)) {
     const target = join(root, file);
     mkdirSync(dirname(target), { recursive: true });
@@ -40,7 +46,6 @@ const ambientEnv = {
   TMPDIR: "/tmp/original-tmp",
   OPENAI_API_KEY: "real-secret",
   OPENCLAW_CONFIG_PATH: "/tmp/leaky-config.json",
-  OPENCLAW_STATE_DIR: "/tmp/operator-state",
 };
 const isolatedEnv = (home: string) => ({
   PATH:
@@ -84,7 +89,7 @@ describe("packed CLI smoke", () => {
           SystemRoot: "C:\\Windows",
           GITHUB_TOKEN: "redacted",
         },
-        { ...smokeHome, OPENAI_API_KEY: "override-openai-secret" },
+        smokeHome,
       ),
     ).toEqual({
       ...isolatedEnv(smokeHome.HOME),
@@ -98,10 +103,13 @@ describe("packed CLI smoke", () => {
   });
 
   it("isolates bundled plugin activation from ambient OpenClaw state", () => {
+    const env = createPackedBundledPluginActivationSmokeEnv(
+      { HOME: "/tmp/operator-home", OPENCLAW_STATE_DIR: "/tmp/operator-state" },
+      "/tmp/release-check",
+    );
+
     const homeDir = join("/tmp/release-check", "activation-home");
-    expect(
-      createPackedBundledPluginActivationSmokeEnv(ambientEnv, "/tmp/release-check"),
-    ).toMatchObject({
+    expect(env).toMatchObject({
       HOME: homeDir,
       OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
     });
@@ -120,6 +128,16 @@ describe("packed CLI smoke", () => {
       plugins: { enabled: true, allow: ["telegram"], entries: { telegram: { enabled: true } } },
     });
     expect(config).not.toHaveProperty("models");
+  });
+
+  it("does not admit provider credentials through smoke overrides", () => {
+    const env = createPackedCliSmokeEnv(
+      { HOME: "/tmp/original-home" },
+      { ...smokeHome, OPENAI_API_KEY: "override-openai-secret" },
+    );
+
+    expect(env).toMatchObject(smokeHome);
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("skips plugin command discovery during packed completion cache smoke", () => {
@@ -199,15 +217,24 @@ it.skipIf(process.platform === "win32")("flags non-executable skill shell script
   ]);
 });
 
-it.each([
-  ["dist/entry.js", "extensions/qa-lab/src/runtime-api.ts"],
-  ["dist/plugin-sdk/channel-test-helpers.d.ts", "src/plugin-sdk/test-helpers/session.ts"],
-])("blocks private source references in %s, not release notes", (file, source) => {
-  const root = fixture({
-    [file]: `//#region ${source}\n`,
-    "CHANGELOG.md": "local QA notes mention extensions/qa-lab/\n",
+describe("collectForbiddenPackPaths", () => {
+  it("blocks root dist chunks that still reference private qa lab sources", () => {
+    const tempRoot = fixture({
+      "dist/entry.js": "//#region extensions/qa-lab/src/runtime-api.ts\n",
+      "CHANGELOG.md": "local QA notes mention extensions/qa-lab/\n",
+    });
+
+    expect(collectForbiddenPackContentPaths(["dist/entry.js", "CHANGELOG.md"], tempRoot)).toEqual([
+      "dist/entry.js",
+    ]);
   });
-  expect(collectForbiddenPackContentPaths([file, "CHANGELOG.md"], root)).toEqual([file]);
+
+  it("blocks root plugin SDK declarations that still reference private test helpers", () => {
+    const file = "dist/plugin-sdk/channel-test-helpers.d.ts";
+    const tempRoot = fixture({ [file]: "//#region src/plugin-sdk/test-helpers/session.ts\n" });
+
+    expect(collectForbiddenPackContentPaths([file], tempRoot)).toEqual([file]);
+  });
 });
 
 it("packs bundled plugin runtime sidecars only for dynamic boundaries", () => {
@@ -223,10 +250,13 @@ it("preserves the unchanged released progress consumer behavior", async () => {
   await import("../scripts/fixtures/packed-plugin-sdk-progress-consumer.js");
 });
 
-it("normalizes legacy singleton npm pack entries", () => {
+it("normalizes npm <=11 arrays and npm 12 name-keyed objects", () => {
   const entry = { filename: "openclaw-2026.7.2.tgz", unpackedSize: 120_354_302 };
 
+  expect(resolveNpmJsonEntries([entry])).toEqual([entry]);
   expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
+  expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
+  expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
 });
 
 it("rejects path-like npm pack tarball filenames", () => {

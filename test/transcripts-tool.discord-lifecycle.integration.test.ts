@@ -20,7 +20,7 @@ import { createTempDirTracker } from "./helpers/temp-dir.js";
 const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
 
 defineDiscordVoiceTests((h) => {
-  const { expect, expectDefined, it, vi } = h;
+  const { expect, expectDefined, it, vi, requireRecord } = h;
   it.each(["manager destruction", "completed", "error", "interleaved finalization"] as const)(
     "retires replaced captures and handles %s without stopping a Discord replacement",
     async (scenario) => {
@@ -144,16 +144,23 @@ defineDiscordVoiceTests((h) => {
         h.expectConnectedStatus(manager, "1001");
         expect(providerStop).not.toHaveBeenCalled();
 
+        const status = await execute({ action: "status" });
+        const active = requireRecord(status.details, "transcript status").active;
+        expect(Array.isArray(active)).toBe(true);
+        if (!Array.isArray(active)) {
+          throw new Error("expected transcript status active sessions");
+        }
         // Keep the stale-status failure first, then exercise historical recovery as well.
-        expect.soft((await execute({ action: "status" })).details).toMatchObject({
-          active: [expect.objectContaining({ sessionId: "second" })],
-        });
+        expect
+          .soft(active.map((capture) => requireRecord(capture, "active capture").sessionId))
+          .toEqual(["second"]);
         await vi.waitFor(async () => {
           expect((await store.readSession("first"))?.stoppedAt).toEqual(expect.any(String));
         });
 
         await execute({ action: "stop", sessionId: "first" });
-        expect(await execute({ action: "summarize", sessionId: "first" })).toMatchObject({
+        const summarized = await execute({ action: "summarize", sessionId: "first" });
+        expect(summarized).toMatchObject({
           details: { summary: { sessionId: "first", utteranceCount: 1 } },
         });
         expect.soft(providerStop).not.toHaveBeenCalled();
@@ -166,13 +173,14 @@ defineDiscordVoiceTests((h) => {
           terminal === "manager destruction" ? undefined : h.lastRealtimeBridgeParams();
         const speaker = { userId: "u-speaker", speakerLabel: "Speaker", senderIsOwner: false };
         const beginTurn = () => h.beginSpeakerTurn(h.getSessionEntry(manager), speaker);
+        const turn = provider ? beginTurn() : undefined;
         if (provider) {
-          beginTurn();
           const onClose = expectDefined(provider.onClose, "provider terminal callback");
           onClose(terminal === "error" ? "error" : "completed");
           h.expectConnectedStatus(manager, "1001");
           await expectStatus("second", true);
-          expect((await read("second")).stoppedAt).toBeUndefined();
+          const ongoing = await read("second");
+          expect(ongoing.stoppedAt).toBeUndefined();
 
           beginTurn();
           const recovered = expectDefined(h.lastRealtimeBridgeParams(), "recovered speaker");
@@ -200,6 +208,26 @@ defineDiscordVoiceTests((h) => {
           stoppedAt: expect.any(String),
         });
         expect(providerStop).toHaveBeenCalledOnce();
+
+        if (provider) {
+          const stoppedSecond = await read("second");
+          await start("third");
+          await join();
+          turn?.close();
+          provider.onClose?.("error");
+          provider.onReady?.();
+          provider.onTranscript?.("user", "Late text from the retired provider.", true);
+          await execute({ action: "stop", sessionId: "second" });
+          expect(providerStop).toHaveBeenCalledOnce();
+          h.expectConnectedStatus(manager, "1001");
+          await expectStatus("third", true);
+          expect(await store.readSession("second")).toMatchObject({
+            stoppedAt: stoppedSecond.stoppedAt,
+          });
+          expect(await texts(stoppedSecond)).toEqual(secondTexts);
+          const third = await read("third");
+          expect(await store.readUtterancesForSession(third)).toEqual([]);
+        }
       } finally {
         summaryWrite.mockRestore();
         resumeFinalizer?.();

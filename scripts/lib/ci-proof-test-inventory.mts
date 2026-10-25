@@ -3927,6 +3927,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/slack-download-read-authority.integration.test.ts",
   "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/subagent-announce-origin.integration.test.ts",
+  "test/talk-browser-defaults.test.ts",
   "test/telegram-outbound-permanent-rejection-loopback.test.ts",
   "test/telegram-recovery-notice-send.test.ts",
   "test/test-env.test.ts",

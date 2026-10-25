@@ -32,15 +32,15 @@ const lease = "fixture-owned-lease";
 const blocker = { kind: "root-request", count: 1, message: "one root" };
 const held = [{ phase: "migration", count: 1 }];
 
-function prepare(state = "ready", custody = []) {
+function prepare(status = "ready", custody = []) {
   return {
-    status: state,
-    ...(state === "busy"
+    status,
+    ...(status === "busy"
       ? { reason: "active-work" }
       : { suspensionId: lease, expiresAtMs: expiry() }),
-    ...(state === "ready" ? {} : { retryAfterMs: 20_000 }),
-    activeCount: state === "ready" ? 0 : 1,
-    blockers: state === "ready" ? [] : [blocker],
+    ...(status === "ready" ? {} : { retryAfterMs: 20_000 }),
+    activeCount: status === "ready" ? 0 : 1,
+    blockers: status === "ready" ? [] : [blocker],
     ...(custody === undefined ? {} : { writeCustody: custody }),
   };
 }
@@ -68,6 +68,7 @@ function parse(kind, payload, ...args) {
 }
 
 const nativeKinds = ["agent-run", "acp-run", "media-generation"];
+const historicalKinds = ["queue", "reply", "embedded-run", "background-exec", "cron-run", "task", "root-request", "session-admission", "session-mutation", "chat-run", "queued-turn", "terminal-persistence", "terminal-session"];
 const taskDetail = { taskId: "fixture-task", status: "running", runtime: "cli", runId: "fixture-run", label: "fixture label", title: "fixture title" };
 
 function blockerPayload(kind, shape, task) {
@@ -76,11 +77,22 @@ function blockerPayload(kind, shape, task) {
   return value;
 }
 
-test("legacy task details pass the pinned wire boundary without custody metadata", () => {
+test("pinned contract accepts exact predecessor and current producer vocabularies without mutation", () => {
+  for (const kind of [...historicalKinds, ...nativeKinds]) {
+    for (const shape of ["draining", "busy", "status"]) {
+      const value = blockerPayload(kind, shape);
+      const before = JSON.stringify(value);
+      const validate = shape === "status" ? contract.validateGatewaySuspendStatusResult : contract.validateGatewaySuspendPrepareResult;
+      assert.equal(validate(value), true, `${shape}: ${kind}`);
+      assert.equal(JSON.stringify(value), before);
+    }
+  }
   for (const kind of ["task", "background-exec"]) {
     for (const shape of ["draining", "busy", "status"]) {
       const value = blockerPayload(kind, shape, taskDetail);
       delete value.writeCustody;
+      const validate = shape === "status" ? contract.validateGatewaySuspendStatusResult : contract.validateGatewaySuspendPrepareResult;
+      assert.equal(validate(value), true, `${shape}: historical ${kind} detail`);
       const accepted = parse(shape === "status" ? "status" : "prepare", value);
       assert.equal(accepted.status, 0, accepted.stderr);
       assert.match(accepted.stdout.trim(), / unknown$/);
@@ -108,13 +120,10 @@ for (const kind of nativeKinds) {
 test("current-only kinds cannot acquire historical task details or unknown wire fields", () => {
   for (const shape of ["draining", "busy", "status"]) {
     const validate = shape === "status" ? contract.validateGatewaySuspendStatusResult : contract.validateGatewaySuspendPrepareResult;
-    for (const kind of ["future-work", 1, null]) { assert.equal(validate(blockerPayload(kind, shape)), false); }
+    for (const kind of ["future-work", 1, null]) assert.equal(validate(blockerPayload(kind, shape)), false);
     for (const blockers of [null, {}, "blocked", [null]]) {
       assert.equal(validate({ ...blockerPayload("agent-run", shape), blockers }), false);
     }
-    const unsafeCount = blockerPayload("agent-run", shape);
-    unsafeCount.blockers[0].count = Number.MAX_SAFE_INTEGER + 1;
-    assert.equal(validate(unsafeCount), false);
     for (const kind of nativeKinds) {
       assert.equal(validate(blockerPayload(kind, shape, taskDetail)), false);
       const extra = blockerPayload(kind, shape);
@@ -124,7 +133,7 @@ test("current-only kinds cannot acquire historical task details or unknown wire 
     for (const task of [
       { ...taskDetail, status: "finished" }, { ...taskDetail, runtime: "future" },
       { ...taskDetail, taskId: 1 }, { ...taskDetail, label: false }, { ...taskDetail, unexpected: true },
-    ]) { assert.equal(validate(blockerPayload("task", shape, task)), false); }
+    ]) assert.equal(validate(blockerPayload("task", shape, task)), false);
   }
 });
 
@@ -243,7 +252,7 @@ ${body}
 test("owner allows ordinary bounded interruption for clear or unknown custody", () => {
   for (const presence of ["clear", "unknown"]) {
     const payload = status("draining");
-    if (presence === "unknown") { delete payload.writeCustody; }
+    if (presence === "unknown") delete payload.writeCustody;
     const result = ownerRun("check_suspension", payload);
     assert.equal(result.status, 0, result.stderr);
   }
@@ -257,6 +266,26 @@ test("owner refuses positive write custody without treating it as malformed wire
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /stage=policy.*custody=held/);
     assert.doesNotMatch(result.stderr, /malformed|stage=proof/);
+  }
+});
+
+test("native blockers retain final-write, safe-count and write-custody policy", () => {
+  for (const kind of nativeKinds) {
+    const clear = blockerPayload(kind, "status");
+    const accepted = ownerRun("check_suspension", clear);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    const custody = { ...clear, writeCustody: held };
+    const blocked = ownerRun("check_suspension", custody);
+    assert.equal(blocked.status, 1, blocked.stderr);
+    assert.match(blocked.stderr, /stage=policy.*custody=held/);
+    const persistence = structuredClone(clear);
+    delete persistence.writeCustody;
+    persistence.blockers.push({ kind: "terminal-persistence", count: 1, message: "fixture final write" });
+    assert.equal(ownerRun("check_suspension", persistence).status, 1);
+    const unsafeCount = structuredClone(clear);
+    unsafeCount.blockers[0].count = Number.MAX_SAFE_INTEGER + 1;
+    assert.notEqual(parse("status", unsafeCount).status, 0);
+    assert.notEqual(parse("prepare", blockerPayload(kind, "ready")).status, 0);
   }
 });
 
@@ -281,7 +310,6 @@ test("owner retains generation, deadline and terminal-persistence guards", () =>
   assert.equal(stale.status, 1);
   assert.match(stale.stderr, /stage=generation/);
   const draining = status("draining");
-  assert.notEqual(parse("prepare", blockerPayload("agent-run", "ready")).status, 0);
   assert.equal(ownerRun("drain_budget_elapsed=0\ncheck_suspension", draining).status, 1);
   assert.equal(ownerRun("interrupt_after_drain=0\ncheck_suspension", draining).status, 1);
   draining.blockers = [{ kind: "terminal-persistence", count: 1, message: "pending write" }];
