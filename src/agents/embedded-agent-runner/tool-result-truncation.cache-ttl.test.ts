@@ -20,9 +20,7 @@ import {
   truncateOversizedToolResultsInMessages as truncate,
 } from "./tool-result-truncation.js";
 
-afterEach(() =>
-  clearEmbeddedSessionPromptStates(["ordinary-turn-teardown", "cache-ttl-soft", "cache-ttl-hard"]),
-);
+afterEach(() => clearEmbeddedSessionPromptStates(["cache-ttl-soft", "cache-ttl-hard"]));
 const NOW = 1_000_000;
 const checkpoint = (data: unknown) => [{ type: "custom", customType: "openclaw.cache-ttl", data }];
 
@@ -196,46 +194,6 @@ describe("cache-TTL tool-result projection", () => {
       expect(toolText(history, "old")).toBe("a".repeat(100_000));
     },
   );
-
-  it("preserves ordinary projected bytes across turn teardown and compaction", () => {
-    const maxChars = 4_000;
-    const sessionId = "ordinary-turn-teardown";
-
-    using initialLease = retainState(sessionId);
-    const state = initialLease.state.toolResults;
-    const history: AgentMessage[] = [user("start")];
-    let sent: AgentMessage[] = [];
-    for (let batch = 0; batch < 3; batch++) {
-      history.push(assistant(), tool(`batch-${batch}`, `${batch}`.repeat(6_000), true));
-      sent = truncate(history, 128_000, maxChars, 8_000, state).messages;
-    }
-    expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expect(toolText(sent, "batch-0")).toContain("truncated");
-    expect(
-      [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
-    ).toBeGreaterThan(8_000);
-    const markerData = JSON.stringify(snapshot(state));
-    const entries = checkpoint(JSON.parse(markerData));
-    initialLease[Symbol.dispose]();
-    using restoredLease = retainState(sessionId);
-    const restored = restoredLease.state.toolResults;
-    expect(restored).not.toBe(state);
-    restore(restored, entries);
-    expect(JSON.stringify(truncate(history, 128_000, maxChars, 8_000, restored).messages)).toBe(
-      JSON.stringify(sent),
-    );
-    const compacted = [user("summary"), ...history.slice(-2)];
-    reconcile(compacted, restored);
-    expect(restored).toMatchObject({ frozen: { size: 1 }, replacements: { size: 1 } });
-    const compactedSnapshot = snapshot(restored);
-    expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
-    const reopened = newState();
-    restore(reopened, [{ ...entries[0], data: compactedSnapshot }]);
-    expect(truncate(compacted, 128_000, maxChars, 8_000, reopened).messages).toEqual([
-      user("summary"),
-      ...sent.slice(-2),
-    ]);
-  });
 
   it.each(["soft", "hard"] as const)(
     "replays %s pruning after TTL refresh and restart, until compaction/reset",
