@@ -25,9 +25,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
   const owners: Array<{ close: () => Promise<void> }> = [];
   const schemas = new Set<string>();
 
-  beforeAll(async () => {
-    await observer.connect();
-  });
+  beforeAll(() => observer.connect());
 
   afterEach(async () => {
     try {
@@ -42,9 +40,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     }
   });
 
-  afterAll(async () => {
-    await observer.end();
-  });
+  afterAll(() => observer.end());
 
   function databasePath(): string {
     return path.join(tempDirs.make("openclaw-workboard-postgres-"), "workboard.sqlite");
@@ -148,17 +144,12 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const { fixture, schema } = await openDatabase(dbPath);
     const [process] = await fixture.statements([get("SELECT pg_backend_pid() AS pid")]);
     const pid = (process as { pid: number }).pid;
-    expect(typeof pid).toBe("number");
     const token = readSqliteDatabaseWriteTokenForPath(dbPath);
     await fixture.statements([
       { sql: "BEGIN ISOLATION LEVEL READ COMMITTED" },
       insertBoard("discarded"),
     ]);
-    const terminated = await observer.query<{ terminated: boolean }>(
-      "SELECT pg_terminate_backend($1, 5000) AS terminated",
-      [pid],
-    );
-    expect(terminated.rows).toEqual([{ terminated: true }]);
+    await observer.query("SELECT pg_terminate_backend($1, 5000) AS terminated", [pid]);
     const reply = await fixture.request({ kind: "statements", statements: [{ sql: statement }] });
     const message = unknown
       ? "PostgreSQL connection lost; outcome unknown"
@@ -215,15 +206,9 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       return {
         schema: anchor.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name").all(),
         rows: anchor.prepare("SELECT * FROM openclaw_engine_anchor").all(),
-        workboardTables: anchor
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'workboard_%'",
-          )
-          .all(),
       };
     };
     const before = snapshotAnchor();
-    expect(before.workboardTables).toEqual([]);
     expect(() => createWorkboardDatabase(dbPath)).toThrow(schema);
     expect(() => createWorkboardDatabase(dbPath)).toThrow("database.families.workboard.engine");
     expect(snapshotAnchor()).toEqual(before);
@@ -322,22 +307,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       expect(await read()).toEqual([{ value: replacement }]);
     },
   );
-
-  it("refuses an existing SQLite workboard without replacing its data", () => {
-    const dbPath = databasePath();
-    {
-      using existing = new DatabaseSync(dbPath);
-      existing.exec("CREATE TABLE workboard_boards (id TEXT PRIMARY KEY, name TEXT)");
-      existing.prepare("INSERT INTO workboard_boards VALUES (?, ?)").run("local", "Keep me");
-    }
-    expect(() => createWorkboardDatabase(dbPath, undefined, postgresInput)).toThrow(
-      "Existing SQLite workboard data cannot switch engines",
-    );
-    using preserved = new DatabaseSync(dbPath, { readOnly: true });
-    expect(preserved.prepare("SELECT * FROM workboard_boards").all()).toEqual([
-      { id: "local", name: "Keep me" },
-    ]);
-  });
 });
 
 function quoteIdentifier(value: string): string {

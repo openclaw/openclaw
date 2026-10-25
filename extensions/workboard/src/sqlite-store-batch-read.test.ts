@@ -296,32 +296,42 @@ describe("workboard sqlite batch card persistence", () => {
   });
 
   // Injects malformed rows and counts native SQLite statements.
-  test("checks the claim revision before decoding unrelated malformed children", async () => {
-    await using stores = openKernel();
-    const { dbPath } = stores;
-    using raw = new DatabaseSync(dbPath);
-    const target = fixtureCard(2);
-    const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
-    await stores.cards.register(busy.id, persisted(busy));
-    await stores.cards.register("card-1", persisted(fixtureCard(1)));
-    await stores.cards.register(target.id, persisted(target));
-    raw
-      .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
-      .run(9007199254740993n, "card-1");
-    const before = sqliteStatements.count;
-    const claim = stores.cards.claimIfOwnerAvailable(
-      target.id,
-      persisted({ ...target, updatedAt: target.updatedAt + 1 }),
-      target.updatedAt - 1,
-      "slot-owner",
-      3000,
-    );
-    await expect(claim).resolves.toBe("conflict");
-    expect(sqliteStatements.count - before).toBe(1);
-    expect(
-      raw.prepare("SELECT updated_at FROM workboard_cards WHERE id = ?").get(target.id),
-    ).toEqual({ updated_at: target.updatedAt });
-  });
+  test.each(["conflict", "updated"] as const)(
+    "claims return %s without hydrating unrelated malformed children",
+    async (result) => {
+      await using stores = openKernel();
+      using raw = new DatabaseSync(stores.dbPath);
+      const target = fixtureCard(2);
+      const next = { ...target, updatedAt: target.updatedAt + 1 };
+      const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
+      for (const card of [result === "conflict" ? busy : fixtureCard(0), fixtureCard(1), target]) {
+        await stores.cards.register(card.id, persisted(card));
+      }
+      raw
+        .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
+        .run(9007199254740993n, "card-1");
+      const before = sqliteStatements.count;
+      await expect(
+        stores.cards.claimIfOwnerAvailable(
+          target.id,
+          persisted(next),
+          target.updatedAt - (result === "conflict" ? 1 : 0),
+          "slot-owner",
+          3000,
+        ),
+      ).resolves.toBe(result);
+      if (result === "conflict") {
+        expect(sqliteStatements.count - before).toBe(1);
+      } else {
+        await expect(stores.cards.lookup("card-1")).rejects.toMatchObject({
+          code: "ERR_OUT_OF_RANGE",
+        });
+      }
+      await expect(stores.cards.lookup(target.id)).resolves.toEqual(
+        persisted(result === "conflict" ? target : next),
+      );
+    },
+  );
 
   it.each([
     {
@@ -368,33 +378,6 @@ describe("workboard sqlite batch card persistence", () => {
       );
     },
   );
-
-  // Injects an unsafe integer through a native SQLite file handle.
-  test("claims an available owner without reading or replacing unrelated malformed children", async () => {
-    await using stores = openKernel();
-    const { dbPath } = stores;
-    using raw = new DatabaseSync(dbPath);
-    const target = fixtureCard(2);
-    await stores.cards.register("card-0", persisted(fixtureCard(0)));
-    await stores.cards.register(target.id, persisted(target));
-    raw
-      .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = 'card-0'")
-      .run(9007199254740993n);
-    const next = { ...target, updatedAt: target.updatedAt + 1 };
-    await expect(
-      stores.cards.claimIfOwnerAvailable(
-        target.id,
-        persisted(next),
-        target.updatedAt,
-        "slot-owner",
-        3000,
-      ),
-    ).resolves.toBe("updated");
-    await expect(stores.cards.lookup(target.id)).resolves.toEqual(persisted(next));
-    await expect(stores.cards.lookup("card-0")).rejects.toMatchObject({
-      code: "ERR_OUT_OF_RANGE",
-    });
-  });
 
   it.each(["constraint", "binding"])(
     "rolls back earlier batches, grouped writes, and claims after a later child %s fails",
@@ -553,39 +536,27 @@ describe("workboard sqlite batch card persistence", () => {
       await stores.close();
       stores = createKernelStores(dbPath);
 
-      const beforeBoards = sqliteStatements.count;
-      const boardEntries = await stores.boards.entries();
-      const boardReads = sqliteStatements.count - beforeBoards;
-      const beforeSubscriptions = sqliteStatements.count;
-      const subscriptionEntries = await stores.subscriptions.entries();
-      const subscriptionReads = sqliteStatements.count - beforeSubscriptions;
-      const beforeAttachments = sqliteStatements.count;
-      const attachmentEntries = await stores.attachments.entries();
-      const attachmentReads = sqliteStatements.count - beforeAttachments;
-
-      expect(boardEntries).toEqual(boards.map((value) => ({ key: value.board.id, value })));
       const timeOrder = [0, 2, 4, 6, 1, 3, 5, 7];
-      expect(subscriptionEntries).toEqual(
-        timeOrder.map((index) => ({ key: ids[index], value: subscriptions[index] })),
-      );
-      expect(attachmentEntries).toEqual(
-        timeOrder.map((index) => ({ key: ids[index], value: attachments[index] })),
-      );
-      for (const [collection, entries] of [
-        [stores.boards, boardEntries],
-        [stores.subscriptions, subscriptionEntries],
-        [stores.attachments, attachmentEntries],
+      for (const [collection, expected] of [
+        [stores.boards, boards.map((value) => ({ key: value.board.id, value }))],
+        [
+          stores.subscriptions,
+          timeOrder.map((index) => ({ key: ids[index], value: subscriptions[index] })),
+        ],
+        [
+          stores.attachments,
+          timeOrder.map((index) => ({ key: ids[index], value: attachments[index] })),
+        ],
       ] as const) {
+        const before = sqliteStatements.count;
+        const entries = await collection.entries();
+        expect(sqliteStatements.count - before).toBe(1);
+        expect(entries).toEqual(expected);
         for (const { key, value } of entries) {
           await expect(collection.lookup(key)).resolves.toEqual(value);
         }
         await expect(collection.lookup("missing")).resolves.toBeUndefined();
       }
-      expect({ boardReads, subscriptionReads, attachmentReads }).toEqual({
-        boardReads: 1,
-        subscriptionReads: 1,
-        attachmentReads: 1,
-      });
     } finally {
       await stores.close();
     }
