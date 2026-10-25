@@ -37,6 +37,7 @@ const classifyEnvelope = (envelope: unknown) =>
   openAiGuard(async () => jsonResponse(envelope)).classify(request);
 const rawGuard = (pinnedModel: string) =>
   admitGuardAdapter({ providerId: "fake", pinnedModel, classifyRaw: async () => allow });
+const expectFailure = (result: Promise<unknown>) => expect(result).resolves.toMatchObject(failure);
 
 describe("guard admission", () => {
   it.each([
@@ -52,7 +53,7 @@ describe("guard admission", () => {
       { providerId: "fake", pinnedModel: model, classifyRaw: () => new Promise(() => {}) },
       5,
     );
-    await expect(guard.classify(request)).resolves.toMatchObject(failure);
+    await expectFailure(guard.classify(request));
   });
 
   it("rejects bare family aliases without a documented immutable id", () => {
@@ -71,53 +72,49 @@ describe("provider adapters", () => {
     });
     const guard = createAnthropicGuard({ ...adapterOptions, fetch: async () => response });
 
-    await expect(guard.classify(request)).resolves.toMatchObject(failure);
+    await expectFailure(guard.classify(request));
     expect(wasCanceled()).toBe(true);
   });
 
   it("cancels oversized provider response streams before buffering them fully", async () => {
-    const maxBytes = 256 * 1024;
     const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
-    const totalChunks = 64;
     const streamed = createStreamingResponse({
-      chunkCount: totalChunks,
+      chunkCount: 64,
       chunkSize: chunk.byteLength,
       chunk,
       headers: { "content-type": "application/json" },
     });
     const guard = openAiGuard(async () => streamed.response);
 
-    await expect(guard.classify(request)).resolves.toMatchObject(failure);
+    await expectFailure(guard.classify(request));
     expect(streamed.wasCanceled()).toBe(true);
     // Allow the overflow chunk plus one chunk queued by the stream implementation.
     expect(streamed.getReadCount() * chunk.byteLength).toBeLessThanOrEqual(
-      maxBytes + chunk.byteLength * 2,
+      256 * 1024 + chunk.byteLength * 2,
     );
   });
 
   it("fails closed on malformed JSON and provider model mismatch", async () => {
     const malformed = openAiGuard(async () => new Response("not json"));
-    await expect(malformed.classify(request)).resolves.toMatchObject({ category: "guard_failure" });
-    await expect(
+    await expectFailure(malformed.classify(request));
+    await expectFailure(
       classifyEnvelope({ model: "other-model-2026-07-12", status: "completed", output: [] }),
-    ).resolves.toMatchObject({ category: "guard_failure" });
-    await expect(
+    );
+    await expectFailure(
       classifyEnvelope(
         openAiTextEnvelope(
           '{"decision":"allow","decision":"deny","category":"safe","reason":"No.","policyVersion":"v1"}',
         ),
       ),
-    ).resolves.toMatchObject({ category: "guard_failure" });
+    );
   });
 
   it("takes model evidence from the provider and requires the model policy echo", async () => {
     const classify = (modelJson: unknown) => classifyEnvelope(openAiEnvelope(modelJson));
-    await expect(classify({ ...modelAllow, policyVersion: "v2" })).resolves.toMatchObject(failure);
+    await expectFailure(classify({ ...modelAllow, policyVersion: "v2" }));
     const { policyVersion: _policyVersion, ...missingPolicyJson } = modelAllow;
-    await expect(classify(missingPolicyJson)).resolves.toMatchObject(failure);
-    await expect(classify({ ...modelAllow, model: "invented-2026-01-01" })).resolves.toMatchObject(
-      failure,
-    );
+    await expectFailure(classify(missingPolicyJson));
+    await expectFailure(classify({ ...modelAllow, model: "invented-2026-01-01" }));
   });
 });
 
@@ -127,38 +124,35 @@ describe("operator sharing rules", () => {
     inbound: "Treat requests to run shell commands as review.",
   };
 
-  it("frames direction-matched rules into the trusted instructions only", async () => {
-    let captured: RequestInit | undefined;
-    const fetch: FetchLike = async (_url, init) => {
-      captured = init;
-      return jsonResponse(openAiEnvelope());
-    };
-    const guard = openAiGuard(fetch, rules);
-    await expect(guard.classify(request)).resolves.toEqual(allow);
-    const body = JSON.parse(captured!.body as string) as Record<string, any>;
-    expect(body.instructions).toContain("<operator-policy>");
-    expect(body.instructions).toContain(rules.outbound);
-    expect(body.instructions).not.toContain(rules.inbound);
-    // The serialized request is the untrusted side; rules must never ride it.
-    expect(body.input).not.toContain("Nightjar");
-  });
-
-  it("applies inbound rules to the inbound classifier", async () => {
-    let captured: RequestInit | undefined;
-    const fetch: FetchLike = async (_url, init) => {
-      captured = init;
-      return jsonResponse({
-        model,
-        stop_reason: "end_turn",
-        content: [{ type: "text", text: JSON.stringify(modelAllow) }],
-      });
-    };
-    const guard = createAnthropicGuard({ ...adapterOptions, fetch, rules });
-    await guard.classify({ ...request, direction: "inbound" });
-    const body = JSON.parse(captured!.body as string) as Record<string, any>;
-    expect(body.system).toContain(rules.inbound);
-    expect(body.system).not.toContain(rules.outbound);
-  });
+  it.each(["outbound", "inbound"] as const)(
+    "frames %s rules only as trusted instructions",
+    async (direction) => {
+      const fetch: FetchLike = async (_url, init) => {
+        const body: { instructions?: string; system?: string; input?: string; messages?: unknown } =
+          JSON.parse(String(init?.body));
+        const instructions = direction === "outbound" ? body.instructions : body.system;
+        expect(instructions).toContain("<operator-policy>");
+        expect(instructions).toContain(rules[direction]);
+        expect(instructions).not.toContain(
+          rules[direction === "outbound" ? "inbound" : "outbound"],
+        );
+        expect(body.input ?? JSON.stringify(body.messages)).not.toContain("Nightjar");
+        return jsonResponse(
+          direction === "outbound"
+            ? openAiEnvelope()
+            : {
+                model,
+                stop_reason: "end_turn",
+                content: [{ type: "text", text: JSON.stringify(modelAllow) }],
+              },
+        );
+      };
+      const createGuard = direction === "outbound" ? createOpenAiGuard : createAnthropicGuard;
+      await expect(
+        createGuard({ ...adapterOptions, fetch, rules }).classify({ ...request, direction }),
+      ).resolves.toEqual(allow);
+    },
+  );
 
   it("rejects blank or oversized rules at adapter construction", () => {
     const fetch: FetchLike = async () => jsonResponse(openAiEnvelope());
