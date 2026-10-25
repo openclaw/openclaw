@@ -277,16 +277,36 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     await completeRun(harness, run);
   });
 
-  it("retains a required command as one native pending call until terminal collection", async () => {
+  it.each([
+    {
+      scenario: "retains a required command as one native pending call until terminal collection",
+      stop: "complete",
+    },
+    {
+      scenario: "cancels a required native command when its execution budget expires",
+      stop: "timeout",
+    },
+    {
+      scenario: "cancels a required native command when its caller aborts",
+      stop: "abort",
+    },
+  ] as const)("$scenario", async ({ stop }) => {
+    const abortController = new AbortController();
     const command = createRequiredExecRuntimeContract();
+    const params = createTestParams();
     // Keep fixture I/O from spending the attempt clock before the command starts.
     const { harness, run } = await startTool(
       { ...command.tool, name: "sandbox_exec" },
-      { clock: true },
+      { ...params, abortSignal: abortController.signal, clock: true },
     );
     let response: ReturnType<typeof callTool> | undefined;
     try {
-      await harness.waitForMethod("turn/start");
+      await Promise.race([
+        harness.waitForMethod("turn/start"),
+        run.then((result) => {
+          throw new Error("Attempt ended before turn/start", { cause: result });
+        }),
+      ]);
       let collected = false;
       response = callTool(harness, "sandbox_exec", "required-command", {
         command: "verify-required",
@@ -296,19 +316,57 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         collected = true;
         return value;
       });
-      await command.started;
+      await Promise.race([
+        command.started,
+        response.then((result) => {
+          throw new Error("Tool call ended before native execution", { cause: result });
+        }),
+        run.then((result) => {
+          throw new Error("Attempt ended before native execution", { cause: result });
+        }),
+      ]);
       await vi.advanceTimersByTimeAsync(20);
       expect(collected).toBe(false);
       expect(command.spawn).toHaveBeenCalledOnce();
       expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+      if (stop !== "complete") {
+        const nativeRun = await command.spawn.mock.results[0]?.value;
+        if (!nativeRun) {
+          throw new Error("Required command did not acquire its native run");
+        }
+        const cancel = vi.spyOn(nativeRun, "cancel");
+        if (stop === "timeout") {
+          await vi.advanceTimersByTimeAsync(params.timeoutMs);
+        } else {
+          abortController.abort("user_cancelled");
+        }
+        await expect(response).resolves.toMatchObject({ success: false });
+        expect(readAttemptTerminal(await run)).toMatchObject({
+          aborted: true,
+          timedOut: stop === "timeout",
+          ...(stop === "timeout"
+            ? { promptError: "codex app-server execution budget timed out" }
+            : {}),
+        });
+        expect(cancel).toHaveBeenCalledWith("manual-cancel");
+        return;
+      }
       command.finish();
       expectToolResult(await response, "REQUIRED_NATIVE_RESULT");
       await completeRun(harness, run);
     } finally {
+      abortController.abort("test_cleanup");
       vi.useRealTimers();
       command.finish();
-      await response;
-      command.close();
+      try {
+        await response;
+      } finally {
+        try {
+          await run;
+        } finally {
+          command.close();
+        }
+      }
     }
   });
 
