@@ -115,11 +115,9 @@ function harness(
   };
   const access = async (sessionId: string, allowed: boolean, origin?: Origin, agentId = "main") => {
     const result = execute({ action: "summarize", sessionId }, origin, agentId);
-    if (allowed) {
-      await expectDetails(result, { sessionId });
-    } else {
-      await expect(result).rejects.toThrow(`transcripts session not found: ${sessionId}`);
-    }
+    return allowed
+      ? expectDetails(result, { sessionId })
+      : expect(result).rejects.toThrow(`transcripts session not found: ${sessionId}`);
   };
   return {
     ...ctx,

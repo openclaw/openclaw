@@ -393,7 +393,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                             expect(admin).not.toHaveBeenCalled();
                           }
                         }
-                        if (outcome === "undelivered") {
+                        if (outcome === "undelivered" || outcome === "reset") {
                           await noticed.promise;
                           const history = await readSessionMessagesAsync(
                             {
@@ -404,8 +404,12 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                                 agentId: "main",
                               }),
                             },
-                            { mode: "full", reason: "undelivered handoff notice" },
+                            { mode: "full", reason: `${outcome} handoff notice` },
                           );
+                          if (outcome === "reset") {
+                            expect(JSON.stringify(history)).not.toContain("could not continue");
+                            return;
+                          }
                           const last = history.at(-1) as {
                             role?: string;
                             content?: Array<{ text?: string }>;
@@ -416,20 +420,6 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                             "PR preparation could not continue this conversation automatically: Session event was abandoned before execution",
                           );
                           expect(text).toContain('"status":"prepared"');
-                        } else if (outcome === "reset") {
-                          await noticed.promise;
-                          const history = await readSessionMessagesAsync(
-                            {
-                              agentId: "main",
-                              sessionKey,
-                              sessionId,
-                              storePath: resolveSessionStorePathCore(undefined, {
-                                agentId: "main",
-                              }),
-                            },
-                            { mode: "full", reason: "reset handoff notice" },
-                          );
-                          expect(JSON.stringify(history)).not.toContain("could not continue");
                         } else {
                           expect(notice).not.toHaveBeenCalled();
                         }

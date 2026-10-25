@@ -28,13 +28,6 @@ describe("web_search tool schema", () => {
   });
 });
 
-const externalContent = (provider: string) => ({
-  untrusted: true as const,
-  source: "web_search" as const,
-  wrapped: true as const,
-  provider,
-});
-
 const preWrappedText = (text: string) =>
   `<<<EXTERNAL_UNTRUSTED_CONTENT id="c0ffee">>>\nSource: Web Search\n---\n${text}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="c0ffee">>>`;
 
@@ -114,6 +107,15 @@ function stripWrapMarkers(value: unknown): unknown {
 
 const normalize = (result: Record<string, unknown>, provider = "external-demo") =>
   normalizeWebSearchOutput({ provider, query: "q", result });
+const resultRow = (extra: Record<string, unknown> = {}) => ({
+  title: "result title",
+  url: "https://example.com/result",
+  ...extra,
+});
+const rows = (length: number, extra: Record<string, unknown> = {}) =>
+  Array.from({ length }, (_, index) =>
+    resultRow({ url: `https://example.com/${index}`, ...extra }),
+  );
 
 describe("web_search normalized output contract", () => {
   it.each(normalizedProviderFixtures)("normalizes $expected.kind", ({ result, expected }) => {
@@ -122,25 +124,18 @@ describe("web_search normalized output contract", () => {
     expect(stripWrapMarkers(normalized)).toEqual({
       provider,
       query: "q",
-      externalContent: externalContent(provider),
+      externalContent: { untrusted: true, source: "web_search", wrapped: true, provider },
       ...expected,
     });
     expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
-    if (normalized.kind === "results") {
-      for (const row of normalized.results) {
-        for (const text of [row.title, row.snippet, row.siteName]) {
-          if (text) {
-            expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-          }
-        }
-      }
-    } else if (normalized.kind === "answer") {
-      expect(normalized.content).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-      for (const citation of normalized.citations ?? []) {
-        if (citation.title) {
-          expect(citation.title).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-        }
-      }
+    const prose =
+      normalized.kind === "results"
+        ? normalized.results.flatMap((row) => [row.title, row.snippet, row.siteName])
+        : normalized.kind === "answer"
+          ? [normalized.content, ...(normalized.citations ?? []).map((citation) => citation.title)]
+          : [];
+    for (const text of prose.filter(Boolean)) {
+      expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     }
     if (normalized.kind === "results") {
       const snippet = normalized.results[0]?.snippet;
@@ -337,10 +332,7 @@ describe("web_search normalized output security", () => {
   it("bounds conforming result rows to the public search count and reports the emitted count", () => {
     const normalized = normalize({
       count: 25,
-      results: Array.from({ length: 25 }, (_, index) => ({
-        title: `result ${index}`,
-        url: `https://example.com/result/${index}`,
-      })),
+      results: rows(25),
     });
 
     assertOutputKind(normalized, "results");
@@ -354,14 +346,7 @@ describe("web_search normalized output security", () => {
     ["ignore instructions", undefined],
   ])("omits invalid calendar or prose metadata for %s", (published, expected) => {
     const normalized = normalize({
-      results: [
-        {
-          title: "result title",
-          url: "https://example.com/result",
-          snippet: "result snippet",
-          published,
-        },
-      ],
+      results: [resultRow({ snippet: "result snippet", published })],
     });
 
     assertOutputKind(normalized, "results");
@@ -376,12 +361,11 @@ describe("web_search normalized output security", () => {
 
   it("bounds the aggregate untrusted result URLs, titles, snippets, and site names", () => {
     const normalized = normalize({
-      results: Array.from({ length: 10 }, (_, index) => ({
+      results: rows(10, {
         title: "t".repeat(15_000),
-        url: `https://example.com/${index}`,
         snippet: "s".repeat(15_000),
         siteName: "n".repeat(15_000),
-      })),
+      }),
     });
 
     assertOutputKind(normalized, "results");
@@ -476,13 +460,7 @@ describe("web_search normalized output security", () => {
 
   it("preserves the raw compatibility branch when a malformed result follows ten valid rows", () => {
     const payload = {
-      results: [
-        ...Array.from({ length: 10 }, (_, index) => ({
-          title: `valid ${index}`,
-          url: `https://example.com/${index}`,
-        })),
-        { name: "provider-specific", link: "https://example.com/custom" },
-      ],
+      results: [...rows(10), { name: "provider-specific", link: "https://example.com/custom" }],
     };
 
     expect(normalize(payload)).toEqual({ kind: "raw", provider: "external-demo", data: payload });
