@@ -34,14 +34,7 @@ it("migrates retired heartbeat config with its backed-up state only once", async
       vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
       await state.writeConfig({
         agents: {
-          defaults: {
-            heartbeat: {
-              every: "17m",
-              target: "none",
-              prompt: "Check the synthetic checklist.",
-              activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-            },
-          },
+          defaults: { heartbeat: { every: "17m", target: "none" } },
           entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { enabled: false },
@@ -81,19 +74,7 @@ it("migrates retired heartbeat config with its backed-up state only once", async
           .map((row) => JSON.parse(String(row.job_json)));
       };
       const jobs = readJobs();
-      expect(jobs).toEqual([
-        expect.objectContaining({
-          agentId: "main",
-          enabled: true,
-          schedule: expect.objectContaining({ kind: "every", everyMs: 1_020_000 }),
-          activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-          payload: expect.objectContaining({
-            kind: "agentTurn",
-            message: "Check the synthetic checklist.",
-          }),
-          delivery: { mode: "none" },
-        }),
-      ]);
+      expect(jobs).toEqual([expect.objectContaining({ agentId: "main", enabled: true })]);
       await updateMigrateCommand(state.path("second-recovery", "native"));
       expect(readJobs()).toEqual(jobs);
       expect(

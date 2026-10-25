@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as commandExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -24,21 +23,18 @@ import {
 } from "./update-command-service-maintenance.js";
 import * as windowsRecovery from "./update-command-windows-task.js";
 
-const { mocks, withServiceHome } =
+const { mockMaintenanceService, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
 
 function windowsService(home: string, overrides: Partial<GatewayService> = {}) {
-  const service = createMockGatewayService({
+  return mockMaintenanceService(home, {
     readCommand: async () => ({
       ...gatewayCommand(home),
       sourcePath: path.join(home, "gateway.cmd"),
     }),
     readRuntime: async () => ({ status: "running" }),
-    isLoaded: async () => true,
     ...overrides,
   });
-  mocks.service.mockReturnValue(service);
-  return service;
 }
 
 function mutableTask(
