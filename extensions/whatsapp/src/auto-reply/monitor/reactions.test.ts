@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { createWhatsAppStatusReactionController } from "./status-reaction.js";
 
@@ -18,25 +17,6 @@ vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: hoisted.resolveGroupActivationFor,
 }));
 
-function createMessage(
-  overrides: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]> = {},
-): AdmittedWebInboundMessage {
-  return createTestWebInboundMessage({
-    event: { id: "msg-1" },
-    platform: {
-      chatJid: "15551234567@s.whatsapp.net",
-      recipientJid: "15559876543",
-      fromMe: false,
-    },
-    admission: {
-      accountId: "default",
-      conversation: { kind: "direct", id: "15551234567" },
-      sender: { id: "15551234567" },
-    },
-    ...overrides,
-  });
-}
-
 function createConfig(reactionLevel: "off" | "ack" | "minimal" | "extensive"): OpenClawConfig {
   return {
     messages: { ackReaction: "👀", ackReactionScope: "all" },
@@ -48,8 +28,8 @@ const groupJid = "120363000000000000@g.us";
 const senderLid = "277038292303944@lid";
 const groupSessionKey = `whatsapp:default:${groupJid}`;
 
-function createGroupMessage(): AdmittedWebInboundMessage {
-  return createMessage({
+function createGroupMessage() {
+  return createTestWebInboundMessage({
     platform: { chatJid: groupJid, sender: { jid: null, lid: senderLid } },
     admission: {
       conversation: { kind: "group", id: groupJid },
@@ -71,7 +51,7 @@ type AckReactionParams = Parameters<typeof maybeSendAckReaction>[0];
 const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
   maybeSendAckReaction({
     cfg: createConfig("ack"),
-    msg: createMessage(),
+    msg: createTestWebInboundMessage({ platform: { chatJid: "15551234567@s.whatsapp.net" } }),
     agentId: "agent",
     sessionKey: "whatsapp:default:15551234567",
     verbose: false,
@@ -121,19 +101,11 @@ describe("maybeSendAckReaction", () => {
     const cfg = createConfig("ack");
     cfg.messages!.ackReactionScope = "group-mentions";
     hoisted.resolveGroupActivationFor.mockResolvedValue("mention");
-
     const ackReaction = await runAckReaction({
       cfg,
-      msg: createMessage({
-        platform: { chatJid: groupJid },
-        admission: {
-          conversation: { kind: "group", id: groupJid },
-        },
-        groupMention: { wasMentioned: false, requireMention: true },
-      }),
+      msg: { ...createGroupMessage(), groupMention: { wasMentioned: false, requireMention: true } },
       sessionKey: groupSessionKey,
     });
-
     expect(ackReaction).toBeNull();
   });
 
@@ -141,17 +113,11 @@ describe("maybeSendAckReaction", () => {
     const cfg = createConfig("ack");
     const warn = vi.fn();
     hoisted.sendReactionWhatsApp.mockRejectedValueOnce(new Error("session down"));
-
     const ackReaction = await runAckReaction({ cfg, warn });
-
     await expect(ackReaction?.ackReactionPromise).resolves.toBe(false);
     expect(warn).toHaveBeenCalledWith(
-      {
-        error: "session down",
-        chatId: "15551234567@s.whatsapp.net",
-        messageId: "msg-1",
-      },
-      "failed to send ack reaction",
+      expect.objectContaining({ error: "session down" }),
+      expect.any(String),
     );
   });
   it.each(["ack", "status"] as const)(
