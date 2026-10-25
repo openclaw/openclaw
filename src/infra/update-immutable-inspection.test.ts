@@ -54,6 +54,8 @@ function writeJson(file: string, value: unknown) {
   write(file, JSON.stringify(value));
 }
 
+const noBoot = 'throw new Error("must not boot during inspection");\n';
+
 function database(file: string, version: number) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = openNodeSqliteDatabase(file);
@@ -109,7 +111,7 @@ function fixture() {
     configSchema: {},
     doctorContract: { stateMigrations: true },
   });
-  write(path.join(pluginRoot, "index.cjs"), 'throw new Error("must not boot plugin");\n');
+  write(path.join(pluginRoot, "index.cjs"), noBoot);
   write(
     path.join(pluginRoot, "doctor-contract-api.cjs"),
     `module.exports = { stateMigrations: [{
@@ -145,10 +147,7 @@ function fixture() {
       name: "openclaw",
       openclaw: { schemaVersions: { state: 1, agent } },
     });
-    write(
-      path.join(generationPath, "openclaw.mjs"),
-      'throw new Error("must not boot candidate");\n',
-    );
+    write(path.join(generationPath, "openclaw.mjs"), noBoot);
   }
   const record: ImmutableInstallRecord = {
     revision: 1,
@@ -226,7 +225,6 @@ function expectDatabases(
 
 function expectUnchanged(f: ReturnType<typeof fixture>, before: Map<string, Buffer>) {
   const after = sourceFiles(f.root, path.join(f.root, "cache"));
-  expect([...after.keys()]).toEqual([...before.keys()]);
   expect(after).toEqual(before);
   expect(fs.readdirSync(f.scratch)).toEqual([]);
   expect(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith(f.capturePrefix))).toEqual(

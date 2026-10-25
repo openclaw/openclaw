@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderResolveUsageAuthContext } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageAuthWithPluginMock,
   getProviderUsageSnapshotWithPluginMock,
@@ -16,6 +16,18 @@ import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types
 
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
+const claude: ProviderUsageSnapshot = { provider: "anthropic", displayName: "Claude", windows: [] };
+const codex: ProviderUsageSnapshot = {
+  provider: "openai",
+  displayName: "Codex",
+  windows: [{ label: "3h", usedPercent: 12 }],
+};
+const load = (options: Parameters<typeof loadProviderUsageSummary>[0]) =>
+  loadProviderUsageSummary({ config: {}, env: {}, ...options });
+const unusedFetch = () =>
+  createProviderUsageFetch(async () => {
+    throw new Error("legacy fetch should not run");
+  });
 
 describe("provider-usage.load", () => {
   beforeEach(() => {
@@ -28,15 +40,14 @@ describe("provider-usage.load", () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
     vi.spyOn(Date, "now").mockReturnValue(usageNow);
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
-    const result = await loadProviderUsageSummary({
+    const result = await load({
       providers: ["anthropic"],
-      config: {},
       env: { ANTHROPIC_API_KEY: "fixture-token" },
       timeoutMs: 0,
     });
     expect(result).toEqual({
       updatedAt: usageNow,
-      providers: [{ provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" }],
+      providers: [{ ...claude, error: "Timeout" }],
     });
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
     expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
@@ -74,13 +85,11 @@ describe("provider-usage.load", () => {
         await (signalSource === "init"
           ? context.fetchFn("https://usage.example.test", { signal: caller.signal })
           : context.fetchFn(new Request("https://usage.example.test", { signal: caller.signal })));
-        return { provider: "anthropic", displayName: "Claude", windows: [] };
+        return claude;
       });
       const pending = scope.track(() =>
-        loadProviderUsageSummary({
+        load({
           auth: [{ provider: "anthropic", token: "fixture-token" }],
-          config: {},
-          env: {},
           timeoutMs: 1,
         }),
       );
@@ -94,12 +103,7 @@ describe("provider-usage.load", () => {
         expect(aborted).toHaveBeenCalledOnce();
         expect(caller.signal.aborted).toBe(callerAbort);
         expect((await pending).providers).toEqual([
-          {
-            provider: "anthropic",
-            displayName: "Claude",
-            windows: [],
-            error: callerAbort ? "Caller cancelled" : "Timeout",
-          },
+          { ...claude, error: callerAbort ? "Caller cancelled" : "Timeout" },
         ]);
         await scope.drain();
         expect(scope.hasPendingWork).toBe(false);
@@ -124,9 +128,8 @@ describe("provider-usage.load", () => {
         return { handled: true };
       });
       const pending = scope.track(() =>
-        loadProviderUsageSummary({
+        load({
           providers: ["anthropic"],
-          config: {},
           env: { ANTHROPIC_API_KEY: "fixture-token" },
           timeoutMs: 1,
         }),
@@ -154,33 +157,17 @@ describe("provider-usage.load", () => {
     },
   );
 
-  it("returns unsupported provider snapshots for unknown provider ids", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(404, "not found"));
-    const summary = await loadUsageWithAuth(
-      loadProviderUsageSummary,
-      [{ provider: "unsupported-provider", token: "token-u" }],
-      mockFetch,
-    );
-    expect(summary.providers).toHaveLength(1);
-    expect(summary.providers[0]?.error).toBe("Unsupported provider");
-  });
-
   it("filters errors that are marked as ignored", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
-      provider: "anthropic",
-      displayName: "Claude",
-      windows: [],
+      ...claude,
       error: "HTTP 500",
-    });
-    const mockFetch = createProviderUsageFetch(async () => {
-      throw new Error("legacy fetch should not run");
     });
     ignoredErrors.add("HTTP 500");
     try {
       const summary = await loadUsageWithAuth(
         loadProviderUsageSummary,
         [{ provider: "anthropic", token: "token-a" }],
-        mockFetch,
+        unusedFetch(),
       );
       expect(summary.providers).toStrictEqual([]);
     } finally {
@@ -190,15 +177,13 @@ describe("provider-usage.load", () => {
 
   it("keeps window and balance-only snapshots with injected auth", async () => {
     const snapshots: ProviderUsageSnapshot[] = [
-      { provider: "anthropic", displayName: "Claude", windows: [{ label: "5h", usedPercent: 20 }] },
+      { ...claude, windows: [{ label: "5h", usedPercent: 20 }] },
       { provider: "deepseek", displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
     ];
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
-      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) =>
+      structuredClone(snapshots.find((snapshot) => snapshot.provider === provider) ?? null),
     );
-    const mockFetch = createProviderUsageFetch(async () => {
-      throw new Error("legacy fetch should not run");
-    });
+    const mockFetch = unusedFetch();
 
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
@@ -209,19 +194,7 @@ describe("provider-usage.load", () => {
       mockFetch,
     );
 
-    expect(summary.providers).toEqual([
-      {
-        provider: "anthropic",
-        displayName: "Claude",
-        windows: [{ label: "5h", usedPercent: 20 }],
-      },
-      {
-        provider: "deepseek",
-        displayName: "DeepSeek",
-        windows: [],
-        summary: "Balance ¥42.50",
-      },
-    ]);
+    expect(summary.providers).toEqual(snapshots);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -230,8 +203,7 @@ describe("provider-usage.load", () => {
     const scope = new AsyncWorkScope();
     const heldSnapshot = createDeferredCore<ProviderUsageSnapshot>();
     const lateSnapshot: ProviderUsageSnapshot = {
-      provider: "anthropic",
-      displayName: "Claude",
+      ...claude,
       windows: [{ label: "5h", usedPercent: 20 }],
     };
     let summaryPromise: Promise<UsageSummary> | undefined;
@@ -241,20 +213,14 @@ describe("provider-usage.load", () => {
         if (provider === "anthropic") {
           return await heldSnapshot.promise;
         }
-        return {
-          provider,
-          displayName: "Codex",
-          windows: [{ label: "3h", usedPercent: 12 }],
-        };
+        return structuredClone({ ...codex, provider });
       });
       summaryPromise = scope.track(() =>
-        loadProviderUsageSummary({
+        load({
           auth: [
             { provider: "anthropic", token: "token-a" },
             { provider: "openai", token: "token-codex" },
           ],
-          config: {},
-          env: {},
           timeoutMs: 5_000,
         }),
       );
@@ -271,14 +237,7 @@ describe("provider-usage.load", () => {
       const summary = await summaryPromise;
 
       expect(settledAtDeadline).toBe(true);
-      expect(summary.providers).toEqual([
-        { provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" },
-        {
-          provider: "openai",
-          displayName: "Codex",
-          windows: [{ label: "3h", usedPercent: 12 }],
-        },
-      ]);
+      expect(summary.providers).toEqual([{ ...claude, error: "Timeout" }, codex]);
       let drained = false;
       draining = scope.drain().then(() => {
         drained = true;
@@ -313,16 +272,15 @@ describe("provider-usage.load", () => {
       windows: [{ label: "5h", usedPercent: 12 }],
     }));
 
-    const summary = await loadProviderUsageSummary({
+    const summary = await load({
       providers: ["anthropic", "openai"],
-      config: {},
       // Credential sources keep both providers past the plugin-auth gate so the
       // sibling-isolation behavior under test is actually exercised.
       env: { ANTHROPIC_API_KEY: "sk-ant-test", OPENAI_API_KEY: "sk-openai-test" },
     });
 
     expect(summary.providers).toEqual([
-      { provider: "anthropic", displayName: "Claude", windows: [], error: "auth failed" },
+      { ...claude, error: "auth failed" },
       {
         provider: "openai",
         displayName: "openai",
@@ -331,16 +289,18 @@ describe("provider-usage.load", () => {
     ]);
   });
 
-  it("does not require ambient fetch when no provider has a usage hook", async () => {
+  it.each([
+    ["xiaomi", "Xiaomi"],
+    ["unsupported-provider", "unsupported-provider"],
+  ])("returns unsupported %s without ambient fetch", async (provider, displayName) => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);
     try {
-      const summary = await loadProviderUsageSummary({
-        auth: [{ provider: "xiaomi", token: "token-x" }],
-        env: {},
+      const summary = await load({
+        auth: [{ provider, token: "token-x" }],
       });
       expect(summary.providers).toEqual([
-        { provider: "xiaomi", displayName: "Xiaomi", windows: [], error: "Unsupported provider" },
+        { provider, displayName, windows: [], error: "Unsupported provider" },
       ]);
     } finally {
       vi.stubGlobal("fetch", previousFetch);
