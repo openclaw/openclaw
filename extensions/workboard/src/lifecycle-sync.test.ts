@@ -312,18 +312,16 @@ describe("Workboard gateway lifecycle sync", () => {
       sessionKey,
       execution: execution(sessionKey, "manually-completed"),
     });
-
     await sweep([lifecycleSession(sessionKey, "done", card.updatedAt + 1)]);
-
     expect(await read()).toMatchObject({ status: "done", execution: { status: "review" } });
   });
 
   it("keeps backlog cards in place after a terminal session event", async () => {
-    const sessionKey = "agent:main:dashboard:terminal-backlog";
-    const { end, read } = await linked({ status: "backlog", sessionKey });
-
+    const { end, read } = await linked({
+      status: "backlog",
+      sessionKey: "agent:main:dashboard:terminal-backlog",
+    });
     await end();
-
     expect((await read())?.status).toBe("backlog");
   });
 
@@ -494,15 +492,16 @@ describe("Workboard gateway lifecycle sync", () => {
     );
   });
 
-  it("does not suffix-match a uniquely wrong agent for an explicit target", async () => {
-    const { card, read, sweep } = await linked({ agentId: "worker", boardId: "ops" });
-    const sessionKey = workboardSessionKeyForCard(card);
-    const suffix = sessionKey.slice(sessionKey.indexOf("subagent:workboard-"));
-
-    await sweep([lifecycleSession(`agent:other:${suffix}`, "done", card.updatedAt + 1)]);
-
-    expect((await read())?.status).toBe("running");
-  });
+  it.each([undefined, "worker"])(
+    "suffix matches only an agentless target (agent=%s)",
+    async (agentId) => {
+      const { card, read, sweep } = await linked({ agentId, boardId: "ops" });
+      const key = workboardSessionKeyForCard(card);
+      const suffix = key.slice(key.indexOf("subagent:workboard-"));
+      await sweep([lifecycleSession(`agent:other:${suffix}`, "done", card.updatedAt + 1)]);
+      expect((await read())?.status).toBe(agentId ? "running" : "review");
+    },
+  );
 
   it("does not backfill over a newer attempt after lifecycle matching", async () => {
     const provisionalSessionKey = "subagent:workboard-default-match-race";
@@ -577,15 +576,6 @@ describe("Workboard gateway lifecycle sync", () => {
       expect((await store.get(card.id))?.status).toBe(ambiguous ? "running" : "review");
     },
   );
-
-  it("suffix-matches an agentless linked card to an agent-prefixed Workboard session", async () => {
-    const { card, read, sweep } = await linked({ boardId: "ops" });
-    const sessionKey = `agent:worker:${workboardSessionKeyForCard(card)}`;
-
-    await sweep([lifecycleSession(sessionKey, "done", card.updatedAt + 1)]);
-
-    expect((await read())?.status).toBe("review");
-  });
 
   it("recovers an exact legacy link from a full page with an unrelated title match", async () => {
     const sessionKey = "legacy-card";

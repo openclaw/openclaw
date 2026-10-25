@@ -28,26 +28,25 @@ async function beginPreparedDispatch() {
     options: { maxStarts: 1 },
   });
   const prepared = await reachedRun.promise;
+  const replacementStore = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
   return {
     card,
     dispatch,
     prepared,
     runResult,
-    replacementStore: new WorkboardStore(stores.cards, sqliteTestAuxStores(stores)),
+    replacementStore,
+    read: () => replacementStore.get(card.id),
+    reject: async () => {
+      runResult.reject(new Error("simulated dispatcher process loss"));
+      await dispatch;
+    },
   };
-}
-
-async function rejectInterruptedDispatch(
-  interrupted: Awaited<ReturnType<typeof beginPreparedDispatch>>,
-) {
-  interrupted.runResult.reject(new Error("simulated dispatcher process loss"));
-  await interrupted.dispatch;
 }
 
 let interrupted: Awaited<ReturnType<typeof beginPreparedDispatch>>;
 let canonicalSessionKey: string;
 let lifecycle: Awaited<ReturnType<typeof sweep>> | undefined;
-const read = () => interrupted.replacementStore.get(interrupted.card.id);
+const read = () => interrupted.read();
 
 beforeEach(async () => {
   interrupted = await beginPreparedDispatch();
@@ -60,7 +59,7 @@ afterEach(async () => {
     }
   } finally {
     try {
-      await rejectInterruptedDispatch(interrupted);
+      await interrupted.reject();
     } finally {
       await interrupted.replacementStore.close();
     }
@@ -102,7 +101,7 @@ describe("Workboard prepared launch restart recovery", () => {
       if (status === "running") {
         expect((await read())?.metadata?.claim).toBeUndefined();
       }
-      await rejectInterruptedDispatch(interrupted);
+      await interrupted.reject();
     },
   );
 
@@ -118,25 +117,14 @@ describe("Workboard prepared launch restart recovery", () => {
     });
 
     const accepted = await read();
+    const link = { sessionKey: canonicalSessionKey, runId: interrupted.prepared.provisionalRunId };
     expect(accepted).toMatchObject({
       status: "running",
-      sessionKey: canonicalSessionKey,
-      runId: interrupted.prepared.provisionalRunId,
+      ...link,
       metadata: {
         claim: { ownerId: "workboard-dispatcher" },
-        attempts: [
-          {
-            status: "running",
-            sessionKey: canonicalSessionKey,
-            runId: interrupted.prepared.provisionalRunId,
-          },
-        ],
-        automation: {
-          launch: {
-            phase: "accepted",
-            acceptedSessionKey: canonicalSessionKey,
-          },
-        },
+        attempts: [{ status: "running", ...link }],
+        automation: { launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey } },
       },
     });
     expect(accepted?.metadata?.automation?.launch).not.toHaveProperty("acceptedRunId");
@@ -156,20 +144,14 @@ describe("Workboard prepared launch restart recovery", () => {
       runId: "accepted-run",
       metadata: {
         automation: { launch: { phase: "accepted", acceptedRunId: "accepted-run" } },
-        attempts: [
-          {
-            id: expect.any(String),
-            status: "succeeded",
-            runId: "accepted-run",
-          },
-        ],
+        attempts: [{ id: expect.any(String), status: "succeeded", runId: "accepted-run" }],
       },
     });
     expect(terminal?.metadata?.attempts).toHaveLength(1);
     expect(terminal?.metadata?.attempts?.[0]?.id).toBe(accepted?.metadata?.attempts?.[0]?.id);
 
     await stopLifecycleSweep(active);
-    await rejectInterruptedDispatch(interrupted);
+    await interrupted.reject();
     expect((await read())?.status).toBe("review");
   });
 
@@ -198,7 +180,7 @@ describe("Workboard prepared launch restart recovery", () => {
         attempts: [{ status: "succeeded" }],
       },
     });
-    await rejectInterruptedDispatch(interrupted);
+    await interrupted.reject();
   });
 
   it.each(["incomplete", "ambiguous"] as const)(
@@ -232,7 +214,7 @@ describe("Workboard prepared launch restart recovery", () => {
       });
 
       await stopLifecycleSweep(active);
-      await rejectInterruptedDispatch(interrupted);
+      await interrupted.reject();
     },
   );
 });

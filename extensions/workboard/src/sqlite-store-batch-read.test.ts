@@ -1,4 +1,3 @@
-// Workboard tests cover batched card persistence and hydration.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import {
 } from "@openclaw/workboard-contract";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { execution } from "./lifecycle-sync-fixtures.test-support.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -62,6 +62,11 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
 
 function fixtureCard(index: number): WorkboardCard {
   const id = `card-${index}`;
+  const child = <T extends object>(kind: string, fields: T, createdAt = 1000) => ({
+    id: `${id}-${kind}`,
+    createdAt,
+    ...fields,
+  });
   return {
     id,
     title: `Card ${index}`,
@@ -74,14 +79,10 @@ function fixtureCard(index: number): WorkboardCard {
     ...(index % 2
       ? {
           execution: {
+            ...execution(`session-${index}`, `run-${index}`, "done"),
             id: `${id}-execution`,
-            kind: "agent-session" as const,
-            mode: "autonomous" as const,
-            status: "done" as const,
-            engine: "codex" as const,
+            engine: "codex",
             model: "gpt-5.5",
-            sessionKey: `session-${index}`,
-            runId: `run-${index}`,
             startedAt: 0,
             updatedAt: 1,
           },
@@ -91,24 +92,12 @@ function fixtureCard(index: number): WorkboardCard {
     metadata: {
       lifecycleStatusSourceUpdatedAt: 1234,
       attempts: [{ id: `${id}-attempt`, status: "succeeded", startedAt: 1000 + index }],
-      comments: [{ id: `${id}-comment`, body: `note ${index}`, createdAt: 1000 + index }],
-      links: [
-        { id: `${id}-link`, type: "relates_to", url: "https://example.test", createdAt: 1000 },
-      ],
-      proof: [{ id: `${id}-proof`, status: "passed", label: "unit", createdAt: 1000 }],
-      artifacts: [{ id: `${id}-artifact`, label: "log", createdAt: 1000 }],
-      attachments: [
-        {
-          id: `${id}-attachment`,
-          cardId: id,
-          fileName: "note.txt",
-          byteSize: 4,
-          createdAt: 1000,
-        },
-      ],
-      workerLogs: [
-        { id: `${id}-log`, level: "info", message: `log ${index}`, createdAt: 1000 + index },
-      ],
+      comments: [child("comment", { body: `note ${index}` }, 1000 + index)],
+      links: [child("link", { type: "relates_to" as const, url: "https://example.test" })],
+      proof: [child("proof", { status: "passed" as const, label: "unit" })],
+      artifacts: [child("artifact", { label: "log" })],
+      attachments: [child("attachment", { cardId: id, fileName: "note.txt", byteSize: 4 })],
+      workerLogs: [child("log", { level: "info" as const, message: `log ${index}` }, 1000 + index)],
       diagnostics: [
         {
           kind: "stranded_ready",
@@ -121,9 +110,7 @@ function fixtureCard(index: number): WorkboardCard {
           actions: [],
         },
       ],
-      notifications: [
-        { id: `${id}-notify`, kind: "failed", message: "boom", createdAt: 1000 + index },
-      ],
+      notifications: [child("notify", { kind: "failed" as const, message: "boom" }, 1000 + index)],
       workerProtocol: { state: "idle", updatedAt: 1000 + index, detail: "waiting" },
     },
   };
@@ -161,39 +148,28 @@ describe("workboard sqlite batch card persistence", () => {
       next.createdAt = original.createdAt;
       next.metadata!.attachments![0]!.cardId = original.id;
       const counts: Record<string, number> = {};
-      const write = async (name: string, operation: () => Promise<boolean>) => {
+      const write = async (
+        name: string,
+        card: WorkboardCard,
+        revision?: number,
+        id = original.id,
+      ) => {
         const before = sqliteStatements.count;
-        const result = await operation();
+        const result =
+          revision === undefined
+            ? await stores.cards.registerIfAbsent(id, persisted(card))
+            : await stores.cards.registerIfUpdatedAt(id, persisted(card), revision);
         counts[name] = sqliteStatements.count - before;
         return result;
       };
-
-      expect(
-        await write("create", () =>
-          stores.cards.registerIfAbsent(original.id, persisted(original)),
-        ),
-      ).toBe(true);
+      expect(await write("create", original)).toBe(true);
       await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(original));
-      expect(
-        await write("duplicate", () => stores.cards.registerIfAbsent(original.id, persisted(next))),
-      ).toBe(false);
-      expect(
-        await write("stale", () =>
-          stores.cards.registerIfUpdatedAt(original.id, persisted(next), original.updatedAt - 1),
-        ),
-      ).toBe(false);
-      expect(
-        await write("missing", () =>
-          stores.cards.registerIfUpdatedAt("missing", persisted(next), original.updatedAt),
-        ),
-      ).toBe(false);
+      expect(await write("duplicate", next)).toBe(false);
+      expect(await write("stale", next, original.updatedAt - 1)).toBe(false);
+      expect(await write("missing", next, original.updatedAt, "missing")).toBe(false);
       await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(original));
       await expect(stores.cards.lookup("missing")).resolves.toBeUndefined();
-      expect(
-        await write("update", () =>
-          stores.cards.registerIfUpdatedAt(original.id, persisted(next), original.updatedAt),
-        ),
-      ).toBe(true);
+      expect(await write("update", next, original.updatedAt)).toBe(true);
       await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(next));
 
       await stores.boards.register("sessions", {

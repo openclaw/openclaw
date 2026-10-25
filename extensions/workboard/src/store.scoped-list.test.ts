@@ -88,58 +88,43 @@ describe("Workboard context and session-scoped reads", () => {
   test("normalizes structural session casing without hydrating colliding opaque identities", async () => {
     const { store, stores, dbPath } = setup();
     const cases = [
-      {
-        kind: "direct",
-        stored: " Agent:Main:Matrix:Channel:!Room:example.org ",
-        key: "agent:main:matrix:channel:!Room:example.org",
-        other: "agent:main:matrix:channel:!room:example.org",
-      },
-      {
-        kind: "execution",
-        stored: "Agent:Main:Matrix:Channel:!Room:example.org:THREAD:$Event",
-        key: "agent:main:matrix:channel:!Room:example.org:thread:$Event",
-        other: "agent:main:matrix:channel:!Room:example.org:thread:$event",
-      },
-      {
-        kind: "attempt",
-        stored: "Agent:Main:Signal:Group: OpaqueGroup :THREAD:REPLY",
-        key: "agent:main:signal:group:OpaqueGroup:thread:reply",
-        other: "agent:main:signal:group:opaquegroup:thread:reply",
-      },
-      {
-        kind: "event",
-        stored: "Agent:Main:Agent:Worker:catalog:SourceID",
-        key: "agent:main:agent:worker:catalog:SourceID",
-        other: "agent:main:agent:worker:catalog:sourceid",
-      },
-      {
-        kind: "unicode-direct",
-        stored: "Agent:Main:ChÄt",
-        key: "agent:main:chät",
-        other: "agent:main:chât",
-      },
-      {
-        kind: "unicode-event",
-        stored: "Agent:Main:catalog:Ä",
-        key: "agent:main:catalog:Ä",
-        other: "agent:main:catalog:ä",
-      },
-      {
-        kind: "kelvin-event",
-        stored: "Agent:Main:Key",
-        key: "agent:main:key",
-        other: "agent:main:other",
-      },
-    ];
-    for (const scenario of cases) {
+      [
+        "direct",
+        " Agent:Main:Matrix:Channel:!Room:example.org ",
+        "agent:main:matrix:channel:!Room:example.org",
+        "agent:main:matrix:channel:!room:example.org",
+      ],
+      [
+        "execution",
+        "Agent:Main:Matrix:Channel:!Room:example.org:THREAD:$Event",
+        "agent:main:matrix:channel:!Room:example.org:thread:$Event",
+        "agent:main:matrix:channel:!Room:example.org:thread:$event",
+      ],
+      [
+        "attempt",
+        "Agent:Main:Signal:Group: OpaqueGroup :THREAD:REPLY",
+        "agent:main:signal:group:OpaqueGroup:thread:reply",
+        "agent:main:signal:group:opaquegroup:thread:reply",
+      ],
+      [
+        "event",
+        "Agent:Main:Agent:Worker:catalog:SourceID",
+        "agent:main:agent:worker:catalog:SourceID",
+        "agent:main:agent:worker:catalog:sourceid",
+      ],
+      ["unicode-direct", "Agent:Main:ChÄt", "agent:main:chät", "agent:main:chât"],
+      ["unicode-event", "Agent:Main:catalog:Ä", "agent:main:catalog:Ä", "agent:main:catalog:ä"],
+      ["kelvin-event", "Agent:Main:Key", "agent:main:key", "agent:main:other"],
+    ] as const;
+    for (const [kind, stored, , other] of cases) {
       for (const [suffix, sessionKey] of [
-        ["selected", scenario.stored],
-        ["collision", scenario.other],
+        ["selected", stored],
+        ["collision", other],
       ] as const) {
-        const id = `${scenario.kind}-${suffix}`;
-        const link = scenario.kind.endsWith("direct")
+        const id = `${kind}-${suffix}`;
+        const link = kind.endsWith("direct")
           ? { sessionKey }
-          : scenario.kind === "execution"
+          : kind === "execution"
             ? {
                 sessionKey: "another-session",
                 execution: {
@@ -152,7 +137,7 @@ describe("Workboard context and session-scoped reads", () => {
                   updatedAt: 2,
                 },
               }
-            : scenario.kind === "attempt"
+            : kind === "attempt"
               ? {
                   metadata: {
                     attempts: [{ id, status: "succeeded" as const, startedAt: 1, sessionKey }],
@@ -167,14 +152,14 @@ describe("Workboard context and session-scoped reads", () => {
       .prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id LIKE '%-collision'")
       .run();
     const { ids } = await captureRead(async () => {
-      for (const scenario of cases) {
-        expect(
-          (await store.listCards(undefined, scenario.key)).cards.map((card) => card.id),
-        ).toEqual([`${scenario.kind}-selected`]);
+      for (const [kind, , key] of cases) {
+        expect((await store.listCards(undefined, key)).cards.map((card) => card.id)).toEqual([
+          `${kind}-selected`,
+        ]);
       }
     });
-    expect(new Set(ids)).toEqual(new Set(cases.map((scenario) => `${scenario.kind}-selected`)));
-    expect((await store.listCards("other", cases[0]!.key)).cards).toEqual([]);
+    expect(new Set(ids)).toEqual(new Set(cases.map(([kind]) => `${kind}-selected`)));
+    expect((await store.listCards("other", cases[0][2])).cards).toEqual([]);
     expect((await store.listCards(undefined, "missing-session")).cards).toEqual([]);
     await expect(store.listCards(undefined)).rejects.toThrow(SyntaxError);
   });
@@ -276,26 +261,14 @@ describe("Workboard context and session-scoped reads", () => {
   // Injects legacy rows and counts reads through native SQLite handles.
   test("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
     const { store, stores, dbPath } = setup();
-    const cases: Array<{
-      name: string;
-      left: Partial<WorkboardCard>;
-      right: Partial<WorkboardCard>;
-    }> = [
-      {
-        name: "active",
-        left: { updatedAt: 1 },
-        right: { updatedAt: 999, metadata: { archivedAt: 1 } },
-      },
-      {
-        name: "status",
-        left: { status: "ready", position: 99 },
-        right: { status: "done", position: 0 },
-      },
-      { name: "position", left: { position: 0 }, right: { position: 1 } },
-      { name: "created", left: { createdAt: 1 }, right: { createdAt: 2 } },
-      { name: "id", left: {}, right: {} },
+    const cases: Array<[string, Partial<WorkboardCard>, Partial<WorkboardCard>]> = [
+      ["active", { updatedAt: 1 }, { updatedAt: 999, metadata: { archivedAt: 1 } }],
+      ["status", { status: "ready", position: 99 }, { status: "done", position: 0 }],
+      ["position", { position: 0 }, { position: 1 }],
+      ["created", { createdAt: 1 }, { createdAt: 2 }],
+      ["id", {}, {}],
     ];
-    for (const { name, left, right } of cases) {
+    for (const [name, left, right] of cases) {
       const sessionKey = `session-${name}`;
       const cards = [
         fixtureCard(`arbitrary-${name}-z`, { sessionKey, ...right }),
@@ -331,7 +304,7 @@ describe("Workboard context and session-scoped reads", () => {
     raw
       .prepare("UPDATE workboard_cards SET execution_id = NULL WHERE id = ?")
       .run(absentExecution.id);
-    for (const { name } of cases) {
+    for (const [name] of cases) {
       const { value: captured, ids } = await captureRead(() =>
         store.captureSession({
           title: "Reuse",

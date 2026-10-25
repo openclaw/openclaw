@@ -76,10 +76,10 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     return { fixture, schema, close };
   }
 
-  const insertBoard = (id: string) => ({
-    sql: "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, ?, ?)",
+  const insertBoard = (id: string, name: string | null = null) => ({
+    sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
     method: "run" as const,
-    args: [id, 1, 2],
+    args: [id, name, 1, 2],
   });
 
   const get = (sql: string, args: string[] = []) => ({ sql, args, method: "get" as const });
@@ -108,37 +108,6 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     expect(
       anchor.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'workboard_%'").all(),
     ).toEqual([]);
-  });
-
-  it("retains a real SQLite anchor and reopens the same PostgreSQL schema", async () => {
-    const dbPath = databasePath();
-    const first = await openDatabase(dbPath);
-    await first.fixture.statements(
-      [
-        {
-          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          method: "run",
-          args: ["board", "Persisted remotely", 1, 2],
-        },
-      ],
-      true,
-    );
-    const persisted = await observer.query<{ name: string }>(
-      `SELECT name FROM ${quoteIdentifier(first.schema)}.workboard_boards WHERE id = $1`,
-      ["board"],
-    );
-    expect(persisted.rows).toEqual([{ name: "Persisted remotely" }]);
-    const schema = first.schema;
-    await first.close();
-    const reopened = await openDatabase(dbPath);
-    expect(reopened.schema).toBe(schema);
-    expect(await readName(reopened.fixture, "board")).toEqual([{ name: "Persisted remotely" }]);
-    await reopened.close();
-    using anchor = new DatabaseSync(dbPath, { readOnly: true });
-    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(
-      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
-    ).toBeUndefined();
   });
 
   it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
@@ -236,16 +205,10 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const dbPath = databasePath();
     const opened = await openDatabase(dbPath);
     const schema = opened.schema;
-    await opened.fixture.statements(
-      [
-        {
-          sql: "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-          method: "run",
-          args: ["remote", "Keep remote data", 1, 2],
-        },
-      ],
-      true,
-    );
+    await opened.fixture.statements([insertBoard("remote", "Keep remote data")], true);
+    expect(await rows(`SELECT name FROM ${quoteIdentifier(schema)}.workboard_boards`)).toEqual([
+      { name: "Keep remote data" },
+    ]);
     await opened.close();
     const snapshotAnchor = () => {
       using anchor = new DatabaseSync(dbPath, { readOnly: true });
@@ -267,6 +230,12 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     const reopened = await openDatabase(dbPath);
     expect(reopened.schema).toBe(schema);
     expect(await readName(reopened.fixture, "remote")).toEqual([{ name: "Keep remote data" }]);
+    await reopened.close();
+    using anchor = new DatabaseSync(dbPath, { readOnly: true });
+    expect(anchor.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(
+      anchor.prepare("SELECT name FROM sqlite_schema WHERE name = 'workboard_boards'").get(),
+    ).toBeUndefined();
   });
 
   // External metadata changes are visible on the next physical-store admission, not warm reopen.
