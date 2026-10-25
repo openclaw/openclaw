@@ -4,6 +4,7 @@ import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
 
@@ -617,6 +618,26 @@ describe("config appearance preferences", () => {
     expect(fallbackRow).toBeDefined();
     labeledRow?.querySelector<HTMLButtonElement>("button")?.click();
     expect(props.setSessionCatalogHidden).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("defers offscreen Lobsterdex artwork and keeps it after the first reveal", async () => {
+    const { container } = renderAppearance();
+    container.style.cssText = "position:fixed;top:0;left:0;width:390px;height:200px;overflow:auto";
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const gallery = required(container, ".lobsterdex", HTMLElement);
+    const thumbnails = gallery.querySelectorAll(".lobsterdex__mini");
+    expect(thumbnails.length).toBeGreaterThan(0);
+    expect(gallery.querySelectorAll(".lobster-pet__svg")).toHaveLength(0);
+
+    gallery.scrollIntoView({ block: "center" });
+    await waitForSolid(() => {
+      expect(gallery.querySelectorAll(".lobster-pet__svg")).toHaveLength(thumbnails.length);
+    });
+    const artwork = gallery.querySelector(".lobster-pet__svg");
+    container.style.top = "2000px";
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(gallery.querySelector(".lobster-pet__svg")).toBe(artwork);
   });
 
   it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {

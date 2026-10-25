@@ -62,13 +62,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: none;
   transition:
     transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 100ms ease-out,
-    content-visibility 160ms allow-discrete;
+    opacity 100ms ease-out;
 }
 
-/* Skip the retained drawer's layout after its closing transition finishes. */
-.shell--mobile-nav .shell-nav[aria-hidden="true"] {
-  content-visibility: hidden;
+.shell--mobile-nav .sidebar-resizer {
+  display: none;
 }
 
 .shell--mobile-nav .shell-nav-backdrop {
@@ -106,8 +104,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
-  /* Initial focus must see the controls before the first animation frame. */
-  transition-property: transform, opacity;
   transition-duration: 200ms, 140ms;
 }
 

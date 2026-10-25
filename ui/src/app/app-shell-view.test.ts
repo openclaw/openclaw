@@ -147,23 +147,6 @@ it("exposes the Claws navigation entry only while its Labs toggle is enabled", a
   }
 });
 
-it("leaves viewport width measurement to the sidebar divider", async () => {
-  const { owner } = await mountShell(false);
-  const original = Object.getOwnPropertyDescriptor(globalThis, "innerWidth");
-  const measure = vi.fn(() => 1280);
-  Object.defineProperty(globalThis, "innerWidth", { configurable: true, get: measure });
-  try {
-    expect(readShellView(owner).activeRoute).toBe("chat");
-    expect(measure).not.toHaveBeenCalled();
-  } finally {
-    if (original) {
-      Object.defineProperty(globalThis, "innerWidth", original);
-    } else {
-      Reflect.deleteProperty(globalThis, "innerWidth");
-    }
-  }
-});
-
 it("updates native history buttons only while connected and refreshes them on reconnect", async () => {
   Object.assign(window, {
     __OPENCLAW_NATIVE_WEB_CHROME__: true,
@@ -333,7 +316,6 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   const outlet = query("openclaw-router-outlet");
   expect(sidebar).toBe(owner.navigationSidebar);
   expect(outlet).not.toBeNull();
-  expect(query(".sidebar-resizer")).not.toBeNull();
 
   mobile = true;
   owner.navDrawerOpen = true;
@@ -344,7 +326,6 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(drawer?.contains(sidebar)).toBe(true);
   expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(true);
   expect(query("openclaw-router-outlet")).toBe(outlet);
-  expect(query(".sidebar-resizer")).toBeNull();
 
   owner.navDrawerOpen = false;
   flush();
@@ -358,7 +339,6 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(query("openclaw-router-outlet")).toBe(outlet);
-  expect(query(".sidebar-resizer")).not.toBeNull();
 
   owner.routeState = { routeId: "appearance" };
   refresh();

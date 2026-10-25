@@ -33,7 +33,7 @@ import {
   isHomePanelAvailable,
 } from "./panel-availability.ts";
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
-import { normalizeCatalogOpenTarget } from "./settings.ts";
+import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
@@ -163,6 +163,7 @@ export function readShellView(host: ShellViewHost) {
       onboarding,
       compact: mergedChatChrome,
     });
+  const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
   const requestedRouteAgentId = host.shellNavigation.newSessionRouteAgentId();
@@ -311,6 +312,7 @@ export function readShellView(host: ShellViewHost) {
     expandedNavWidth,
     navigationSurfaceHidden,
     floatingAttentionVisible,
+    shellWidth,
     selectedAgentId,
     newSessionDisabledReason,
     workspacePluginsEnabled,

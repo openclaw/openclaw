@@ -95,14 +95,6 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
-  // Only a mounted desktop divider needs viewport geometry.
-  const sidebarViewportWidth = createMemo(
-    () => {
-      props.host.shellRevision();
-      return Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
-    },
-    { lazy: true },
-  );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
@@ -325,7 +317,6 @@ export function ApplicationShell(props: {
         <Show
           when={
             !view().nativeEmbed &&
-            !view().mobileNavLayout &&
             !view().navCollapsed &&
             !view().onboarding &&
             !view().settingsTakeover
@@ -334,9 +325,9 @@ export function ApplicationShell(props: {
           <resizable-divider
             class="sidebar-resizer"
             prop:label={t("nav.resize")}
-            prop:splitRatio={view().expandedNavWidth / sidebarViewportWidth()}
-            prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / sidebarViewportWidth()}
-            prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / sidebarViewportWidth()}
+            prop:splitRatio={view().expandedNavWidth / view().shellWidth}
+            prop:minRatio={(NAV_WIDTH_MIN + view().railWidth) / view().shellWidth}
+            prop:maxRatio={(NAV_WIDTH_MAX + view().railWidth) / view().shellWidth}
             aria-valuetext={`${view().expandedNavWidth} pixels`}
             onResize-start={() => setNavResizing(true)}
             onResize-end={() => setNavResizing(false)}
