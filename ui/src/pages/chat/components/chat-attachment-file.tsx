@@ -2,12 +2,15 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentVideoPosterUrl } from "../attachment-payload-store.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function AttachmentRemove(props: {
   label: string;

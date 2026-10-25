@@ -477,6 +477,8 @@ on:
         default: true
         type: boolean
     secrets:
+      ABLITERATION_API_KEY:
+        required: false
       AZURE_SPEECH_KEY:
         required: false
       AZURE_SPEECH_REGION:
@@ -3094,6 +3096,24 @@ jobs:
                 }
             fi
           fi
+          metadata=".artifacts/docker-e2e-package/package-candidate.json"
+          if [[ ! -f "$metadata" ]]; then
+            jq -n \
+              --arg name "$name" \
+              --arg packageSourceSha "$package_source_sha" \
+              --arg sha256 "$digest" \
+              --arg version "$version" \
+              '{
+                name: $name,
+                packageSourceSha: $packageSourceSha,
+                sha256: $sha256,
+                version: $version
+              }' > "$metadata"
+          fi
+          [[ -s "$metadata" ]] || {
+            echo "Docker E2E package metadata was not created." >&2
+            exit 1
+          }
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -3111,7 +3131,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           if-no-files-found: error
 
       - name: Validate prerelease plugin registry artifact identity
@@ -5049,6 +5071,7 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      ABLITERATION_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ABLITERATION_API_KEY || '' }}
       AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
       AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
       BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}

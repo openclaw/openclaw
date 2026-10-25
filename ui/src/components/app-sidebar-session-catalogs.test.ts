@@ -178,5 +178,12 @@ it.each([false, true])(
     expect(projectSidebarSessionCatalogs([catalog(hosts)], ownerId, liveRows)).toEqual([
       { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
     ]);
+    expect(
+      projectSidebarSessionCatalogs(
+        [{ ...catalog(hosts), error: { code: "UNAVAILABLE", message: "Discovery failed" } }],
+        "operator:unrelated",
+        liveRows,
+      ),
+    ).toEqual([]);
   },
 );

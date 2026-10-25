@@ -10,7 +10,7 @@ import {
 } from "./plugin-command-schedule.types.js";
 import type { CronStoredJob } from "./types.js";
 
-export const MAX_PLUGIN_COMMAND_SCHEDULE_BYTES = 65_536;
+const MAX_PLUGIN_COMMAND_SCHEDULE_BYTES = 65_536;
 export const MAX_PLUGIN_COMMAND_SCHEDULE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_PLUGIN_COMMAND_SCHEDULES_PER_INVOCATION = 4;
 export const MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT = 8;
@@ -99,7 +99,8 @@ export function resolvePluginCommandScheduleBinding(
 
 /**
  * The loaded instance runs the same code that accepted the schedule: the same plugin location
- * and metadata, the exact captured source digest, and the target command still registered.
+ * and metadata, the exact code identity (captured source digest or bundled build), and the target
+ * command still registered.
  * Metadata alone is not code identity; a reload with the same metadata can run different code.
  */
 function servesPluginCommandSchedule(

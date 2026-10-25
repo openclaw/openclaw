@@ -17,49 +17,17 @@ function required<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
-// #107299: palette edits dimmed --muted to 3.1–3.5:1 on dark surfaces.
-const TEXT_TOKENS = "text text-strong chat-text muted muted-strong muted-foreground"
-  .split(" ")
-  .map((name) => `--${name}`);
-
-const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
-
-const AA_NORMAL_TEXT_MIN = 4.5;
-
 // Beacon promises AAA; the other themes promise AA.
-const AAA_NORMAL_TEXT_MIN = 7;
-
-// Read overrides from CSS: missing Beacon once left white on pale at 1.80:1.
-const CONFIRM_BUTTON_RULE = ".chat-confirm-popover__yes";
 const AAA_THEMES = new Set(["beacon", "beacon-light"]);
-
-// --secondary matched --card and hid code chips in dark user bubbles.
-const CODE_CHIP_RULE = ".chat-text :where(:not(pre, a.markdown-file-link) > code)";
-const CODE_CHIP_HOST_SURFACES = ["--card", "--bg"] as const;
-const CHIP_SURFACE_MIN_STEP = 1.05;
-const CHIP_BORDER_MIN_STEP = 1.25;
-
-// Missing light-mode overrides left tinted additions at 1.15:1 on --bg-muted.
-const DIFF_SELECTORS = [
-  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition",
-  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion",
-] as const;
-const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
-
-// Accent-derived bubbles can swallow links; sender tints vary the failing hue.
-const CHAT_LINK_RULE = ".chat-text :where(a)";
-const CHAT_LINK_HOVER_RULE = ".chat-text :where(a:hover)";
-const USER_BUBBLE_RULE = ".chat-group.user .chat-bubble";
-const SENDER_TINT_BUBBLE_RULE =
-  ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
-const LIGHT_USER_BUBBLE_RULE =
-  ':where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble';
-const LIGHT_SENDER_TINT_BUBBLE_RULE =
-  ':where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble';
+const AA_NORMAL_TEXT_MIN = 4.5;
+const contrastFloor = (theme: string) => (AAA_THEMES.has(theme) ? 7 : AA_NORMAL_TEXT_MIN);
+const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
+const number = (value = "") => Number.parseFloat(value);
+const channels = (read: (index: 0 | 1 | 2) => number): RGB => [read(0), read(1), read(2)];
 
 /** Compose each selectable theme the way theme.ts layers blocks over :root. */
 function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
@@ -86,8 +54,7 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
 
 function parseHex(hex: string): RGB {
   const match = required(hex.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/iu), hex);
-  const channel = (index: number) => Number.parseInt(match[index] ?? "", 16);
-  return [channel(1), channel(2), channel(3)];
+  return channels((index) => Number.parseInt(match[index + 1] ?? "", 16));
 }
 
 function relativeLuminance(rgb: RGB): number {
@@ -105,34 +72,26 @@ function contrastRatio(foreground: RGB, background: RGB): number {
 }
 
 function parseAlpha(value: string | undefined): number {
-  return value ? Number.parseFloat(value) / (value.endsWith("%") ? 100 : 1) : 1;
+  return value ? number(value) / (value.endsWith("%") ? 100 : 1) : 1;
 }
 
 function hslToRgb(hue: number, saturation: number, lightness: number): RGB {
-  const normalizedHue = ((hue % 360) + 360) % 360;
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
-  const segment = normalizedHue / 60;
-  const secondary = chroma * (1 - Math.abs((segment % 2) - 1));
-  const sectors: RGB[] = [
-    [chroma, secondary, 0],
-    [secondary, chroma, 0],
-    [0, chroma, secondary],
-    [0, secondary, chroma],
-    [secondary, 0, chroma],
-    [chroma, 0, secondary],
-  ];
-  const [red, green, blue] = sectors[Math.floor(segment)]!;
-  const offset = lightness - chroma / 2;
-  return [(red + offset) * 255, (green + offset) * 255, (blue + offset) * 255];
+  // CSS Color's HSL-to-sRGB formula, with hue normalized for negative inputs.
+  const amplitude = saturation * Math.min(lightness, 1 - lightness);
+  const channel = (offset: number) => {
+    const k = (offset + (((hue % 360) + 360) % 360) / 30) % 12;
+    return 255 * (lightness - amplitude * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
+  };
+  return [channel(0), channel(8), channel(4)];
 }
 
 function resolveNumber(value: string, tokens: TokenMap): number {
   const variable = value.match(/^var\((--[\w-]+)\)$/u)?.[1];
   const resolved = variable ? tokens.get(variable) : value;
-  if (resolved === undefined || !Number.isFinite(Number.parseFloat(resolved))) {
+  if (resolved === undefined || !Number.isFinite(number(resolved))) {
     throw new Error(`could not resolve numeric value "${value}"`);
   }
-  return Number.parseFloat(resolved);
+  return number(resolved);
 }
 
 function mixColors(first: Color, firstWeight: number, second: Color): Color {
@@ -142,11 +101,13 @@ function mixColors(first: Color, firstWeight: number, second: Color): Color {
     return { rgb: [0, 0, 0], alpha };
   }
   // CSS color-mix weights translucent operands by their alpha too.
-  const channel = (index: 0 | 1 | 2): number =>
-    (first.rgb[index] * first.alpha * firstWeight +
-      second.rgb[index] * second.alpha * secondWeight) /
-    alpha;
-  return { rgb: [channel(0), channel(1), channel(2)], alpha };
+  const rgb = channels(
+    (index) =>
+      (first.rgb[index] * first.alpha * firstWeight +
+        second.rgb[index] * second.alpha * secondWeight) /
+      alpha,
+  );
+  return { rgb, alpha };
 }
 
 function resolveColor(value: string, tokens: TokenMap, resolving = new Set<string>()): Color {
@@ -169,11 +130,7 @@ function resolveColor(value: string, tokens: TokenMap, resolving = new Set<strin
   );
   if (rgb) {
     return {
-      rgb: [
-        Number.parseFloat(rgb[1] ?? ""),
-        Number.parseFloat(rgb[2] ?? ""),
-        Number.parseFloat(rgb[3] ?? ""),
-      ],
+      rgb: channels((index) => number(rgb[index + 1])),
       alpha: parseAlpha(rgb[4]),
     };
   }
@@ -185,8 +142,8 @@ function resolveColor(value: string, tokens: TokenMap, resolving = new Set<strin
     return {
       rgb: hslToRgb(
         resolveNumber(hsl[1] ?? "", tokens),
-        Number.parseFloat(hsl[2] ?? "") / 100,
-        Number.parseFloat(hsl[3] ?? "") / 100,
+        number(hsl[2]) / 100,
+        number(hsl[3]) / 100,
       ),
       alpha: parseAlpha(hsl[4]),
     };
@@ -198,7 +155,7 @@ function resolveColor(value: string, tokens: TokenMap, resolving = new Set<strin
   if (mix) {
     return mixColors(
       resolveColor(mix[1] ?? "", tokens, resolving),
-      Number.parseFloat(mix[2] ?? "") / 100,
+      number(mix[2]) / 100,
       resolveColor(mix[3] ?? "", tokens, resolving),
     );
   }
@@ -207,11 +164,9 @@ function resolveColor(value: string, tokens: TokenMap, resolving = new Set<strin
 }
 
 function composite(color: Color, background: RGB): RGB {
-  return [
-    color.rgb[0] * color.alpha + background[0] * (1 - color.alpha),
-    color.rgb[1] * color.alpha + background[1] * (1 - color.alpha),
-    color.rgb[2] * color.alpha + background[2] * (1 - color.alpha),
-  ];
+  return channels(
+    (index) => color.rgb[index] * color.alpha + background[index] * (1 - color.alpha),
+  );
 }
 
 function resolveOpaqueColor(value: string, tokens: TokenMap): RGB {
@@ -244,46 +199,6 @@ const readPaint = (rule: Map<string, string>, property: string) =>
   required(rule.get(property), property);
 const readColorToken = (value: string) => value.match(/var\((--[\w-]+)\)/u)?.[1] ?? "";
 
-function readConfirmButtonPaint(rules: Rule[]) {
-  type Paint = { background: string; color: string };
-  let base: Paint | undefined;
-  const overrides = new Map<string, Paint>();
-  for (const rule of rules) {
-    if (
-      !/\.chat-confirm-popover__yes(?![\w-])/u.test(rule.selector) ||
-      rule.selector.includes(":hover")
-    ) {
-      continue;
-    }
-    const values = declarations(rule);
-    const background = readColorToken(values.get("background") ?? "");
-    const color = readColorToken(values.get("color") ?? "");
-    if (!background || !color) {
-      continue;
-    }
-    const themes = [...rule.selector.matchAll(/\[data-theme="([^"]+)"\]/gu)].map((m) => m[1]!);
-    if (themes.length === 0) {
-      base = { background, color };
-    }
-    for (const theme of themes) {
-      overrides.set(theme, { background, color });
-    }
-  }
-  return { base: required(base, CONFIRM_BUTTON_RULE), overrides };
-}
-
-function readBubbleBackgrounds(rules: Rule[]) {
-  const background = (selector: string) =>
-    readPaint(readRule(rules, selector), "--chat-bubble-background");
-  return {
-    user: background(USER_BUBBLE_RULE),
-    lightUser: background(LIGHT_USER_BUBBLE_RULE),
-    lightUserText: readColorToken(readPaint(readRule(rules, LIGHT_USER_BUBBLE_RULE), "color")),
-    senderTint: background(SENDER_TINT_BUBBLE_RULE),
-    lightSenderTint: background(LIGHT_SENDER_TINT_BUBBLE_RULE),
-  };
-}
-
 const themeBlocks = readThemeBlocks(stylesDir);
 
 describe("Control UI theme contrast", () => {
@@ -292,16 +207,18 @@ describe("Control UI theme contrast", () => {
   const textRules = cssRules(textCss);
   const groupedRules = cssRules(readStyle("chat/grouped.css"));
   type Paint = readonly [ink: string, fill: string, minimum: number, host?: string];
-  const paletteCases = (
-    paints: (themeName: string, tokens: TokenMap, floor: number) => readonly Paint[],
-  ) =>
-    [...themes].flatMap(([themeName, tokens]) =>
-      paints(
-        themeName,
-        tokens,
-        AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN,
-      ).map(([ink, fill, minimum, host]) => ({ themeName, tokens, ink, fill, minimum, host })),
-    );
+  const onSurfaces = (
+    ink: string,
+    surfaces: readonly string[],
+    floor: number,
+    tint?: string,
+  ): Paint[] =>
+    surfaces.map((surface) => [
+      ink,
+      tint ?? `var(${surface})`,
+      floor,
+      tint ? `var(${surface})` : undefined,
+    ]);
   const controls = (
     [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
@@ -310,84 +227,111 @@ describe("Control UI theme contrast", () => {
         ".settings-segmented--accent > .settings-segmented__btn--active",
         "var(--accent-subtle)",
       ],
-      ["sessions.css", ".session-label-chip", null],
-      ["sessions.css", ".session-kind--direct", null],
-    ] as const
-  ).flatMap(([filename, selector, tint]) => {
-    const ink = readPaint(readRule(cssRules(readStyle(filename)), selector), "color");
-    return SURFACE_TOKENS.map(
-      (surface) =>
-        [
-          ink,
-          tint ?? `var(${surface})`,
-          AA_NORMAL_TEXT_MIN,
-          tint ? `var(${surface})` : undefined,
-        ] as const,
-    );
-  });
+      ["sessions.css", ".session-label-chip"],
+      ["sessions.css", ".session-kind--direct"],
+    ] satisfies [string, string, string?][]
+  ).flatMap(([file, selector, tint]) =>
+    onSurfaces(
+      readPaint(readRule(cssRules(readStyle(file)), selector), "color"),
+      SURFACE_TOKENS,
+      4.5,
+      tint,
+    ),
+  );
   const componentsRules = cssRules(readStyle("components.css"));
-  const diffs = DIFF_SELECTORS.map((selector) => {
-    const rule = readRule(componentsRules, selector);
-    const foregroundToken = readColorToken(readPaint(rule, "color"));
-    const tint = readPaint(rule, "background");
-    return { foregroundToken, tint };
+  const diffs = ["addition", "deletion"].map((kind) => {
+    const rule = readRule(
+      componentsRules,
+      `:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-${kind}`,
+    );
+    return rule;
   });
-  const confirmation = readConfirmButtonPaint(groupedRules);
-  const bubbles = readBubbleBackgrounds(groupedRules);
+  // #160568 retired per-theme confirmation overrides in favor of paired action tokens.
+  const confirmation = readRule(
+    groupedRules.filter((rule) => rule.selector === ".chat-confirm-popover__yes"),
+    ".chat-confirm-popover__yes",
+  );
   const bubblePaints = (theme: string, tokens: TokenMap) => {
     const light = theme === "light" || theme.endsWith("-light");
     const page = resolveOpaqueColor("var(--bg)", tokens);
-    const user = composite(resolveColor(light ? bubbles.lightUser : bubbles.user, tokens), page);
-    const tinted = (value: string) =>
-      Array.from({ length: 360 }, (_, hue) =>
+    const lightRoot = ':where(:root[data-theme-mode="light"]) ';
+    const lightUser = lightRoot + ".chat-group.user .chat-bubble";
+    const sender =
+      ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
+    const paint = (selector: string, property = "--chat-bubble-background") =>
+      readPaint(readRule(groupedRules, selector), property);
+    const background = (selector: string, palette = tokens) =>
+      composite(resolveColor(paint(selector), palette), page);
+    const tinted = (selector: string) => {
+      const value = paint(selector);
+      return Array.from({ length: 360 }, (_, hue) =>
         composite(resolveColor(value, new Map(tokens).set("--chat-sender-hue", String(hue))), page),
       );
+    };
     return {
       page,
-      user,
       light,
-      sender: tinted(light ? bubbles.lightSenderTint : bubbles.senderTint),
-      forwarded: () => tinted(bubbles.senderTint),
+      user: background(".chat-group.user .chat-bubble"),
+      lightUserText: paint(lightUser, "color"),
+      sender: tinted(
+        light ? lightRoot + ".chat-group.user.chat-group--sender-tint .chat-bubble" : sender,
+      ),
+      forwarded: () => tinted(sender),
     };
   };
 
   const checks = {
-    "text tokens: AA on every surface, AAA where promised": paletteCases((_theme, _tokens, floor) =>
-      TEXT_TOKENS.flatMap((ink) =>
-        SURFACE_TOKENS.map((fill) => [`var(${ink})`, `var(${fill})`, floor] as const),
-      ),
-    ),
-    "selected controls and session labels: AA": paletteCases(() => controls),
-    "filled actions and accent glyphs": paletteCases(() => [
+    "native selection text: AA": () => [
+      ["var(--selection-fg)", "var(--selection-bg)", AA_NORMAL_TEXT_MIN],
+    ],
+    "native selection highlight: distinguishable from page and cards": () => [
+      ["var(--selection-bg)", "var(--bg)", 3],
+      ["var(--selection-bg)", "var(--card)", 3],
+      ["var(--selection-bg)", "var(--panel)", 3],
+    ],
+    "text tokens: AA on every surface, AAA where promised": (_theme, _tokens, floor) =>
+      // #107299: palette edits dimmed --muted to 3.1–3.5:1 on dark surfaces.
+      "text text-strong chat-text muted muted-strong muted-foreground"
+        .split(" ")
+        .flatMap((ink) => onSurfaces(`var(--${ink})`, SURFACE_TOKENS, floor)),
+    "selected controls and session labels: AA": () => controls,
+    "filled actions and accent glyphs": () => [
       ["var(--primary-foreground)", "var(--primary)", AA_NORMAL_TEXT_MIN],
       ["var(--primary-foreground)", "var(--primary-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--destructive-foreground)", "var(--destructive-hover)", AA_NORMAL_TEXT_MIN],
       ["var(--accent-foreground)", "var(--accent)", 3],
-    ]),
-    "chat confirmation": paletteCases((themeName, tokens, floor) => {
-      const paint = confirmation.overrides.get(themeName) ?? confirmation.base;
-      const fill = tokens.get(paint.background);
-      const ink = tokens.get(paint.color);
+    ],
+    "chat confirmation": (_themeName, tokens, floor) => {
+      const fill = tokens.get(readColorToken(readPaint(confirmation, "background")));
+      const ink = tokens.get(readColorToken(readPaint(confirmation, "color")));
       return fill?.startsWith("#") && ink?.startsWith("#") ? [[ink, fill, floor]] : [];
-    }),
-    "highlighted diffs: AA on every code surface": paletteCases((_theme, _tokens, floor) =>
-      diffs.flatMap(({ foregroundToken, tint }) =>
-        DIFF_HOST_SURFACES.map(
-          (surface) => [`var(${foregroundToken})`, tint, floor, `var(${surface})`] as const,
+    },
+    "highlighted diffs: AA on every code surface": (_theme, _tokens, floor) =>
+      diffs.flatMap((rule) =>
+        onSurfaces(
+          readPaint(rule, "color"),
+          ["--bg", "--bg-muted", "--card"],
+          floor,
+          readPaint(rule, "background"),
         ),
       ),
-    ),
-  };
+  } satisfies Record<string, (theme: string, tokens: TokenMap, floor: number) => readonly Paint[]>;
   it.each(Object.entries(checks))("%s", (_name, samples) => {
-    for (const { themeName, tokens, ink, fill, minimum, host } of samples) {
-      const foreground = resolveOpaqueColor(ink, tokens);
-      const background = host
-        ? composite(resolveColor(fill, tokens), resolveOpaqueColor(host, tokens))
-        : resolveOpaqueColor(fill, tokens);
-      expect(
-        contrastRatio(foreground, background),
-        `${themeName}: ${ink} on ${fill}${host ? ` over ${host}` : ""}`,
-      ).toBeGreaterThanOrEqual(minimum);
+    for (const [themeName, tokens] of themes) {
+      for (const [ink, fill, minimum, host] of samples(
+        themeName,
+        tokens,
+        contrastFloor(themeName),
+      )) {
+        const foreground = resolveOpaqueColor(ink, tokens);
+        const background = host
+          ? composite(resolveColor(fill, tokens), resolveOpaqueColor(host, tokens))
+          : resolveOpaqueColor(fill, tokens);
+        expect(
+          contrastRatio(foreground, background),
+          `${themeName}: ${ink} on ${fill}${host ? ` over ${host}` : ""}`,
+        ).toBeGreaterThanOrEqual(minimum);
+      }
     }
   });
 
@@ -416,16 +360,17 @@ describe("Control UI theme contrast", () => {
   });
 
   it("keeps the markdown code chip separated from every surface it sits on", () => {
-    const rule = readRule(textRules, CODE_CHIP_RULE);
+    // --secondary matched --card and hid code chips in dark user bubbles.
+    const rule = readRule(textRules, ".chat-text :where(:not(pre, a.markdown-file-link) > code)");
     for (const [property, minimum] of [
-      ["background", CHIP_SURFACE_MIN_STEP],
-      ["border", CHIP_BORDER_MIN_STEP],
+      ["background", 1.05],
+      ["border", 1.25],
     ] as const) {
       const name = readColorToken(readPaint(rule, property));
       for (const [theme, tokens] of themes) {
         const color = tokens.get(name);
         expect(color, `${theme}: ${name} is not a hex token`).toMatch(/^#/u);
-        for (const hostToken of CODE_CHIP_HOST_SURFACES) {
+        for (const hostToken of ["--card", "--bg"]) {
           const host = tokens.get(hostToken);
           if (host?.startsWith("#")) {
             expectFloor(
@@ -451,7 +396,6 @@ describe("Control UI theme contrast", () => {
       textCss.match(/a\.markdown-github-item:focus-visible\s*\{\s*outline-color:\s*([^;]+);/u)?.[1],
       "GitHub chip focus paint",
     );
-    const failures: string[] = [];
     for (const [theme, palette] of themes) {
       const { page, user, sender, forwarded } = bubblePaints(theme, palette);
       const hosts = [page, user, ...sender, ...forwarded()];
@@ -474,37 +418,33 @@ describe("Control UI theme contrast", () => {
             ...resolveColor(surface, neutralTokens),
             alpha: 1,
           });
-          for (const host of hosts) {
-            const background = composite(resolveColor(surface, tokens), host);
-            const ink = composite(resolveColor(foreground, tokens), background);
-            const ratio = contrastRatio(ink, background);
-            const floor = AAA_THEMES.has(theme) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-            if (ratio < floor) {
-              failures.push(theme + "/" + tone + ": " + ratio.toFixed(2) + " < " + floor);
-            }
-            const focusRatio = contrastRatio(composite(resolveColor(focus, tokens), host), host);
-            if (focusRatio < 3) {
-              failures.push(theme + "/focus: " + focusRatio.toFixed(2));
-            }
-          }
+          // The opacity assertion makes every underlying host equivalent for chip ink.
+          const ink = composite(resolveColor(foreground, tokens), fill.rgb);
+          expectFloor(contrastRatio(ink, fill.rgb), contrastFloor(theme), `${theme}/${tone}`);
         }
+        const focusColor = resolveColor(focus, tokens);
+        expectFloor(
+          Math.min(...hosts.map((host) => contrastRatio(composite(focusColor, host), host))),
+          3,
+          `${theme}/${tone}/focus`,
+        );
       }
     }
-    expect([...new Set(failures)]).toEqual([]);
   });
 
   it("keeps chat links at WCAG AA on every bubble surface", () => {
-    const link = readColorToken(readPaint(readRule(textRules, CHAT_LINK_RULE), "color"));
+    const link = readColorToken(readPaint(readRule(textRules, ".chat-text :where(a)"), "color"));
     const linkTokens = {
       link,
-      hover: readColorToken(readRule(textRules, CHAT_LINK_HOVER_RULE).get("color") ?? "") || link,
+      hover:
+        readColorToken(readRule(textRules, ".chat-text :where(a:hover)").get("color") ?? "") ||
+        link,
     };
     for (const [themeName, tokens] of themes) {
-      const { light, user, sender } = bubblePaints(themeName, tokens);
+      const { light, user, sender, lightUserText } = bubblePaints(themeName, tokens);
 
       if (light) {
-        expect(bubbles.lightUserText).not.toBe("");
-        const foreground = resolveOpaqueColor(`var(${bubbles.lightUserText})`, tokens);
+        const foreground = resolveOpaqueColor(lightUserText, tokens);
         expectFloor(contrastRatio(foreground, user), AA_NORMAL_TEXT_MIN, `${themeName}: user text`);
       }
 

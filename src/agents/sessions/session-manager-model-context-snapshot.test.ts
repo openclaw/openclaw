@@ -13,11 +13,9 @@ import { makeUserMessage as userMessage } from "../../../test/helpers/user-messa
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
@@ -25,10 +23,10 @@ import * as transcriptHydration from "../../config/sessions/session-transcript-h
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptReader,
   readOwnedSessionTranscriptEntry,
-  runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
@@ -38,9 +36,9 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   getOpenClawAgentDatabaseIfOpen,
@@ -62,6 +60,7 @@ import {
   withTranscriptState,
 } from "./session-manager-fixtures.test-support.js";
 import * as managerContext from "./session-manager-incognito.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -103,57 +102,6 @@ function readMessages(
 }
 function withActor<T>(target: ContextTarget, run: (actor?: SessionActor) => Promise<T>) {
   return withSelectedTranscriptReader(target, run, true);
-}
-
-async function withSelectedTranscriptReader<T>(
-  target: Parameters<typeof SessionManager.openModelContextAsync>[0],
-  run: (actor?: SessionActor) => Promise<T>,
-  retainActor = false,
-): Promise<T> {
-  const { databaseClaim } = await loadSessionEntryForAdmission(target);
-  let actor: SessionActor | undefined;
-  try {
-    assert(
-      "kind" in databaseClaim && databaseClaim.kind === "worker" && databaseClaim.reader,
-      "Expected admitted durable session reader",
-    );
-    const reader = databaseClaim.reader;
-    const assertCurrent = () => reader.assertCurrent();
-    if (retainActor) {
-      const identity = readDatabasePathIdentitySync(reader.database.path);
-      assert(identity.key.startsWith("file:"), "Expected a physical actor database");
-      const acquired = await createSessionActorFactory(reader.database).acquire(
-        {
-          sessionKey: target.sessionKey,
-          database: {
-            kind: "file",
-            physicalIdentity: identity.key.slice(5),
-            birthtime: identity.birthtime,
-            nativeLocation: reader.database.path,
-          },
-        },
-        { assertCurrent, assertReadable: assertCurrent },
-      );
-      assert(!("kind" in acquired), "Expected a durable session actor");
-      actor = acquired;
-      await actor.read({ assertCurrent, authorize: assertCurrent });
-    }
-    return await withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: target,
-        sessionReader: reader,
-        ...(actor && { sessionActor: { actor, database: reader.database } }),
-        withTranscriptWrite: async (write) => write(),
-      },
-      () => run(actor),
-    );
-  } finally {
-    try {
-      await actor?.release();
-    } finally {
-      await databaseClaim.release();
-    }
-  }
 }
 
 it("reloads a durable sibling transcript under the parent writer without borrowing its actor", () =>
@@ -400,9 +348,33 @@ it.each(["durable", "admitted", "incognito"] as const)(
       }
       const seed = await SessionManager.openAsync(scope);
       const userId = await seed.appendMessageAsync(userMessage("question", 1));
-      const replyId = await seed.appendMessageAsync(
-        privateAnswer("synthetic-private-native-payload"),
-      );
+      const answer = privateAnswer("synthetic-private-native-payload");
+      answer.stopReason = "toolUse";
+      answer.content.push({
+        type: "toolCall",
+        id: "call",
+        name: "read",
+        arguments: {
+          path: "original.txt",
+          mode: "read",
+          nested: {
+            accessor: "original",
+            changed: "original",
+            proxied: { text: "proxy" },
+            cyclic: { inner: { text: "cycle" } },
+          },
+        },
+      });
+      const replyId = await seed.appendMessageAsync(answer);
+      await seed.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: "call",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "result" }],
+        timestamp: 2,
+        details: { private: "synthetic-private-tool-details" },
+      });
       const manager = await SessionManager.openAsync(scope, undefined, contextLimits);
       const readContext = async () => {
         await waitForDiagnosticEventsDrained();
@@ -436,10 +408,9 @@ it.each(["durable", "admitted", "incognito"] as const)(
           unsubscribe();
         }
       };
-      const context =
-        mode === "admitted"
-          ? await withSelectedTranscriptReader(scope, readContext)
-          : await readContext();
+      const readInitial = () =>
+        mode === "admitted" ? withSelectedTranscriptReader(scope, readContext) : readContext();
+      const context = await readInitial();
       const user = manager.getEntry(userId!);
       const reply = manager.getEntry(replyId!);
       const projectedReply = context.messages[1];
@@ -453,8 +424,72 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(context.messages[0]).toEqual(user.message);
       expect(projectedReply.content).not.toBe(reply.message.content);
       expect(JSON.stringify(context)).not.toContain("synthetic-private-native-payload");
+      expect(JSON.stringify(context)).not.toContain("synthetic-private-tool-details");
       expect(Reflect.set(projectedReply.content[0]!, "text", "changed")).toBe(true);
-      expect(reply.message.content).toEqual([{ type: "text", text: "answer" }]);
+      const residentCall = reply.message.content.find((part) => part.type === "toolCall");
+      const projectedCall = projectedReply.content.find((part) => part.type === "toolCall");
+      assert(residentCall?.type === "toolCall" && projectedCall?.type === "toolCall");
+      const projectedNested = asOptionalRecord(projectedCall.arguments.nested);
+      assert(projectedNested);
+      expect(Reflect.set(projectedNested, "changed", "context edit")).toBe(true);
+      expect(reply.message.content[0]).toEqual({ type: "text", text: "answer" });
+      expect(residentCall.arguments).toMatchObject({ nested: { changed: "original" } });
+
+      freezeJsonSnapshot(reply.message.content);
+      const reread = await readInitial();
+      const rereadReply = reread.messages[1];
+      assert(rereadReply?.role === "assistant");
+      expect(Reflect.set(rereadReply.content[0]!, "text", "changed again")).toBe(true);
+      const rereadCall = rereadReply.content.find((part) => part.type === "toolCall");
+      assert(rereadCall?.type === "toolCall");
+      expect(Reflect.set(rereadCall.arguments, "path", "context edit after freeze")).toBe(true);
+      expect(reply.message.content[0]).toEqual({ type: "text", text: "answer" });
+      expect(residentCall.arguments.path).toBe("original.txt");
+
+      const trap = vi.fn(() => {
+        throw new Error("Initial context invoked a resident proxy trap");
+      });
+      const cycle: Record<string, unknown> = { text: "cycle" };
+      cycle.inner = cycle;
+      const residentNested = {
+        accessor: "original",
+        changed: "unpersisted manager edit",
+        proxied: new Proxy(
+          { text: "proxy" },
+          {
+            get: trap,
+            getOwnPropertyDescriptor: trap,
+            ownKeys: trap,
+            getPrototypeOf: trap,
+          },
+        ),
+        cyclic: cycle,
+      };
+      Object.defineProperty(residentNested, "accessor", {
+        get() {
+          throw new Error("Initial context invoked a resident SDK getter");
+        },
+        enumerable: true,
+      });
+      reply.message.content = [
+        { type: "text", text: "unpersisted manager edit" },
+        {
+          ...residentCall,
+          arguments: { mode: "read", path: "original.txt", nested: residentNested },
+        },
+      ];
+      const authoritative = await readInitial();
+      const authoritativeReply = authoritative.messages[1];
+      assert(authoritativeReply?.role === "assistant");
+      const authoritativeCall = authoritativeReply.content.find((part) => part.type === "toolCall");
+      assert(authoritativeCall?.type === "toolCall");
+      expect(authoritativeReply.content[0]).toEqual({ type: "text", text: "answer" });
+      expect(JSON.stringify(authoritativeCall.arguments)).toBe(
+        '{"path":"original.txt","mode":"read","nested":{"accessor":"original","changed":"original","proxied":{"text":"proxy"},"cyclic":{"inner":{"text":"cycle"}}}}',
+      );
+      expect(JSON.stringify(authoritative)).not.toMatch(/synthetic-private|unpersisted/);
+      expect(rereadCall.arguments).toMatchObject({ nested: { changed: "original" } });
+      expect(trap).not.toHaveBeenCalled();
     }),
 );
 

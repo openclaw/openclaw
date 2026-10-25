@@ -38,6 +38,7 @@ import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  loadMoreSidebarSessions(): Promise<void>;
   readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
@@ -52,7 +53,10 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
+  readonly sessionProjection: Pick<
+    SidebarSessionProjection,
+    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow"
+  >;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -89,7 +93,6 @@ export interface SessionListHost {
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
-    | "setSessionsStatusFilter"
     | "startSessionDrag"
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"

@@ -570,7 +570,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
     return typeof hostname === "string"
-      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" alt="" role="presentation">`
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" width="16" height="16" loading="lazy" decoding="async" alt="" role="presentation">`
       : "";
   };
   // Fenced and indented blocks share one interaction and overflow surface.

@@ -34,6 +34,29 @@ backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
 
+## Retired A2UI widgets
+
+A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
+removed. Use [`show_widget`](/tools/show-widget) with `kind: "html"` for
+interactive widget content. Calls that still request `kind: "a2ui"` fail
+validation with the next step: `A2UI widgets were removed; use kind "html"`.
+
+Doctor backs up the affected agent database before deleting stored A2UI widgets
+identified by `pluginKind: "canvas:a2ui"` or `registeredContentKind: "a2ui"`.
+It preserves other widgets and records a warning naming the deleted count,
+explaining that A2UI widgets were retired and can be recreated as HTML widgets.
+This repair does not convert their source into HTML.
+
+Other widgets using the retired registered-renderer API become inert HTML source
+previews after the same backup. Doctor preserves their original descriptor and
+manifest in the preview, keeps their layout and valid identity, and removes
+previous capabilities. Existing HTML, native plugin, and MCP widgets are unchanged.
+
+During `openclaw update`, the candidate's Doctor step owns this backed-up repair,
+including when the update was started by an older installed update driver.
+Stored A2UI rows do not prevent the update. Runtime readers accept only the
+current widget formats; they do not retain a compatibility renderer.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
@@ -106,6 +129,20 @@ unset markers, disabled state, schedule anchors and pending occurrences, tool
 authority, delivery targets, and quiet hours. A standalone `HEARTBEAT_OK` marker
 in a saved prompt becomes `NO_REPLY`; every other prompt byte remains unchanged.
 
+Doctor retains the original heartbeat settings through the entire pass, including
+workspace-file discovery for agents excluded by explicit per-agent enrollment.
+Disabled heartbeats stay disabled, and newly migrated jobs finish their cutover
+before Doctor returns. Interrupted cutovers also retain their original enablement
+in the existing receipt. Doctor disables a pending job when that receipt or the
+remaining source configuration proves it was disabled. Older pending receipts
+without those facts retain their job and report its exact disable command; after
+disabling it, rerun `openclaw doctor --fix`, then re-enable it if intended.
+Completed cutovers preserve later operator edits. Doctor also repairs the quiet
+reply token in receipt-owned tasks created from scratch by an earlier migration
+when their creation and definition-update timestamps still match. Ordinary runs
+preserve that provenance. Edited tasks and older converted tasks without that
+provenance remain unchanged.
+
 Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
 duplicate suppression and no-route skipping are removed: repeated updates can be
 delivered, and a missing route no longer skips the run before execution. Delivery
@@ -140,6 +177,18 @@ not block admission: Doctor preserves the originals and reports them for review.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+
+### Memory flush model selection
+
+`openclaw doctor --fix` removes the retired
+`agents.defaults.compaction.memoryFlush.model` setting and records a warning
+naming its removal. Memory flushes use the active session model and its normal
+fallback chain. To keep memory extraction local, select a local session model
+and local fallbacks.
+
+Updates apply the same migration through the existing backed-up config write
+flow. Run Doctor before starting a Gateway with a configuration that still
+contains the retired setting.
 
 ### Provider configuration
 
@@ -884,6 +933,22 @@ upgrade, run `openclaw doctor --fix` before normal commands or Gateway startup.
 Package installation does not perform operator-state migrations. Doctor and
 `openclaw update status` report pending plugin upgrades even when no update run
 exists.
+
+## Context engine plugin-ID selectors
+
+Releases before declared engine ownership stored the installing plugin's ID in
+`plugins.slots.contextEngine`. When that plugin registers a different engine
+ID, the selector never resolves and turns fall back to `legacy`. Doctor replaces
+the selector with the plugin's single declared `contextEngineIds` entry when the
+plugin is independently enabled or allowlisted and no other eligible plugin
+declares that engine. A selector that is already a declared engine ID, `legacy`,
+`none`, or an undeclared equal-ID plugin stays unchanged. With multiple declared
+engines, a disabled or denied owner, or a conflicting owner, Doctor keeps the
+selector and reports which engine ID to set. Incomplete plugin discovery skips
+the repair. Update-time Doctor applies the same rule through the normal backed-up
+config write; plugin settings and install records are not touched.
+
+See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
 
 ## Blocked local plugins
 

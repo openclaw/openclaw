@@ -11,6 +11,7 @@ import {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { NotificationsSection } from "../pages/config/notifications-section.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -33,14 +34,6 @@ const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(navigator, "p
 
 function setNavigatorValue(key: string, value: unknown): void {
   Object.defineProperty(navigator, key, { configurable: true, value });
-}
-
-function restoreNavigatorValue(key: string, descriptor: PropertyDescriptor | undefined): void {
-  if (descriptor) {
-    Object.defineProperty(navigator, key, descriptor);
-  } else {
-    Reflect.deleteProperty(navigator, key);
-  }
 }
 
 function encodedVapidKey(bytes: number[]): string {
@@ -199,15 +192,11 @@ describe("web push Gateway reconciliation", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    restoreNavigatorValue("userAgent", originalUserAgentDescriptor);
-    restoreNavigatorValue("maxTouchPoints", originalMaxTouchPointsDescriptor);
-    restoreNavigatorValue("standalone", originalStandaloneDescriptor);
-    restoreNavigatorValue("platform", originalPlatformDescriptor);
-    if (originalServiceWorkerDescriptor) {
-      Object.defineProperty(navigator, "serviceWorker", originalServiceWorkerDescriptor);
-    } else {
-      Reflect.deleteProperty(navigator, "serviceWorker");
-    }
+    restorePropertyDescriptor(navigator, "userAgent", originalUserAgentDescriptor);
+    restorePropertyDescriptor(navigator, "maxTouchPoints", originalMaxTouchPointsDescriptor);
+    restorePropertyDescriptor(navigator, "standalone", originalStandaloneDescriptor);
+    restorePropertyDescriptor(navigator, "platform", originalPlatformDescriptor);
+    restorePropertyDescriptor(navigator, "serviceWorker", originalServiceWorkerDescriptor);
   });
 
   it("does not offer or prompt for push when the connected guest lacks method access", async () => {
@@ -306,11 +295,9 @@ describe("web push Gateway reconciliation", () => {
       await vi.waitFor(() =>
         expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false),
       );
-      const controls = Array.from(
-        container.querySelectorAll(".settings-stack input, .settings-stack select"),
-      );
+      const controls = container.querySelectorAll(".settings-stack input, .settings-stack select");
       expect(controls.length).toBeGreaterThan(0);
-      expect(controls.every((control) => control.matches(":disabled"))).toBe(true);
+      expect([...controls].every((control) => control.matches(":disabled"))).toBe(true);
       container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
       expect(changePreferences).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Send test");

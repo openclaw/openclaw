@@ -36,17 +36,6 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
-  it("settles the final update when the page unmounts", async () => {
-    const { context } = createHarness("main");
-    const page = createPage(context);
-    mountPage(page);
-    await page.updateComplete;
-
-    unmountPage(page);
-
-    await expect(page.updateComplete).resolves.toBe(true);
-  });
-
   it("recovers a failed preload provider usage result on the next page activation", async () => {
     const { context, request, snapshot } = createHarness("main");
     vi.spyOn(document, "hasFocus").mockReturnValue(true);

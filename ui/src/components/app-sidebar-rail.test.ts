@@ -8,6 +8,7 @@ import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import * as toast from "../lib/toast.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -15,8 +16,8 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -169,7 +170,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
-    expect(dom.query(".sidebar-pages")).not.toBeNull();
+    await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
@@ -352,11 +353,16 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([...retained, "route:usage"]);
     const pin = rail(sidebar, "route:usage")!;
+    const person = rail(sidebar, "person:offline");
+    const pinLink = pin.querySelector<HTMLAnchorElement>("a")!;
     const reorder = createDataTransferStub();
-    drag(pin.querySelector("a")!, "dragstart", reorder);
+    drag(pinLink, "dragstart", reorder);
     drag(rail(sidebar, "person:offline")!, "drop", reorder);
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual(["route:usage", ...retained]);
+    expect(rail(sidebar, "route:usage")).toBe(pin);
+    expect(rail(sidebar, "person:offline")).toBe(person);
+    expect(pin.querySelector("a")).toBe(pinLink);
     await sidebar.sidebarMenus.preloadMenuRenderer();
     pin.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
@@ -796,13 +802,11 @@ describe("personal navigation rail", () => {
 
   it("paints a burst of unloaded pins together without changing their saved order", async () => {
     const { sidebar, sessions, result, dom } = await fixture();
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++frameId, callback);
-      return frameId;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
+    vi.stubGlobal("requestAnimationFrame", framesClock.request);
+    vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
     const keys = Array.from({ length: 30 }, (_, index) => `agent:other:pin-${index}`);
     const reads = keys.map(() =>
       createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>(),

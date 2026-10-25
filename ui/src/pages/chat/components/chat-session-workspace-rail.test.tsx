@@ -4,11 +4,13 @@ import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -110,17 +112,13 @@ it("keeps Files search usable during a failed owner read and retries without dup
   const first = createDeferred<List>();
   const retry = createDeferred<List>();
   const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const [current, setCurrent] = createSignal(props());
@@ -244,6 +242,9 @@ describe("session workspace path actions", () => {
     clipboard();
     const entry = file("README.md");
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [entry] };
+    const fileRequested = createDeferred();
+    const fileRead = createDeferred();
+    onTestFinished(() => fileRead.resolve());
     const state = {
       client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
       connected: true,
@@ -254,9 +255,13 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({
-          ...result,
-          file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        getFile: vi.fn(async () => {
+          fileRequested.resolve();
+          await fileRead.promise;
+          return {
+            ...result,
+            file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+          };
         }),
       },
     } as unknown as SessionWorkspaceHost;
@@ -271,9 +276,16 @@ describe("session workspace path actions", () => {
     assert(preview);
     preview.focus();
     preview.click();
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
-    );
+    const opened = state.sessionWorkspaceState?.previews[0];
+    assert(opened?.readResult);
+    await fileRequested.promise;
+    expect(opened.content.kind).toBe("loading");
+    fileRead.resolve();
+    // This receipt includes the lazy content import, file read, and current-preview publication.
+    await opened.readResult;
+    expect(state.sessionWorkspaceState?.previews[0]).toBe(opened);
+    expect(opened.content.kind).toBe("file");
+    expect(state.sessions.getFile).toHaveBeenCalledOnce();
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
@@ -507,13 +519,7 @@ describe("session workspace path actions", () => {
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: false,
@@ -523,7 +529,7 @@ function setupDesktopLayout() {
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   onTestFinished(() => {
     if (previousFonts) {
@@ -560,17 +566,13 @@ it("desktop browses lazy directories and restores activity after global search c
       },
     }),
   );
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const mounted = await mountWorkspace(props());
@@ -735,17 +737,13 @@ it("mobile restores folder search and root groups without mixing global search r
           : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
   const mounted = await mountWorkspace(props());

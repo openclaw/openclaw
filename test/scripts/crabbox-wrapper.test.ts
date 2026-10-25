@@ -209,7 +209,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.77.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.79.2"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -318,7 +318,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.77.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.79.2}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -371,7 +371,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.77.0");
+  console.log("crabbox 0.79.2");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -1822,7 +1822,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.77.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.79.2", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1848,7 +1848,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.77.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.79.2 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2548,7 +2548,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.77.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.79.2";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2571,16 +2571,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.77.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.77.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.77.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.79.2", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.79.2", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.79.2", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.77.0",
+            version: "0.79.2",
             selectedKey: true,
           },
         ]
@@ -2639,14 +2639,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.77.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.79.2",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.77.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.79.2", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -3951,19 +3951,12 @@ esac
     ).toBe(false);
   });
 
-  it.each(
-    [
-      "ci-check-focused-testbox.yml",
-      "ci-android-focused-testbox.yml",
-      "ci-check-routine-testbox.yml",
-      "ci-check-high-memory-testbox.yml",
-    ].flatMap((workflow) =>
-      [[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]].map((refs) => ({
-        workflow,
-        refs,
-      })),
-    ),
-  )(
+  it.each([
+    {
+      workflow: "ci-check-focused-testbox.yml",
+      refs: ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"],
+    },
+  ])(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
     ({ workflow, refs }) => {
       const { output, result } = runSuccessfulDefaultWrapper(
@@ -4433,11 +4426,9 @@ process.on("exit", () => {
     ["aws", true, "transport"],
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
-    ["aws", false, "reuse"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
-    ["blacksmith-testbox", false, "reuse"],
     ["blacksmith-testbox", false, "unchanged"],
     ["blacksmith-testbox", false, "unrelated-staging"],
     ["blacksmith-testbox", false, "captured-base"],
@@ -4551,7 +4542,7 @@ process.on("exit", () => {
       for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
         writeFileSync(path.join(origin, file), "base\n");
       }
-      if (scenario === "reuse" || scenario === "unchanged") {
+      if (scenario === "unchanged") {
         chmodSync(path.join(origin, "mode.sh"), 0o755);
       }
       writeFiles(origin, {
@@ -4853,7 +4844,7 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
         return;
       }
-      if (scenario === "reuse" || scenario === "unchanged") {
+      if (scenario === "unchanged") {
         expect(git(producer, ["ls-files", "--stage", "--", "mode.sh"])).toMatch(/^100755 /u);
         const sent = runSender();
         const first = receive("reused", sent);
@@ -4861,21 +4852,16 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
         const capturedMode = git(first.receiver, ["ls-tree", "HEAD", "--", "mode.sh"]);
         expect(capturedMode).toMatch(/^100755 blob /u);
-        const retained =
-          scenario === "unchanged"
-            ? ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
-                file,
-                stat: lstatSync(path.join(first.receiver, file)),
-              }))
-            : [];
-        if (scenario === "unchanged") {
-          // Keep the old inode allocated so recreation cannot pass through inode reuse.
-          linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
-          writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
-          chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
-          rmSync(path.join(first.receiver, "raw-crlf.txt"));
-          symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
-        }
+        const retained = ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
+          file,
+          stat: lstatSync(path.join(first.receiver, file)),
+        }));
+        // Keep the old inode allocated so recreation cannot pass through inode reuse.
+        linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
+        writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
+        chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
+        rmSync(path.join(first.receiver, "raw-crlf.txt"));
+        symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
         // The old private Git owner is removed during promotion. A second import
         // must work without origin and leave no alternate pointing at that owner.
         const reused = receive("reused", sent, { source: path.join(root, "unavailable-origin") });

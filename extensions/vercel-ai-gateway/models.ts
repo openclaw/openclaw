@@ -94,16 +94,6 @@ function toPerMillionCost(value: unknown): number {
   return Number.isFinite(price) && price >= 0 ? price : 0;
 }
 
-function normalizeCost(value: unknown): ModelDefinitionConfig["cost"] {
-  const pricing = asOptionalObjectRecord(value);
-  return {
-    input: toPerMillionCost(pricing?.input),
-    output: toPerMillionCost(pricing?.output),
-    cacheRead: toPerMillionCost(pricing?.input_cache_read),
-    cacheWrite: toPerMillionCost(pricing?.input_cache_write),
-  };
-}
-
 function buildStaticModelDefinition(model: StaticVercelGatewayModel): ModelDefinitionConfig {
   return {
     ...model,
@@ -157,7 +147,13 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
     asPositiveSafeInteger(model.max_tokens) ??
     fallback?.maxTokens ??
     VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
-  const normalizedCost = normalizeCost(model.pricing);
+  const pricing = asOptionalObjectRecord(model.pricing);
+  const normalizedCost = {
+    input: toPerMillionCost(pricing?.input),
+    output: toPerMillionCost(pricing?.output),
+    cacheRead: toPerMillionCost(pricing?.input_cache_read),
+    cacheWrite: toPerMillionCost(pricing?.input_cache_write),
+  };
   const tags = Array.isArray(model.tags) ? model.tags : undefined;
 
   return {

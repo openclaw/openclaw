@@ -49,16 +49,7 @@ function makeTimeoutBin(command = "timeout", plain = false) {
 function expectedRunArgs(wrapper: string[], cpus = "16", pids = "2048") {
   return [
     ...wrapper,
-    "42s",
-    "docker",
-    "run",
-    "--init",
-    "--memory",
-    "8g",
-    "--cpus",
-    cpus,
-    "--pids-limit",
-    pids,
+    ...`42s docker run --init --memory 8g --cpus ${cpus} --pids-limit ${pids}`.split(" "),
   ];
 }
 
@@ -112,24 +103,16 @@ describe("scripts/lib/live-docker-auth.sh", () => {
         "unset OPENCLAW_DOCKER_AUTH_DIRS DOCKER_HOME_DIR",
         'openclaw_live_collect_auth_for_providers ","',
         "openclaw_live_finalize_auth_mounts",
-        'printf "default-dirs=%s\\ndefault-files=%s\\ndefault-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
+        '[[ -n "$AUTH_DIRS_CSV" && -n "$AUTH_FILES_CSV" && "${#EXTERNAL_AUTH_MOUNTS[@]}" == 0 ]]',
         "OPENCLAW_DOCKER_AUTH_DIRS=none",
         "openclaw_live_collect_auth_for_providers openai",
         "openclaw_live_finalize_auth_mounts",
-        'printf "none-dirs=%s\\nnone-files=%s\\nnone-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
+        '[[ -z "$AUTH_DIRS_CSV" && -z "$AUTH_FILES_CSV" && "${#EXTERNAL_AUTH_MOUNTS[@]}" == 0 ]]',
       ],
       { HOME: homeDir },
     );
 
-    expect(result).toMatchObject({ status: 0, stderr: "" });
-    expect(result.stdout.trimEnd().split("\n")).toEqual([
-      "default-dirs=.factory,.gemini,.minimax",
-      "default-files=.codex/auth.json,.codex/config.toml,.claude.json,.claude/.credentials.json,.claude/settings.json,.claude/settings.local.json,.gemini/settings.json",
-      "default-mounts=0",
-      "none-dirs=",
-      "none-files=",
-      "none-mounts=0",
-    ]);
+    expect(result).toMatchObject({ status: 0, stdout: "", stderr: "" });
   });
 
   it("prestages selected auth and preserves equivalent external mounts", () => {

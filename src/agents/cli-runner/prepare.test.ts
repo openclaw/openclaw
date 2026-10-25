@@ -97,6 +97,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import { resolveBootstrapContextForRun as loadBootstrapContext } from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -140,6 +141,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createCliMcpTool,
   createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
@@ -243,15 +245,7 @@ function createBundledMessageToolConfig(): OpenClawConfig {
     getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
     resolveMcpLoopbackScopedTools: vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("message", "Message", "Send a message")],
     })),
   });
   return createCliBackendConfig({ bundleMcp: true });
@@ -313,6 +307,20 @@ function createArgBackendConfig(
   output: "text" | "json" = "text",
 ): CliBackendPlugin["config"] {
   return { command, args, output, input: "arg", sessionMode: "existing" };
+}
+
+function createNativeArgMcpBackend(): CliBackendPlugin & { pluginId: string } {
+  return {
+    id: "native-cli",
+    pluginId: "native-plugin",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      ...createArgBackendConfig("native-cli"),
+      systemPromptArg: "--system-prompt",
+      systemPromptWhen: "first",
+    },
+  };
 }
 
 type CliContextBudgetTestCase = {
@@ -1758,7 +1766,7 @@ describe("prepareCliRunContext", () => {
       try {
         const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
           fixture.prepare({
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
             assertCurrent: () => {
               if (!current) {
                 throw new Error("CLI owner retired after engine acquisition");
@@ -1850,7 +1858,7 @@ describe("prepareCliRunContext", () => {
             model: "test-model",
             runId: "cli-custody-history-failure",
             timeoutMs: 1_000,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           }),
         ),
       ).rejects.toBe(historyFailure);
@@ -1900,7 +1908,7 @@ describe("prepareCliRunContext", () => {
         "plugin:fixture",
       );
       try {
-        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const config = { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } };
         const context = await work.run(() =>
           withPluginRuntimeRegistryScope(custody.registry, async () => {
             if (ownership === "borrowed") {
@@ -2088,6 +2096,52 @@ describe("prepareCliRunContext", () => {
     expect(normal.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
   });
 
+  it.each([false, true])(
+    "keeps agent bootstrap and layers only execution AGENTS (explicit root: %s)",
+    async (explicitRoot) => {
+      setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+      const { dir } = fixture.session;
+      const executionDir = path.join(dir, "execution");
+      const bootstrapDir = explicitRoot ? path.join(dir, "bootstrap-override") : dir;
+      fs.mkdirSync(executionDir);
+      fs.mkdirSync(bootstrapDir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), "UNSELECTED-WORKSPACE");
+      for (const [name, content] of Object.entries({
+        "AGENTS.md": "CANONICAL-AGENT-RULE",
+        "SOUL.md": "CANONICAL-SOUL-MARKER",
+        "USER.md": "CANONICAL-USER-MARKER",
+        "MEMORY.md": "CANONICAL-MEMORY-MARKER",
+      })) {
+        fs.writeFileSync(path.join(bootstrapDir, name), content);
+      }
+      fs.writeFileSync(path.join(executionDir, "AGENTS.md"), "EXECUTION-PROJECT-RULE");
+      fs.writeFileSync(path.join(executionDir, "USER.md"), "EXECUTION-USER-MUST-NOT-OVERRIDE");
+      fs.writeFileSync(path.join(executionDir, "MEMORY.md"), "EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+
+      const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir }, entries: { main: {} } } },
+        sessionKey: "agent:main:main",
+        workspaceDir: executionDir,
+        cwd: executionDir,
+        ...(explicitRoot ? { bootstrapWorkspaceDir: bootstrapDir } : {}),
+      });
+
+      expect(context.cwd).toBe(executionDir);
+      expect(context.systemPrompt).toContain("CANONICAL-AGENT-RULE");
+      expect(context.systemPrompt).toContain("CANONICAL-SOUL-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-USER-MARKER");
+      expect(context.systemPrompt).toContain("CANONICAL-MEMORY-MARKER");
+      expect(context.systemPrompt).toContain("EXECUTION-PROJECT-RULE");
+      expect(context.systemPromptReport.injectedWorkspaceFiles.at(-1)).toMatchObject({
+        path: path.join(executionDir, "AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: executionDir },
+      });
+      expect(context.systemPrompt).not.toContain("EXECUTION-USER-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("EXECUTION-MEMORY-MUST-NOT-OVERRIDE");
+      expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");
+    },
+  );
+
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
@@ -2212,41 +2266,17 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("message", "Message", "Send a message"),
         ...(scope.context.senderIsOwner === false
           ? []
-          : [
-              {
-                name: "gateway",
-                label: "Gateway",
-                description: "Manage the gateway",
-                parameters: { type: "object", properties: {} },
-                execute: vi.fn(),
-              },
-            ]),
+          : [createCliMcpTool("gateway", "Gateway", "Manage the gateway")]),
       ],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const cliSessionBindingFacts = {
       extraSystemPromptStatic: "group:telegram:group:message_tool_only",
       sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -2415,13 +2445,7 @@ describe("prepareCliRunContext", () => {
     const resolveMcpLoopbackScopedTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
       tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
+        createCliMcpTool("memory_search", "Memory Search", "Search memory"),
         {
           name: "fake_web_tool",
           label: "Fake web tool",
@@ -2442,17 +2466,7 @@ describe("prepareCliRunContext", () => {
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const baselineContext = await fixture.prepare({
       sessionKey: "main",
       agentId: "worker",
@@ -2548,15 +2562,7 @@ describe("prepareCliRunContext", () => {
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "memory_search",
-          label: "Memory Search",
-          description: "Search memory",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("memory_search", "Memory Search", "Search memory")],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,
@@ -2564,17 +2570,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     await expect(
       fixture.prepare({
         sessionKey: "agent:main:test",
@@ -3181,15 +3177,7 @@ describe("prepareCliRunContext", () => {
     };
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "skill_workshop",
-          label: "Skill Workshop",
-          description: "Manage skills",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("skill_workshop", "Skill Workshop", "Manage skills")],
     }));
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
@@ -3921,7 +3909,7 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.secretInput?.fingerprint).toBe(
       "selected-node-token-fingerprint",
     );
-    expect(context.preparedBackend.backend.clearEnv).toEqual(
+    expect(context.preparedBackend.resetEnv).toEqual(
       expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
     );
   });

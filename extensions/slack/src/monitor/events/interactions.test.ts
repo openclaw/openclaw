@@ -1680,7 +1680,7 @@ describe("registerSlackInteractionEvents", () => {
               richtext_block: {
                 richtext_input: {
                   type: "rich_text_input",
-                  rich_text_value: richText("Ship this now", "with canary metrics"),
+                  rich_text_value: richText("  Ship this now\t", "with canary metrics  "),
                 },
               },
             },

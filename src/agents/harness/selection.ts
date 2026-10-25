@@ -1,3 +1,4 @@
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
@@ -170,6 +171,8 @@ export async function runAgentHarnessSettledTurnFinalization(
       {
         ...internalParams,
         operation: "settled-tool-finalization",
+        // This tool-free projection must not replace the conversation's cache or history baseline.
+        promptCacheKey: `finalization:${sha256HexPrefixCore(params.runId, 32)}`,
         abortSignal: modelExecution
           ? params.abortSignal
             ? AbortSignal.any([params.abortSignal, modelExecution.signal])

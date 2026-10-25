@@ -41,7 +41,7 @@ import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js
 import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
@@ -55,7 +55,7 @@ import { buildCodexUserInput } from "./user-input.js";
 import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export function activateCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
@@ -413,7 +413,8 @@ export function activateCodexAttemptTurn(
       // is recorded only once Codex accepts it, so a rejected steer cannot replay.
       const transcriptItems = items.filter(
         (item) =>
-          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+          (item.isInboundUserReply ?? item.isInboundUserMessage) === true ||
+          item.userTurnTranscriptRecorder !== undefined,
       );
       if (transcriptItems.length === 0) {
         return;
@@ -444,7 +445,7 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
-        if (item.isInboundUserMessage === false) {
+        if ((item.isInboundUserReply ?? item.isInboundUserMessage) === false) {
           continue;
         }
         const recorder = item.userTurnTranscriptRecorder;
@@ -517,8 +518,8 @@ export function activateCodexAttemptTurn(
       unconfirmed = error;
     }
     const recorder =
-      optionsLocal?.isInboundUserMessage === false
-        ? optionsLocal.userTurnTranscriptRecorder
+      (optionsLocal?.isInboundUserReply ?? optionsLocal?.isInboundUserMessage) === false
+        ? optionsLocal?.userTurnTranscriptRecorder
         : undefined;
     if (recorder) {
       recorder.markSentToProvider?.();
@@ -593,9 +594,7 @@ export function activateCodexAttemptTurn(
       deadlines.ownsExecutionWait() &&
       resourceState.turnRoute?.signal.aborted === false &&
       !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      state.activeAppServerTurnRequests === 0 &&
-      state.activeLocalProjections === 0,
+      !state.terminalTurnNotificationQueued,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,

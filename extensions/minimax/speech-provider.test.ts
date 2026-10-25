@@ -10,6 +10,7 @@ import {
   isProviderAuthProfileConfiguredAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
 const transcode = vi.hoisted(() => vi.fn());
 
@@ -70,16 +71,7 @@ describe("resolveConfig", () => {
 });
 
 describe("parseDirectiveToken", () => {
-  const policy = {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
-  };
+  const policy = createSpeechDirectivePolicy();
 
   it.each([
     [

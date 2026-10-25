@@ -23,6 +23,7 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
@@ -127,11 +128,13 @@ describe("automatic client credential preparation", () => {
   }
   function snapshotFiles(root: string) {
     return Object.fromEntries(
-      fs.readdirSync(root, { recursive: true }).map((entry) => {
-        const relative = String(entry);
-        const pathname = path.join(root, relative);
-        return [relative, fs.statSync(pathname).isDirectory() ? null : fs.readFileSync(pathname)];
-      }),
+      listDirectoryTreeStrictSync(root)
+        .map((walkEntry) => walkEntry.relativePath)
+        .map((entry) => {
+          const relative = entry;
+          const pathname = path.join(root, relative);
+          return [relative, fs.statSync(pathname).isDirectory() ? null : fs.readFileSync(pathname)];
+        }),
     );
   }
 
@@ -478,7 +481,7 @@ describe("automatic client credential preparation", () => {
     expect(fs.readFileSync(fixture.local)).toEqual(refusedBytes);
   });
 
-  it("does not replace missing credentials after the source has retired them", async () => {
+  it("does not replace missing SQLite credentials", async () => {
     const fixture = await bootstrap();
     fs.unlinkSync(fixture.local);
     await expect(prepareStartupClientCredentials({ env: fixture.env, runtime })).rejects.toThrow(

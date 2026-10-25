@@ -33,9 +33,9 @@ const {
 
 describe("grouped chat rendering", () => {
   function renderMarkdownAssistant(content: unknown) {
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () =>
-      renderAssistantMessage(createAssistantMessage(content)),
-    );
+    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
+      renderAssistantMessage(createAssistantMessage(content));
+    });
   }
 
   function renderAssistantMessageEntries(
@@ -109,7 +109,7 @@ describe("grouped chat rendering", () => {
     expect(list.querySelector("li:last-child > .chat-duplicate-count")?.textContent).toBe("×2");
   });
 
-  it("suppresses a whole thinking region spanning assistant media", () => {
+  it("suppresses a whole thinking region spanning assistant media", async () => {
     renderMarkdownAssistant([
       { type: "text", text: "<thinking>Hidden before" },
       { type: "image", url: "https://example.com/hidden-before.png" },
@@ -118,6 +118,8 @@ describe("grouped chat rendering", () => {
       { type: "text", text: "Hidden after</thinking>\n\nVisible answer" },
     ]);
     expect(elementText(".chat-text")?.trim()).toBe("Visible answer");
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expectCount(".chat-message-image", 0));
   });
 
   it("keeps literal media-marker text distinct from assistant image positions", async () => {

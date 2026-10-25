@@ -33,6 +33,7 @@ function browserRuntime(
     subscribeSessionChanges: unexpected,
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     openPluginPanel: unexpected,
     request: async <T = unknown>(method: string, params?: BrowserParams, options?: unknown) =>
       (await request(method, params ?? {}, options)) as T,

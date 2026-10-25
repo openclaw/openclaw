@@ -33,7 +33,6 @@ import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
 import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -101,7 +100,6 @@ export function finalizeEmbeddedAttempt(
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
-      result.lastToolError !== undefined ||
       hasAsyncActivity(result.toolMetas) ||
       (stopReason !== "toolUse" &&
         (params.hasTerminalOutput ||
@@ -217,11 +215,24 @@ export async function completeEmbeddedAttemptAfterTurn(
   // rewrite callback reacquires the synchronous session write boundary.
   if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    const terminalEntryId = attempt.onContextEngineTurnCandidate
-      ? resolveTerminalMessageEntryId(sessionManager)
-      : undefined;
+    let terminalEntryId: string | null | undefined;
+    if (attempt.onContextEngineTurnCandidate) {
+      // Cache-TTL bookkeeping advances the leaf without adding a message anchor.
+      // Other entry kinds retain their terminal semantics.
+      terminalEntryId = null;
+      let entryId = sessionManager.getLeafId();
+      while (entryId) {
+        const entry = sessionManager.getEntry(entryId);
+        if (!entry || entry.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
+          terminalEntryId = entry ? entryId : null;
+          break;
+        }
+        entryId = entry.parentId;
+      }
+    }
     await finalizeHarnessContextEngineTurn({
       ...attempt,
+      abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
       aborted: lifecycleState.aborted,
@@ -482,9 +493,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
       source: "prompt",
       error: createAttemptAbortError(signal),
     });
-    if (!input.runAbortController.signal.aborted) {
-      input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
-    }
+    input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
     void abortActiveSession?.(input.runAbortController.signal.reason);
   };
 

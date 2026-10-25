@@ -8,6 +8,7 @@ import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-suppo
 import type { UsageProps } from "./types.ts";
 import { texts } from "./view-render.test-support.ts";
 import {
+  usageMessages,
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
@@ -68,6 +69,37 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("identifies each query removal action and removes only its named token", () => {
+    const base = createUsageProps();
+    const [queryDraft, setQueryDraft] = createSignal('provider:openai "label:Team Planning"');
+    const container = mountUsage({
+      ...base,
+      filters: {
+        ...base.filters,
+        get queryDraft() {
+          return queryDraft();
+        },
+      },
+      callbacks: {
+        ...base.callbacks,
+        filters: { ...base.callbacks.filters, onQueryDraftChange: setQueryDraft },
+      },
+    });
+    const buttons = () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".usage-query-chip button"),
+    ];
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: provider:openai",
+      'Remove filter: "label:Team Planning"',
+    ]);
+    buttons()[1]!.click();
+    flush();
+    expect(queryDraft().trim()).toBe("provider:openai");
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: provider:openai",
+    ]);
+  });
+
   it("parses each draft once for chips, suggestions, and every filter", () => {
     const base = createUsageProps();
     const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
@@ -431,14 +463,7 @@ describe("renderUsage", () => {
             usage: {
               ...visibleUsage,
               dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-              messageCounts: {
-                total: 2,
-                user: 1,
-                assistant: 1,
-                toolCalls: 0,
-                toolResults: 0,
-                errors: 0,
-              },
+              messageCounts: usageMessages(),
             },
           },
         ],

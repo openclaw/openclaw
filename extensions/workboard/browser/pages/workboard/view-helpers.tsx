@@ -190,7 +190,6 @@ export function workboardMutationContext(workboard: WorkboardProps): WorkboardCl
   return {
     host: workboard.host,
     client: workboard.client,
-    requestUpdate: workboard.onRequestUpdate,
   };
 }
 

@@ -19,6 +19,7 @@ import {
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import {
   GatewayDrainingError,
   markGatewayRestartDraining,
@@ -39,6 +40,7 @@ import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.j
 import { abortChatRunById } from "../chat-abort.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -88,6 +90,56 @@ async function captureTerminalTarget(scope: {
 }
 
 describe("handleChatSendSetupError", () => {
+  it.each([false, true])("preserves an uncertain setup outcome (cleanup: %s)", async (cleanup) => {
+    const primary = new SqliteWorkerError("PRIVATE_WRITE_DETAIL", "outcome-unknown");
+    const error = cleanup
+      ? new AggregateError([primary, new Error("PRIVATE_CLEANUP_DETAIL")], "PRIVATE_AGGREGATE", {
+          cause: primary,
+        })
+      : primary;
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const dedupe = new Map();
+    const runId = "setup-outcome-unknown";
+    const activeRunAbort = registerRpcSourceForTest({
+      runId,
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    try {
+      await handleChatSendSetupError({
+        admission: {
+          activeRunAbort,
+          cleanupAdmittedRun: vi.fn(),
+          lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
+        },
+        context: createDirectChatContext({ broadcast, dedupe, getRuntimeConfig: () => ({}) }),
+        error,
+        respond,
+        session: { agentId: "main", clientRunId: runId, sessionKey: "agent:main:main" },
+        terminalizeRestartSafeAdmission: vi.fn(),
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      const [ok, payload, refusal] = respond.mock.calls[0]!;
+      expect(ok).toBe(false);
+      expect(refusal).toMatchObject({ code: "UNAVAILABLE", retryable: false });
+      expect(refusal.message).toMatch(/confirm|saved/i);
+      expect(refusal.message).toMatch(/check|reopen|retry/i);
+      expect(refusal.message).not.toContain("PRIVATE_");
+      expect(payload).toMatchObject({ runId, status: "error", summary: refusal.message });
+      expect(dedupe.get(`chat:${runId}`)).toMatchObject({ ok: false, error: refusal, payload });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error", errorMessage: refusal.message }),
+        expect.anything(),
+      );
+    } finally {
+      activeRunAbort.cleanup();
+    }
+  });
+
   it.each([
     new GatewayDrainingError(),
     new SessionTranscriptProjectionUnavailableError("sess-main"),

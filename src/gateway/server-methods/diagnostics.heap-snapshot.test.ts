@@ -11,7 +11,9 @@ import { diagnosticProfileEntrypoints } from "../../logging/diagnostic-profile-r
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestOptions } from "./types.js";
 
 const native = vi.hoisted(() => ({ write: vi.fn(), warn: vi.fn() }));
@@ -26,7 +28,11 @@ vi.mock("node:inspector/promises", () => ({
   Session: class {
     connect() {}
     disconnect() {}
-    async post() {}
+    async post(method: string) {
+      if (method === "HeapProfiler.enable") {
+        throw new Error("Inspector error -32601: HeapProfiler.enable is unavailable");
+      }
+    }
   },
 }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
@@ -61,22 +67,16 @@ function request(
 ) {
   const respond = vi.fn();
   const pending = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "heap-snapshot",
-      method: "diagnostics.heapSnapshot",
-      params: options.params,
-    },
+    req: gatewayRequest("heap-snapshot", "diagnostics.heapSnapshot", options.params),
     respond,
     client: {
       connId: "snapshot-client",
-      connect: {
-        role: options.role ?? "operator",
-        scopes: options.scopes ?? ["operator.admin"],
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-      },
+      connect: gatewayConnect(
+        options.scopes ?? ["operator.admin"],
+        { id: "test", version: "1", mode: "test" },
+        1,
+        options.role ?? "operator",
+      ),
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
     context: {
@@ -160,7 +160,7 @@ describe("diagnostics.heapSnapshot", () => {
     );
   });
 
-  it("returns only file metadata, writes privately, and refuses immediate recapture", async () => {
+  it("writes a native snapshot without enabling heap sampling, privately and with cooldown", async () => {
     const stat = fs.stat.bind(fs);
     // Model queued allocations running after native capture while metadata is awaited.
     vi.spyOn(fs, "stat").mockImplementation(async (...args) => {

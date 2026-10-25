@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => {
   const lease = () => ({
     signal: new AbortController().signal,
+    assertCurrent: vi.fn(),
     assertOwned: vi.fn(),
     assertOwnedInTransaction: vi.fn(),
   });
@@ -105,9 +106,11 @@ vi.mock("./project-checkout.js", () => ({
   resolveProjectCheckout: mocks.resolveCheckout,
   resolveProjectDirectory: async (directory: string) => directory,
 }));
+// mock-isolation: environment routing must not spawn Git against synthetic checkout paths.
 vi.mock("./project-clone-runtime.js", () => ({
   ProjectCloneError: class extends Error {},
   cloneProjectCheckout: mocks.clone,
+  configureProjectCheckoutMaintenance: vi.fn(),
   refreshProjectCheckout: mocks.refresh,
   ensureProjectCheckoutCommit: vi.fn(),
 }));
@@ -233,6 +236,7 @@ it.each(cases)(
       };
       const lease: OpenClawStateLeaseContext = {
         signal: new AbortController().signal,
+        assertCurrent() {},
         assertOwned() {},
         assertOwnedInTransaction: mocks.forbiddenSqlite,
       };

@@ -1,4 +1,3 @@
-// Real SQLite, monitor and handler; only Gateway approval resolution is mocked.
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -6,27 +5,10 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { registerSignalApprovalReactionTarget } from "./approval-reactions.js";
+// Real SQLite, monitor and handler; only Gateway approval resolution is mocked.
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
-
+const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
 const resolveApproval = vi.hoisted(() => vi.fn());
 
 // mock-isolation: simulate approval failures without sending requests to a real Gateway.
@@ -47,7 +29,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  reactionStores.forEach((store) => store.clearForTest());
+  reactionStores.clearSignalApprovalReactionStoresForTest();
   resolveApproval.mockReset();
 });
 

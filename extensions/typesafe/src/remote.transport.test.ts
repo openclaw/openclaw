@@ -17,7 +17,6 @@ import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undi
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "./config.js";
 import {
-  closeServer,
   collectRequest,
   decisionContext,
   registeredDecisionProvider,
@@ -69,7 +68,7 @@ async function listen<T extends Server>(listener: T) {
     listener,
     port: claim.port,
     async close() {
-      await closeServer(listener);
+      await listener[Symbol.asyncDispose]();
       await claim.release();
     },
   };

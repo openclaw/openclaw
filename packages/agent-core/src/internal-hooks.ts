@@ -27,7 +27,7 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
-export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
@@ -51,15 +51,13 @@ export function commitInternalToolTurnInput(
   }
 }
 
-type InternalReadyToolCall = { toolCallId: string; args: unknown };
-
 export type InternalToolBatchLifecycle = {
   /**
    * Commit admitted calls in assistant order as they launch: prepared calls just
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
   /** Observe settled outcomes in assistant order, before warning text changes their identity. */

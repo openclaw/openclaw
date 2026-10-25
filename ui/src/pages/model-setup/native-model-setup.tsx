@@ -30,15 +30,6 @@ import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 
-type NativeModelSetupOptions = {
-  getContext: () => ApplicationContext;
-  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
-  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
-  blocked: () => boolean;
-  onSelected: () => void;
-  onChange: () => void;
-};
-
 export type NativeModelSetup = ReturnType<typeof createNativeModelSetup>;
 
 type NativeCatalogRequest = {
@@ -47,7 +38,14 @@ type NativeCatalogRequest = {
   result: Promise<ModelCatalogResult>;
 };
 
-export function createNativeModelSetup(options: NativeModelSetupOptions) {
+export function createNativeModelSetup(options: {
+  getContext: () => ApplicationContext;
+  getConnection: () => ReturnType<typeof captureModelSetupConnection> | null;
+  canUseSetup: (client: GatewayBrowserClient | null) => boolean;
+  blocked: () => boolean;
+  onSelected: () => void;
+  onChange: () => void;
+}) {
   const catalog = projectSource<NativeCatalogRequest | null, ReturnType<typeof readModelCatalog>>(
     null,
     {
@@ -192,7 +190,7 @@ export function createNativeModelSetup(options: NativeModelSetupOptions) {
     setRequest(read);
   }
 
-  // open() admits resources synchronously, including before the first settle.
+  // Retire the command owner's request, subscription, and pending mutation together.
   onCleanup(() => {
     saving.retire();
     generation += 1;

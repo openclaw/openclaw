@@ -16,6 +16,7 @@ import type {
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -25,6 +26,7 @@ const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
 const MAX_FINISHED_SESSION_COUNT = 50;
 const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
+const EMPTY_OUTPUT = { order: 0, text: Buffer.alloc(0) };
 
 function clampTtl(value: number | undefined) {
   return clampWithDefault(value, DEFAULT_JOB_TTL_MS, MIN_JOB_TTL_MS, MAX_JOB_TTL_MS);
@@ -44,9 +46,97 @@ type ProcessStatus = "running" | "completed" | "failed" | "killed";
 type NotifyOnExitRemoval = () => boolean;
 
 type PendingOutputChunk = {
-  stream: "stdout" | "stderr";
-  text: string;
+  order: number;
+  text: Buffer;
 };
+
+// UTF-16 bytes own their storage without round-tripping each append back to a
+// string. A head offset makes eviction independent of the retained log's size.
+class ProcessOutput {
+  private chunks: PendingOutputChunk[] = [];
+  private head = 0;
+  private offset = 0;
+  private finished: string | undefined;
+  length = 0;
+
+  append(chunk: PendingOutputChunk, cap: number, originalLength: number) {
+    // A pre-trimmed chunk replaces the old window even if a surrogate-safe
+    // boundary shortened its retained suffix by one additional code unit.
+    if (originalLength > cap) {
+      this.chunks = [];
+      this.head = 0;
+      this.offset = 0;
+      this.length = 0;
+    }
+    if (chunk.text.length === 0) {
+      return;
+    }
+    this.chunks.push(chunk);
+    this.length += chunk.text.length / 2;
+    let remove = Math.max(0, this.length - cap);
+    while (remove > 0) {
+      // Positive retained length guarantees an entry at the live head.
+      const first = this.chunks[this.head]!.text;
+      const count = Math.min(remove, first.length / 2 - this.offset);
+      const last = first.readUInt16LE((this.offset + count - 1) * 2);
+      this.offset += count;
+      this.length -= count;
+      remove -= count;
+      if (this.offset * 2 === first.length) {
+        this.chunks[this.head++] = EMPTY_OUTPUT;
+        this.offset = 0;
+      }
+      // Also handle a pair split across producer callbacks.
+      if (remove === 0 && this.length > 0 && last >= 0xd800 && last <= 0xdbff) {
+        const next = this.chunks[this.head]!.text.readUInt16LE(this.offset * 2);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          remove = 1;
+        }
+      }
+    }
+    if (this.head > 0 && this.head * 2 >= this.chunks.length) {
+      this.chunks = this.chunks.slice(this.head);
+      this.head = 0;
+    }
+  }
+
+  text(max = this.length): string {
+    if (this.finished !== undefined) {
+      return tail(this.finished, max);
+    }
+    let remaining = Math.min(max + 1, this.length);
+    const parts: Buffer[] = [];
+    for (let index = this.chunks.length - 1; index >= this.head && remaining > 0; index--) {
+      const chunk = this.chunks[index]!.text;
+      const start = Math.max(
+        index === this.head ? this.offset * 2 : 0,
+        chunk.length - remaining * 2,
+      );
+      parts.push(chunk.subarray(start));
+      remaining -= (chunk.length - start) / 2;
+    }
+    // Include the preceding code unit so a tail cut can recognize a surrogate
+    // pair even when its halves arrived in separate callbacks.
+    const text = Buffer.concat(parts.toReversed()).toString("utf16le");
+    return sliceUtf16Safe(text, Math.max(0, text.length - max));
+  }
+
+  freeze() {
+    this.finished = this.text();
+    this.chunks = [];
+    this.head = 0;
+    this.offset = 0;
+  }
+
+  entries(): PendingOutputChunk[] {
+    const entries = this.chunks.slice(this.head);
+    const first = entries[0];
+    if (first && this.offset > 0) {
+      entries[0] = { ...first, text: first.text.subarray(this.offset * 2) };
+    }
+    return entries;
+  }
+}
 
 type PendingPollDelivery = {
   output: string;
@@ -97,15 +187,16 @@ export interface ProcessSession {
   pendingMaxOutputChars?: number;
   totalOutputChars: number;
   /** Live chunks become frozen text at completion, releasing the chunk graph. */
-  pendingOutput: PendingOutputChunk[] | string;
+  pendingOutput: { stdout: ProcessOutput; stderr: ProcessOutput } | string;
   pendingStdoutChars: number;
   pendingStderrChars: number;
   /** Output was dropped from the pending poll buffers since their last drain. */
   pendingOutputDropped: boolean;
   /** Output prepared for a poll but not yet attached to the agent transcript. */
   pendingPollDelivery?: PendingPollDelivery;
-  aggregated: string;
-  tail: string;
+  output: ProcessOutput;
+  readonly aggregated: string;
+  readonly tail: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
@@ -125,6 +216,24 @@ export interface ProcessSession {
   backgrounded: boolean;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
+}
+
+/** Creates one output owner; string views are materialized only by readers. */
+export function createProcessSession(
+  params: Omit<ProcessSession, "output" | "aggregated" | "tail" | "pendingOutput">,
+): ProcessSession {
+  const output = new ProcessOutput();
+  return {
+    ...params,
+    output,
+    pendingOutput: { stdout: new ProcessOutput(), stderr: new ProcessOutput() },
+    get aggregated() {
+      return output.text();
+    },
+    get tail() {
+      return output.text(2000);
+    },
+  };
 }
 
 const runningSessions = new Map<string, ProcessSession>();
@@ -178,7 +287,7 @@ function queueProcessChange(session: ProcessSession) {
       }
     }, 5_000),
   );
-  changeTimer.unref?.();
+  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
@@ -233,7 +342,7 @@ function deleteFinishedSession(id: string): boolean {
     return false;
   }
   finishedSessions.delete(id);
-  finishedSessionOutputChars -= session.aggregated.length;
+  finishedSessionOutputChars -= session.output.length;
   queueProcessChange(session);
   return true;
 }
@@ -271,7 +380,7 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
-  if (typeof session.pendingOutput === "string") {
+  if (!chunk || typeof session.pendingOutput === "string") {
     return;
   }
   const streamChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
@@ -279,14 +388,20 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  // Producer chunks may themselves be slices of a much larger decoded callback.
-  const ownedChunk = copyOutputText(chunk);
-  session.pendingOutput.push({ stream, text: ownedChunk });
-  let pendingChars = streamChars + chunk.length;
-  if (pendingChars > pendingCap) {
+  // Own only the retained suffix; producer strings may borrow a large callback.
+  const ownedChunk = {
+    order: session.totalOutputChars,
+    text: encodeOwnedBuffer(
+      sliceUtf16Safe(chunk, Math.max(0, chunk.length - session.maxOutputChars)),
+      "utf16le",
+    ),
+  };
+  const pending = session.pendingOutput[stream];
+  pending.append(ownedChunk, pendingCap, chunk.length);
+  const pendingChars = pending.length;
+  if (pendingChars < streamChars + chunk.length) {
     session.truncated = true;
     session.pendingOutputDropped = true;
-    pendingChars = capPendingStream(session.pendingOutput, stream, pendingChars, pendingCap);
   }
   if (stream === "stdout") {
     session.pendingStdoutChars = pendingChars;
@@ -294,11 +409,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = tail(session.aggregated + ownedChunk, session.maxOutputChars);
-  session.truncated =
-    session.truncated || aggregated.length < session.aggregated.length + chunk.length;
-  session.aggregated = aggregated;
-  session.tail = tail(session.aggregated, 2000);
+  const previousLength = session.output.length;
+  session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
+  session.truncated ||= session.output.length < previousLength + chunk.length;
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -308,10 +421,17 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 function drainSession(session: ProcessSession) {
   const pending = session.pendingOutput;
   const output =
-    typeof pending === "string" ? pending : pending.map((chunk) => chunk.text).join("");
+    typeof pending === "string"
+      ? pending
+      : Buffer.concat(
+          [...pending.stdout.entries(), ...pending.stderr.entries()]
+            .toSorted((a, b) => a.order - b.order)
+            .map((chunk) => chunk.text),
+        ).toString("utf16le");
   const outputDropped = session.pendingOutputDropped;
   // Draining a terminal record must not reopen it to late producer callbacks.
-  session.pendingOutput = typeof pending === "string" ? "" : [];
+  session.pendingOutput =
+    typeof pending === "string" ? "" : { stdout: new ProcessOutput(), stderr: new ProcessOutput() };
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
   session.pendingOutputDropped = false;
@@ -373,12 +493,12 @@ export function markExited(
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
   session.noOutputTimedOut = noOutputTimedOut;
-  session.tail = tail(session.aggregated, 2000);
   // Finalizer diagnostics are already appended. Freeze output before retention
   // accounts for its size, and release the live per-callback chunk objects.
   const pending = drainSession(session);
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
+  session.output.freeze();
   moveToFinished(session);
   if (session.backgrounded) {
     queueProcessChange(session);
@@ -525,7 +645,7 @@ function moveToFinished(session: ProcessSession) {
     session.id,
     Object.assign(session, { endedAt, expiresAt: endedAt + session.cleanupMs }),
   );
-  finishedSessionOutputChars += session.aggregated.length;
+  finishedSessionOutputChars += session.output.length;
   while (
     finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
     (finishedSessions.size > 1 && finishedSessionOutputChars > MAX_FINISHED_SESSION_OUTPUT_CHARS)
@@ -539,53 +659,12 @@ function moveToFinished(session: ProcessSession) {
   scheduleSweeper();
 }
 
-function copyOutputText(text: string): string {
-  // Own code units without replacing lone surrogates as UTF-8 would.
-  return Buffer.from(text, "utf16le").toString("utf16le");
-}
-
 /** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return copyOutputText(sliceUtf16Safe(text, text.length - max));
-}
-
-function capPendingStream(
-  output: PendingOutputChunk[],
-  stream: PendingOutputChunk["stream"],
-  pendingCharsInput: number,
-  cap: number,
-) {
-  let pendingChars = pendingCharsInput;
-  let overflow = pendingChars - cap;
-  let writeIndex = 0;
-  let index = 0;
-  for (; index < output.length && overflow > 0; index += 1) {
-    const chunk = output[index];
-    if (!chunk || chunk.stream !== stream) {
-      if (writeIndex !== index) {
-        output.copyWithin(writeIndex, index, index + 1);
-      }
-      writeIndex += 1;
-      continue;
-    }
-    if (chunk.text.length <= overflow) {
-      overflow -= chunk.text.length;
-      pendingChars -= chunk.text.length;
-      continue;
-    }
-    const trimmed = tail(chunk.text, chunk.text.length - overflow);
-    const removedChars = chunk.text.length - trimmed.length;
-    pendingChars -= removedChars;
-    chunk.text = trimmed;
-    break;
-  }
-  if (writeIndex !== index) {
-    output.splice(writeIndex, index - writeIndex);
-  }
-  return pendingChars;
+  return Buffer.from(sliceUtf16Safe(text, text.length - max), "utf16le").toString("utf16le");
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */
@@ -635,7 +714,7 @@ function scheduleSweeper() {
     return;
   }
   sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
-  sweeper.unref?.();
+  sweeper.unref();
 }
 
 function stopSweeper() {

@@ -3,39 +3,30 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, Show, createMemo, lazy } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
-import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import { resolveToolCardDisplay, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
-import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
+import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
-
-export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
-  return (
-    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
-      {(item) => (
-        <BrowserTabCardHost
-          preview={item().preview}
-          revision={item().revision}
-          latest={item().latest}
-        />
-      )}
-    </For>
-  );
-}
 
 function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
@@ -133,10 +124,27 @@ export function ToolApprovalReviews(props: { card: ToolCard }) {
 
 function ToolCardRowPlaceholder(props: ToolCardProps) {
   const display = () => resolveToolDisplayIdentity(unwrapToolCallForDisplay(props.card).name);
+  const input = createMemo(() => {
+    const call = unwrapToolCallForDisplay(props.card);
+    return resolveToolCallInput(call.name, asNullableRecord(call.args));
+  });
+  const outcome = () => resolveToolCardOutcome(props.card, props.options.runActive);
+  const verb = () => resolveToolRowVerb(input(), outcome());
+  const stat = () =>
+    outcome() === "running" && (input().kind === "edit" || input().kind === "write")
+      ? props.card.liveDiffStat
+      : undefined;
   const activityCards = () => props.options.activityCards ?? [props.card];
+  const running = () =>
+    activityCards().some(
+      (item) => resolveToolCardOutcome(item, props.options.runActive) === "running",
+    );
   return (
     <button
-      class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row"
+      class={[
+        "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
+        { "chat-tool-row--running": running() },
+      ]}
       type="button"
       disabled
       aria-busy="true"
@@ -153,7 +161,14 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
         />
       </span>
       <span class="chat-tool-disclosure__content">
-        <span class="chat-tool-msg-summary__label">{display().label}</span>
+        <Show
+          when={verb() && input().path}
+          fallback={<span class="chat-tool-msg-summary__label">{display().label}</span>}
+        >
+          <span class="chat-tool-row__verb">{verb()}</span>
+          <span class="chat-tool-row__target">{pathDisplayName(input().path!)}</span>
+          <Show when={stat()}>{(value) => <DiffStatChips stat={value()} />}</Show>
+        </Show>
       </span>
       <Show when={!props.options.expanded}>
         <ToolOutcomeSummary cards={activityCards()} includeCount={Boolean(props.hasChildren)} />
@@ -254,6 +269,7 @@ export function ChatToolCard(props: ToolCardProps) {
       surface="tool-result"
       props={toolResultSurfaceProps(props.card, props.options)}
       presented={props.options.presented ?? true}
+      enabled={props.options.mediaReadAllowed !== false}
       renderDefault={() => (
         <openclaw-chat-tool-card style={{ display: "contents" }}>
           <ToolCardView

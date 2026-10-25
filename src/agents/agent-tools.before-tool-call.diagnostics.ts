@@ -57,6 +57,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -332,7 +333,6 @@ function resolvedSkillUsageMatch(params: {
 }
 
 function findResolvedSkillUsageMatch(params: {
-  activation: SkillUsageMatch["activation"];
   skillName: string;
   skillSource: SkillTelemetrySource;
   snapshot?: SkillSnapshot;
@@ -344,7 +344,7 @@ function findResolvedSkillUsageMatch(params: {
   const skill =
     candidates.find((candidate) => resolveSkillTelemetrySource(candidate) === params.skillSource) ??
     (candidates.length === 1 ? candidates[0] : undefined);
-  return skill ? resolvedSkillUsageMatch({ activation: params.activation, skill }) : undefined;
+  return skill ? resolvedSkillUsageMatch({ activation: "command", skill }) : undefined;
 }
 
 function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string | undefined {
@@ -412,7 +412,6 @@ export function findSkillUsageMatch(params: {
     if (!commandToolName || commandToolName === params.toolName) {
       const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
       const snapshotMatch = findResolvedSkillUsageMatch({
-        activation: "command",
         skillName: command.skillName,
         skillSource,
         snapshot: params.ctx?.skillsSnapshot,
@@ -483,7 +482,9 @@ export function recordSkillUsed(params: {
   match: SkillUsageMatch;
   toolName: string;
   toolCallId?: string;
+  result?: unknown;
 }): void {
+  const skillFingerprint = getSkillInstructionFingerprint(params.result);
   recordRunSkillUsage({
     runId: params.ctx?.runId,
     name: params.match.skillName,
@@ -507,6 +508,7 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
+      ...(skillFingerprint ? { skillFingerprint } : {}),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

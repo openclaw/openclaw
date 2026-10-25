@@ -1,7 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
-import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
+import {
+  summarizeUpdateStepFailure,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-run-result.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -148,6 +152,27 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       };
     }),
   ];
+}
+
+/** Add late advisory diagnostics to captured output without reopening or regrading history. */
+export function projectUpdateRunResultSteps(
+  record: UpdateRunRecord,
+  additionalSteps: readonly UpdateStepResult[],
+): UpdateRunRecord {
+  if (additionalSteps.length === 0) {
+    return record;
+  }
+  return {
+    ...record,
+    steps: [
+      ...new Map(
+        [...record.steps, ...additionalSteps.flatMap(updateRunStepsFromResultStep)].map((step) => [
+          step.step,
+          step,
+        ]),
+      ).values(),
+    ],
+  };
 }
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {

@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
 import {
@@ -109,7 +110,7 @@ function documentPage<T>(waitForFunction: T, url = "https://example.com") {
   install(page);
   return { page, documentHandle };
 }
-type WaitState = { document: unknown };
+type WaitState = { document: unknown; source: string };
 type WaitPredicate = (state: WaitState) => boolean;
 function pendingEvaluation(result: Promise<unknown> = new Promise(() => {})) {
   const ctrl = new AbortController();
@@ -146,7 +147,7 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it.each(["() => true", "async () => true"])(
-    "guards %s wait predicates and preserves proxy policy",
+    "guards serialized %s wait predicates without host compilation",
     async (fn) => {
       let currentUrl = "https://example.com";
       const order: string[] = [];
@@ -157,11 +158,13 @@ describe("pw-tools-core browser SSRF guards", () => {
       const documentHandle = { dispose: vi.fn(async () => {}) };
       const waitForFunction = vi.fn(async (predicate: WaitPredicate, state: WaitState) => {
         order.push("predicate");
-        const browserState = { ...state, document: globalThis.document };
-        expect(predicate(browserState)).toBe(!fn.startsWith("async"));
+        const browserState = { ...state, document: {} };
+        const browser = { state: browserState, document: browserState.document };
+        const poll = () => runInNewContext(`(${predicate.toString()})(state)`, browser);
+        expect(poll()).toBe(!fn.startsWith("async"));
         if (fn.startsWith("async")) {
           await Promise.resolve();
-          expect(predicate(browserState)).toBe(true);
+          expect(poll()).toBe(true);
         }
         currentUrl = "https://93.184.216.34/target";
       });
@@ -173,11 +176,18 @@ describe("pw-tools-core browser SSRF guards", () => {
         }),
         waitForFunction,
       });
-      await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      const hostFunction = vi.spyOn(globalThis, "Function").mockImplementation(() => {
+        throw new EvalError("Host code generation is disabled");
+      });
+      try {
+        await waitForViaPlaywright({ ...proxied, timeMs: 1, fn });
+      } finally {
+        hostFunction.mockRestore();
+      }
       expect(waitForFunction).toHaveBeenCalledOnce();
       expect(waitForFunction).toHaveBeenCalledWith(
         expect.any(Function),
-        { document: documentHandle },
+        { document: documentHandle, source: fn },
         { timeout: expect.any(Number) },
       );
       expect(order).toEqual(["guard", "passive", "predicate"]);
@@ -199,6 +209,15 @@ describe("pw-tools-core browser SSRF guards", () => {
     },
   );
 
+  it("rejects invalid wait syntax before starting passive waits", async () => {
+    const waitForTimeout = vi.fn(async () => {});
+    install({ url: () => "https://example.com", waitForTimeout });
+    await expect(waitForViaPlaywright({ ...strict, timeMs: 1, fn: "return (" })).rejects.toThrow(
+      SyntaxError,
+    );
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
+
   it("does not recreate a wait predicate in a replacement document", async () => {
     const { documentHandle } = documentPage(
       vi.fn(async (predicate: WaitPredicate, state: WaitState) =>
@@ -219,6 +238,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     const dialogError = new BrowserObservedDialogBlockedError({
       dialogs: { pending: [], recent: [] },
     });
+    session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     session.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
     install({

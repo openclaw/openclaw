@@ -206,7 +206,13 @@ describe("pw-tools-core", () => {
       visible: [[{ state: "visible", timeout: 1234 }]],
       url: [["**/dash", { timeout: 1234 }]],
       load: [["networkidle", { timeout: 1234 }]],
-      predicate: [[expect.any(Function), { document: documentHandle }, { timeout: 1234 }]],
+      predicate: [
+        [
+          expect.any(Function),
+          { document: documentHandle, source: expect.any(String) },
+          { timeout: 1234 },
+        ],
+      ],
     });
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });

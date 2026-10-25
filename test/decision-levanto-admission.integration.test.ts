@@ -104,6 +104,7 @@ async function runScenario(
         agentDir,
         workspaceDir: state.workspaceDir,
         loadRuntimePlugins: true,
+        runtimePluginPurpose: "isolated-completion",
         runtimePluginSelections: [{ provider: "levanto", modelId: "levanto-sage", agentId }],
       },
       { catalogMode: "static", pluginMetadataSnapshot: metadata },

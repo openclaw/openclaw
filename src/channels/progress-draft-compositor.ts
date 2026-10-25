@@ -378,7 +378,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (params.mode !== "progress" && !previewToolProgressEnabled) {
       return false;
     }
-    const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
+    const progressLine = typeof line === "object" ? line : normalized;
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
       !quietProgress ||

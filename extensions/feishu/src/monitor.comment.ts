@@ -858,7 +858,6 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
     messageId: `drive-comment:${eventId}`,
     commentId,
     replyId,
-    noticeType,
     fileToken,
     fileType,
     isWholeComment: context.isWholeComment,

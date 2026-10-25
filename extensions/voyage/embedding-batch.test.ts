@@ -5,8 +5,9 @@ import { text } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
-import { createVoyageEmbeddingProvider } from "./embedding-provider.js";
+import { voyageMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
@@ -95,12 +96,7 @@ async function serve(replies: Record<string, unknown>) {
       })
       .catch(() => response.destroy());
   });
-  onTestFinished(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
+  onTestFinished(() => server[Symbol.asyncDispose]());
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -127,27 +123,15 @@ it.each([
   ],
   ["status", 500, { name: "ProviderHttpError", status: 500, statusCode: 500 }],
 ] as const)("bounds %s streams with HTTP %i", async (stage, status, error) => {
-  let reads = 0;
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= 20) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(new Uint8Array(1024 * 1024));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  const response = new Response(stream, {
+  const streamed = createStreamingResponse({
     status,
+    chunkCount: 20,
+    chunkSize: 1024 * 1024,
+    byte: 0,
     headers: { "content-type": "application/json" },
   });
   const fetchMock = stubBatchFetch({
-    [stage]: response,
+    [stage]: streamed.response,
     ...(stage === "error" ? { create: Response.json(completedWithError) } : {}),
   });
   const result = expect(runBatch()).rejects;
@@ -156,8 +140,8 @@ it.each([
   } else {
     await result.toMatchObject(error);
   }
-  expect(reads).toBeLessThan(20);
-  expect(canceled).toBe(true);
+  expect(streamed.getReadCount()).toBeLessThan(20);
+  expect(streamed.wasCanceled()).toBe(true);
   if (status === 500) {
     expect(
       fetchMock.mock.calls.filter(([input]) => fetchInputUrl(input).endsWith("/batches/batch-0")),
@@ -175,13 +159,14 @@ it("preserves real default requests, grouping, and configured query parameters",
       data: vectors.map((embedding, index) => ({ index, embedding })),
     },
   });
-  const { provider } = await createVoyageEmbeddingProvider({
+  const { provider } = await voyageMemoryEmbeddingProviderAdapter.create({
     config: {},
     provider: "voyage",
     model: "voyage/voyage-3",
     fallback: "none",
     remote: { baseUrl, apiKey: "voyage-loopback-key" },
   });
+  assert(provider, "expected configured Voyage embedding provider");
   expect(provider.maxInputTokens).toBe(32000);
   await expect(
     provider.embedBatch([{ text: "first" }, "second"], { inputType: undefined }),

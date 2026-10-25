@@ -5,6 +5,7 @@ import path from "node:path";
  */
 import { isDeepStrictEqual } from "node:util";
 import type { DiagnosticWorkerRetainedData } from "../../infra/diagnostic-process-types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { estimateRetainedDataSize } from "../../infra/retained-data-size.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { registerListener } from "../../shared/listeners.js";
@@ -167,11 +168,7 @@ function recordDeletedSnapshotRevision(key: string): void {
   runtimeAuthStoreSnapshotRevisions.delete(key);
   runtimeAuthStoreDeletedSnapshotRevisions.delete(key);
   runtimeAuthStoreDeletedSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
-  while (runtimeAuthStoreDeletedSnapshotRevisions.size > 256) {
-    runtimeAuthStoreDeletedSnapshotRevisions.delete(
-      runtimeAuthStoreDeletedSnapshotRevisions.keys().next().value!,
-    );
-  }
+  pruneMapToMaxSize(runtimeAuthStoreDeletedSnapshotRevisions, 256);
 }
 
 function snapshotMetadataState(entry: OwnedRuntimeSnapshot | undefined) {
@@ -189,10 +186,7 @@ function advanceRuntimeAuthStoreMetadataRevision(key: string): void {
   runtimeAuthStoreMetadataRevisions.delete(key);
   runtimeAuthStoreMetadataRevisions.set(key, runtimeAuthStoreMetadataRevision);
   // Keep unpublished and deleted owners fenced without retaining them indefinitely.
-  while (runtimeAuthStoreMetadataRevisions.size > 256) {
-    const oldestKey = runtimeAuthStoreMetadataRevisions.keys().next().value!;
-    runtimeAuthStoreMetadataRevisions.delete(oldestKey);
-  }
+  pruneMapToMaxSize(runtimeAuthStoreMetadataRevisions, 256);
 }
 
 function recordMetadataRevision(

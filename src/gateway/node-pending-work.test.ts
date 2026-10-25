@@ -77,9 +77,9 @@ describe("node pending work", () => {
       pairingGeneration: "generation-1",
     });
 
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
     drainNodePendingWork("node-retired-generation", {
       pairingGeneration: "generation-2",
-      nowMs: Date.now() + 2_000,
     });
 
     expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
@@ -121,15 +121,12 @@ describe("node pending work", () => {
   });
 
   it("assigns default expiry to queued work without explicit ttl", () => {
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    using dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const expiresAtMs = 1_000 + 24 * 60 * 60_000;
-    try {
-      expect(enqueue("node-default-expiry").item.expiresAtMs).toBe(expiresAtMs);
-    } finally {
-      dateNow.mockRestore();
-    }
+    expect(enqueue("node-default-expiry").item.expiresAtMs).toBe(expiresAtMs);
 
-    const drained = drainNodePendingWork("node-default-expiry", { nowMs: expiresAtMs });
+    dateNow.mockReturnValue(expiresAtMs);
+    const drained = drainNodePendingWork("node-default-expiry");
     expect(drained).toMatchObject({ items: baseline });
   });
 });

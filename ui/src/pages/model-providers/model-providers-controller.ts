@@ -25,6 +25,7 @@ import {
   modelDefaultsActions,
   modelProviderErrorMessage,
   readModelBehaviorConfig,
+  type ModelDefaultsSaveField,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
@@ -344,6 +345,7 @@ export function createModelProviders(
   onSettled(() => {
     connected = true;
     gateway.connect();
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     let location = context.router.getState().location;
     const syncAgent = () => {
       discovery.synchronize();
@@ -566,13 +568,16 @@ export function createModelProviders(
         agentId: state.selectedAgentId,
         defaultsDraft: state.defaultsDraft,
       });
-    const stageDefaults = (patch: Partial<DefaultsDraft>) => {
+    const stageDefaults = (
+      patch: Partial<DefaultsDraft>,
+      field: ModelDefaultsSaveField = "defaults",
+    ) => {
       state.defaultsDraft = {
         ...(state.defaultsDraft ?? configuredDefaults),
         ...patch,
       };
       setMessage("defaults", null);
-      void saveDefaults();
+      void saveDefaults(field);
     };
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
     const usageAvailable = isGatewayMethodAdvertised(gatewaySnapshot, "codex.accountUsage");

@@ -13,12 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
+import { isMainModule } from "../src/infra/is-main.js";
 import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -215,7 +216,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "teamBoot",
-    name: "gateway, 44 startup plugins, eight agents and 4096 sessions",
+    name: "gateway, 44 startup plugins, eight agents and 5000 sessions",
     agentTopology: "incident-scale",
     pluginActivationOnStartup: true,
     pluginCount: 44,
@@ -224,6 +225,10 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: {
       ...BASE_CONFIG,
       gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
+      plugins: {
+        ...BASE_CONFIG.plugins,
+        entries: { ...BASE_CONFIG.plugins.entries, "memory-core": { enabled: false } },
+      },
       cron: { enabled: false },
     },
   },
@@ -253,6 +258,14 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "default",
     name: "gateway default",
+    config: BASE_CONFIG,
+  },
+  {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
   },
   {
@@ -1418,7 +1431,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
-            for (let index = 0; index < 512; index++) {
+            for (let index = 0; index < 625; index++) {
               writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
                 sessionId: `team-boot-${agentId}-${index}`,
                 updatedAt: now - index,
@@ -1469,7 +1482,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
-        sessionCount: agents.length * 512,
+        sessionCount: agents.length * 625,
         stateDatabaseBytes: statSync(statePath).size,
         agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
         workerEnvironments: "default local startup; no provisioned remote workers",
@@ -2246,7 +2259,7 @@ export const testing = {
   writeConfig,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   main().catch((err: unknown) => {
     if (err instanceof CliArgumentError) {
       console.error(err.message);

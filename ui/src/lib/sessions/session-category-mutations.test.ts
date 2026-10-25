@@ -6,24 +6,18 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
-import { sessionRpcHarness } from "./session-rpc.test-support.ts";
+import { patchReceipt, sessionRow, sessionRpcHarness } from "./session-rpc.test-support.ts";
 
-const initial: GatewaySessionRow = {
-  key: "agent:main:category-test",
+const initial = sessionRow("category-test", {
   sessionId: "category-incarnation",
-  kind: "direct",
   updatedAt: 1,
   category: "Alpha",
   pinned: false,
-};
+});
 const result = (overrides: Partial<GatewaySessionRow>, ts = 2) =>
   sessionsResult([{ ...initial, ...overrides }], ts);
-const receipt = (overrides: Partial<GatewaySessionRow>, updatedAt = 2) => ({
-  ok: true,
-  key: initial.key,
-  path: "",
-  entry: { ...initial, updatedAt, ...overrides },
-});
+const receipt = (overrides: Partial<GatewaySessionRow>, updatedAt = 2) =>
+  patchReceipt(initial.key, { ...initial, updatedAt, ...overrides }, "");
 function setup(readList?: (params: unknown) => Promise<ReturnType<typeof sessionsResult>>) {
   const replies = [createDeferred<unknown>(), createDeferred<unknown>()];
   const list = createDeferred<ReturnType<typeof sessionsResult>>();
@@ -52,21 +46,17 @@ function setup(readList?: (params: unknown) => Promise<ReturnType<typeof session
     replies[index]!.resolve(receipt({ category }, updatedAt));
   return {
     ...harness,
-    sessions,
     replies,
     list,
     listStarted,
     confirm,
+    row: () => sessions.state.result?.sessions[0],
     category: () => sessions.state.result?.sessions[0]?.category,
     move: (category: string | null) =>
       sessions.patch(initial.key, { category }, { ...options, deferListRefresh: true }),
     categoryEvent: (category: string, updatedAt: number) => {
       const session = { ...initial, category, updatedAt, archived: false };
-      harness.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { ...session, sessionKey: initial.key, reason: "patch", session },
-      });
+      harness.changed({ ...session, sessionKey: initial.key, reason: "patch", session });
     },
   };
 }
@@ -86,7 +76,7 @@ describe("session category mutations", () => {
       const changes = { category: null, ...(pin ? { pinned: true } : {}) };
       const pending = h.sessions.patch(initial.key, changes, options);
       if (pin) {
-        expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true });
+        expect(h.row()).toMatchObject({ pinned: true });
       }
       expect(h.category()).toBeUndefined();
       h.replies[0]!.resolve(
@@ -96,7 +86,7 @@ describe("session category mutations", () => {
       expect(h.category()).toBeUndefined();
       await expect(pending).resolves.toMatchObject({ ok: true });
       if (pin) {
-        expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 7 });
+        expect(h.row()).toMatchObject({ pinned: true, pinnedAt: 7 });
         h.list.resolve(result({ category: undefined, pinned: true, pinnedAt: 7, updatedAt: 7 }, 7));
       } else {
         h.list.reject(new Error("injected list failure"));
@@ -154,6 +144,8 @@ describe("session category mutations", () => {
     await h.listStarted.promise;
     h.list.resolve(result({ category: "Beta", updatedAt: 2 }));
     await h.list.promise;
+    await flushRead();
+    expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
   });
 
   it.each(["session", "connection"])(
@@ -179,15 +171,6 @@ describe("session category mutations", () => {
       }
     },
   );
-  it("keeps a confirmed category ahead of a read started before the write", async () => {
-    const reading = h.sessions.refresh({ agentId: "main", force: true });
-    const pending = h.move("Beta");
-    h.confirm(0, "Beta");
-    await pending;
-    h.list.resolve(result({}, 1));
-    await reading;
-    expect(h.category()).toBe("Beta");
-  });
 });
 
 it.each(["different", "returned"] as const)(

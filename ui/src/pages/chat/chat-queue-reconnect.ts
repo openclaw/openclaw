@@ -35,7 +35,7 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
     if (chatOutboxOwner(host).hasVolatile(host, item.id)) {
       chatOutboxOwner(host).change(host, item.id, (current) => ({
         ...current,
-        sendState: "unconfirmed",
+        sendState: "waiting-reconnect",
       }));
       continue;
     }
@@ -66,27 +66,6 @@ function isHistorySessionInfoForRequestedSession(
     isUiGlobalSessionKey(historySessionKey) &&
     resolveUiGlobalAliasAgentId(host, requestedSessionKey),
   );
-}
-
-function findSelectedSessionRow(
-  host: ChatIdleSessionReconciliationHost,
-  sessionsResult: SessionsListResult | null | undefined,
-  sessionKey: string,
-  historySessionKey: string | undefined,
-): GatewaySessionRow | undefined {
-  const requestedGlobalAgentId =
-    historySessionKey && isUiGlobalSessionKey(historySessionKey)
-      ? resolveUiGlobalAliasAgentId(host, sessionKey)
-      : undefined;
-  return sessionsResult?.sessions.find((session) => {
-    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
-      return true;
-    }
-    return (
-      requestedGlobalAgentId != null &&
-      resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
-    );
-  });
 }
 
 function historyIdleProofIsStaleForSelectedRow(
@@ -129,12 +108,20 @@ export function flushChatQueueAfterIdleSessionReconciliation(
       historyRefreshSettled.status === "fulfilled"
         ? historyRefreshSettled.value?.sessionInfo
         : null;
-    const selectedSessionRow = findSelectedSessionRow(
-      host,
-      freshSessionsResult,
-      sessionKey,
-      historySessionInfo?.key,
-    );
+    const historySessionKey = historySessionInfo?.key;
+    const requestedGlobalAgentId =
+      historySessionKey && isUiGlobalSessionKey(historySessionKey)
+        ? resolveUiGlobalAliasAgentId(host, sessionKey)
+        : undefined;
+    const selectedSessionRow = freshSessionsResult?.sessions.find((session) => {
+      if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+        return true;
+      }
+      return (
+        requestedGlobalAgentId != null &&
+        resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+      );
+    });
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
       isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&

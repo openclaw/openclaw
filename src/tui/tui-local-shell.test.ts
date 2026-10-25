@@ -9,7 +9,8 @@ import {
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { SearchableSelectList } from "./components/searchable-select-list.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
-import { createOverlayHandle } from "./tui-overlay.test-support.js";
+import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
+import "./tui-overlay.test-support.js";
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: vi.fn(),

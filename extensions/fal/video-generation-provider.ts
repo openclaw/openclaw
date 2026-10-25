@@ -22,6 +22,7 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
+  type VideoGenerationProviderCapabilities,
   type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
@@ -149,6 +150,31 @@ function isFalSeedance2Model(model: string): boolean {
   return SEEDANCE_2_VIDEO_MODELS.includes(model as (typeof SEEDANCE_2_VIDEO_MODELS)[number]);
 }
 
+function isFalPromptOnlyVideoModel(model: string): boolean {
+  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
+  return (
+    normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL
+  );
+}
+
+function resolveFalVideoModelCapabilities(
+  model: string,
+): VideoGenerationProviderCapabilities | undefined {
+  const unsupported = isFalPromptOnlyVideoModel(model)
+    ? {
+        supportsAspectRatio: false,
+        supportsResolution: false,
+        supportsSize: false,
+        supportsAudio: false,
+      }
+    : isFalSeedance2Model(model)
+      ? undefined
+      : { supportsAudio: false };
+  return unsupported
+    ? { generate: unsupported, imageToVideo: { enabled: true, ...unsupported } }
+    : undefined;
+}
+
 function isFalSeedance2ReferenceModel(model: string): boolean {
   return SEEDANCE_2_REFERENCE_VIDEO_MODELS.includes(
     model as (typeof SEEDANCE_2_REFERENCE_VIDEO_MODELS)[number],
@@ -236,8 +262,7 @@ function buildFalVideoRequestBody(
   // MiniMax Live on fal currently documents prompt + optional image_url only.
   // Keep the default model conservative so queue requests do not hang behind
   // unsupported knobs such as duration/resolution/aspect-ratio overrides.
-  const normalizedModel = normalizeLowercaseStringOrEmpty(model);
-  if (normalizedModel === DEFAULT_FAL_VIDEO_MODEL || normalizedModel === HEYGEN_VIDEO_AGENT_MODEL) {
+  if (isFalPromptOnlyVideoModel(model)) {
     return requestBody;
   }
   applyFalSeedanceControls(req, model, requestBody);
@@ -321,6 +346,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
+    resolveModelCapabilities: ({ model }) => resolveFalVideoModelCapabilities(model),
     capabilities: {
       generate: buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
       imageToVideo: {

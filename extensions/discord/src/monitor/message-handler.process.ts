@@ -28,7 +28,7 @@ import { beginDiscordActiveTurnThreadRoute } from "../active-turn-thread-route.j
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { createDiscordMessageReactionRuntime } from "./message-handler.process-reactions.js";
 import {
   createDiscordBeforePayloadDelivery,

@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -33,15 +34,11 @@ function makePrompter(
 }
 
 describe("createDoctorPrompter", () => {
-  const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const ttyMock = createCliTtyMock([process.stdin]);
 
   afterEach(() => {
     vi.resetAllMocks();
-    if (originalStdinIsTTY) {
-      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
     vi.unstubAllEnvs();
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Context, Model, Tool } from "../types.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
@@ -85,6 +85,55 @@ function expectBudget(
 }
 
 describe("OpenAI completions output budgets", () => {
+  it.each([
+    { tokens: 1_000, output: 8_999 },
+    { tokens: 9_500, output: 499 },
+  ])("uses matched pressure of $tokens tokens", ({ tokens, output }) => {
+    const context = emptyContext("x".repeat(25_000));
+    measuredRequestPressure.set(proxy, context, tokens);
+    expectBudget(buildOpenAICompletionsParams(proxy, context, undefined), output);
+  });
+
+  it.each(["messages", "tools", "system", "endpoint", "cleared"] as const)(
+    "falls back to payload accounting after the measured request's %s changes",
+    (change) => {
+      const context = emptyContext("x".repeat(25_000));
+      const model = { ...proxy };
+      measuredRequestPressure.set(model, context, 1_000);
+      if (change === "messages") {
+        context.messages = [...context.messages];
+      } else if (change === "tools") {
+        context.tools = [...(context.tools ?? [])];
+      } else if (change === "system") {
+        context.systemPrompt = "y".repeat(25_000);
+      } else if (change === "endpoint") {
+        model.baseUrl = "http://localhost:8001/v1";
+      } else {
+        measuredRequestPressure.set(model, context, undefined);
+      }
+      expectBudget(buildOpenAICompletionsParams(model, context, undefined), 2_186);
+    },
+  );
+
+  it.each([
+    { name: "an already measured", tokens: 24_000, schemaChars: 16_000, output: 8_192 },
+    { name: "a new or enlarged", tokens: 1_000, schemaChars: 80_000, output: 7_734 },
+  ])("uses payload accounting for $name response schema", ({ tokens, schemaChars, output }) => {
+    const context = emptyContext();
+    const model = { ...proxy, contextWindow: 32_768, maxTokens: 8_192 };
+    measuredRequestPressure.set(model, context, tokens);
+    const params = buildOpenAICompletionsParams(model, context, {
+      responseFormat: {
+        type: "json_schema",
+        json_schema: {
+          name: "report",
+          schema: { type: "string", description: "x".repeat(schemaChars) },
+        },
+      },
+    });
+    expectBudget(params, output);
+  });
+
   it.each([
     ["ｺ", 7_499],
     ["\u3400", 6_249],

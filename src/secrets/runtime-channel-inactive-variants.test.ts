@@ -174,27 +174,103 @@ describe("secrets runtime snapshot channel inactive variants", () => {
     }
   });
 
-  it("treats top-level Google Chat serviceAccount as inactive when enabled accounts override it", async () => {
+  it.each([
+    {
+      channel: "googlechat",
+      root: { serviceAccount: envRef("GOOGLECHAT_DEFAULT") },
+      work: { serviceAccount: "work-service-account-json" },
+      resolved: { serviceAccount: "default-service-account-json" },
+    },
+    {
+      channel: "mattermost",
+      root: {
+        baseUrl: "https://mattermost.example.invalid",
+        botToken: envRef("MATTERMOST_DEFAULT"),
+      },
+      work: { baseUrl: "https://work.example.invalid", botToken: "work-bot-token" },
+      resolved: { botToken: "default-bot-token" },
+    },
+    {
+      channel: "x",
+      root: {
+        clientId: "fixture-client",
+        clientSecret: envRef("X_CLIENT_SECRET"),
+        refreshToken: envRef("X_REFRESH_TOKEN"),
+      },
+      work: {
+        clientSecret: "work-secret",
+        refreshToken: "work-refresh",
+        bearerToken: "work-bearer",
+      },
+      resolved: { clientSecret: "default-client-secret", refreshToken: "default-refresh-token" },
+    },
+  ])(
+    "resolves the implicit $channel default's credentials when named accounts override them",
+    async ({ channel, root, work, resolved }) => {
+      const snapshot = await prepare(
+        { [channel]: { ...root, accounts: { work: { enabled: true, ...work } } } },
+        {
+          GOOGLECHAT_DEFAULT: "default-service-account-json",
+          MATTERMOST_DEFAULT: "default-bot-token",
+          X_CLIENT_SECRET: "default-client-secret",
+          X_REFRESH_TOKEN: "default-refresh-token",
+        },
+      );
+
+      expect(getPath(snapshot.config, ["channels", channel])).toMatchObject(resolved);
+      expect(snapshot.warnings).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "an explicit default override",
+      accountId: "default",
+      baseUrl: "https://mattermost.example.invalid",
+    },
+    { name: "no root base URL", accountId: "work", baseUrl: undefined },
+  ])("keeps unused Mattermost root refs inactive with $name", async ({ accountId, baseUrl }) => {
+    const botToken = envRef("MISSING_MATTERMOST_DEFAULT");
+    const snapshot = await prepare({
+      mattermost: {
+        baseUrl,
+        botToken,
+        accounts: {
+          [accountId]: { baseUrl: "https://work.example.invalid", botToken: "work-bot-token" },
+        },
+      },
+    });
+
+    expect(getPath(snapshot.config, ["channels", "mattermost", "botToken"])).toEqual(botToken);
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.mattermost.botToken",
+      }),
+    );
+  });
+
+  it("keeps top-level Google Chat serviceAccount inactive when an explicit default overrides it", async () => {
     const snapshot = await prepare(
       {
         googlechat: {
           serviceAccount: envRef("MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT"),
           accounts: {
-            work: {
+            default: {
               enabled: true,
-              serviceAccount: envRef("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
+              serviceAccount: envRef("GOOGLECHAT_DEFAULT_SERVICE_ACCOUNT"),
             },
           },
         },
       },
-      { GOOGLECHAT_WORK_SERVICE_ACCOUNT: "work-service-account-json" },
+      { GOOGLECHAT_DEFAULT_SERVICE_ACCOUNT: "default-service-account-json" },
     );
 
     expect(snapshot.config.channels?.googlechat?.serviceAccount).toEqual(
       envRef("MISSING_GOOGLECHAT_BASE_SERVICE_ACCOUNT"),
     );
-    expect(snapshot.config.channels?.googlechat?.accounts?.work?.serviceAccount).toBe(
-      "work-service-account-json",
+    expect(snapshot.config.channels?.googlechat?.accounts?.default?.serviceAccount).toBe(
+      "default-service-account-json",
     );
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.googlechat.serviceAccount",

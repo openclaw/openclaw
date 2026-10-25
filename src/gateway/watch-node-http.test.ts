@@ -1,5 +1,5 @@
 import { request as httpRequest, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -20,7 +20,7 @@ import {
   approveDevicePairing,
 } from "../infra/device-pairing-approval.js";
 import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
-import { listNodePairing } from "../infra/device-pairing-node.js";
+import { listNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
@@ -29,100 +29,67 @@ import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { serializeEventPayload } from "./node-registry.js";
 import {
+  cleanups,
   connectWatchNode,
+  createWatchNodeFixture,
   makeConnectParams,
+  makeWatchNodeDir,
   readJson,
+  registerWatchNodeFixtureCleanup,
   startPartialJsonRequest,
   startWatchNodeHttpRuntime,
   waitForLastConnectedMetadata,
 } from "./watch-node-http.test-helpers.js";
 
-const tempDirs = createTrackedTempDirs();
-const cleanups: Array<() => Promise<void>> = [];
-const databasePaths = new Set<string>();
-
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Watch node fixture cleanup failed", { cause: errors[0] });
-  }
-  // Handlers enqueue connection history; drain that writer before closing its database.
-  await withDevicePairingLock(async () => {});
-  for (const databasePath of databasePaths) {
-    await closeOpenClawStateDatabaseByPathAsync(databasePath);
-  }
-  await tempDirs.cleanup();
-  cleanups.length = 0;
-  databasePaths.clear();
-  vi.unstubAllEnvs();
-});
-
-async function makeWatchNodeDir(prefix: string): Promise<string> {
-  const baseDir = await tempDirs.make(prefix);
-  databasePaths.add(
-    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
-  );
-  return baseDir;
-}
-
-async function createWatchNodeFixture(
-  prefix: string,
-  options?: Parameters<typeof startWatchNodeHttpRuntime>[2] & {
-    bootstrapProfile?: DeviceBootstrapProfile;
-  },
-) {
-  const baseDir = await makeWatchNodeDir(prefix);
-  const identity = loadOrCreateDeviceIdentity({
-    env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
-  });
-  const issued = await issueDevicePairSetupBootstrapToken({
-    baseDir,
-    profile: options?.bootstrapProfile ?? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  });
-  return {
-    baseDir,
-    identity,
-    issued,
-    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
-  };
-}
+registerWatchNodeFixtureCleanup();
 
 describe("watch node HTTP transport", () => {
-  it("uses Gateway time for skew-independent device proof", async () => {
-    const now = vi.fn(() => 1_700_000_000_123);
-    const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
-      "openclaw-watch-node-challenge-time-",
-      { now },
-    );
-
-    const response = await connectWatchNode({
+  it("publishes superseded and post-connect cleanup rejections with the Watch clock", async () => {
+    const current = 1_700_000_000_123;
+    const { baseDir, identity, issued, baseUrl, broadcasts, settleRequests } =
+      await createWatchNodeFixture("openclaw-watch-pairing-events-", { now: () => current });
+    const initial = await connectWatchNode({
       baseUrl,
       identity,
       bootstrapToken: issued.token,
+      commands: ["device.info"],
     });
-
-    expect(response.status).toBe(200);
-    expect(now).toHaveBeenCalled();
-    runtime.close();
+    expect(initial.status).toBe(200);
+    const { deviceToken } = await readJson(initial);
+    await settleRequests();
+    await requestNodePairing(
+      { nodeId: identity.deviceId, commands: ["device.info", "device.status"] },
+      baseDir,
+    );
+    for (const commands of [["device.info", "system.notify"], ["device.info"]]) {
+      const {
+        pending: [pending],
+      } = await listNodePairing(baseDir);
+      const response = await connectWatchNode({
+        baseUrl,
+        identity,
+        deviceToken: String(deviceToken),
+        commands,
+      });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      await settleRequests();
+      expect(broadcasts.findLast(({ event }) => event === "node.pair.resolved")).toEqual({
+        event: "node.pair.resolved",
+        payload: {
+          requestId: pending?.requestId,
+          nodeId: identity.deviceId,
+          decision: "rejected",
+          ts: current,
+        },
+      });
+    }
+    expect((await listNodePairing(baseDir)).pending).toEqual([]);
   });
 
   it("rejects capabilities and identities outside the bounded watch surface", async () => {

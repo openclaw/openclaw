@@ -9,10 +9,13 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 const PDF_PREVIEW_TIMEOUT_MS = 10_000;
@@ -25,18 +28,14 @@ export function isPdfAttachment(rawMimeType: string, filename: string): boolean 
   );
 }
 
-type PdfPreviewProps = {
+/** Owns the bounded, browser-native PDF surface for same-origin attachments. */
+export function ChatPdfPreview(props: {
   src: string;
   sourceIdentity: string;
   label: string;
   mimeType: string;
   sizeBytes?: number;
-};
-
-type PdfRead = { ok: true; bytes: ArrayBuffer } | { ok: false; cause: unknown };
-
-/** Owns the bounded, browser-native PDF surface for same-origin attachments. */
-export function ChatPdfPreview(props: PdfPreviewProps) {
+}) {
   // A new ticket keeps its reader; a different attachment or missing source retires it.
   const source = createMemo(
     () =>
@@ -68,7 +67,7 @@ export function ChatPdfPreview(props: PdfPreviewProps) {
     if (sizeBytes !== undefined && sizeBytes > PDF_PREVIEW_MAX_BYTES) {
       return unavailable();
     }
-    const result = createMemo<PdfRead>(
+    const result = createMemo<{ ok: true; bytes: ArrayBuffer } | { ok: false; cause: unknown }>(
       async () => {
         const src = props.src;
         const controller = new AbortController();

@@ -36,18 +36,21 @@ afterEach(() => clearRuntimeConfigSnapshot());
 it.each([
   ["monitor without source key", undefined, false, "available"],
   ["hidden subagent announcement", "announce:child:user", true, "available"],
+  ["replayed settle wake", "announce:requester-settle:replay:user", true, "replayed"],
   ["removed admitted prompt", "removed:user", false, "removed"],
   ["closed consultation", "closed-consult:user", true, "closed"],
 ] as const)(
   "preserves host prompt ownership for an admitted %s",
   async (_label, idempotencyKey, hidden, recovery) => {
     const admittedContent = "Check the admitted monitor.";
-    const upstreamUserText = "Check the monitor.";
+    const upstreamUserText =
+      recovery === "replayed" ? "Restarted: check the monitor." : "Check the monitor.";
+    const turnId = recovery === "replayed" ? "turn-2" : "turn-1";
     const promptMetadata = {
       content: admittedContent,
       ...(idempotencyKey ? { idempotencyKey } : {}),
       __openclaw: {
-        mirrorIdentity: "turn-1:prompt",
+        mirrorIdentity: `${turnId}:prompt`,
         mirrorOrigin: "codex-app-server",
         upstreamUserText,
       },
@@ -65,7 +68,12 @@ it.each([
       input: {
         text: upstreamUserText,
         provenance: hidden
-          ? { kind: "inter_session", sourceChannel: "internal", sourceTool: "agent_harness_task" }
+          ? {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: recovery === "replayed" ? "subagent_settle" : "agent_harness_task",
+              ...(recovery === "replayed" ? { sourceSessionKey: "agent:main:child" } : {}),
+            }
           : { kind: "internal_system", sourceTool: "heartbeat" },
         ...(hidden ? { display: false } : {}),
         ...(recovery === "closed" ? { excludeFromContext: true } : {}),
@@ -101,9 +109,22 @@ it.each([
         sessionKey: target.sessionKey,
         cwd: base.workspaceDir,
         threadId: "thread-1",
-        turnId: "turn-1",
+        turnId,
         notifyUserMessagePersisted: createCodexAppServerUserMessagePersistenceNotifier(params),
       };
+      if (recovery === "replayed") {
+        await mirrorPromptAtTurnStartBestEffort({
+          ...mirror,
+          turnId: "turn-1",
+          upstreamUserText: "Check the monitor.",
+        });
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          __openclaw: { mirrorIdentity: "turn-1:prompt", upstreamUserText: "Check the monitor." },
+        });
+        mirror.notifyUserMessagePersisted =
+          createCodexAppServerUserMessagePersistenceNotifier(params);
+        onUserMessagePersisted.mockClear();
+      }
       const beforeMirror =
         recovery === "closed" ? await readSessionTranscriptEvents(target) : undefined;
       const promptMirror = mirrorPromptAtTurnStartBestEffort({ ...mirror, upstreamUserText });
@@ -117,7 +138,7 @@ it.each([
         expect(await readSessionTranscriptEvents(target)).toEqual(beforeMirror);
         return;
       }
-      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1", {
+      const projector = new CodexAppServerEventProjector(params, "thread-1", turnId, {
         upstreamUserText,
       });
       const tool = { callId: "result", tool: "heartbeat_respond" };
@@ -136,11 +157,11 @@ it.each([
         sessionTarget: target,
         sessionFile: base.sessionFile,
         model: "gpt-5.6-luna",
-        turnId: "turn-1",
+        turnId,
         settledMessages: result.messagesSnapshot,
         mirroredMessages: mirrored.mirroredMessages,
       });
-      if (recovery === "available") {
+      if (recovery === "available" || recovery === "replayed") {
         expect(captured).toBeInstanceOf(CodexSettledTurnContext);
         expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(
           recorder.getPersistedMessage?.(),
@@ -154,7 +175,7 @@ it.each([
         (event) => asOptionalRecord(asOptionalRecord(event)?.message)?.role === "user",
       );
       expect(prompts).toHaveLength(recovery === "removed" ? 0 : 1);
-      if (recovery === "available") {
+      if (recovery === "available" || recovery === "replayed") {
         expect(prompts[0]).toMatchObject({
           message: {
             ...promptMetadata,
@@ -165,6 +186,18 @@ it.each([
       }
       if (idempotencyKey) {
         expect(recorder.getPersistedMessage?.()?.idempotencyKey).toBe(idempotencyKey);
+      }
+      if (recovery === "replayed") {
+        expect(prompts[0]).toMatchObject({
+          message: {
+            provenance: {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: "agent:main:child",
+            },
+          },
+        });
       }
     } finally {
       host.closeHost();

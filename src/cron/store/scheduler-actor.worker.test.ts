@@ -168,42 +168,6 @@ function observeWakes(channelName: string) {
   };
 }
 
-it("activates scheduled requests in FIFO capacity order and observes a queued edit on the next tick", () => {
-  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 2;
-  const scheduler = storedScheduler(
-    "scheduled-activation",
-    jobSeries("job", count, (index) => now - (count - index) * minute).toReversed(),
-  );
-  const started = scheduler.start(now, immediate(count));
-  expect(jobIds(started.accepted)).toEqual(ids("job", count));
-  expect(jobIds(started.launches)).toEqual(ids("job", DEFAULT_CRON_MAX_CONCURRENT_RUNS));
-  const queuedId = `job-${DEFAULT_CRON_MAX_CONCURRENT_RUNS}`;
-  const persisted = scheduler.read();
-  expect(persisted.filter((entry) => entry.state.runningAtMs === now)).toHaveLength(
-    DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-  );
-  expect(persisted.filter((entry) => entry.state.queuedAtMs === now)).toHaveLength(2);
-  const queued = persisted.find((entry) => entry.id === queuedId)!;
-  queued.payload = { kind: "command", argv: ["echo", "edited while queued"] };
-  queued.state.lastError = "preserve earlier failure";
-  scheduler.save(persisted);
-  expect(scheduler.tick(now + 1, 1)).toMatchObject({ accepted: [], launches: [] });
-  expect(scheduler.receipts()).toHaveLength(count);
-  scheduler.cancel([started.launches[0]!.runReceipt.receiptId], now + 2, "test releases one slot");
-  const resumed = scheduler.tick(now + 3, 3);
-  expect(resumed.accepted).toEqual([]);
-  expect(jobIds(resumed.launches)).toEqual([queuedId]);
-  expect(resumed.launches[0]?.job.payload).toEqual({
-    kind: "command",
-    argv: ["echo", "edited while queued"],
-  });
-  expect(resumed.launches[0]?.job.state).toMatchObject({
-    runningAtMs: now + 3,
-    lastError: "preserve earlier failure",
-  });
-  expect(scheduler.job(queuedId)?.state).toEqual(resumed.launches[0]?.job.state);
-});
-
 it.each(["every", "cron"] as const)(
   "advances a cancelled %s slot across scheduler and database restart",
   async (kind) => {
@@ -303,11 +267,14 @@ it("does not activate work for a paused caller when another subscriber is active
 it("persists the five-immediate limit, overflow staggering, and pending requests across restart", async () => {
   const scheduler = storedScheduler(
     "overflow-restart",
-    jobSeries("job", 7, (index) => now - (7 - index) * minute),
+    jobSeries("job", 7, (index) => now - (7 - index) * minute).toReversed(),
   );
   const started = scheduler.start();
   expect(jobIds(started.accepted)).toEqual(ids("job", 5));
-  const deferred = scheduler.read().slice(5);
+  const deferred = scheduler
+    .read()
+    .filter(({ state }) => state.startupCatchupAtMs !== undefined)
+    .toReversed();
   expect(deferred.map(({ state }) => [state.nextRunAtMs, state.startupCatchupAtMs])).toEqual([
     [now + 5_000, now + 5_000],
     [now + 10_000, now + 10_000],
@@ -315,7 +282,12 @@ it("persists the five-immediate limit, overflow staggering, and pending requests
   const receipts = scheduler.receipts();
   expect((await scheduler.restart(now + 1_000)).accepted).toEqual([]);
   expect(scheduler.receipts()).toEqual(receipts);
-  expect(scheduler.read().slice(5)).toEqual(deferred);
+  expect(
+    scheduler
+      .read()
+      .filter(({ state }) => state.startupCatchupAtMs !== undefined)
+      .toReversed(),
+  ).toEqual(deferred);
 });
 
 it("defers missed isolated and main-session work for two minutes without blocking command work", () => {

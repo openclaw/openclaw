@@ -1,15 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Parser, Tree } from "web-tree-sitter";
 import { CommandExplanationWorkLimitError, explainShellCommand } from "./extract.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import { getBashParserForCommandExplanation } from "./tree-sitter-runtime.js";
 import type { CommandStep } from "./types.js";
 
 function expectRisk(risks: readonly unknown[], fields: Record<string, unknown>): void {
   expect(risks).toContainEqual(expect.objectContaining(fields));
 }
 
-async function expectSourceRisk(source: string, fields: Record<string, unknown>) {
+async function expectSourceRisk(
+  source: string,
+  fields: Record<string, unknown>,
+  sourceText?: string,
+) {
   const explanation = await explainShellCommand(source);
   expectRisk(explanation.risks, fields);
+  if (sourceText !== undefined) {
+    expect(
+      explanation.risks.map((risk) => ({
+        ...risk,
+        sourceText: source.slice(risk.span.startIndex, risk.span.endIndex),
+      })),
+    ).toContainEqual(expect.objectContaining({ ...fields, sourceText }));
+  }
   return explanation;
 }
 
@@ -31,17 +44,55 @@ function expectExecutables(commands: readonly CommandStep[], executables: string
 }
 
 async function expectDynamicExecutable(source: string, text: string): Promise<void> {
-  const explanation = await expectSourceRisk(source, { kind: "dynamic-executable", text });
+  const explanation = await expectSourceRisk(source, { kind: "dynamic-executable" }, text);
   expect(explanation.topLevelCommands).toStrictEqual([]);
 }
 
-function expectCarrierWrapper(source: string, command: string) {
-  return expectSourceRisk(source, { kind: "shell-wrapper-through-carrier", command });
+function expectCarrierWrapper(source: string) {
+  return expectSourceRisk(source, { kind: "shell-wrapper-through-carrier" });
 }
 
 describe("command explainer tree-sitter runtime", () => {
+  it("bounds live native trees across concurrent wrapper explanations", async () => {
+    const liveTrees = new Set<Tree>();
+    let peakLiveTrees = 0;
+    // oxlint-disable typescript/unbound-method -- The spies invoke both native methods with their original receiver below.
+    const parse = Parser.prototype.parse;
+    const deleteTree = Tree.prototype.delete;
+    // oxlint-enable typescript/unbound-method
+    const parseSpy = vi.spyOn(Parser.prototype, "parse").mockImplementation(function (
+      this: Parser,
+      ...args
+    ) {
+      const tree = parse.apply(this, args);
+      if (tree) {
+        liveTrees.add(tree);
+        peakLiveTrees = Math.max(peakLiveTrees, liveTrees.size);
+      }
+      return tree;
+    });
+    const deleteSpy = vi.spyOn(Tree.prototype, "delete").mockImplementation(function (this: Tree) {
+      deleteTree.call(this);
+      liveTrees.delete(this);
+    });
+    try {
+      const explanations = await Promise.all(
+        Array.from({ length: 4 }, () => explainShellCommand(`bash -c 'sh -c "echo hello"'`)),
+      );
+      expect(explanations.every((explanation) => explanation.ok)).toBe(true);
+      expect(liveTrees.size).toBe(0);
+      // The outer command and two nested wrapper payloads share one native-memory lifetime.
+      expect(peakLiveTrees).toBeGreaterThan(0);
+      expect(peakLiveTrees).toBeLessThanOrEqual(3);
+    } finally {
+      parseSpy.mockRestore();
+      deleteSpy.mockRestore();
+    }
+  });
+
   it("rejects oversized parser input before parsing", async () => {
-    await expect(parseBashForCommandExplanation("x".repeat(128 * 1024 + 1))).rejects.toThrow(
+    const parse = await getBashParserForCommandExplanation();
+    expect(() => parse("x".repeat(128 * 1024 + 1))).toThrow(
       "Shell command is too large to explain",
     );
   });
@@ -110,7 +161,8 @@ describe("command explainer tree-sitter runtime", () => {
   });
 
   it("detects shell wrappers", async () => {
-    const explanation = await explainShellCommand('bash -lc "echo hi | wc -c"');
+    const source = 'bash -lc "echo hi | wc -c"';
+    const explanation = await explainShellCommand(source);
 
     expectExecutables(explanation.topLevelCommands, ["bash"]);
     expect(explanation.nestedCommands).toEqual([
@@ -118,19 +170,15 @@ describe("command explainer tree-sitter runtime", () => {
       expect.objectContaining({ context: "wrapper-payload", executable: "wc" }),
     ]);
     const [wrappedEcho, wrappedWc] = explanation.nestedCommands;
-    expect(explanation.source.slice(wrappedEcho?.span.startIndex, wrappedEcho?.span.endIndex)).toBe(
-      "echo hi",
-    );
-    expect(explanation.source.slice(wrappedWc?.span.startIndex, wrappedWc?.span.endIndex)).toBe(
-      "wc -c",
-    );
+    expect(source.slice(wrappedEcho?.span.startIndex, wrappedEcho?.span.endIndex)).toBe("echo hi");
+    expect(source.slice(wrappedWc?.span.startIndex, wrappedWc?.span.endIndex)).toBe("wc -c");
     expect(explanation.shapes).toContain("pipeline");
     expectRisk(explanation.risks, {
       kind: "shell-wrapper",
       executable: "bash",
       flag: "-lc",
       payload: "echo hi | wc -c",
-      text: 'bash -lc "echo hi | wc -c"',
+      span: expect.objectContaining({ startIndex: 0, endIndex: source.length }),
     });
 
     await expectShellWrapper('bash -euxc "echo hi"', "bash", "echo hi", "-euxc");
@@ -158,20 +206,19 @@ describe("command explainer tree-sitter runtime", () => {
     );
     expect(powershellPipeline.nestedCommands).toStrictEqual([]);
 
-    for (const [command, carrier] of [
-      ["time bash -lc 'id'", "time"],
-      ["nice bash -lc 'id'", "nice"],
-      ["timeout 1 bash -lc 'id'", "timeout"],
-      ["caffeinate -d -w 42 bash -lc 'id'", "caffeinate"],
+    for (const command of [
+      "time bash -lc 'id'",
+      "nice bash -lc 'id'",
+      "timeout 1 bash -lc 'id'",
+      "caffeinate -d -w 42 bash -lc 'id'",
     ] as const) {
       const wrapped = await explainShellCommand(command);
       expectRisk(wrapped.risks, {
         kind: "shell-wrapper-through-carrier",
-        command: carrier,
       });
       const wrappedId = wrapped.nestedCommands.find((step) => step.executable === "id");
       expect(wrappedId?.context).toBe("wrapper-payload");
-      expect(wrapped.source.slice(wrappedId?.span.startIndex, wrappedId?.span.endIndex)).toBe("id");
+      expect(command.slice(wrappedId?.span.startIndex, wrappedId?.span.endIndex)).toBe("id");
     }
   });
 
@@ -223,12 +270,12 @@ describe("command explainer tree-sitter runtime", () => {
     expectCommand(continuedArgument.topLevelCommands, ["pnpm", "test", "--filter", "foo"]);
     expectRisk(continuedArgument.risks, { kind: "line-continuation" });
 
-    const escapedWordBoundary = await explainShellCommand("tr x\n\\id");
+    const escapedWordBoundary = await expectSourceRisk(
+      "tr x\n\\id",
+      { kind: "line-continuation" },
+      "\n\\id",
+    );
     expectCommand(escapedWordBoundary.topLevelCommands, ["tr", "x", "\nid"]);
-    expectRisk(escapedWordBoundary.risks, {
-      kind: "line-continuation",
-      text: "\n\\id",
-    });
 
     const invalidObfuscation = await explainShellCommand("e'c'h'o hi");
     expect(invalidObfuscation.ok).toBe(false);
@@ -271,11 +318,11 @@ describe("command explainer tree-sitter runtime", () => {
     await expectSourceRisk("builtin eval 'echo hi'", { kind: "eval" });
     await expectSourceRisk(". ./some-script.sh", { kind: "source", command: "." });
     await expectSourceRisk("alias ll='ls -l'", { kind: "alias" });
-    await expectCarrierWrapper('sudo sh -c "id && whoami"', "sudo");
-    await expectCarrierWrapper("command bash -lc 'id && whoami'", "command");
-    await expectCarrierWrapper("exec bash -lc 'id && whoami'", "exec");
+    await expectCarrierWrapper('sudo sh -c "id && whoami"');
+    await expectCarrierWrapper("command bash -lc 'id && whoami'");
+    await expectCarrierWrapper("exec bash -lc 'id && whoami'");
     await expectSourceRisk("exec eval 'echo hi'", { kind: "eval" });
-    await expectCarrierWrapper('sudo bash -euxc "id && whoami"', "sudo");
+    await expectCarrierWrapper('sudo bash -euxc "id && whoami"');
   });
 
   it("treats function bodies as nested command context", async () => {
@@ -290,10 +337,12 @@ describe("command explainer tree-sitter runtime", () => {
   });
 
   it("marks redirects heredocs and here-strings as risks", async () => {
-    const redirect = await explainShellCommand("echo hi > out.txt");
+    const source = "echo hi > out.txt";
+    const redirect = await explainShellCommand(source);
     const redirectRisks = redirect.risks.filter((risk) => risk.kind === "redirect");
     expect(redirectRisks).toHaveLength(1);
-    expect(redirectRisks[0]?.text).toBe("> out.txt");
+    const span = redirectRisks[0]?.span;
+    expect(source.slice(span?.startIndex, span?.endIndex)).toBe("> out.txt");
 
     await expectSourceRisk("cat <<EOF\nhello\nEOF", { kind: "heredoc" });
     await expectSourceRisk('cat <<< "hello"', { kind: "here-string" });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { PermissionExec as ExecFn } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -52,7 +53,6 @@ import type {
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
-import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
@@ -101,8 +101,6 @@ type SecurityAuditOptions = {
   execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
-  /** Optional cache for code-safety summaries across repeated deep audits. */
-  codeSafetySummaryCache?: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
@@ -125,7 +123,6 @@ type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   configPath: string;
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
-  codeSafetySummaryCache: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -1000,7 +997,6 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
-    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
@@ -1097,7 +1093,6 @@ export async function runSecurityAuditCore(
         stateDir,
         deep: context.deep,
         workspaceDir: context.workspaceDir,
-        summaryCache: context.codeSafetySummaryCache,
       })),
     );
   }

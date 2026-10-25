@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
+import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture as makeAssistant } from "../test-helpers/assistant-message-fixtures.js";
 import {
+  ERROR_DETAILS_HINT,
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
   renderRuntimeCoordinationFailureCopy,
+  renderStorageFailureSummary,
 } from "./assistant-request-failure-copy.js";
 import { isAuthErrorMessage } from "./message-patterns.js";
 
@@ -68,6 +74,81 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(copy).toContain("restart OpenClaw");
     expect(copy).not.toContain("Session actor");
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
+  });
+
+  it.each([
+    ["operator cancellation", "canceling statement due to user request PRIVATE_STORAGE_DETAIL"],
+    ["statement timeout", "canceling statement due to statement timeout PRIVATE_STORAGE_DETAIL"],
+  ])("retains %s guidance in live replies and saved history", (_scenario, message) => {
+    const error = decodePostgresError({ name: "error", message, code: "57014" });
+    const storageFailure = classifyGatewayStorageFailure(error);
+    expect(storageFailure).toBe("57014");
+    const assistant = makeAssistant({
+      errorMessage: error.message,
+      errorCode: storageFailure,
+      errorType: error.name,
+    });
+    expect(classifyGatewayStorageFailure(assistant)).toBe("57014");
+    expect(classifyProviderRuntimeFailureKind(buildAssistantFailoverSignal(assistant))).toBe(
+      "gateway_storage",
+    );
+    const summary = renderStorageFailureSummary(storageFailure);
+    expect(summary).toEqual(expect.any(String));
+    expect(summary).not.toBe("");
+    for (const copy of [
+      formatUserFacingAssistantErrorText(assistant),
+      renderRecordedAssistantFailureCopy(assistant),
+    ]) {
+      expect(copy).toContain(summary);
+      expect(copy).toContain(ERROR_DETAILS_HINT);
+      expect(copy).not.toContain("PRIVATE_STORAGE_DETAIL");
+    }
+  });
+
+  it("retains cancellation provenance through name-only actor errors", () => {
+    const error = decodePostgresError({
+      name: "error",
+      message: "canceling statement due to user request PRIVATE_ACTOR_DETAIL",
+      code: "57014",
+    });
+    const actorError = { name: error.name, message: error.message };
+    expect(classifyGatewayStorageFailure(actorError)).toBe("57014");
+    const assistant = makeAssistant({
+      errorMessage: actorError.message,
+      errorType: actorError.name,
+    });
+    expect(classifyGatewayStorageFailure(assistant)).toBe("57014");
+    for (const copy of [
+      formatUserFacingAssistantErrorText(assistant),
+      renderRecordedAssistantFailureCopy(assistant),
+    ]) {
+      expect(copy).toContain(ERROR_DETAILS_HINT);
+      expect(copy).not.toContain("PRIVATE_ACTOR_DETAIL");
+    }
+  });
+
+  it("keeps provider-owned 57014 errors out of storage cancellation handling", () => {
+    const assistant = makeAssistant({
+      errorCode: "57014",
+      errorType: "rate_limit_error",
+      errorMessage: "Rate limit reached PRIVATE_PROVIDER_DETAIL",
+    });
+    const signal = buildAssistantFailoverSignal(assistant);
+    expect(classifyGatewayStorageFailure(assistant)).toBeUndefined();
+    expect(classifyGatewayStorageFailure(signal)).toBeUndefined();
+    expect(classifyProviderRuntimeFailureKind(signal)).toBe("rate_limit");
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
+      renderAssistantRequestFailureCopy({ reason: "rate_limit" }),
+    );
+    for (const copy of [
+      formatUserFacingAssistantErrorText(assistant),
+      renderRecordedAssistantFailureCopy(assistant),
+    ]) {
+      expect(copy).toEqual(expect.any(String));
+      expect(copy).not.toBe("");
+      expect(copy).not.toMatch(/postgres/i);
+      expect(copy).not.toContain("PRIVATE_PROVIDER_DETAIL");
+    }
   });
 
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {

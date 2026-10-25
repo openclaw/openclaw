@@ -3,9 +3,12 @@ import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { CronJobActionProps, CronProps } from "./view-types.ts";
+
+registerCronEnglish();
 export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
   const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
@@ -133,7 +136,12 @@ export function EnabledSwitch(
     >
       <SettingsToggle
         checked={props.job.enabled}
-        disabled={props.busy || !props.connected || !props.canManage}
+        saving={props.toggleSavingJobId === props.job.id}
+        disabled={
+          !props.connected ||
+          !props.canManage ||
+          (props.busy && props.toggleSavingJobId !== props.job.id)
+        }
         ariaLabel={props.compact ? actionLabel() : stateLabel()}
         onChange={(checked) => {
           if (props.canManage) {

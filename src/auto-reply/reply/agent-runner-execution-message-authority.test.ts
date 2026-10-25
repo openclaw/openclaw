@@ -1,6 +1,9 @@
 import "../../agents/auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -11,6 +14,7 @@ import {
   getExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
@@ -28,17 +32,13 @@ const currentChannelId = "100000000000000003";
 const provider = "claude-cli";
 const model = "claude-sonnet-4-6";
 
-async function cliCandidate(params: FallbackRunnerParams, fallback = false) {
-  return {
-    result: await params.run(
-      provider,
-      model,
-      fallback ? fallbackAttemptOptions(params, "unknown") : initialFallbackAttemptOptions(params),
-    ),
+function cliCandidate(params: FallbackRunnerParams, fallback = false) {
+  return runFallbackCandidate(
+    params,
     provider,
     model,
-    attempts: [],
-  };
+    fallback ? fallbackAttemptOptions(params, "unknown") : initialFallbackAttemptOptions(params),
+  );
 }
 
 beforeEach(() => {
@@ -49,14 +49,7 @@ beforeEach(() => {
   );
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
     resolvePluginSetupCliBackend: () => undefined,
   });
 });

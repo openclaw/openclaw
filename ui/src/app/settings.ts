@@ -38,13 +38,6 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
-import type {
-  ScopedSessionSelection,
-  PersistedUiSettings,
-  PersistedSettingsSource,
-  ProfileNavigation,
-  SettingsStorageFallback,
-} from "./settings-storage-types.ts";
 import { normalizeTerminalFontFamily } from "./terminal-font.ts";
 import { parseThemeSelection } from "./theme.ts";
 import { normalizeTypefaceOverride } from "./typography.ts";
@@ -66,6 +59,45 @@ export type {
   UiPreferences,
   UiSettings,
 } from "./settings-contract.ts";
+
+// The existing gateway-scoped browser record; profile snapshots contain references only.
+type ScopedSessionSelection = {
+  sessionKey: string;
+  lastActiveSessionKey: string;
+  selectedAgentId?: string;
+};
+
+type ProfileNavigation = { railShortcuts: string[] };
+type PersistedUiSettings = Omit<
+  UiSettings,
+  | "token"
+  | "sessionKey"
+  | "lastActiveSessionKey"
+  | "selectedAgentId"
+  | "navCollapsed"
+  | "sidebarEntries"
+  | "background"
+> &
+  Partial<ProfileNavigation> & {
+    token?: never;
+    sessionsByGateway?: Record<string, ScopedSessionSelection>;
+    navigationByProfile?: Record<string, Partial<ProfileNavigation> & Record<string, unknown>>;
+    // Retired sidebar order is preserved as opaque data, never used as rail shortcuts.
+    sidebarEntries?: unknown;
+    sidebarPinnedRoutes?: unknown;
+  };
+
+type PersistedSettingsSource = {
+  gatewayUrl: string;
+  parsed: PersistedUiSettings;
+  available: boolean;
+};
+
+type SettingsStorageFallback = {
+  key: string;
+  record: PersistedUiSettings;
+  pendingNavigation: Record<string, ProfileNavigation> | null;
+};
 
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
@@ -433,6 +465,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
+      ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -602,6 +635,7 @@ export function saveSettings(
     lobsterPetSounds: next.lobsterPetSounds === true ? true : undefined,
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
+    chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

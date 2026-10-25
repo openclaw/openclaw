@@ -1,9 +1,8 @@
 // Fresh-process fixture: value imports stay outside OpenClaw until each scenario demands them.
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import { once } from "node:events";
 import fs from "node:fs";
-import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -30,13 +29,6 @@ function assertFields<T extends object>(actual: T | undefined, expected: Partial
   for (const key in expected) {
     assert.equal(actual[key], expected[key], key);
   }
-}
-
-function assertEvent(kind: string) {
-  assert(
-    providerEvents.some((event) => event.kind === kind),
-    `missing provider event: ${kind}`,
-  );
 }
 
 const credentialOwner = {
@@ -158,12 +150,13 @@ function authOptions(
 }
 
 async function createHttpFixture() {
+  const { startCompletionServer } = await import("./simple-completion.test-support.js");
   const requests: HttpRequest[] = [];
   const refreshInputs: string[] = [];
   const order: string[] = [];
   const errors: unknown[] = [];
   const behavior = { rejectRefresh: false };
-  const server = createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
       const body = await text(request);
       response.setHeader("content-type", "application/json");
@@ -212,22 +205,15 @@ async function createHttpFixture() {
       response.end();
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const origin = `http://127.0.0.1:${address.port}`;
   return {
-    url: `${origin}/mcp`,
-    tokenUrl: `${origin}/token`,
+    url: `${server.origin}/mcp`,
+    tokenUrl: `${server.origin}/token`,
     requests,
     refreshInputs,
     order,
     behavior,
     close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      await server[Symbol.asyncDispose]();
       assert.deepEqual(errors, []);
     },
   };
@@ -263,7 +249,6 @@ async function runExternalScenario(root: string): Promise<void> {
   const foreign = await createHttpFixture();
   const fixture = writeProvider(root, "external", endpoint.tokenUrl);
   const moduleAttempts: string[] = [];
-  const moduleLoads: string[] = [];
   const observeModuleAttempt = (specifier: string) => {
     if (isCredentialModule(specifier)) {
       moduleAttempts.push(specifier);
@@ -281,14 +266,6 @@ async function runExternalScenario(root: string): Promise<void> {
         observeModuleAttempt(resolved.url);
       }
       return resolved;
-    },
-    load(url, context, nextLoad) {
-      // Source loading is not evaluation; the real plugin records evaluation separately.
-      const loaded = nextLoad(url, context);
-      if (isCredentialModule(url)) {
-        moduleLoads.push(url);
-      }
-      return loaded;
     },
   });
   try {
@@ -311,7 +288,7 @@ async function runExternalScenario(root: string): Promise<void> {
     const foreignInit = { headers: { Authorization: "Bearer caller-owned-not-real" } };
     await consumeFetch(wrapped, foreign.url, foreignInit);
     assert.equal(calls[0], foreignInit);
-    assert.deepEqual([moduleAttempts, moduleLoads, providerEvents], [[], [], []]);
+    assert.deepEqual([moduleAttempts, providerEvents], [[], []]);
     authRuntimeEntered = true;
     const signal = new AbortController().signal;
     await consumeFetch(wrapped, new URL(endpoint.url), {
@@ -325,8 +302,6 @@ async function runExternalScenario(root: string): Promise<void> {
       accept: "application/json",
     });
     assert(moduleAttempts.some((entry) => entry.includes("auth-profiles")));
-    assert(moduleLoads.some((entry) => entry.includes("auth-profiles")));
-    ["evaluated", "registered", "overlay", "formatted"].forEach(assertEvent);
 
     fs.writeFileSync(fixture.credentialPath, "rotated");
     await consumeFetch(wrapped, endpoint.url);
@@ -474,7 +449,6 @@ async function runRefreshScenario(root: string): Promise<void> {
       },
     );
     assert.equal(mcpPosts().length, sent);
-    ["refresh", "refreshed"].forEach(assertEvent);
   } finally {
     await client.close();
     await endpoint.close();

@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createGatewayCrashLoopRecovery } from "../../cli/gateway-cli/crash-loop-recovery.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/io.js";
 import {
   patchSessionEntryCore,
   loadSessionEntry,
@@ -245,7 +249,7 @@ describe("startup recovery admission", () => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, () =>
           markGatewayStartupMainSessionOrphans(
             {
-              gatewayPluginConfigAtStart: {},
+              getConfig: getRuntimeConfig,
               isRestartRecoverySuppressed: () => suppression !== null,
               scheduler: lifetime,
               log: { warn: vi.fn() },
@@ -433,6 +437,8 @@ describe("startup recovery admission", () => {
         sessionKey: "agent:main:subagent:child",
         sessionId: "child-session",
         spawnDepth: 1,
+        mainRestartRecovery: undefined,
+        restartRecoveryDeliveryRunId: "registry-child-run",
       });
       const info = vi.spyOn(mainSessionRecoveryLog, "info");
       const executionWait = createDeferred();

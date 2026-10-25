@@ -5,7 +5,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import * as processExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import * as databaseContexts from "./update-command-database-context.js";
 import { inspectGitDryRunTargetSchemaVersions } from "./update-command-git.js";
+import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -94,14 +97,12 @@ it("recovers an incomplete remote advertisement without changing cached refs", a
       if (attempts === 1) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         failed.resolve();
-        return Promise.resolve({
-          stdout: "",
-          stderr: "fatal: transfer closed with 187 bytes remaining to read",
-          termination: "exit",
-          code: 128,
-          signal: null,
-          killed: false,
-        });
+        return Promise.resolve(
+          createCommandResult({
+            code: 128,
+            stderr: "fatal: transfer closed with 187 bytes remaining to read",
+          }),
+        );
       }
       vi.useRealTimers();
     }
@@ -133,3 +134,52 @@ it("explains when a dry-run cannot hydrate a promised target manifest", async ()
   expect(missingManifest.message).not.toContain("Check Git remote access");
   expect(git(checkout, "rev-parse", "origin/main")).toBe(targetBefore);
 });
+
+it.each(["incompatible", "compatible", "uncached"] as const)(
+  "reports the %s Git target Node requirement without updating the checkout",
+  async (scenario) => {
+    const { checkout, source } = createGitFixture(tempDirs.make("git-node-preview-"));
+    const engine = scenario === "compatible" ? ">=24.0.0" : ">=999.0.0";
+    fs.writeFileSync(
+      path.join(source, "package.json"),
+      JSON.stringify({ name: "openclaw", engines: { node: engine } }),
+    );
+    git(source, "add", "package.json");
+    git(source, "commit", "-m", "target engine");
+    git(source, "push", "origin", "main");
+    if (scenario !== "uncached") {
+      git(checkout, "fetch", "origin");
+    }
+    const refs = git(checkout, "show-ref");
+    const manifest = fs.readFileSync(path.join(checkout, "package.json"), "utf8");
+    vi.spyOn(databaseContexts, "inspectUpdateDatabaseContexts").mockResolvedValue({
+      service: undefined,
+      services: new Map(),
+      managedEnv: undefined,
+      contexts: [],
+    });
+    const preview = await preflightUpdateCommandSchemas({
+      root: checkout,
+      updateInstallKind: "git",
+      switchToGit: false,
+      shouldRestart: false,
+      updateStepTimeoutMs: 5000,
+      managedServiceRootRedirect: null,
+      channel: "dev",
+      opts: { dryRun: true, json: true },
+      refuseUpdate: async () => {
+        throw new Error("preview attempted mutation");
+      },
+    });
+    expect(preview?.preflightNotes.join("\n")).toContain(
+      scenario === "uncached" ? "Node compatibility was not checked" : engine,
+    );
+    if (scenario === "incompatible") {
+      expect(preview?.preflightFailures).toContainEqual(
+        expect.objectContaining({ reason: "preflight-node-runtime-incompatible" }),
+      );
+    }
+    expect(git(checkout, "show-ref")).toBe(refs);
+    expect(fs.readFileSync(path.join(checkout, "package.json"), "utf8")).toBe(manifest);
+  },
+);

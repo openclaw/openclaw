@@ -41,7 +41,7 @@ import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-
 import { resolveReplyAdmissionRunId } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 
 type FollowupDrainDisposition = { kind: "consumed" } | { kind: "retry"; error: unknown };
@@ -270,7 +270,7 @@ export function createFollowupRunner(
         isReplyOperationStalledBeforeOutput(turn.operation)
           ? // A watchdog stall is a failure, not a user cancel: source owners
             // surface its last-resort notice through their terminal error.
-            { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
+            { kind: "failed", error: resolveStalledTurnNoticeText(turn.operation) }
           : resolveFollowupCompletion(execution.execution.outcome);
       try {
         await execution.progress.drain();

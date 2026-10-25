@@ -47,7 +47,6 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { resolveFastModeSupport } from "./fast-mode-policy.js";
-import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
@@ -665,7 +664,15 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       return async (...args) => (await loadStream())(...args);
     },
   });
-  api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+  api.registerMediaUnderstandingProvider({
+    id: "anthropic",
+    capabilities: ["image"],
+    defaultModels: { image: "claude-opus-5-5" },
+    autoPriority: { image: 20 },
+    nativeDocumentInputs: ["pdf"],
+    describeImage: undefined,
+    describeImages: undefined,
+  });
   registerClaudeSessionDiscovery(api);
   for (const policy of createClaudeSessionNodeInvokePolicies()) {
     api.registerNodeInvokePolicy(policy);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -17,11 +18,13 @@ import {
   pickerValue as modelPickerValue,
   selectPickerValue as selectModelPicker,
 } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   catalogModel,
   emptyUsage,
   keyCapabilities,
   providerPageOptions,
+  configAuth,
 } from "./model-catalog-fixtures.test-support.ts";
 import {
   requestRaw,
@@ -30,7 +33,6 @@ import {
   createProviderProofCapture,
   expandProvider,
 } from "./model-providers.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -93,7 +95,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "openclaw.setup.detect",
       ],
       methodResponses: {
-        "config.get": configSnapshot(config, "credential-only-model-provider"),
+        "config.get": sourceConfigSnapshot(config, "credential-only-model-provider"),
         "models.list": {
           cases: [
             {
@@ -224,7 +226,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         catalogModel("openai", "gpt-4.1", "GPT-4.1"),
       ],
       methodResponses: {
-        "config.get": configSnapshot(config, "read-only-model-providers"),
+        "config.get": sourceConfigSnapshot(config, "read-only-model-providers"),
         "models.authStatus": { ts: NOW, providers: [] },
         ...emptyUsage(NOW),
       },
@@ -334,7 +336,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
       await expandProvider(page, "openrouter");
-      await openrouterCard.getByRole("button", { name: "Set API key", exact: true }).waitFor();
+      await openrouterCard
+        .getByRole("button", { name: "Set API key: OpenRouter", exact: true })
+        .waitFor();
       expect(
         await openrouterCard.locator(".model-providers__profile-copy strong").getAttribute("title"),
       ).toBe("openrouter:default");
@@ -447,7 +451,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ],
       models: [...configuredModels, catalogModel("google", "gemini-3-pro", "Gemini 3 Pro")],
       methodResponses: {
-        "config.get": configSnapshot(config, "model-providers-hash"),
+        "config.get": sourceConfigSnapshot(config, "model-providers-hash"),
         "models.list": {
           cases: [
             {
@@ -476,13 +480,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           ts: NOW,
           providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
           providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "static",
-              profiles: [],
-              apiKey: { source: "config" },
-            },
+            configAuth("openai", { displayName: "OpenAI", status: "static" }),
             {
               provider: "anthropic",
               displayName: "Anthropic",
@@ -528,8 +526,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await expandProvider(page, "openai");
-      await openaiCard.getByRole("button", { name: "Set API key" }).click();
-      await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      for (const action of ["Remove provider", "Add account", "Test connection", "Set API key"]) {
+        const control = page.getByRole("button", { name: `${action}: OpenAI`, exact: true });
+        expect(await control.count()).toBe(1);
+        expect((await control.textContent())?.trim()).toBe(action);
+      }
+      const anthropicCard = await expandProvider(page, "anthropic");
+      await anthropicCard
+        .getByRole("button", { name: "Set API key: Anthropic", exact: true })
+        .waitFor();
+      const setKey = openaiCard.getByRole("button", { name: "Set API key: OpenAI", exact: true });
+      await setKey.focus();
+      await page.keyboard.press("Enter");
+      await openaiCard.getByLabel("API key", { exact: true }).fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
       await gateway.deferNext("models.authSetApiKey");
       await openaiCard.getByRole("button", { name: "Save" }).click();
@@ -549,9 +558,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await resolveConfigMutation(gateway, keyedConfig, "model-providers-hash-key", "openai");
       await expect.poll(async () => openaiCard.textContent()).toContain("Secret saved.");
 
-      await openaiCard.getByRole("button", { name: "Test connection" }).click();
+      await gateway.deferNext("models.probe");
+      const testConnection = openaiCard.getByRole("button", {
+        name: "Test connection: OpenAI",
+        exact: true,
+      });
+      await testConnection.focus();
+      await page.keyboard.press("Enter");
       const probe = await gateway.waitForRequest("models.probe");
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
+      const testing = openaiCard.getByRole("button", { name: "Testing…: OpenAI", exact: true });
+      await expect.poll(() => testing.isDisabled()).toBe(true);
+      await gateway.resolveDeferred("models.probe");
+      await expect.poll(() => testConnection.isEnabled()).toBe(true);
       await expect
         .poll(() => openaiCard.locator(".model-providers__probe-target span").nth(1).textContent())
         .toBe("Connected · Request round-trip: 87 ms");
@@ -602,13 +621,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         ts: NOW,
         providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
         providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            status: "static",
-            profiles: [],
-            apiKey: { source: "config" },
-          },
+          configAuth("openai", { displayName: "OpenAI", status: "static" }),
           {
             provider: "anthropic",
             displayName: "Anthropic",
@@ -752,16 +765,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       defaultAgentId: "main",
       featureMethods: ["chat.metadata", "chat.startup", "config.patch"],
       methodResponses: {
-        "agents.list": {
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "config.get": configSnapshot(initialConfig, "model-providers-reconnect-1"),
+        "agents.list": createAgentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
+        "config.get": sourceConfigSnapshot(initialConfig, "model-providers-reconnect-1"),
         "models.list": {
           models: [
             catalogModel("openai", "initial-model", "Initial Model"),
@@ -834,7 +839,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       };
       await gateway.setMethodResponse(
         "config.get",
-        configSnapshot(reconnectedConfig, "model-providers-reconnect-2"),
+        sourceConfigSnapshot(reconnectedConfig, "model-providers-reconnect-2"),
       );
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],

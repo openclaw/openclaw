@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, server, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
+import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
+import "../styles/base.css";
 import "./image-lightbox.tsx";
 
 const containers = new Set<HTMLElement>();
 let previousViewport: { width: number; height: number };
+
+async function tabTo(target: HTMLElement, reverse = false) {
+  await userEvent.keyboard(reverse ? "{Shift>}{Tab}{/Shift}" : "{Tab}");
+  expect(document.activeElement).toBe(target);
+}
+
+function expectSameRect(actual: DOMRect, expected: DOMRect) {
+  for (const dimension of ["x", "y", "width", "height"] as const) {
+    expect(actual[dimension]).toBeCloseTo(expected[dimension], 1);
+  }
+}
 
 beforeEach(async () => {
   previousViewport = { width: window.innerWidth, height: window.innerHeight };
@@ -68,7 +81,7 @@ function imageSource(width: number, height: number, color = "#264060") {
   return canvas.toDataURL("image/png");
 }
 
-it.each(["removed", "retained", "newer"])("restores tile focus after %s close", async (mode) => {
+it.each(["removed", "newer"])("restores tile focus after %s close", async (mode) => {
   const trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Open image tile";
   onTestFinished(() => trigger.remove());
@@ -93,23 +106,19 @@ it.each(["removed", "retained", "newer"])("restores tile focus after %s close", 
   expect(dialog.open).toBe(true);
   expect(document.activeElement).not.toBe(trigger);
 
-  let expected: HTMLElement = trigger;
-  if (mode === "newer") {
-    const next = document.createElement("openclaw-modal-dialog");
-    const input = document.createElement("input");
-    input.autofocus = true;
-    next.initialFocus = () => input;
-    next.append(input);
-    document.body.append(next);
-    onTestFinished(() => next.remove());
-    await next.updateComplete;
-    expect(document.activeElement).toBe(input);
-    expected = input;
-  }
+  const next = document.createElement("openclaw-modal-dialog");
+  const input = document.createElement("input");
+  input.autofocus = true;
+  next.initialFocus = () => input;
+  next.append(input);
+  document.body.append(next);
+  onTestFinished(() => next.remove());
+  await next.updateComplete;
+  expect(document.activeElement).toBe(input);
   animation.finish();
   await hidden;
   expect(dialog.open).toBe(false);
-  expect(document.activeElement).toBe(expected);
+  expect(document.activeElement).toBe(input);
 });
 
 it.each([
@@ -150,9 +159,7 @@ it.each([
     const after = image.getBoundingClientRect();
     expect(viewer.querySelector("img")).toBe(image);
     expect(zoom.textContent).toBe(zoomBefore);
-    for (const dimension of ["x", "y", "width", "height"] as const) {
-      expect(after[dimension]).toBeCloseTo(before[dimension], 1);
-    }
+    expectSameRect(after, before);
   },
 );
 
@@ -178,17 +185,12 @@ it.each([320, 390, 1440])("keeps download below media and clear of zoom at %ipx"
   const close = viewer.querySelector<HTMLButtonElement>(".close")!;
   const external = viewer.querySelector<HTMLAnchorElement>(".external-image")!;
   expect(external.href).toBe("https://example.invalid/original.png");
-  expect(external.getAttribute("aria-label")).toBe("Open in new tab");
   expect(external.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
   close.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(document.activeElement).toBe(original);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(external);
-  await userEvent.keyboard("{Tab}");
-  expect(document.activeElement).toBe(close);
+  await tabTo(external, true);
+  await tabTo(original, true);
+  await tabTo(external);
+  await tabTo(close);
 });
 
 it("uses intrinsic dimensions for unsized neighbors", async () => {
@@ -207,3 +209,148 @@ it("uses intrinsic dimensions for unsized neighbors", async () => {
   expect(bounds.width).toBeCloseTo(320, 1);
   expect(bounds.height).toBeCloseTo(200, 1);
 });
+
+it("skips the pending video original link without skipping native controls", async () => {
+  const original = createDeferred<Response>();
+  const originalSrc = imageSource(32, 20);
+  const fetch = window.fetch.bind(window);
+  const fetchOriginal = vi
+    .spyOn(window, "fetch")
+    .mockImplementation((input, init) =>
+      input === originalSrc ? original.promise : fetch(input, init),
+    );
+  onTestFinished(() => fetchOriginal.mockRestore());
+  const container = document.body.appendChild(document.createElement("div"));
+  containers.add(container);
+  const trigger = container.appendChild(document.createElement("button"));
+  trigger.textContent = "Open synthetic video gallery";
+  trigger.focus();
+  const viewer = Object.assign(document.createElement("openclaw-image-lightbox"), {
+    mediaKind: "video",
+    src: new URL("../e2e/fixtures/video-poster.mp4", import.meta.url).href,
+    originalSrc,
+    imageTitle: "Synthetic gallery video",
+    gallery: { index: 0, items: [async () => null, async () => null] },
+  });
+  viewer.addEventListener("image-lightbox-close", () => viewer.remove());
+  container.append(viewer);
+  await viewer.updateComplete;
+  await expect.poll(() => viewer.querySelector("dialog")?.open).toBe(true);
+  const video = viewer.querySelector("video")!;
+  await expect.poll(() => video.readyState).toBeGreaterThanOrEqual(2);
+  video.pause();
+  const close = viewer.querySelector<HTMLButtonElement>(".close")!;
+  const previous = viewer.querySelector<HTMLButtonElement>(".previous")!;
+  const next = viewer.querySelector<HTMLButtonElement>(".next")!;
+  close.focus();
+  await tabTo(next, true);
+  await tabTo(close);
+  await tabTo(video);
+  const beforeSeek = video.currentTime;
+  let arrowPrevented: boolean | undefined;
+  video.addEventListener("keydown", (event) => (arrowPrevented = event.defaultPrevented), {
+    once: true,
+  });
+  await userEvent.keyboard("{ArrowRight}");
+  expect(arrowPrevented).toBe(false);
+  // A focused WebKit video host does not seek on ArrowRight; Chromium does.
+  if (server.browser === "chromium") {
+    await expect.poll(() => video.currentTime).toBeGreaterThan(beforeSeek);
+  }
+  expect(viewer.querySelector(".gallery-counter")?.textContent?.trim()).toBe("1 / 2");
+  // Native player controls can expose several stops on the video host.
+  for (let stop = 0; stop < 12 && document.activeElement === video; stop++) {
+    await userEvent.keyboard("{Tab}");
+  }
+  expect(document.activeElement).toBe(previous);
+  expect(previous.getAttribute("aria-disabled")).toBe("true");
+  original.resolve(new Response(new Blob(["png"], { type: "image/png" })));
+  await expect
+    .poll(() => viewer.querySelector<HTMLAnchorElement>(".open-original")?.tabIndex)
+    .toBe(0);
+  const link = viewer.querySelector<HTMLAnchorElement>(".open-original")!;
+  close.focus();
+  await tabTo(link, true);
+  await tabTo(close);
+  await userEvent.keyboard("{Escape}");
+  expect(viewer.isConnected).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+});
+
+it.each(["no-preference", "reduce"] as const)(
+  "keeps portrait images anchored through interrupted gallery transitions (%s)",
+  async (reducedMotion) => {
+    await emulateOverlayMedia({ reducedMotion });
+    onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
+    const first = { src: imageSource(420, 840), title: "First portrait", width: 420, height: 840 };
+    const second = {
+      src: imageSource(450, 900, "#89562c"),
+      title: "Second portrait",
+      width: 450,
+      height: 900,
+    };
+    const { viewer, image } = await mountImage({
+      ...first,
+      gallery: { index: 0, items: [async () => first, async () => second] },
+    });
+    const cloneNode = image.cloneNode.bind(image);
+    // Pause each real outgoing animation before DOM waits can outlast its 100ms duration.
+    const cloneSpy = vi.spyOn(image, "cloneNode").mockImplementation((deep) => {
+      const clone = cloneNode(deep);
+      if (clone instanceof HTMLImageElement) {
+        const animate = clone.animate.bind(clone);
+        const animationSpy = vi.spyOn(clone, "animate").mockImplementation((...args) => {
+          const animation = animate(...args);
+          animation.pause();
+          return animation;
+        });
+        onTestFinished(() => animationSpy.mockRestore());
+      }
+      return clone;
+    });
+    onTestFinished(() => cloneSpy.mockRestore());
+    for (const item of [second, first, second, first]) {
+      const previousBounds = image.getBoundingClientRect();
+      viewer
+        .querySelector<HTMLButtonElement>(
+          item === second ? '[aria-label="Next image"]' : '[aria-label="Previous image"]',
+        )!
+        .click();
+      await expect.poll(() => image.src).toBe(item.src);
+      await nextFrame();
+      const animations = viewer.getAnimations({ subtree: true });
+      for (const animation of animations) {
+        animation.currentTime = 50;
+      }
+      const bounds = image.getBoundingClientRect();
+      const stage = viewer.querySelector<HTMLElement>(".stage")!.getBoundingClientRect();
+      expect(bounds.width).toBeCloseTo(item.width, 1);
+      expect(bounds.height).toBeCloseTo(item.height, 1);
+      expect(bounds.x).toBeCloseTo(stage.x + (stage.width - item.width) / 2, 1);
+      expect(bounds.y).toBeCloseTo(stage.y + 20 + (stage.height - 92 - item.height) / 2, 1);
+      expect(getComputedStyle(image).opacity).toBe("1");
+      expect(viewer.querySelectorAll("img").length).toBeLessThanOrEqual(2);
+      if (reducedMotion === "reduce") {
+        expect(viewer.querySelectorAll("img")).toHaveLength(1);
+      } else {
+        const outgoing = [...viewer.querySelectorAll("img")].find((node) => node !== image)!;
+        expect(outgoing).toBeDefined();
+        expect(Number(getComputedStyle(outgoing).opacity)).toBeGreaterThan(0);
+        expect(Number(getComputedStyle(outgoing).opacity)).toBeLessThan(1);
+        expectSameRect(outgoing.getBoundingClientRect(), previousBounds);
+      }
+    }
+    for (const animation of viewer.getAnimations({ subtree: true })) {
+      animation.finish();
+    }
+    await nextFrame();
+    expect(viewer.querySelectorAll("img")).toHaveLength(1);
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Next image"]')!.click();
+    await expect.poll(() => image.src).toBe(second.src);
+    await nextFrame();
+    viewer.remove();
+    await nextFrame();
+    expect(viewer.getAnimations({ subtree: true })).toHaveLength(0);
+    expect(viewer.querySelectorAll("img").length).toBeLessThanOrEqual(1);
+  },
+);

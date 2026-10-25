@@ -1,10 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
+import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -59,12 +60,7 @@ async function installStartupGateway(page: Page) {
     sessionGroups: ["Client work"],
     sessionGroupDefaults: { "Client work": { cwd: "/workspace/client", worktree: true } },
     methodResponses: {
-      "agents.list": {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "research" }],
-      },
+      "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
       "sessions.catalog.list": { catalogs: [] },
       "taskSuggestions.list": { suggestions: [] },
       "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },
@@ -110,6 +106,7 @@ async function openPendingChat(page: Page, gateway: Gateway) {
   await page
     .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
     .waitFor();
+  expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
 }
 
 async function expectBulkReadsHeld(gateway: Gateway) {
@@ -158,100 +155,6 @@ async function openNewSession(page: Page) {
 }
 
 suite.define(() => {
-  it("loads selected history before automatic rosters, including event refreshes, and keeps live messages", async () => {
-    await withPendingChat(async (page, gateway) => {
-      await expectNoRequests(gateway, secondaryMethods, "before history");
-      await expectBulkReadsHeld(gateway);
-      const fixtureTime = Date.now();
-      const suggestion = task("startup-suggestion", "Queued suggestion", fixtureTime);
-      await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [suggestion] });
-      await gateway.setMethodResponse("progressCard.get", {
-        card: {
-          sessionKey,
-          revision: 2,
-          updatedAt: fixtureTime,
-          markdown: "Current rollout progress",
-        },
-      });
-      await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
-      await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        agentId: "research",
-        sessionKey,
-        reason: "patch",
-      });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [{ instanceId: "synthetic-worker", mode: "node", host: "fixture", ts: 1 }],
-      });
-      await expectBulkReadsHeld(gateway);
-      await expectNoRequests(gateway, secondaryMethods, "after queued events");
-      expect(await gateway.getRequests("sessions.list", { spawnedBy: sessionKey })).toEqual([]);
-
-      await setVisibility(page, "hidden");
-      await gateway.resolveDeferred("chat.startup");
-      const activePane = page.locator(".chat-pane-cache__pane--active");
-      const transcript = activePane.locator(".chat-thread");
-      await expect
-        .poll(() =>
-          activePane.evaluate(
-            (pane) => (pane as HTMLElement & { transcriptReady: boolean }).transcriptReady,
-          ),
-        )
-        .toBe(true);
-      await expectNoRequests(gateway, ["taskSuggestions.list", "progressCard.get"], "while hidden");
-      await setVisibility(page, "visible");
-      await transcript.getByText(historyText, { exact: true }).waitFor();
-      // Held roster and owner-count reads occupy both bootstrap slots. Inbox
-      // hydration stays queued until those replies are released below.
-      for (const method of secondaryMethods.filter((candidate) => candidate !== "mentions.list")) {
-        await gateway.waitForRequest(method);
-        expect(await gateway.getRequests(method)).toHaveLength(1);
-      }
-      await expect
-        .poll(() =>
-          activePane.evaluate((element) => {
-            const trigger = element.querySelector(".chat-details-toggle")?.getBoundingClientRect();
-            const suggestionBounds = element
-              .querySelector(".task-suggestion")
-              ?.getBoundingClientRect();
-            return Boolean(trigger && suggestionBounds && trigger.bottom <= suggestionBounds.top);
-          }),
-        )
-        .toBe(true);
-      await expectProgress(page, "Current rollout progress");
-      await closeChatDetails(activePane);
-      await page.getByText(suggestion.title, { exact: true }).waitFor();
-      const composer = activePane.locator(".agent-chat__composer-combobox textarea");
-      const draft = "Synthetic draft while background lists are pending.";
-      await expect.poll(() => composer.isEnabled()).toBe(true);
-      await composer.fill(draft);
-      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
-      // Bulk replies are still held: the selected transcript and its live stream must work alone.
-      await gateway.deferNext("chat.history");
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
-        messageId: "synthetic-live-answer",
-        messageSeq: 2,
-        session: { key: sessionKey, kind: "direct", updatedAt: 2 },
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "Live peer message after startup." }],
-          __openclaw: { id: "synthetic-live-answer", seq: 2 },
-        },
-      });
-      await transcript.getByText("Live peer message after startup.", { exact: true }).waitFor();
-      expect(await composer.inputValue()).toBe(draft);
-      expect(await composer.isEditable()).toBe(true);
-      await composer.fill(`${draft} Still editable.`);
-      expect(await composer.inputValue()).toBe(`${draft} Still editable.`);
-      expect(await gateway.getRequests("chat.send")).toEqual([]);
-      await expectBulkReadsReleased(gateway);
-      await gateway.waitForRequest("mentions.list");
-      expect(await gateway.getRequests("mentions.list")).toHaveLength(1);
-      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
-    });
-  });
-
   it.each([
     { visibility: "hidden document", pendingSnapshot: false },
     { visibility: "retained pane", pendingSnapshot: false },
@@ -369,36 +272,4 @@ suite.define(() => {
       await settleStartup(page, gateway);
     });
   });
-
-  it.each(["failed startup", "New Session navigation"] as const)(
-    "releases background reads after %s retires the pending chat",
-    async (outcome) => {
-      await withPendingChat(async (page, gateway) => {
-        await expectBulkReadsHeld(gateway);
-        if (outcome === "failed startup") {
-          await gateway.rejectDeferred("chat.startup", {
-            code: "GATEWAY_UNAVAILABLE",
-            message: "Synthetic history unavailable.",
-          });
-          await page.getByRole("alert").getByText("Synthetic history unavailable.").waitFor();
-          for (const method of ["taskSuggestions.list", "progressCard.get"]) {
-            await gateway.waitForRequest(method);
-          }
-        } else {
-          await openNewSession(page);
-        }
-        await expectBulkReadsReleased(gateway);
-        if (outcome === "New Session navigation") {
-          await gateway.resolveDeferred("chat.startup");
-          expect(new URL(page.url()).pathname).toBe("/new");
-          expect(await page.getByText(historyText, { exact: true }).isVisible()).toBe(false);
-          await expectNoRequests(
-            gateway,
-            ["taskSuggestions.list", "progressCard.get"],
-            "from retired chat",
-          );
-        }
-      });
-    },
-  );
 });

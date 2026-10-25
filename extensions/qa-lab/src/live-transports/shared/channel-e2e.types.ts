@@ -23,7 +23,6 @@ export type QaChannelE2eDoctorResult = {
 /** Native fixture operations; Gateway/model assertions remain separate evidence. */
 export type QaChannelE2eDriver = {
   doctor(): Promise<QaChannelE2eDoctorResult>;
-  readonly signal?: AbortSignal;
   assertActive(): void;
   send(input: {
     text: string;

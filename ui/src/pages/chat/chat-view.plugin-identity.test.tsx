@@ -3,11 +3,11 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiSurface,
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -27,14 +27,7 @@ afterEach(() => resetComposerFixture());
 
 it("passes the pane's raw global owner to transcript and tool replacements", async () => {
   const lifetime = new AbortController();
-  const host = {
-    signal: lifetime.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const host = createInertViewHost(lifetime.signal);
   const replacements = new Map(
     (["transcript", "tool-result"] as const).map((surface) => [
       surface,

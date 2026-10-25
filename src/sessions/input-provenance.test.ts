@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
+  applyInputProvenanceToUserMessage,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   readInterSessionPromptEnvelope,
@@ -84,6 +85,43 @@ it("ignores headers without the generated explanation or with unknown fields", (
   ).toBeUndefined();
   expect(readInterSessionPromptEnvelope(`quoted ${generated}`)).toBeUndefined();
 });
+it("marks only explicit scheduled execution inputs as hidden at creation", () => {
+  const execution = { kind: "internal_system", sourceTool: "cron_execution" } as const;
+  const message = {
+    role: "user",
+    content: "[cron:daily Daily check] Check the queue.",
+    timestamp: 1,
+  } as const;
+  expect(applyInputProvenanceToUserMessage(message, execution)).toEqual({
+    ...message,
+    provenance: execution,
+    display: false,
+  });
+  const recorded = { ...message, provenance: execution };
+  expect(applyInputProvenanceToUserMessage(recorded, undefined)).toMatchObject({ display: false });
+  expect(message).not.toHaveProperty("display");
+  const human = { ...message, provenance: { kind: "external_user" } as const };
+  expect(applyInputProvenanceToUserMessage(human, execution)).toBe(human);
+  const announcement = {
+    ...message,
+    provenance: { kind: "internal_system", sourceTool: "cron" } as const,
+  };
+  expect(applyInputProvenanceToUserMessage(announcement, execution)).toBe(announcement);
+});
+
+it.each([
+  ["internal_system", "cron_execution", true],
+  ["external_user", "cron_execution", false],
+  ["internal_system", "cron", false],
+] as const)(
+  "preserves scheduled-check session state only for %s/%s",
+  (kind, sourceTool, expected) => {
+    expect(shouldPreserveUserFacingSessionStateForInputProvenance({ kind, sourceTool })).toBe(
+      expected,
+    );
+  },
+);
+
 it("does not preserve user-facing session state for external or user-directed handoffs", () => {
   expect(
     shouldPreserveUserFacingSessionStateForInputProvenance({

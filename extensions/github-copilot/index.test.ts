@@ -149,10 +149,7 @@ async function withDeviceTimers<T>(
 ): Promise<T> {
   vi.useFakeTimers();
   try {
-    let shown!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      shown = resolve;
-    });
+    const { promise: ready, resolve: shown } = Promise.withResolvers<void>();
     const pending = Promise.resolve(run(async () => shown()));
     expect(await Promise.race([ready.then(() => true), pending.then(() => false)])).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);

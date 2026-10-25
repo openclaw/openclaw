@@ -1,49 +1,24 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness as captureWitness,
   migrationFixture,
   row,
   rows,
-  seedVersion,
+  seedAgentV30Schema,
 } from "./schema-migration.test-support.js";
 
 const predecessor = 30;
-const target = 31;
+const target = OPENCLAW_AGENT_SCHEMA_VERSION;
 const scope = ["memory_index_chunks", "memory_index_sources", "schema_meta"];
 
 const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });
-// Frozen schema plus the previously published bundle DDL, independent of the new migration.
-const schemaV27 = fs.readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-  "utf8",
-);
 
 function seed(database: DatabaseSync): void {
-  database.exec(schemaV27);
-  seedVersion(database, predecessor);
+  seedAgentV30Schema(database, predecessor);
   database.exec(`
-    DROP INDEX idx_agent_transcript_event_parent;
-    DROP INDEX idx_agent_session_windows_conversation;
-    CREATE INDEX idx_agent_session_windows_conversation
-      ON session_windows(primary_conversation_id) WHERE primary_conversation_id IS NOT NULL;
-    DROP TABLE memory_entry_origins;
-    ${extractSqliteTableSchema(schemaV27, "memory_entry_origins").replace(
-      ") STRICT;",
-      ") STRICT, WITHOUT ROWID;",
-    )}
-    DROP INDEX idx_agent_session_nodes_last_interaction_at;
-    DROP INDEX idx_agent_session_reactions_message;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_utf8_bytes INTEGER;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_payload BLOB;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_codec TEXT;
-    DROP INDEX idx_agent_trajectory_runtime_run;
-    CREATE INDEX idx_agent_trajectory_runtime_run
-      ON trajectory_runtime_events(session_id, run_id, created_at,
-        COALESCE(event_utf8_bytes, octet_length(event_json)));
     PRAGMA foreign_keys = ON;
     INSERT INTO memory_index_sources (path, source, hash, mtime, size)
       VALUES ('memory/retained.md', 'memory', 'source-hash', 1, 42);

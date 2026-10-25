@@ -534,6 +534,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },

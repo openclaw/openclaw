@@ -10,6 +10,7 @@ import {
   runBuiltRuntime,
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireFileLockSync } from "../infra/file-lock-manager.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -134,11 +135,11 @@ if (threads.isMainThread) record("ready");
 }
 
 function snapshotState(stateDir: string) {
-  return fs
-    .readdirSync(stateDir, { recursive: true })
-    .toSorted((left, right) => String(left).localeCompare(String(right)))
+  return listDirectoryTreeStrictSync(stateDir)
+    .map((walkEntry) => walkEntry.relativePath)
+    .toSorted((left, right) => left.localeCompare(right))
     .map((relative) => {
-      const pathname = path.join(stateDir, String(relative));
+      const pathname = path.join(stateDir, relative);
       const stat = fs.statSync(pathname);
       return [
         relative,

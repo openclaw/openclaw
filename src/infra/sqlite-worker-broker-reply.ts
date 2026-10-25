@@ -12,6 +12,7 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -19,6 +20,7 @@ import {
 } from "./gateway-state-owner.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
+import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
@@ -180,13 +182,7 @@ export async function dispatchSqliteWorkerJob(
               const lease = job.maintenanceScope ? job.maintenanceScope.run(acquire) : acquire();
               schemaLease = lease;
               job.maintenanceScope?.own(lease, "shared-resources", () => lease.release());
-              return {
-                assertCurrent() {
-                  assertAccess();
-                  lease.assertCurrent();
-                },
-                release: () => lease.release(),
-              };
+              return lease;
             },
           });
         }
@@ -220,6 +216,11 @@ export async function dispatchSqliteWorkerJob(
     job.request.requestCustody = job.custody.descriptor;
     const request = prepareSqliteWorkerRequest(job);
     assertDispatchable();
+    const selection = request.stateContext?.databaseEngineSelection;
+    if (!slot.postgresPoolSent && selection) {
+      // A carrier can be created before boot selects its database engines.
+      request.postgresPool = withDatabaseEngineSelection(selection, createPostgresPoolEndpoints);
+    }
     job.custody.accept();
     job.detach();
     if (actor && request.type !== "close") {
@@ -232,10 +233,14 @@ export async function dispatchSqliteWorkerJob(
     }
     // Serialized commands are owned by this dispatch; custody keeps their byte charge until settlement.
     slot.worker.postMessage(request, [
+      ...postgresPoolTransferList(request.postgresPool),
       ...(request.operationAdmission ? [request.operationAdmission] : []),
       ...("input" in request ? [request.input.buffer] : []),
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
     ]);
+    if (request.postgresPool) {
+      slot.postgresPoolSent = true;
+    }
     if (actor && deliveredStateContext) {
       actor.deliveredStateContext = deliveredStateContext;
     }
@@ -371,7 +376,7 @@ function decodeSqliteWorkerReplyError(
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
   });
-  if (error.code !== "outcome-unknown" && error.sharedState) {
+  if (error.sharedState) {
     retainOpenClawStateWorkerErrorPayload(failure, error.sharedState);
     return hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true });
   }

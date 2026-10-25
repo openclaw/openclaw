@@ -195,7 +195,7 @@ it("binds a resolver-backed constructed tool surface exactly once", async () => 
   expect(factory).toHaveBeenCalledOnce();
   expect(bindToolSurface).toHaveBeenCalledExactlyOnceWith(
     expect.arrayContaining([expect.objectContaining({ name: "read" })]),
-    { cwd: effectiveCwd },
+    { cwd: effectiveCwd, nativeLocalExecution: true },
   );
   expect(tools).toEqual([]);
 });

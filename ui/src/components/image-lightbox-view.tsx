@@ -9,10 +9,13 @@ import {
   createUniqueId,
   omit,
 } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type FocusableRef = () => (element: HTMLElement) => void;
 

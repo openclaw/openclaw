@@ -145,6 +145,7 @@ describe("plugin-state-store.authority", () => {
         openPluginPanel: unexpectedRuntimeCall,
         readSessionFacts: unexpectedRuntimeCall,
         withSessionFacts: unexpectedRuntimeCall,
+        appendAgentMessage: unexpectedRuntimeCall,
         subscribeSessionChanges: unexpectedRuntimeCall,
         request: unexpectedRuntimeCall,
       };

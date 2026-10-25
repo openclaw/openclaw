@@ -12,6 +12,7 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import {
   HOST_KEY,
   HOST_MODEL,
@@ -297,6 +298,8 @@ type SummaryScenario = {
   prepared?: boolean;
   priorCount?: number;
   hidden?: boolean;
+  promptSuppressed?: boolean;
+  continuation?: boolean;
   live?: boolean;
 };
 
@@ -631,18 +634,25 @@ it.skipIf(process.platform === "win32")(
   }),
 );
 
-it
-  .skipIf(process.platform === "win32")
-  .for<SummaryScenario>([
-    { label: "ordinary prepared API key" },
-    { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
-    { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
-    { label: "long conversation", priorCount: 201 },
-    { label: "hidden background notification", hidden: true },
-    ...(LIVE
-      ? [{ label: "hidden background notification with live provider", hidden: true, live: true }]
-      : []),
-  ])(
+it.skipIf(process.platform === "win32").for<SummaryScenario>([
+  { label: "ordinary prepared API key" },
+  { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
+  { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+  { label: "long conversation", priorCount: 201 },
+  { label: "hidden background notification", hidden: true },
+  { label: "prompt-less stranded-reply retry", promptSuppressed: true },
+  { label: "same-run continuation after a transient provider overload", continuation: true },
+  ...(LIVE
+    ? [
+        { label: "hidden background notification with live provider", hidden: true, live: true },
+        {
+          label: "prompt-less stranded-reply retry with live provider",
+          promptSuppressed: true,
+          live: true,
+        },
+      ]
+    : []),
+])(
   "persists a host-authorized summary with the actual native selection ($label)",
   { timeout: LIVE ? 360_000 : 60_000 },
   (scenario) =>
@@ -663,6 +673,8 @@ async function runSummary(
     priorCount = 0,
     live = false,
     hidden = false,
+    promptSuppressed = false,
+    continuation = false,
   }: SummaryScenario,
 ) {
   const pluginConfig = {
@@ -712,36 +724,62 @@ async function runSummary(
   for (let index = 0; index < priorCount; index += 1) {
     await appendSessionTranscriptMessageByIdentity({
       ...transcriptTarget(params),
-      message: {
-        role: "user",
-        content: `Earlier synthetic request ${index}.`,
-        timestamp: index + 1,
-      },
+      message: makeUserMessage(`Earlier synthetic request ${index}.`, index + 1),
     });
   }
   fixture.setPhase("action");
   params.runId = "run-settled-action";
-  if (hidden) {
+  if (hidden || promptSuppressed || continuation) {
     params.prompt =
       "Background task completed. Use exec_command exactly once to run " +
       "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
       "then report the command output. Do not run any other command.";
+  }
+  if (promptSuppressed) {
+    // A stranded-reply retry suppresses its system prompt and carries no transcript recorder
+    // (src/auto-reply/reply/stranded-reply-recovery.ts), so the turn mirrors no prompt row.
+    params.suppressNextUserMessagePersistence = true;
+  }
+  if (hidden || continuation) {
     const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
     params.userTurnTranscriptRecorder = createRecorder({
       input: {
         text: params.prompt,
-        display: false,
-        provenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceTool: "agent_harness_task",
-        },
-        idempotencyKey: "announce:completed-action:user",
+        ...(hidden
+          ? {
+              display: false,
+              provenance: {
+                kind: "inter_session" as const,
+                sourceChannel: "internal",
+                sourceTool: "agent_harness_task",
+              },
+            }
+          : {}),
+        idempotencyKey: hidden ? "announce:completed-action:user" : `${params.runId}:user`,
       },
       target: { ...transcriptTarget(params), sessionEntry: undefined },
       beforeMessageWrite: ({ message }) => message,
     });
     await params.userTurnTranscriptRecorder.persistApproved();
+  }
+  if (continuation) {
+    // Same-run retries keep the recorder while suppressing the new native turn's prompt.
+    fixture.setPhase("overload");
+    const closeFirstHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    cleanups.push(async () => closeFirstHost());
+    const overloaded = await run();
+    closeFirstHost();
+    expect(overloaded.terminal).toMatchObject({
+      kind: "failed",
+      error: { status: 503, code: "OVERLOADED" },
+    });
+    expect(overloaded.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(fixture.requests).toHaveLength(1);
+    expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
+      __openclaw: { mirrorIdentity: expect.stringMatching(/:prompt$/) },
+    });
+    fixture.setPhase("action");
+    params.suppressNextUserMessagePersistence = true;
   }
   const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
   cleanups.push(async () => closeHost());
@@ -751,7 +789,7 @@ async function runSummary(
   if (!(context instanceof settledContext.CodexSettledTurnContext)) {
     throw new Error("Native turn lost its settled-tool evidence");
   }
-  if (hidden) {
+  if (hidden || continuation) {
     expect(context.data).toEqual(
       containsObject(
         {
@@ -763,9 +801,15 @@ async function runSummary(
       ),
     );
     expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
-      display: false,
+      ...(hidden ? { display: false } : {}),
       __openclaw: { mirrorIdentity: expect.any(String) },
     });
+  }
+  if (promptSuppressed) {
+    expect(context.data).toEqual(
+      containsObject({ type: "function_call" }, { type: "function_call_output" }),
+    );
+    expect(JSON.stringify(context.data)).not.toContain("Background task completed.");
   }
   expect(() => params.hostCapabilities.assertActive()).not.toThrow();
   closeHost();

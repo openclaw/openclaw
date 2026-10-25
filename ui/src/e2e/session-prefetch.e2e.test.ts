@@ -1,5 +1,12 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
@@ -11,15 +18,22 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it("opens prefetched history immediately after an unrelated roster refresh", async () => {
+  it("opens the full prefetched history window without a refill jump after a roster refresh", async () => {
     const reportKey = "agent:main:weekly-report";
     const workKey = "agent:main:workspace";
     const report = createControlUiSessionRow(reportKey, "Weekly report", 1);
     const workspace = createControlUiSessionRow(workKey, "Workspace", 2);
-    const reportText = "The weekly report is ready to review.";
+    const reportMessages = Array.from({ length: 80 }, (_, index) =>
+      chatMessage(
+        index % 2 === 0 ? "user" : "assistant",
+        `Report item ${index + 1}\n\n${"Synthetic weekly report detail. ".repeat(65)}`,
+        { __openclaw: { id: `report-${index + 1}`, seq: index + 1 } },
+      ),
+    );
     const reportHistory = {
       completeSnapshot: true,
-      messages: [{ role: "assistant", content: reportText }],
+      hasMore: false,
+      messages: reportMessages,
       sessionId: report.sessionId,
     };
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -60,15 +74,57 @@ suite.define(() => {
           page.locator(`openclaw-app-sidebar [data-session-key="${workKey}"]`).textContent(),
         )
         .toContain("Workspace updated");
-      await gateway.resolveDeferred("chat.history", reportHistory);
+      // Model a server honoring both limits. Either a smaller count or a smaller
+      // byte budget must reproduce a partial warm snapshot, not an always-full mock.
+      const warmRequest = (await requests("chat.history", reportTarget))[0]!;
+      const { limit, maxBytes } = warmRequest.params as { limit: number; maxBytes: number };
+      const warmMessages: typeof reportMessages = [];
+      for (const message of reportMessages.toReversed().slice(0, limit)) {
+        if (Buffer.byteLength(JSON.stringify([message, ...warmMessages])) > maxBytes) {
+          break;
+        }
+        warmMessages.unshift(message);
+      }
+      await gateway.resolveDeferred("chat.history", {
+        ...reportHistory,
+        messages: warmMessages,
+        hasMore: warmMessages.length < reportMessages.length,
+        nextOffset: warmMessages.length,
+      });
       const emptyReport = { messages: [], sessionId: report.sessionId };
       await gateway.setMethodResponse("chat.history", emptyReport);
       await gateway.setMethodResponse("chat.startup", emptyReport);
       await gateway.deferNext("chat.history", reportTarget);
       await gateway.deferNext("chat.startup", reportTarget);
       await reportLink.click();
-      await page.locator(".chat-thread-inner").getByText(reportText).waitFor();
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = pane.locator(".chat-thread");
+      await pane.getByText(/^Report item 80\b/).waitFor();
+      await expectTranscriptLayoutCommitted(thread);
+      await thread.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const directory = createControlUiE2eArtifactDir("session-prefetch-window");
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          thread,
+          [thread.locator(".chat-text").first()],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(directory, "opened-history.png"), frame.png);
+      }
+      const first = pane.getByText(/^Report item 1\b/).first();
+      await first.waitFor();
+      const anchorBefore = await first.boundingBox();
       expect((await requests("chat.startup", reportTarget)).length).toBeGreaterThan(0);
+      await gateway.resolveDeferred("chat.startup", reportHistory);
+      await expect
+        .poll(() => pane.evaluate((element: ChatPaneElement) => element.transcriptLoading))
+        .toBe(false);
+      await expectTranscriptLayoutCommitted(thread);
+      await expect.poll(async () => (await first.boundingBox())?.y).toBe(anchorBefore?.y);
+      expect(await requests("chat.history", { ...reportTarget, offset: 20 })).toHaveLength(0);
     });
   });
 });

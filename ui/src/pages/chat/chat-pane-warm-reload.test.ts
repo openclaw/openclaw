@@ -6,6 +6,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -156,16 +157,21 @@ describe("chat pane warm reload", () => {
         expect(() => getPaneTestRuntime(pane).start()).toThrow(attached);
         await loadChatHistory(pane.state, { startup: true });
         await read.mock.results[0]?.value;
+        await chatHistoryRequests(pane.state).initialSnapshotHydration?.promise;
         expect(pane.state.chatMessages).toEqual(priorProjection ? [] : messages);
         expect(pane.state.connected).toBe(false);
         expect(request).not.toHaveBeenCalled();
         view = mountChatThread(
-          threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+          {
+            ...threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages),
+            mediaReadAllowed: false,
+          },
           transcript,
         );
         const { container } = view;
         transcript.start();
         transcript.update();
+        expect(container.querySelector(".chat-thread")?.hasAttribute("inert")).toBe(false);
         if (!empty && !priorProjection) {
           expect(container.textContent).toContain("The browser remembers this conversation.");
         }

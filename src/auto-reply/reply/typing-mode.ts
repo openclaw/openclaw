@@ -4,16 +4,6 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
-/** Inputs that decide when a channel typing indicator should be shown. */
-type TypingModeContext = {
-  configured?: TypingMode;
-  isGroupChat: boolean;
-  wasMentioned: boolean;
-  typingPolicy?: TypingPolicy;
-  suppressTyping?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-};
-
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
   configured,
@@ -22,7 +12,14 @@ export function resolveTypingMode({
   typingPolicy,
   suppressTyping,
   sourceReplyDeliveryMode,
-}: TypingModeContext): TypingMode {
+}: {
+  configured?: TypingMode;
+  isGroupChat: boolean;
+  wasMentioned: boolean;
+  typingPolicy?: TypingPolicy;
+  suppressTyping?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): TypingMode {
   if (typingPolicy === "system_event" || typingPolicy === "internal_webchat" || suppressTyping) {
     return "never";
   }

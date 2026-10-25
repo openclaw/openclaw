@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -21,14 +22,9 @@ const configWithPrimary = (primary: string): OpenClawConfig => ({
       vllm: {
         baseUrl: "http://127.0.0.1:1/v1",
         api: "openai-completions",
-        models: ["model-a", "model-b"].map((id) => ({
-          id,
-          name: id,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          maxTokens: 1024,
-        })),
+        models: ["model-a", "model-b"].map((id) =>
+          modelDefinition(id, { reasoning: false, maxTokens: 1024 }),
+        ),
       },
     },
   },

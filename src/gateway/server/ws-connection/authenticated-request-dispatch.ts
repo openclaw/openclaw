@@ -173,6 +173,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       return false;
     };
+    const reconnectDevice =
+      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
+        ? client.internal.operatorDeviceTokenIdentity
+        : undefined;
+    const reconnectProfile = client.authenticatedUserProfile?.profileId;
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
@@ -222,6 +227,25 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
               authorityOwner: remoteIngress,
+              ...(reconnectDevice && reconnectProfile
+                ? {
+                    reconnect: {
+                      device: reconnectDevice,
+                      profileId: reconnectProfile,
+                      role: client.connect.role,
+                      scopes: JSON.stringify([...new Set(client.connect.scopes ?? [])].toSorted()),
+                      clientId: client.connect.client.id,
+                      clientMode: client.connect.client.mode,
+                      pairedClientId: client.pairedClientId,
+                      transportPolicyGeneration: client.authPolicy?.generation,
+                      verifiedIdentity: client.authPolicy?.verifiedIdentity,
+                      origin: client.browserOrigin?.origin,
+                      requestHost: client.browserOrigin?.requestHost,
+                      isLocalClient: client.browserOrigin?.isLocalClient,
+                      accessOwner: client.internal?.operatorAccessAuthority,
+                    },
+                  }
+                : {}),
             },
             isCurrent: () =>
               hasCurrentIngress() &&

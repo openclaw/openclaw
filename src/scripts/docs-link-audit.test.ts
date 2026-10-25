@@ -8,6 +8,7 @@ import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-ma
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { preparedScriptWrapperEnv } from "../../test/scripts/prepared-script-wrapper.test-support.js";
+import { writeFixtureFiles as writeFiles } from "../../test/scripts/z0632-fixtures.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
 const { auditDocsLinks, prepareExternalLinkAuditTree, prepareMirroredDocsDir } =
@@ -54,14 +55,6 @@ function runAuditCli(root: string, { anchors = false, clawHubRoot, fixtureSync }
       ),
     },
   );
-}
-
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(root, name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, contents);
-  }
 }
 
 type AuditCliCase = {

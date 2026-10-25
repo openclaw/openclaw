@@ -1,4 +1,4 @@
-import { Errored, For, latest, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -6,18 +6,21 @@ import type {
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
-import { ChecksRows } from "./chat-pull-request-shared.tsx";
+import { ChecksRows, PullRequestCopyError } from "./chat-pull-request-shared.tsx";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import "./chat-pull-request-presenters.css";
-import "./chat-ci-details.ts";
-import "./chat-ci-automation-control.ts";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 registerGitHubEnglish();
+registerChatDetailsEnglish();
 
 /** Recovery facts belong to the snapshot owner, including a successful empty result. */
 export type ChatPullRequestMobileRecoveryProps = {
@@ -124,12 +127,24 @@ export type ChatPullRequestMobileCollectionProps = ChatPullRequestMobileRecovery
 
 export function ChatPullRequestMobileCollection(props: ChatPullRequestMobileCollectionProps) {
   return (
-    <div class="chat-pr-mobile">
+    <div
+      class={[
+        "chat-pr-mobile",
+        { "chat-pr-mobile--empty": props.hasSnapshot && props.pullRequests.length === 0 },
+      ]}
+    >
       <ChatPullRequestMobileRecovery {...props} collection />
       <Show when={props.hasSnapshot}>
         <Show
           when={props.pullRequests.length}
-          fallback={<p class="chat-pr-mobile__empty">{t("chat.pullRequests.empty")}</p>}
+          fallback={
+            <PanelEmptyState
+              presentation="mobile"
+              icon={<Icon name="gitPullRequest" />}
+              heading={t("chat.sessionDetails.pullRequests")}
+              description={t("chat.pullRequests.empty")}
+            />
+          }
         >
           <div class="chat-pr-mobile__group">
             <For each={props.pullRequests} keyed={chatPullRequestId}>
@@ -273,17 +288,7 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={!clipboard.copying()}>
-                <Errored
-                  fallback={
-                    <p class="chat-pr-menu__error" role="alert">
-                      {t("chat.pullRequests.copyFailed")}
-                    </p>
-                  }
-                >
-                  {latest(clipboard.outcome)}
-                </Errored>
-              </Show>
+              <PullRequestCopyError clipboard={clipboard} />
               <button
                 type="button"
                 class="chat-pr-mobile__hide"

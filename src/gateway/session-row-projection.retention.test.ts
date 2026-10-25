@@ -85,19 +85,24 @@ it("collects superseded resident rows and their materializations after metadata 
       await expectCollected([control, ...retired, ...selections, ...snapshots]);
       expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
-      const rematerialized = projection
+      const materializations = projection
         .selectEntries()
         .filter(ready)
         .map((row) => weak(row.materialized));
-      // Catalog refresh replaces materializations while keeping their resident rows alive.
+      // An unchanged catalog refresh preserves the current materializations until disposal.
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      await expectCollected(rematerialized);
+      projection
+        .selectEntries()
+        .filter(ready)
+        .forEach((row, index) => {
+          expect(row.materialized).toBe(materializations[index]!.deref());
+        });
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();
       projection.dispose();
-      await expectCollected([...disposedEntries, ...selections]);
+      await expectCollected([...materializations, ...disposedEntries, ...selections]);
     } finally {
       projection.dispose();
       release();

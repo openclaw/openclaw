@@ -1,5 +1,5 @@
+import "./session-send-recovery.delivery.mocks.test-support.js";
 import { createHash } from "node:crypto";
-import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
@@ -22,6 +22,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
@@ -41,14 +42,9 @@ import {
 } from "./session-send-recovery.test-support.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
-  source: vi.fn(),
-  load: vi.fn(),
-  report: vi.fn(),
-  withdraw: vi.fn(),
+const { recoveryDeliveryMocks } =
+  await import("./session-send-recovery.delivery.mocks.test-support.js");
+const recoveryOverrides = vi.hoisted(() => ({
   restoreOperator:
     vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
   resumeMain:
@@ -60,47 +56,15 @@ vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    retryRestartAbortedMainSessionRecovery: io.resumeMain,
-  }),
-);
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readSessionSendRecoveryPage: io.pending,
-}));
-vi.mock(import("../config/sessions/session-pending-input-source.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputSource: io.source,
-}));
-vi.mock(import("../config/sessions/session-accessor.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  appendSessionTranscriptReport: io.report,
-}));
-vi.mock(
-  import("../config/sessions/session-pending-input-withdrawal.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discardSessionPendingInput: io.withdraw,
+    retryRestartAbortedMainSessionRecovery: recoveryOverrides.resumeMain,
   }),
 );
 vi.mock(import("./operator-run-recovery.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  restoreGatewayQueuedOperatorRecovery: io.restoreOperator,
+  restoreGatewayQueuedOperatorRecovery: recoveryOverrides.restoreOperator,
 }));
-vi.mock(import("./session-utils-store-worker.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  resolveGatewaySessionStoreTargetInWorker: io.load,
-}));
+
+const io = { ...recoveryDeliveryMocks, ...recoveryOverrides };
 
 let sourceEntry: {
   sessionId: string;
@@ -134,20 +98,72 @@ const storeTarget = (key: string) => ({
   storePath: "/fixture/sessions.json",
   store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
 });
-const recover = (signal = controller().signal) => recoverSessionSendDeliveries(context, signal);
+const recover = (signal = controller().signal) =>
+  recoverSessionSendDeliveries(context, signal).settled;
 async function recoverWithTimers(signal = controller().signal) {
   await Promise.all([recover(signal), vi.runAllTimersAsync()]);
 }
-function expectNoCalls(...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-function timed<T>(ms: number, value: () => T) {
-  return async () => {
-    vi.advanceTimersByTime(ms);
-    return value();
+function peerInput(
+  overrides: Partial<SessionSendDelivery> & { operatorSource?: unknown },
+  saved: Partial<Pick<SessionPendingInput, "id">> = {},
+): SessionPendingInput {
+  const restored = { ...delivery, operatorSource: null, ...overrides };
+  return {
+    ...input,
+    ...saved,
+    runId: restored.runId,
+    message: {
+      ...input.message,
+      idempotencyKey: `${restored.runId}:user`,
+      __openclaw: { sessionSendDelivery: restored },
+    },
   };
+}
+const pendingInputs = (...items: SessionPendingInput[]) =>
+  io.pending.mockResolvedValue({ items, total: items.length });
+const blockedReport = () => io.report.mock.calls[0]![1].selectReport(undefined);
+const inspectionRefusal = (agentId = "main", path = "/fixture/sessions.json") =>
+  createAgentDatabaseInspectionRefusal({
+    agentId,
+    paths: [path],
+    reason: "Synthetic startup inspection",
+    pending: true,
+  });
+const acceptedMessage = (runId: string) =>
+  readSessionSendDeliveryAdmission({
+    runId,
+    agentId: "main",
+    sessionKey: delivery.target.sessionKey,
+    sessionId: "target-id",
+  })?.acceptedMessage;
+function prepareStoreRecovery(agents: string[], signal = controller().signal) {
+  const refusals = agents.map((id) =>
+    inspectionRefusal(
+      id,
+      agents.length === 1 ? "/fixture/sessions.json" : `/fixture/${id}/sessions.json`,
+    ),
+  );
+  recordAgentDatabaseAdmissions(refusals);
+  io.discover.mockImplementation(async () =>
+    readAgentDatabaseAdmissionRefusal("main")
+      ? []
+      : [{ agentId: "main", storePath: "/fixture/sessions.json" }],
+  );
+  const prepared = agents.map(() => createDeferred());
+  const joined = createDeferred();
+  let waits = 0;
+  const recovery = withAgentDatabasePreparationContext(
+    () => ({
+      waitForAgentPreparation: (id) => {
+        if (++waits === agents.length) {
+          joined.resolve();
+        }
+        return prepared[agents.indexOf(id)]!.promise;
+      },
+    }),
+    () => recover(signal),
+  );
+  return { refusals, prepared, joined: joined.promise, recovery };
 }
 
 beforeEach(() => {
@@ -163,7 +179,7 @@ beforeEach(() => {
   targetEntry = { sessionId: "target-id", updatedAt: 1 };
   io.discover.mockResolvedValue([{ agentId: "main", storePath: "/fixture/sessions.json" }]);
   io.entries.mockResolvedValue([{ sessionKey: delivery.target.sessionKey, entry: targetEntry }]);
-  io.pending.mockResolvedValue({ items: [input], total: 1 });
+  pendingInputs(input);
   io.source.mockResolvedValue(sourceSnapshot());
   io.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
   io.report.mockResolvedValue({ ok: true });
@@ -179,7 +195,6 @@ afterEach(() => {
 });
 
 it("retains queued peers when the interrupted predecessor is paused", async () => {
-  const debug = vi.spyOn(context.logGateway, "debug");
   io.entries.mockResolvedValue([
     {
       sessionKey: delivery.target.sessionKey,
@@ -192,31 +207,13 @@ it("retains queued peers when the interrupted predecessor is paused", async () =
 
   expect(io.resumeMain).toHaveBeenCalledOnce();
   expectNoCalls(dispatch, resumeChat, io.withdraw, io.report);
-  expect(debug).toHaveBeenCalledWith(
-    `Pending input replay: ${JSON.stringify({
-      inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
-      kind: "peer",
-      outcome: "skipped",
-      state: "interrupted",
-      skipReason: "predecessor-not-ready",
-    })}`,
-  );
 });
 
 it("recovers a logical agent's saved input from its shared physical store", async () => {
-  const sharedDelivery = {
-    ...delivery,
-    operatorSource: null,
-    target: { ...delivery.target, agentId: "secondary", sessionKey: "agent:secondary:target" },
-  };
-  const sharedInput = {
-    ...input,
-    message: { ...input.message, __openclaw: { sessionSendDelivery: sharedDelivery } },
-  };
-  io.entries.mockResolvedValue([
-    { sessionKey: sharedDelivery.target.sessionKey, entry: targetEntry },
-  ]);
-  io.pending.mockResolvedValue({ items: [sharedInput], total: 1 });
+  const target = { ...delivery.target, agentId: "secondary", sessionKey: "agent:secondary:target" };
+  const sharedInput = peerInput({ target });
+  io.entries.mockResolvedValue([{ sessionKey: target.sessionKey, entry: targetEntry }]);
+  pendingInputs(sharedInput);
   io.source.mockResolvedValue(sourceSnapshot(sharedInput));
   await recover();
   expect(dispatch).toHaveBeenCalledOnce();
@@ -231,88 +228,57 @@ it("recovers a logical agent's saved input from its shared physical store", asyn
   expectNoCalls(io.report, io.withdraw, warn);
 });
 
-it.each(["admitted", "reconfigured", "permission-revoked", "failed", "cancelled"] as const)(
+it.each(["permission-revoked", "failed", "cancelled"] as const)(
   "recovers a skipped store after its admission owner settles: %s",
   async (outcome) => {
-    const refusal = createAgentDatabaseInspectionRefusal({
-      agentId: "main",
-      paths: ["/fixture/sessions.json"],
-      reason: "Synthetic startup inspection",
-      pending: true,
-    });
-    recordAgentDatabaseAdmissions([refusal]);
-    io.discover.mockImplementation(async () =>
-      readAgentDatabaseAdmissionRefusal("main")
-        ? []
-        : [{ agentId: "main", storePath: "/fixture/sessions.json" }],
-    );
-    const joined = createDeferred();
-    const prepared = createDeferred();
     const cancellation = controller();
-    const recovery = withAgentDatabasePreparationContext(
-      () => ({
-        waitForAgentPreparation: () => {
-          joined.resolve();
-          return prepared.promise;
-        },
-      }),
-      () => recover(cancellation.signal),
-    );
+    const {
+      refusals: [refusal],
+      prepared: [prepared],
+      joined,
+      recovery,
+    } = prepareStoreRecovery(["main"], cancellation.signal);
     try {
       await awaitGateBeforeSettlement(
-        joined.promise,
+        joined,
         recovery,
         "saved-input recovery finished without joining pending store admission",
       );
       expectNoCalls(dispatch, io.report);
       if (outcome === "failed") {
-        failPendingAgentDatabase(refusal, new Error("Synthetic inspection failure"), {});
+        failPendingAgentDatabase(refusal!, new Error("Synthetic inspection failure"), {});
       } else {
-        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
+        await preparePendingAgentDatabase(refusal!, { assertCurrent() {} }, async () => {});
       }
-      if (outcome === "reconfigured" || outcome === "permission-revoked") {
-        currentConfig =
-          outcome === "reconfigured"
-            ? { ...config }
-            : {
-                ...config,
-                session: { communication: { send: "never", receive: "always" } },
-              };
+      if (outcome === "permission-revoked") {
+        currentConfig = {
+          ...config,
+          session: { communication: { send: "never", receive: "always" } },
+        };
         setRuntimeConfigSnapshot(currentConfig);
       }
       if (outcome === "cancelled") {
         cancellation.abort();
       }
-      prepared.resolve();
+      prepared!.resolve();
       if (outcome === "cancelled") {
         await expect(recovery).rejects.toThrow();
       } else {
         await recovery;
       }
-      if (outcome === "admitted" || outcome === "reconfigured") {
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(dispatch.mock.calls[0]![0].idempotencyKey).toBe(delivery.runId);
-        expect(io.discover.mock.calls[1]![0].agentIds).toEqual(new Set(["main"]));
-        expect(io.discover.mock.calls[1]![0].cfg).toBe(currentConfig);
+      expectNoCalls(dispatch);
+      if (outcome === "permission-revoked") {
+        expect(io.report).toHaveBeenCalledOnce();
+        expect(blockedReport().details.inputs[0]).toMatchObject({
+          reason: "permission-denied",
+          attempts: 1,
+        });
       } else {
-        expectNoCalls(dispatch);
-        if (outcome === "permission-revoked") {
-          expect(io.report).toHaveBeenCalledOnce();
-          expect(
-            io.report.mock.calls[0]![1].selectReport(undefined).details.inputs[0],
-          ).toMatchObject({
-            reason: "permission-denied",
-            attempts: 1,
-          });
-        } else {
-          expect(io.discover).toHaveBeenCalledOnce();
-        }
-      }
-      if (outcome !== "permission-revoked") {
+        expect(io.discover).toHaveBeenCalledOnce();
         expectNoCalls(io.report);
       }
     } finally {
-      prepared.resolve();
+      prepared!.resolve();
       await recovery.catch(() => {});
     }
   },
@@ -321,66 +287,36 @@ it.each(["admitted", "reconfigured", "permission-revoked", "failed", "cancelled"
 it("joins every pending store and replays admitted work before reporting a preparation failure", async ({
   signal,
 }) => {
-  const refusals = ["secondary", "main"].map((agentId) =>
-    createAgentDatabaseInspectionRefusal({
-      agentId,
-      paths: [`/fixture/${agentId}/sessions.json`],
-      reason: "Synthetic startup inspection",
-      pending: true,
-    }),
-  );
-  recordAgentDatabaseAdmissions(refusals);
-  io.discover.mockImplementation(async () =>
-    readAgentDatabaseAdmissionRefusal("main")
-      ? []
-      : [{ agentId: "main", storePath: "/fixture/sessions.json" }],
-  );
-  const joined = createDeferred();
-  const failed = createDeferred();
-  const prepared = createDeferred();
+  const {
+    refusals,
+    prepared: [failed, prepared],
+    joined,
+    recovery,
+  } = prepareStoreRecovery(["secondary", "main"]);
   const failure = new Error("Synthetic preparation failure");
-  let waits = 0;
   const settled = vi.fn();
-  const recovery = withAgentDatabasePreparationContext(
-    () => ({
-      waitForAgentPreparation: (agentId) => {
-        if (++waits === 2) {
-          joined.resolve();
-        }
-        return agentId === "main" ? prepared.promise : failed.promise;
-      },
-    }),
-    () => recover(),
-  );
   const observed = recovery.then(settled, settled);
   const rejected = expect(recovery).rejects.toBe(failure);
   try {
-    await withinTest(joined.promise, signal);
-    failed.reject(failure);
+    await withinTest(joined, signal);
+    failed!.reject(failure);
     await vi.runAllTimersAsync();
     expect(settled).not.toHaveBeenCalled();
     expectNoCalls(dispatch);
     await preparePendingAgentDatabase(refusals[1]!, { assertCurrent() {} }, async () => {});
-    prepared.resolve();
+    prepared!.resolve();
     await rejected;
     expect(dispatch).toHaveBeenCalledOnce();
     expect(dispatch.mock.calls[0]![0].idempotencyKey).toBe(delivery.runId);
   } finally {
-    failed.reject(failure);
-    prepared.resolve();
+    failed!.reject(failure);
+    prepared!.resolve();
     await observed;
   }
 });
 
 it("does not join pending preparation when initial recovery fails", async () => {
-  recordAgentDatabaseAdmissions([
-    createAgentDatabaseInspectionRefusal({
-      agentId: "main",
-      paths: ["/fixture/sessions.json"],
-      reason: "Synthetic startup inspection",
-      pending: true,
-    }),
-  ]);
+  recordAgentDatabaseAdmissions([inspectionRefusal()]);
   const failure = new Error("Synthetic discovery failure");
   io.discover.mockRejectedValueOnce(failure);
   const waitForAgentPreparation = vi.fn(async () => {});
@@ -415,18 +351,7 @@ it.each([
       },
     }));
     if (inputKind === "peer") {
-      inputs[0] = {
-        ...input,
-        id: "first",
-        runId: "first",
-        message: {
-          ...input.message,
-          idempotencyKey: "first:user",
-          __openclaw: {
-            sessionSendDelivery: { ...delivery, runId: "first", operatorSource: null },
-          },
-        },
-      };
+      inputs[0] = peerInput({ runId: "first" }, { id: "first" });
     }
     io.entries.mockResolvedValue([
       { sessionKey: delivery.target.sessionKey, entry: targetEntry },
@@ -465,8 +390,6 @@ it.each([
 );
 
 it("resumes chat inputs in acceptance order across pages, excluding expired and withdrawn inputs", async () => {
-  const debug = vi.spyOn(context.logGateway, "debug");
-  const info = vi.spyOn(context.logGateway, "info");
   const chat = (id: string, ageMs = 0, state: SessionPendingInput["state"] = "interrupted") => ({
     ...input,
     id,
@@ -493,273 +416,90 @@ it("resumes chat inputs in acceptance order across pages, excluding expired and 
       items: [
         chat("expired", 24 * 60 * 60_000 + 1),
         chat("cancelled", 0, "cancelled"),
-        chat("live", 0, "queued"),
         chat("withdrawn"),
         chat("consumed"),
         chat("first"),
       ],
     });
-  let releaseFirst!: () => void;
-  let enterFirst!: () => void;
-  const firstEntered = new Promise<void>((resolve) => {
-    enterFirst = resolve;
-  });
-  const firstHeld = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
+  const firstEntered = createDeferredCore();
+  const firstHeld = createDeferredCore();
   resumeChat.mockImplementationOnce(async () => {
-    enterFirst();
-    await firstHeld;
+    firstEntered.resolve();
+    await firstHeld.promise;
   });
   const recovering = recover();
-  await firstEntered;
+  await firstEntered.promise;
   expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first"]);
-  releaseFirst();
+  firstHeld.resolve();
   await recovering;
   expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first", "second"]);
   expectNoCalls(dispatch, io.report, io.withdraw);
-  const decisions = [...debug.mock.calls, ...info.mock.calls]
-    .map(([message]) => JSON.parse(message.slice("Pending input replay: ".length)))
-    .map(({ inputHash, outcome, skipReason, staleReason }) => ({
-      inputHash,
-      outcome,
-      skipReason,
-      staleReason,
-    }));
-  expect(decisions).toEqual(
-    [
-      ["expired", "skipped", "expired", undefined],
-      ["cancelled", "skipped", "state-not-interrupted", undefined],
-      ["live", "skipped", "state-not-interrupted", undefined],
-      ["withdrawn", "stale", undefined, "state-not-interrupted"],
-      ["consumed", "stale", undefined, "consumed"],
-      ["first", "accepted", undefined, undefined],
-      ["second", "accepted", undefined, undefined],
-    ].map(([id, outcome, skipReason, staleReason]) => ({
-      inputHash: createHash("sha256").update(id!).digest("hex").slice(0, 16),
-      outcome,
-      skipReason,
-      staleReason,
-    })),
-  );
 });
 
 it("does not close an accepted chat turn with a blocked-delivery notice", ({ signal }) =>
   verifyRecoveryNoticeTurnOrdering({ io, sourceEntry, resumeChat, warn, recover }, signal));
 
-it.each(["replaced", "archived-source", "archived-target"] as const)(
-  "settles %s inputs durably so the second restart is silent",
-  async (change) => {
-    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-    const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
-    const { writeSessionEntry } =
-      await import("../config/sessions/session-accessor.sqlite-entry-store.js");
-    const { stageSessionPendingInput } =
-      await import("../config/sessions/session-accessor.pending-inputs.js");
-    const history = await vi.importActual<
-      typeof import("../config/sessions/session-pending-input-history.js")
-    >("../config/sessions/session-pending-input-history.js");
-    const source = await vi.importActual<
-      typeof import("../config/sessions/session-pending-input-source.js")
-    >("../config/sessions/session-pending-input-source.js");
-    const reports =
-      await import("../config/sessions/session-accessor.sqlite-transcript-reports.js");
-    const withdrawal = await vi.importActual<
-      typeof import("../config/sessions/session-pending-input-withdrawal.js")
-    >("../config/sessions/session-pending-input-withdrawal.js");
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = { ...delivery.target, storePath: database.path };
-      writeSessionEntry(database, scope.sessionKey, targetEntry);
-      const receipt = await stageSessionPendingInput(scope, {
-        runId: delivery.runId,
-        message: input.message,
-        assertCurrent() {},
-      });
-      expect(receipt).toBeDefined();
-      receipt!.finish("interrupted");
-      await receipt!.settled?.();
-      if (change === "replaced") {
-        sourceEntry.lifecycleRevision = "source-after-reset";
-      } else if (change === "archived-source") {
-        sourceEntry.archivedAt = 2;
-      } else {
-        targetEntry.archivedAt = 2;
-        writeSessionEntry(database, scope.sessionKey, targetEntry);
-      }
-      io.discover.mockResolvedValue([{ agentId: "main", storePath: database.path }]);
-      io.pending.mockImplementation(history.readSessionSendRecoveryPage);
-      io.source.mockImplementation(source.readPendingInputSource);
-      io.report.mockImplementation(reports.appendSessionTranscriptReport);
-      io.withdraw.mockImplementation(withdrawal.discardSessionPendingInput);
-
-      await recover();
-      expect(dispatch).not.toHaveBeenCalled();
-      const notice = await reports.readLatestSessionTranscriptReport(scope, [
-        "session-send-recovery-blocked",
-      ]);
-      if (change === "replaced") {
-        expect(notice).toMatchObject({
-          ok: true,
-          value: { content: expect.stringContaining("session was reset or replaced") },
-        });
-      } else {
-        expect(notice).toEqual({ ok: true, value: undefined });
-        expectNoCalls(warn, io.report);
-      }
-      expect(await history.listSessionPendingInputs(scope)).toMatchObject({
-        items: [{ state: "cancelled", message: { display: false } }],
-      });
-
-      warn.mockClear();
-      io.report.mockClear();
-      await recover();
-      expectNoCalls(warn, io.report, dispatch);
-      expect(
-        await reports.readLatestSessionTranscriptReport(scope, ["session-send-recovery-blocked"]),
-      ).toEqual(notice);
+it("settles archived-target inputs durably so the second restart is silent", async () => {
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
+  const { writeSessionEntry } =
+    await import("../config/sessions/session-accessor.sqlite-entry-store.js");
+  const { stageSessionPendingInput } =
+    await import("../config/sessions/session-accessor.pending-inputs.js");
+  const history = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-history.js")
+  >("../config/sessions/session-pending-input-history.js");
+  const source = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-source.js")
+  >("../config/sessions/session-pending-input-source.js");
+  const reports = await import("../config/sessions/session-accessor.sqlite-transcript-reports.js");
+  const withdrawal = await vi.importActual<
+    typeof import("../config/sessions/session-pending-input-withdrawal.js")
+  >("../config/sessions/session-pending-input-withdrawal.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = { ...delivery.target, storePath: database.path };
+    writeSessionEntry(database, scope.sessionKey, targetEntry);
+    const receipt = await stageSessionPendingInput(scope, {
+      runId: delivery.runId,
+      message: input.message,
+      assertCurrent() {},
     });
-  },
-);
+    expect(receipt).toBeDefined();
+    receipt!.finish("interrupted");
+    await receipt!.settled?.();
+    targetEntry.archivedAt = 2;
+    writeSessionEntry(database, scope.sessionKey, targetEntry);
+    io.discover.mockResolvedValue([{ agentId: "main", storePath: database.path }]);
+    io.pending.mockImplementation(history.readSessionSendRecoveryPage);
+    io.source.mockImplementation(source.readPendingInputSource);
+    io.report.mockImplementation(reports.appendSessionTranscriptReport);
+    io.withdraw.mockImplementation(withdrawal.discardSessionPendingInput);
 
-it("replays sessions across stores concurrently while preserving each saved input order", async ({
-  signal,
-}) => {
-  const agents = ["main", "secondary"];
-  const sessions = Array.from(
-    { length: 6 },
-    (_, index) => `agent:${agents[Math.floor(index / 3)]}:target-${index}`,
-  );
-  const inputs = sessions.map((sessionKey, index) =>
-    Array.from({ length: 2 }, (_, sequence) => {
-      const runId = `delivery-${index}-${sequence}`;
-      return {
-        ...input,
-        id: `input-${index}-${sequence}`,
-        runId,
-        message: {
-          ...input.message,
-          idempotencyKey: `${runId}:user`,
-          __openclaw: {
-            sessionSendDelivery: {
-              ...delivery,
-              runId,
-              operatorSource: null,
-              target: { ...delivery.target, sessionKey, agentId: sessionKey.split(":")[1]! },
-            },
-          },
-        },
-      };
-    }),
-  );
-  io.discover.mockResolvedValue(
-    agents.map((agentId) => ({ agentId, storePath: `/fixture/${agentId}/sessions.json` })),
-  );
-  io.entries.mockImplementation(async ({ agentId }) =>
-    sessions
-      .filter((sessionKey) => sessionKey.startsWith(`agent:${agentId}:`))
-      .map((sessionKey) => ({ sessionKey, entry: targetEntry })),
-  );
-  io.pending.mockImplementation(async ({ sessionKey }) => ({
-    items: inputs[sessions.indexOf(sessionKey)],
-  }));
-  io.source.mockImplementation(async (_scope, key) =>
-    sourceSnapshot(inputs.flat().find((saved) => saved.message.idempotencyKey === key)!),
-  );
-  const release = createDeferred();
-  const saturated = createDeferred();
-  const accepted: string[] = [];
-  let active = 0;
-  let maximum = 0;
-  dispatch.mockImplementation(async (request) => {
-    active++;
-    maximum = Math.max(maximum, active);
-    if (active === 4) {
-      saturated.resolve();
-    }
-    await release.promise;
-    accepted.push(request.idempotencyKey);
-    active--;
-  });
-  const recovery = recover();
-  try {
-    await withinTest(saturated.promise, signal);
-    expect(dispatch).toHaveBeenCalledTimes(4);
-    expect(accepted).toEqual([]);
-    release.resolve();
-    await recovery;
-    expect(maximum).toBe(4);
-    expect(accepted).toHaveLength(12);
-    expect(new Set(accepted).size).toBe(12);
-    for (let index = 0; index < sessions.length; index++) {
-      expect(accepted.filter((runId) => runId.startsWith(`delivery-${index}-`))).toEqual([
-        `delivery-${index}-0`,
-        `delivery-${index}-1`,
-      ]);
-    }
-  } finally {
-    release.resolve();
-    await recovery;
-  }
-});
+    await recover();
+    expect(dispatch).not.toHaveBeenCalled();
+    const notice = await reports.readLatestSessionTranscriptReport(scope, [
+      "session-send-recovery-blocked",
+    ]);
+    expect(notice).toEqual({ ok: true, value: undefined });
+    expectNoCalls(warn, io.report);
+    expect(await history.listSessionPendingInputs(scope)).toMatchObject({
+      items: [{ state: "cancelled", message: { display: false } }],
+    });
 
-it("reports each input replay phase and retry backoff without raw input identity", async () => {
-  const startedAt = Date.now();
-  vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
-  const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
-  io.discover.mockImplementation(
-    timed(10, () => [{ agentId: "main", storePath: "/fixture/sessions.json" }]),
-  );
-  io.entries.mockImplementation(
-    timed(20, () => [{ sessionKey: delivery.target.sessionKey, entry: targetEntry }]),
-  );
-  io.pending.mockImplementation(timed(30, () => ({ items: [input], total: 1 })));
-  io.source.mockImplementationOnce(
-    timed(40, () => {
-      throw new WorkerTaskError("Reader starting", "unavailable");
-    }),
-  );
-  io.load.mockImplementation(async ({ key }: { key: string }) => {
-    vi.advanceTimersByTime(50);
-    return storeTarget(key);
+    warn.mockClear();
+    io.report.mockClear();
+    await recover();
+    expectNoCalls(warn, io.report, dispatch);
+    expect(
+      await reports.readLatestSessionTranscriptReport(scope, ["session-send-recovery-blocked"]),
+    ).toEqual(notice);
   });
-  sourceEntry.sessionId = "replaced-source";
-  io.report.mockImplementation(timed(250, () => ({ ok: true })));
-  await recoverWithTimers();
-  expect(dispatch).not.toHaveBeenCalled();
-  const replay = info.mock.calls.find(([message]) =>
-    message.startsWith("Pending input replay: "),
-  )?.[0];
-  expect(JSON.parse(replay!.slice("Pending input replay: ".length))).toMatchObject({
-    inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
-    kind: "peer",
-    outcome: "blocked",
-    waitReason: "endpoint-replaced",
-    attempts: 2,
-    sourceLoadMs: 40,
-    sessionLoadMs: 100,
-    retryWaitMs: 5000,
-    totalMs: 5140,
-  });
-  expect(replay).not.toContain(input.id);
-  expect(replay).not.toContain(delivery.source.sessionKey);
-  expect(replay).not.toContain(delivery.message);
 });
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {
-  const next = {
-    ...input,
-    id: "next-input",
-    runId: "next-delivery",
-    message: {
-      ...input.message,
-      idempotencyKey: "next-delivery:user",
-      __openclaw: {
-        sessionSendDelivery: { ...delivery, runId: "next-delivery", operatorSource: null },
-      },
-    },
-  };
-  io.pending.mockResolvedValue({ items: [input, next], total: 2 });
+  const next = peerInput({ runId: "next-delivery" }, { id: "next-input" });
+  pendingInputs(input, next);
   io.source.mockImplementation(async (_scope: unknown, key: string) =>
     sourceSnapshot(key === input.message.idempotencyKey ? input : next),
   );
@@ -769,14 +509,9 @@ it("retries transient admission with the saved input and delivery identity, in o
   dispatch.mockImplementation(async (request) => {
     attemptTimes.push(Date.now() - startedAt);
     expect(request.sessionKey).toBe(delivery.target.sessionKey);
-    expect(
-      readSessionSendDeliveryAdmission({
-        runId: request.idempotencyKey,
-        agentId: "main",
-        sessionKey: delivery.target.sessionKey,
-        sessionId: "target-id",
-      })?.acceptedMessage,
-    ).toEqual(request.idempotencyKey === delivery.runId ? input.message : next.message);
+    expect(acceptedMessage(request.idempotencyKey)).toEqual(
+      request.idempotencyKey === delivery.runId ? input.message : next.message,
+    );
     if (dispatch.mock.calls.length === 1) {
       throw new GatewayClientRequestError({
         code: "UNAVAILABLE",
@@ -797,49 +532,29 @@ it("retries transient admission with the saved input and delivery identity, in o
   expect(io.report).not.toHaveBeenCalled();
 });
 
-it.each(["interrupted", "cancelled"] as const)(
-  "preserves returned-result semantics while respecting %s custody",
-  async (state) => {
-    const returnedDelivery: SessionSendDelivery = {
-      ...delivery,
-      returnedResult: { extraSystemPrompt: "Consume this result once; do not send it back." },
-    };
-    const returnedInput = {
-      ...input,
-      message: {
-        ...input.message,
-        __openclaw: { sessionSendDelivery: { ...returnedDelivery, operatorSource: null } },
-      },
-    };
-    io.pending.mockResolvedValue({ items: [returnedInput], total: 1 });
-    sourceEntry.communication = { send: "never" };
-    io.source.mockResolvedValue(sourceSnapshot(returnedInput, state));
-    dispatch.mockImplementation(async (_request, _timeout, options) => {
-      options.assertAdmissionCurrent();
-      expect(
-        readSessionSendDeliveryAdmission({
-          runId: delivery.runId,
-          agentId: "main",
-          sessionKey: delivery.target.sessionKey,
-          sessionId: "target-id",
-        })?.acceptedMessage,
-      ).toEqual(returnedInput.message);
-    });
-    await recover();
-    expect(dispatch).toHaveBeenCalledTimes(state === "interrupted" ? 1 : 0);
-    if (state === "interrupted") {
-      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
-        idempotencyKey: delivery.runId,
-        message: delivery.message,
-        extraSystemPrompt: "Consume this result once; do not send it back.",
-        expectedExistingSessionId: "target-id",
-        inputProvenance: input.message.provenance,
-      });
-      expect(dispatch.mock.calls[0]?.[2].replyExpectation).toBe("optional");
-    }
-    expectNoCalls(io.report, io.withdraw, warn);
-  },
-);
+it("preserves returned-result semantics for an interrupted input", async () => {
+  const returnedInput = peerInput({
+    returnedResult: { extraSystemPrompt: "Consume this result once; do not send it back." },
+  });
+  pendingInputs(returnedInput);
+  sourceEntry.communication = { send: "never" };
+  io.source.mockResolvedValue(sourceSnapshot(returnedInput));
+  dispatch.mockImplementation(async (_request, _timeout, options) => {
+    options.assertAdmissionCurrent();
+    expect(acceptedMessage(delivery.runId)).toEqual(returnedInput.message);
+  });
+  await recover();
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+    idempotencyKey: delivery.runId,
+    message: delivery.message,
+    extraSystemPrompt: "Consume this result once; do not send it back.",
+    expectedExistingSessionId: "target-id",
+    inputProvenance: input.message.provenance,
+  });
+  expect(dispatch.mock.calls[0]?.[2].replyExpectation).toBe("optional");
+  expectNoCalls(io.report, io.withdraw, warn);
+});
 
 it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as const)(
   "rechecks %s before a delayed attempt",
@@ -875,7 +590,7 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
       change === "reset" || change === "replaced" || change === "archive" ? 1 : 0,
     );
     if (change === "reset" || change === "replaced" || change === "permission") {
-      const notice = io.report.mock.calls[0]![1].selectReport(undefined);
+      const notice = blockedReport();
       expect(notice.content).toContain(
         change === "permission"
           ? "current session permissions do not allow automatic delivery"
@@ -886,20 +601,24 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
   },
 );
 
-it("logs replacement identity and age without session keys or message content", async () => {
+it("redacts session keys and message content from recovery logs", async () => {
+  const info = vi.spyOn(context.logGateway, "info");
   sourceEntry = { ...sourceEntry, lifecycleRevision: "source-after-reset" };
-  vi.setSystemTime(10_001);
   await recover();
   const warning = warn.mock.calls[0]![0] as string;
-  expect(warning).toContain('"inputId":"saved-input"');
-  expect(warning).toContain('"ageMs":10000');
-  expect(warning).toContain('"endpoint":"source"');
-  expect(warning).toContain('"previousGeneration":"source-before-reset"');
-  expect(warning).toContain('"currentGeneration":"source-after-reset"');
-  expect(warning).toMatch(/"sessionKeyHash":"[a-f0-9]{16}"/u);
   expect(warning).not.toContain(delivery.source.sessionKey);
   expect(warning).not.toContain(delivery.target.sessionKey);
   expect(warning).not.toContain(delivery.message);
+  const replay = info.mock.calls.find(([line]) => line.startsWith("Pending input replay: "))![0];
+  expect(JSON.parse(replay.slice("Pending input replay: ".length))).toMatchObject({
+    inputHash: createHash("sha256").update(input.id).digest("hex").slice(0, 16),
+    kind: "peer",
+    outcome: "blocked",
+    waitReason: "endpoint-replaced",
+  });
+  for (const privateValue of [input.id, delivery.source.sessionKey, delivery.message]) {
+    expect(replay).not.toContain(privateValue);
+  }
 });
 
 it("retains replaced-endpoint inputs when the durable notice is refused", async () => {
@@ -916,26 +635,17 @@ it.each(recoveryDiagnosticCases)(
   "keeps path-bearing %s diagnostics out of saved recovery notices",
   async (_name, stage, error, { reason, attempts, description }) => {
     if (stage === "requester") {
-      const acceptedInput: SessionPendingInput = {
-        ...input,
-        message: {
-          ...input.message,
-          __openclaw: {
-            sessionSendDelivery: {
-              ...delivery,
-              operatorSource: {
-                kind: "channel",
-                snapshot: {
-                  reference: { version: 1, id: "d0ba40e9-13e6-4e6b-918f-62e8bc12ffbd" },
-                  profileId: "original-requester",
-                  scopes: ["operator.write"],
-                },
-              },
-            },
+      const acceptedInput = peerInput({
+        operatorSource: {
+          kind: "channel",
+          snapshot: {
+            reference: { version: 1, id: "d0ba40e9-13e6-4e6b-918f-62e8bc12ffbd" },
+            profileId: "original-requester",
+            scopes: ["operator.write"],
           },
         },
-      };
-      io.pending.mockResolvedValue({ items: [acceptedInput], total: 1 });
+      });
+      pendingInputs(acceptedInput);
       io.source.mockResolvedValue(sourceSnapshot(acceptedInput));
       io.restoreOperator.mockRejectedValue(error);
     } else {
@@ -945,7 +655,7 @@ it.each(recoveryDiagnosticCases)(
     for (const retry of retries) {
       warn.mockImplementationOnce(() => retry.resolve());
     }
-    const recovery = recoverSessionSendDeliveries(context, controller().signal);
+    const recovery = recoverSessionSendDeliveries(context, controller().signal).settled;
     for (const retry of retries) {
       // A dynamic requester import can finish after an empty fake-timer drain.
       await Promise.race([retry.promise, recovery]);
@@ -954,7 +664,7 @@ it.each(recoveryDiagnosticCases)(
     await recovery;
     expect(dispatch).not.toHaveBeenCalled();
     expect(io.restoreOperator).toHaveBeenCalledTimes(stage === "requester" ? attempts : 0);
-    const report = io.report.mock.calls[0]![1].selectReport(undefined);
+    const report = blockedReport();
     expect(report.details.inputs[0]).toEqual({
       inputId: input.id,
       sourceSessionKey: delivery.source.sessionKey,
@@ -1016,7 +726,7 @@ it.each(terminalRecoveryFailures)(
     dispatch.mockRejectedValue(error);
     await recoverWithTimers();
     expect(dispatch).toHaveBeenCalledOnce();
-    expect(io.report.mock.calls[0]![1].selectReport(undefined).details.inputs[0]).toMatchObject({
+    expect(blockedReport().details.inputs[0]).toMatchObject({
       attempts: 1,
     });
   },

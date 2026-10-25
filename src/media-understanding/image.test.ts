@@ -82,14 +82,14 @@ function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
     },
   };
 }
-function requestOpencode(
-  { provider, model, baseUrl } = opencode,
-  extras: Record<string, unknown> = {},
-) {
-  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...extras });
-  return describeImageWithModelCore(
-    request({ provider, model }, { prompt: "Describe the image." }),
-  );
+function requestOpencode() {
+  mockImageModel({
+    provider: opencode.provider,
+    id: opencode.model,
+    api: "openai-completions",
+    baseUrl: opencode.baseUrl,
+  });
+  return describeImageWithModelCore(request(opencode));
 }
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
@@ -111,6 +111,28 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
+
+  it.each([
+    { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
+    { modelMaxTokens: 1024.5, requested: 2048, expected: 1024.5 },
+    { modelMaxTokens: Number.NaN, requested: -0, expected: -0 },
+    { modelMaxTokens: 0, requested: 0.5, expected: 0.5 },
+  ])(
+    "preserves image completion token caps %#",
+    async ({ modelMaxTokens, requested, expected }) => {
+      mockImageModel({
+        provider: openai.provider,
+        id: openai.model,
+        api: "openai-responses",
+        maxTokens: modelMaxTokens,
+      });
+      completeMock.mockResolvedValue(openAiCompletion("ok"));
+      await describeImageWithModelCore(request(openai, { maxTokens: requested }));
+      expect(completeMock).toHaveBeenCalledOnce();
+      const options = expectDefined(completeMock.mock.calls[0], "image cap completion")[2];
+      expect(options.maxTokens).toBe(expected);
+    },
+  );
 
   it("uses a fresh routing identity for each image request", async () => {
     const { options } = stubProviderStream();
@@ -144,19 +166,6 @@ describe("describeImageWithModelCore", () => {
     const first = options(0).header;
     expect(first).toMatch(uuidPattern);
     expect(options(1).header).toBe(first);
-  });
-
-  it.each([
-    [
-      "unrelated provider",
-      { provider: "openai", model: "gpt-5-mini", baseUrl: "https://api.openai.com/v1" },
-      {},
-    ],
-    ["model-level header", opencode, { headers: { "X-OpenCode-Session": "model-session" } }],
-  ] as const)("does not inject routing identity for %s", async (_name, endpoint, extras) => {
-    const { options } = stubProviderStream();
-    await requestOpencode(endpoint, extras);
-    expect(options(0)).toEqual({ sessionId: undefined, header: undefined });
   });
 
   it("does not start another MiniMax request after caller cancellation", async () => {

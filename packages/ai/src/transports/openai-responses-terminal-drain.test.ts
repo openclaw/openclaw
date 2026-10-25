@@ -2,23 +2,24 @@ import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 
-const model: Model<"openai-responses"> = {
-  id: "fixture",
-  name: "Fixture",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 8192,
-  maxTokens: 256,
-};
+const model: Model<"openai-responses"> = makeProviderModel(
+  "openai-responses",
+  "openai",
+  "fixture",
+  {
+    name: "Fixture",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    contextWindow: 8192,
+    maxTokens: 256,
+  },
+);
 
 afterEach(() => {
   cleanupSessionResources();

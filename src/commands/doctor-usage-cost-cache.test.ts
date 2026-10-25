@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  loadExactSessionEntryReadOnly,
+  loadTranscriptEventsSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "../infra/session-cost-usage-rollup-codec.js";
 import {
@@ -9,6 +16,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -42,6 +51,30 @@ const noted = (message: string | RegExp, title: string) =>
     typeof message === "string" ? expect.stringContaining(message) : expect.stringMatching(message),
     title,
   );
+const current = { value_json: '{"current":true}', blob: Uint8Array.of(0, 17, 255) };
+type CacheDatabase = ReturnType<typeof openOpenClawAgentDatabase>["db"];
+
+function seedCacheRows(db: CacheDatabase, unrelated = false) {
+  const insert = db.prepare(
+    "INSERT INTO cache_entries (scope, key, value_json, blob, updated_at) VALUES (?, ?, ?, ?, 1)",
+  );
+  insert.run(USAGE_COST_ROLLUP_SCOPE, "current", current.value_json, current.blob);
+  insert.run("session-cost-usage", "refresh-lock", "{}", null);
+  for (const scope of ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"]) {
+    insert.run(scope, "retired", "{}", null);
+  }
+  insert.run("session-cost-usage", "cache", "{}", null);
+  if (unrelated) {
+    insert.run("other", "keep", "{}", null);
+  }
+}
+
+const cacheRows = (db: CacheDatabase) =>
+  db.prepare("SELECT scope, key, value_json, blob FROM cache_entries ORDER BY scope, key").all();
+const retainedRows = [
+  { scope: "session-cost-usage", key: "refresh-lock", value_json: "{}", blob: null },
+  { scope: USAGE_COST_ROLLUP_SCOPE, key: "current", ...current },
+];
 
 describe("legacy usage-cost cache cleanup", () => {
   it("reports the obsolete Control UI cache and removes only that cache on repair, recording failures", async () => {
@@ -131,30 +164,50 @@ describe("legacy usage-cost cache cleanup", () => {
     await missing(uploadRoot);
     await contents(path.join(external, "keep.txt"), "keep");
   });
-  it.each(["none", "write", "inspection"] as const)(
+  it("cleans obsolete rows under real Doctor custody without warning on clean stores", async () => {
+    await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const scope = {
+        agentId: "main",
+        env: state.env,
+        sessionKey: "agent:main:history",
+        sessionId: "main-history",
+      };
+      const events = [{ type: "message", message: { role: "user", content: "Keep history." } }];
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 123 });
+      await replaceTranscriptEvents(scope, events);
+      seedCacheRows(openOpenClawAgentDatabase(scope).db);
+      await closeOpenClawAgentDatabasesAsync();
+      const maintenance = await beginDoctorRepair({ env: state.env });
+      expect(maintenance).toBeDefined();
+      try {
+        await maintenance!.run(async () => {
+          await maybeRepairLegacyRuntimeFiles(true, state.env);
+          expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+          expect(cacheRows(openOpenClawAgentDatabase(scope).db)).toEqual(retainedRows);
+          expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
+            sessionId: scope.sessionId,
+            updatedAt: 123,
+          });
+          expect(loadTranscriptEventsSync(scope)).toEqual(events);
+          await maybeRepairLegacyRuntimeFiles(true, state.env);
+          expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+        });
+      } finally {
+        await maintenance?.release();
+      }
+    });
+  });
+  it.each(["write", "inspection"] as const)(
     "continues retired-row cleanup after an agent failure (failure=%s)",
     async (failure) => {
-      const rejectFirst = failure !== "none";
       const root = tempDirs.make("openclaw-usage-cost-sqlite-doctor-");
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
-      const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
-      // Cleanup selects scopes, not codec contents; preserve both stored columns byte-for-byte.
-      const current = { valueJson: '{"fixture":"current"}', blob: Uint8Array.of(0, 17, 255) };
+      const secondDatabase = openOpenClawAgentDatabase({ agentId: "worker", env });
+      const databases = [firstDatabase, secondDatabase];
       for (const database of databases) {
-        const insert = database.db.prepare(
-          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
-        );
-        insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
-        insert.run("session-cost-usage-rollup-v2", "retired-v2", "{}");
-        database.db
-          .prepare(
-            "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'current', ?, ?, NULL, 1)",
-          )
-          .run(USAGE_COST_ROLLUP_SCOPE, current.valueJson, current.blob);
-        insert.run("session-cost-usage", "cache", "{}");
-        insert.run("session-cost-usage", "refresh-lock", "{}");
-        insert.run("other", "keep", "{}");
+        seedCacheRows(database.db, true);
       }
       const query = "SELECT * FROM cache_entries ORDER BY scope, key";
       const before = firstDatabase.db.prepare(query).all();
@@ -166,26 +219,12 @@ describe("legacy usage-cost cache cleanup", () => {
         );
       }
       await maybeRepairLegacyRuntimeFiles(true, env);
-      if (rejectFirst) {
-        expect(note).toHaveBeenCalledWith(
-          expect.stringContaining(failure === "inspection" ? "EACCES" : "pruning rejected"),
-          "Doctor warnings",
-        );
-        expect(firstDatabase.db.prepare(query).all()).toEqual(before);
-      }
-      for (const database of rejectFirst ? databases.slice(1) : databases) {
-        expect(
-          database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
-        ).toEqual([
-          { key: "keep", scope: "other" },
-          { key: "refresh-lock", scope: "session-cost-usage" },
-          { key: "current", scope: USAGE_COST_ROLLUP_SCOPE },
-        ]);
-        const retained = database.db
-          .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ? AND key = 'current'")
-          .get(USAGE_COST_ROLLUP_SCOPE);
-        expect(retained).toEqual({ value_json: current.valueJson, blob: current.blob });
-      }
+      noted(failure === "inspection" ? "EACCES" : "pruning rejected", "Doctor warnings");
+      expect(firstDatabase.db.prepare(query).all()).toEqual(before);
+      expect(cacheRows(secondDatabase.db)).toEqual([
+        { key: "keep", scope: "other", value_json: "{}", blob: null },
+        ...retainedRows,
+      ]);
     },
   );
   it.each([

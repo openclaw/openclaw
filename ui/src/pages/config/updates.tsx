@@ -23,6 +23,7 @@ import {
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
+  RetryAction,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -33,6 +34,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -45,6 +47,8 @@ import {
   type UpdatesViewProps,
   type UpdatesCommandPresentation,
 } from "./updates-types.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -368,16 +372,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
                   fallback={(error, reset) => (
                     <span class="updates-status-check-failed">
                       <SettingsStatus kind="warn" label={formatUiError(error())} dot={false} />
-                      <button
-                        class="btn btn--sm"
+                      <RetryAction
                         type="button"
-                        onClick={() => {
+                        onRetry={() => {
                           reset();
                           void props.onCheckStatus();
                         }}
-                      >
-                        {t("common.retry")}
-                      </button>
+                      />
                     </span>
                   )}
                 >
@@ -523,16 +524,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
         fallback={(error, reset) => (
           <div class="callout danger" role="alert">
             {formatUiError(error())}
-            <button
-              class="btn btn--sm"
+            <RetryAction
               type="button"
-              onClick={() => {
+              onRetry={() => {
                 reset();
                 void updateNow();
               }}
-            >
-              {t("common.retry")}
-            </button>
+            />
           </div>
         )}
       >

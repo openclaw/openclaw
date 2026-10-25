@@ -54,7 +54,10 @@ export type PluginInstanceCallLease = {
 export interface PluginInstanceResource {
   readonly pluginId: string;
   quiesce(): boolean;
-  dispose(beforeCleanup?: () => void | Promise<void>): Promise<PluginInstanceDisposalResult>;
+  dispose(
+    beforeCleanup?: () => void | Promise<void>,
+    options?: { waitForSettlement?: boolean },
+  ): Promise<PluginInstanceDisposalResult>;
 }
 
 /** Captured code custody survives retiring a runtime until recovery consumes or releases it. */

@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,11 @@ vi.mock("./adapters/child.js", () => ({
   }),
 }));
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  readFile: vi.fn(),
+  readdir: vi.fn(),
+}));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
 const spawn = (input: Partial<Extract<SpawnInput, { mode: "child" }>> = {}) =>
@@ -68,6 +74,8 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
+  vi.mocked(fs.readFile).mockReset();
+  vi.mocked(fs.readdir).mockReset();
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
@@ -77,6 +85,47 @@ afterEach(() => {
 });
 
 describe("process supervisor", () => {
+  it.each(["child", "pty", "external"] as const)(
+    "enforces host memory ownership for %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      mockProcessPlatform("linux");
+      const read = vi.mocked(fs.readFile).mockResolvedValue("VmRSS:\t256 kB\n");
+      vi.mocked(fs.readdir).mockResolvedValue([]);
+      const adapter = terminating();
+      adapter.memoryRootPid = 4321;
+      if (mode === "pty") {
+        pty.mockResolvedValueOnce(adapter);
+      } else {
+        prepare(adapter);
+      }
+      const run = await supervisor.spawn({
+        mode: mode === "pty" ? "pty" : "child",
+        argv: ["fixture"],
+        memoryLimitBytes: 128 * 1024,
+        ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      if (mode === "external") {
+        expect(read).not.toHaveBeenCalled();
+        adapter.settle(0);
+      } else {
+        expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8");
+        await expect(run.wait()).resolves.toMatchObject({
+          reason: "memory-limit",
+          timedOut: false,
+          stderr: expect.stringContaining("Command killed for exceeding its host memory bound"),
+        });
+      }
+      await run.wait();
+      await supervisor.shutdown();
+      const reads = read.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(read).toHaveBeenCalledTimes(reads);
+    },
+  );
+
   it("passes private secret input and exact environment to the child adapter", async () => {
     const adapter = prepare();
     const secretInput = { fd: 3, createData: () => Buffer.from("secret") };

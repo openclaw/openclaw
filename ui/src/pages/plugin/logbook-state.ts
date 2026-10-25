@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
@@ -48,13 +48,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   let notify = () => {};
   const projection = projectMutableSource(state, (source) => source);
   notify = projection.publish;
-  onCleanup(() => {
-    dayLifetime.resolve();
-    clearInterval(pollTimer);
-    client = null;
-    backgroundRefreshQueued = false;
-  });
-
   function resetDay(day: string) {
     dayLifetime.resolve();
     dayLifetime = Promise.withResolvers<void>();
@@ -174,9 +167,17 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   }
 
   // PluginPage remounts this model for each connection; polling shares the analysis refresh owner.
-  const pollTimer = client
-    ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
-    : undefined;
+  onSettled(() => {
+    const pollTimer = client
+      ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
+      : undefined;
+    return () => {
+      dayLifetime.resolve();
+      clearInterval(pollTimer);
+      client = null;
+      backgroundRefreshQueued = false;
+    };
+  });
   return {
     get dayRetired() {
       return dayLifetime.promise;

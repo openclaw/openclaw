@@ -96,12 +96,12 @@ export async function getBoundingBox(page: Page, selector: string) {
 }
 
 export function readUiCss(): string {
-  const styles = `base layout layout.mobile components
+  const styles = `base layout layout.mobile components exec-approval-card
     chat/startup-layout chat/layout chat/message-layout chat/composer-surface
-    chat/composer chat/composer-queue chat/progress-card chat/composer-progress
+    chat/composer chat/composer-queue chat/composer-queue-content chat/progress-card chat/composer-progress
     chat/composer-context-strip chat/text chat/grouped chat/tool-cards
     chat/working-indicator chat/question-card rail-header
-    chat/sidebar chat/session-rail chat/side-panel`;
+    chat/sidebar chat/sidebar-panels chat/session-rail chat/side-panel`;
   return (cachedUiCss ??= styles
     .split(/\s+/)
     .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))

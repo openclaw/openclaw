@@ -1459,14 +1459,14 @@ describe("mobile release CI tools", () => {
     const prepared = runSigningProof();
     expect(prepared.result.status, prepared.result.stderr).toBe(0);
     expect(prepared.events).toEqual([
-      "bundle:_4.0.22_ check",
-      "bundle:_4.0.22_ exec fastlane ios signing_check",
+      "bundle:_4.0.23_ check",
+      "bundle:_4.0.23_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
-    expect(failedCheck.events).toEqual(["bundle:_4.0.22_ check"]);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.23_ check"]);
 
     const action = parse(readText(".github/actions/ios-signing-keychain/action.yml")) as {
       runs: {

@@ -88,23 +88,6 @@ async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-async function runModelAuthStatus(agent: string) {
-  const captured: string[] = [];
-  const { modelsStatusCommand } = await import("../../commands/models/list.status-command.js");
-  await modelsStatusCommand(
-    { json: true, agent },
-    {
-      log: (...args) => captured.push(args.join(" ")),
-      error: defaultRuntime.error,
-      exit: (code) => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-  );
-  const raw = captured.find((line) => line.trim().startsWith("{"));
-  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-}
-
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
@@ -558,9 +541,22 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
-        return runModelAuthStatus(
-          await resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
+        const agent = await resolveModelAuthAgent(command, opts.agent, "infer model auth status");
+        const captured: string[] = [];
+        const { modelsStatusCommand } =
+          await import("../../commands/models/list.status-command.js");
+        await modelsStatusCommand(
+          { json: true, agent },
+          {
+            log: (...args) => captured.push(args.join(" ")),
+            error: defaultRuntime.error,
+            exit: (code) => {
+              throw new Error(`exit ${code}`);
+            },
+          },
         );
+        const raw = captured.find((line) => line.trim().startsWith("{"));
+        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       }),
     );
 }

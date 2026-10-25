@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-pane.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
   createSidebarContentRecorder,
   loadedSidebarContent,
@@ -24,16 +22,12 @@ function createReferenceState(
   sessions: SessionWorkspaceHost["sessions"],
   methods: string[] = ["sessions.files.list", "sessions.files.set"],
 ): SessionWorkspaceHost {
-  return {
-    client: createGatewayBrowserClientFixture(),
-    connected: true,
-    connectionEpoch: 1,
+  return createSessionWorkspaceHost({
     handleOpenSidebar: createSidebarContentRecorder(),
     hello: gatewayHelloForMethods(methods),
     sessionKey: "agent:main:current",
-    sidebarContent: null,
     sessions,
-  };
+  });
 }
 
 describe("session workspace file reference resolution", () => {
@@ -56,10 +50,27 @@ describe("session workspace file reference resolution", () => {
     expect(listFiles).not.toHaveBeenCalled();
   });
 
-  it("resolves a bare filename to the nested workspace file that search finds once", async () => {
-    const nestedPath = "labs/file-organizer/output/sorted-copy-001/ORGANIZATION_REPORT.md";
+  it.each([
+    {
+      label: "resolves a bare filename to the nested workspace file that search finds once",
+      inputPath: "ORGANIZATION_REPORT.md",
+      returnedPath: "labs/file-organizer/output/sorted-copy-001/ORGANIZATION_REPORT.md",
+      search: true,
+      content: "# Sorted",
+    },
+    {
+      label:
+        "keeps the successful root path for actions when the Gateway responds with a cwd-relative path",
+      inputPath: "/workspace/src/readme.md",
+      returnedPath: "src/readme.md",
+      search: false,
+      content: "# Readme",
+    },
+  ])("$label", async ({ inputPath, returnedPath, search, content }) => {
+    const requestPath = `/workspace/${returnedPath}`;
+    const name = returnedPath.split("/").at(-1)!;
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path !== `/workspace/${nestedPath}`) {
+      if (path !== requestPath) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "session file not found",
@@ -70,14 +81,14 @@ describe("session workspace file reference resolution", () => {
         sessionKey,
         root: "/workspace",
         file: {
-          path: nestedPath,
-          workspacePath: nestedPath,
-          name: "ORGANIZATION_REPORT.md",
+          path: returnedPath,
+          workspacePath: returnedPath,
+          name,
           kind: "read",
           missing: false,
           previewKind: "text",
           contentEncoding: "utf8",
-          content: "# Sorted",
+          content,
           hash: "hash",
         },
       };
@@ -88,8 +99,8 @@ describe("session workspace file reference resolution", () => {
       files: [],
       browser: {
         path: "",
-        search: "ORGANIZATION_REPORT.md",
-        entries: [{ path: nestedPath, name: "ORGANIZATION_REPORT.md", kind: "file" }],
+        search: name,
+        entries: [{ path: returnedPath, name, kind: "file" }],
       },
     });
     const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
@@ -109,110 +120,34 @@ describe("session workspace file reference resolution", () => {
       createSessionCapabilityFixture({ getFile, listFiles, setFile }),
     );
 
-    void openSessionWorkspaceFile(state, { path: "ORGANIZATION_REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: inputPath });
 
     const sidebarContent = await loadedSidebarContent(state);
-    expect(sidebarContent.kind).toBe("file");
-    expect(listFiles).toHaveBeenCalledExactlyOnceWith("agent:main:current", {
-      agentId: "main",
-      path: "",
-      search: "ORGANIZATION_REPORT.md",
-    });
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", `/workspace/${nestedPath}`, {
-      agentId: "main",
-    });
-    if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
-      throw new Error("expected editable resolved file content");
+    if (search) {
+      expect(listFiles).toHaveBeenCalledExactlyOnceWith("agent:main:current", {
+        agentId: "main",
+        path: "",
+        search: name,
+      });
+    } else {
+      expect(listFiles).not.toHaveBeenCalled();
     }
-    await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
-    expect(setFile).toHaveBeenLastCalledWith(
-      "agent:main:current",
-      `/workspace/${nestedPath}`,
-      "# Updated",
-      {
-        agentId: "main",
-        expectedHash: "hash",
-      },
-    );
-    expect(sidebarContent.sessionFileSource).toEqual({
-      sessionKey: "agent:main:current",
-      agentId: "main",
-      path: `/workspace/${nestedPath}`,
-    });
-    await sidebarContent.download?.(new AbortController().signal);
-    expect(downloadSessionFile).toHaveBeenLastCalledWith(
-      state,
-      {
-        sessionKey: "agent:main:current",
-        agentId: "main",
-        path: `/workspace/${nestedPath}`,
-      },
-      expect.any(AbortSignal),
-    );
-    await sidebarContent.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", `/workspace/${nestedPath}`, {
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
       agentId: "main",
     });
-  });
-
-  it("keeps the successful root path for actions when the Gateway responds with a cwd-relative path", async () => {
-    const requestPath = "/workspace/src/readme.md";
-    const returnedPath = "src/readme.md";
-    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path !== requestPath) {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "session file not found",
-          details: { type: "session_file_not_found" },
-        });
-      }
-      return {
-        sessionKey,
-        root: "/workspace",
-        file: {
-          path: returnedPath,
-          workspacePath: returnedPath,
-          name: "readme.md",
-          kind: "read",
-          missing: false,
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content: "# Readme",
-          hash: "hash",
-        },
-      };
-    });
-    const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
-      async (sessionKey, path) => ({
-        sessionKey,
-        file: {
-          path,
-          workspacePath: path,
-          name: path.split("/").at(-1) ?? path,
-          kind: "modified",
-          missing: false,
-          hash: "saved-hash",
-        },
-      }),
-    );
-    const state = createReferenceState(createSessionCapabilityFixture({ getFile, setFile }));
-
-    void openSessionWorkspaceFile(state, { path: requestPath });
-
-    const sidebarContent = await loadedSidebarContent(state);
     if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
       throw new Error("expected editable resolved file content");
     }
     expect(sidebarContent.path).toBe(returnedPath);
-    expect(sidebarContent.sessionFileSource?.path).toBe(requestPath);
+    expect(sidebarContent.sessionFileSource).toEqual({
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      path: requestPath,
+    });
     await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
     expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
       agentId: "main",
       expectedHash: "hash",
-    });
-    await sidebarContent.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-      agentId: "main",
     });
     await sidebarContent.download?.(new AbortController().signal);
     expect(downloadSessionFile).toHaveBeenLastCalledWith(
@@ -220,6 +155,10 @@ describe("session workspace file reference resolution", () => {
       { sessionKey: "agent:main:current", agentId: "main", path: requestPath },
       expect.any(AbortSignal),
     );
+    await sidebarContent.edit.fetchLatest();
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
+      agentId: "main",
+    });
   });
 
   it("uses the resolved nested path for oversized-file metadata", async () => {

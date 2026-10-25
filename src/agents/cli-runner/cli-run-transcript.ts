@@ -199,6 +199,7 @@ export async function persistCliAssistantTranscript(params: {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
+            runId: runParams.runId,
             hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
@@ -207,6 +208,7 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
+              runId: runParams.runId,
               hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,

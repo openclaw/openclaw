@@ -11,10 +11,7 @@ import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import {
-  isSessionRunActive,
-  isSessionRunCompactionBlocked,
-} from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {
@@ -70,8 +67,8 @@ function unused(...mocks: unknown[]) {
   }
 }
 
-function expectAbandonment(expected: "timeout" | undefined, sessionFile: string) {
-  for (const identity of [{ sessionId }, { sessionKey }, { sessionFile }]) {
+function expectAbandonment(expected: "timeout" | undefined) {
+  for (const identity of [{ sessionId }, { sessionKey }]) {
     expect(resolveEmbeddedRunAbandonment(identity)).toBe(expected);
   }
 }
@@ -171,20 +168,6 @@ describe("embedded run ownership", () => {
     unused(unknown, normal);
   });
 
-  it("keeps queued reply operations out of compact abort checks", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-reply-run",
-      resetTriggered: false,
-    });
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(false);
-
-    operation.setPhase("running");
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(true);
-  });
-
   it("aborts every active run in all mode", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
@@ -208,7 +191,6 @@ describe("embedded run ownership", () => {
     const { operation, backend } = startReply(handle);
     expect(abortEmbeddedAgentRun(sessionId)).toBe(false);
     expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
-    expect(isSessionRunCompactionBlocked(sessionId)).toBe(true);
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     expect(operation.result).toBeNull();
     expect(isSessionRunActive(sessionId)).toBe(true);
@@ -397,10 +379,6 @@ describe("embedded run ownership", () => {
     expect(observation(b)).toBeUndefined();
     expect(abandon(b)).toBe(true);
     expect(resolveEmbeddedRunAbandonment({ sessionId })).toBeUndefined();
-    expect(resolveEmbeddedRunAbandonment({ sessionFile: a.file })).toBe("timeout");
-    expect(resolveEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile: a.file })).toBe(
-      "timeout",
-    );
     expect(
       markEmbeddedRunRecoveringTimeout({
         sessionId: "different-incarnation",
@@ -434,18 +412,18 @@ describe("embedded run ownership", () => {
     expect(observation(b)).toBe("timeout");
   });
 
-  it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+  it("tracks timeout abandonment by session id and key until a new run starts", () => {
     const sessionFile = "/tmp/abandoned-session.jsonl";
     const timeout = { sessionKey, reason: "timeout" } as const;
     const handle = activate(createRunHandle(), sessionKey, sessionFile);
     expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId, handle, sessionFile })).toBe(
       true,
     );
-    expectAbandonment("timeout", sessionFile);
+    expectAbandonment("timeout");
     const next = createRunHandle();
     clearActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile);
     setActiveEmbeddedRun("next", next, sessionKey, sessionFile);
-    expectAbandonment(undefined, sessionFile);
+    expectAbandonment(undefined);
     expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId: "next", handle: next })).toBe(
       true,
     );

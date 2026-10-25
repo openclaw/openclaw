@@ -775,6 +775,9 @@ workspace. A safety rescan every 30 minutes catches missed events, including on
 filesystems without reliable native notifications. Each discovery pass reads a shared root once for matching discovery
 limits and file policies, then applies each workspace's precedence separately.
 Unchanged roots need no discovery work between events and safety rescans.
+Sessions share immutable parsed skill facts for unchanged files while retaining
+their own eligibility, allowlists, and prompt selections. A changed file replaces
+those facts on refresh; snapshots already in use keep their original revision.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
@@ -889,7 +892,10 @@ in-flight indexing started under the previous grant.
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. The read returns a string with the same location context and complete
-instructions. `await skills.list(offset)` returns up to 20 directory entries;
+instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+search and reads, with the same turn-lifetime checks. If a request fails, the
+Code Mode bridge reports a bounded, redacted cause.
+`await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
