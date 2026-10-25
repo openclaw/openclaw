@@ -20,10 +20,12 @@ const childKey = "agent:main:dashboard:child";
 const allowed = ["sessions_spawn", "github_publish", "github_identity_status"];
 const plan = createOpenClawOnlyToolConstructionPlan();
 type ToolOptions = Parameters<typeof createOpenClawCodingToolsInternal>[0];
-type ProfileOptions = Parameters<typeof resolveConversationCapabilityProfile>[0];
+type CapabilityStore = Parameters<
+  typeof resolveConversationCapabilityProfile
+>[0]["preparedSessionCapabilityStore"];
 function buildTools(
   options: ToolOptions & { config: OpenClawConfig; sessionKey: string },
-  profile: Partial<ProfileOptions> = {},
+  preparedSessionCapabilityStore: CapabilityStore = {},
 ) {
   return createOpenClawCodingToolsInternal({
     ...options,
@@ -32,8 +34,10 @@ function buildTools(
     conversationCapabilityProfile: resolveConversationCapabilityProfile({
       config: options.config,
       sessionKey: options.sessionKey,
-      preparedSessionCapabilityStore: {},
-      ...profile,
+      runtimeToolAllowlist: options.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options.inheritRuntimeToolAllowlist,
+      sandboxToolPolicy: options.sandbox?.tools,
+      preparedSessionCapabilityStore,
     }),
   });
 }
@@ -94,11 +98,7 @@ describe("publication policy inherited by a managed child", () => {
         sessionKey: childKey,
         githubPublicationAvailable: true,
       },
-      {
-        preparedSessionCapabilityStore: {
-          [childKey]: inheritedEntry(additionalInheritedToolNamesRef),
-        },
-      },
+      { [childKey]: inheritedEntry(additionalInheritedToolNamesRef) },
     );
     const childPublishers = child.filter((tool) => tool.name === "github_publish");
     expect(childPublishers).toHaveLength(1);
@@ -169,20 +169,15 @@ describe("publication policy inherited by a managed child", () => {
           inheritRuntimeToolAllowlist: true,
           inheritedToolAllowlistRef,
         },
-        {
-          runtimeToolAllowlist: runtime,
-          inheritRuntimeToolAllowlist: true,
-          sandboxToolPolicy: sandbox.tools,
-          preparedSessionCapabilityStore: inheritedDeny
-            ? {
-                [parentKey]: inheritedEntry(
-                  allowed,
-                  inheritedDeny,
-                  "agent:main:dashboard:grandparent",
-                ),
-              }
-            : {},
-        },
+        inheritedDeny
+          ? {
+              [parentKey]: inheritedEntry(
+                allowed,
+                inheritedDeny,
+                "agent:main:dashboard:grandparent",
+              ),
+            }
+          : {},
       );
       expect(parent.some((tool) => tool.name === "github_publish")).toBe(false);
       expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(expected);
@@ -217,12 +212,7 @@ describe("publication policy inherited by a managed child", () => {
           sandbox: childSandbox,
           githubPublicationAvailable: true,
         },
-        {
-          sandboxToolPolicy: sandbox.tools,
-          preparedSessionCapabilityStore: {
-            [childKey]: inheritedEntry(inheritedToolAllowlistRef, tools.deny ?? []),
-          },
-        },
+        { [childKey]: inheritedEntry(inheritedToolAllowlistRef, tools.deny ?? []) },
       );
       expect(child.some((tool) => tool.name === "github_publish")).toBe(expected);
       if (tools.gatewayPolicy?.actions?.github_publish?.includes("prepare_pr")) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startComputerHostProcess } from "../gateway/desktop/computer-process.js";
+import { createComputerRegistry } from "../gateway/desktop/computer-registry.test-support.js";
 import { createGatewayComputerService } from "../gateway/desktop/computer-service.js";
 import { computerCapabilities } from "../gateway/desktop/computer.test-support.js";
 import { NodeRegistry } from "../gateway/node-registry.js";
@@ -9,9 +10,6 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { DevicePairingNodeSnapshot } from "../infra/device-pairing-read.types.js";
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
 import type { ComputerUseV2ActionName } from "../plugins/computer-use-contract.js";
-import { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -148,40 +146,24 @@ it("updates the advertised surface after the local node and pairing owners chang
 it("observes the local computer owner's config and provider publications", async () => {
   vi.useFakeTimers();
   let config: OpenClawConfig = { plugins: { entries: { fixture: { enabled: true } } } };
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push(
-    createPluginRecord({
-      id: "fixture",
-      source: "fixture",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    }),
-  );
+  const provider = (actions: ComputerUseV2ActionName[]) => ({
+    id: "fixture",
+    label: "Fixture computer",
+    capabilities: () => capabilities(actions),
+    isAvailable: () => true,
+    openExecution: async () => {
+      throw new Error("Discovery must not open an execution");
+    },
+  });
+  const registryOptions = { pluginName: "Fixture" };
+  const registry = createComputerRegistry(provider(["screenshot", "left_click"]), registryOptions);
   const publishProvider = (actions: ComputerUseV2ActionName[]) => {
-    registry.nodeHostCommands.length = 0;
-    registerComputerUseProvider(
-      {
-        registerNodeHostCommand: (command) =>
-          registry.nodeHostCommands.push({
-            pluginId: "fixture",
-            pluginName: "Fixture",
-            command,
-            source: "fixture",
-          }),
-      },
-      {
-        id: "fixture",
-        label: "Fixture computer",
-        capabilities: () => capabilities(actions),
-        isAvailable: () => true,
-        openExecution: async () => {
-          throw new Error("Discovery must not open an execution");
-        },
-      },
+    registry.nodeHostCommands.splice(
+      0,
+      registry.nodeHostCommands.length,
+      ...createComputerRegistry(provider(actions), registryOptions).nodeHostCommands,
     );
   };
-  publishProvider(["screenshot", "left_click"]);
   const service = createGatewayComputerService({
     getConfig: () => config,
     getPluginRegistry: () => registry,

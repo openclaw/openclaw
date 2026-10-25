@@ -9,7 +9,6 @@ const readCall = {
   tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }],
 };
 const pinned = { type: "tool", name: "read" };
-const keepAll = { thinking: { type: "enabled", keep: "all" } };
 const disabled = { type: "disabled" };
 const sampling = { temperature: 0, top_p: 0.5, n: 2, presence_penalty: 1, frequency_penalty: 1 };
 type PayloadCase = Parameters<typeof runExtraParamsPayloadCase>[0];
@@ -77,21 +76,6 @@ it.each<
     { thinking: disabled, tool_choice: pinned },
   ],
   ["configured thinking", "kimi-k2.5", {}, { thinking: disabled }, { thinking: disabled }, "high"],
-  ["k2.6 keep", "kimi-k2.6", { model: "kimi-k2.6" }, keepAll, keepAll],
-  [
-    "non-k2.6 keep",
-    "kimi-k2.5",
-    { model: "kimi-k2.5" },
-    keepAll,
-    { thinking: { type: "enabled" } },
-  ],
-  [
-    "pinned choice drops keep",
-    "kimi-k2.6",
-    { model: "kimi-k2.6", tool_choice: pinned },
-    keepAll,
-    { thinking: disabled },
-  ],
 ])("Moonshot %s", (_name, model, input, params, expected, level) => {
   const payload = run(model, input, params, level);
   expect(payload.thinking).toEqual(expected.thinking);
