@@ -1,10 +1,8 @@
 import type { Expression } from "kysely";
 import {
   createSqliteQueryCache,
-  encodeSqliteStringSet,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
-  sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -106,33 +104,35 @@ type PluginStateRetentionBatchParams = {
   namespaces: readonly string[];
   now: number;
 };
-const pluginStateRetentionBatchQuery = createSqliteQueryCache((db: EngineConnection) =>
-  prepareSqliteQuerySync<
-    PluginStateRetentionBatchParams,
-    PluginStateRetentionRow & { namespace: string }
-  >(db, (parameter) =>
-    selectPluginStateRetention(
-      db,
-      parameter((value) => value.now),
-    )
-      .select("namespace")
-      .where(
-        "plugin_id",
-        "=",
-        parameter((value) => value.pluginId),
-      )
-      .where(
-        "namespace",
-        "in",
-        getPluginStateKysely(db)
-          .selectFrom(
-            sqliteStringSetEntries(
-              parameter((value) => encodeSqliteStringSet(value.namespaces)),
-            ).as("requested"),
+// Separate indexed aggregates keep undeclared namespaces out of the query plan.
+const pluginStateRetentionBatchQueries = Array.from({ length: 4 }, (_, lastIndex) =>
+  createSqliteQueryCache((db: EngineConnection) =>
+    prepareSqliteQuerySync<
+      PluginStateRetentionBatchParams,
+      PluginStateRetentionRow & { namespace: string }
+    >(db, (parameter) => {
+      const select = (index: number) =>
+        selectPluginStateRetention(
+          db,
+          parameter((value) => value.now),
+        )
+          .select(parameter((value) => value.namespaces[index]!).as("namespace"))
+          .where(
+            "plugin_id",
+            "=",
+            parameter((value) => value.pluginId),
           )
-          .select("requested.value"),
-      )
-      .groupBy("namespace"),
+          .where(
+            "namespace",
+            "=",
+            parameter((value) => value.namespaces[index]!),
+          );
+      let query = select(0);
+      for (let index = 1; index <= lastIndex; index++) {
+        query = query.unionAll(select(index));
+      }
+      return query;
+    }),
   ),
 );
 
@@ -140,9 +140,8 @@ export function readPluginStateRetentionBatch(
   db: EngineConnection,
   params: PluginStateRetentionBatchParams,
 ): Map<string, PluginStateRetention> {
-  const rows = new Map(
-    pluginStateRetentionBatchQuery(db)(params).rows.map((row) => [row.namespace, row]),
-  );
+  const read = pluginStateRetentionBatchQueries[params.namespaces.length - 1]!;
+  const rows = new Map(read(db)(params).rows.map((row) => [row.namespace, row]));
   return new Map(
     params.namespaces.map((namespace) => [
       namespace,
