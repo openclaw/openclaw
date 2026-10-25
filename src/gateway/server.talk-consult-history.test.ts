@@ -189,7 +189,10 @@ beforeEach(async () => {
     getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
-    sessionMessageSubscribers: { get: () => new Set([connectionId]) },
+    sessionMessageSubscribers: {
+      get: () => new Set([connectionId]),
+      getNarration: () => new Set(),
+    },
   });
   unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     if ((update.target?.sessionId ?? update.sessionId) !== sessionId) {

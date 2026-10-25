@@ -129,7 +129,7 @@ it.each([
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["broad"]) },
-    sessionMessageSubscribers: { get: () => new Set(["selected"]) },
+    sessionMessageSubscribers: { get: () => new Set(["selected"]), getNarration: () => new Set() },
   });
   const failedUpdate = update({
     messageId: "failed-attempt",

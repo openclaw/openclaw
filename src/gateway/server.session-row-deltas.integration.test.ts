@@ -108,7 +108,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
   ];
   const capable = await harness.openClient({ caps: deltaCaps });
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
-  const roster = await harness.openClient({ caps: deltaCaps });
+  const roster = await harness.openClient({
+    caps: [...deltaCaps, "narration-message-bodies-optional"],
+  });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
   const key = expectDefined(keys.at(-1), "nested leaf");
   const runId = "row-delta-controlled-turn";
@@ -147,7 +149,12 @@ test("capable and legacy sockets produce identical session payloads and consumer
     await request(ws, "sessions.messages.subscribe", { key });
   }
   await request(roster.ws, "sessions.subscribe");
-  // Every exact kind retains bodies, including independently identified observers.
+  await request(roster.ws, "sessions.messages.subscribe", {
+    key,
+    mode: "narration",
+    subscriptionId: "sidebar",
+  });
+  // Without the new capability, every exact kind still retains bodies.
   for (const [depth, childKey] of keys.slice(0, -1).entries()) {
     await request(capable.ws, "sessions.messages.subscribe", {
       key: childKey,

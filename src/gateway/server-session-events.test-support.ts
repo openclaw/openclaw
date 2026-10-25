@@ -261,7 +261,7 @@ function createHandler(
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-    sessionMessageSubscribers: { get: getSessionMessageSubscribers },
+    sessionMessageSubscribers: { get: getSessionMessageSubscribers, getNarration: () => new Set() },
   });
   return { broadcastToConnIds, handler };
 }

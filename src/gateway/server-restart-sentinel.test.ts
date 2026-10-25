@@ -1041,7 +1041,7 @@ describe("scheduleRestartSentinelWake", () => {
       getSessionRowProjection: () => rowProjection,
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => subscribers },
-      sessionMessageSubscribers: { get: () => subscribers },
+      sessionMessageSubscribers: { get: () => subscribers, getNarration: () => new Set() },
     });
     const publications: ReturnType<typeof publish>[] = [];
     const publicationErrors: unknown[] = [];

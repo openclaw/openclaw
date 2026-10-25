@@ -33,7 +33,15 @@ connect capability. For these clients, the Gateway omits only `message` from a
 visible `session.message` when the connection has no exact subscription for the
 resolved session and agent, and has not requested `includeMessageBodies`.
 Every exact subscription counts, including narration, approvals, and any
-`subscriptionId`. The event name, routing, message ID and sequence, run and
+`subscriptionId`, unless the client also advertises
+`narration-message-bodies-optional`. That additional capability permits omission
+when all exact subscriptions for the resolved session and agent use
+`mode: "narration"`. A full subscription, including a provisional one or one with
+a different `subscriptionId`, still retains bodies. The web Control UI advertises
+both capabilities because its sidebar narration consumes bounded narration and
+observer events rather than persisted message bodies. An explicit
+`includeMessageBodies: true` preference always retains bodies.
+The event name, routing, message ID and sequence, run and
 ownership receipts, clocks, full session row, and ancestor coverage remain
 unchanged. Rows still use the connection's negotiated row codec. Clients without
 the capability, including native apps, continue receiving complete messages.

@@ -56,7 +56,7 @@ import {
 } from "./session-transcript-readers.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
-type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get" | "getNarration">;
 
 function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): boolean {
   return Boolean(
@@ -552,15 +552,21 @@ async function handleTranscriptUpdateBroadcast(
         agentId: eventAgentId,
         activeRunState,
       });
-      // Read live connection preferences and every exact observer at delivery time.
+      // Full observers and plugin interest win over narration-only body omission.
       const omitMessage = (client: GatewayClient) =>
         hasGatewayClientCap(
           client.connect.caps,
           GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
         ) &&
         !(client.includeSessionMessageBodies ?? client.connect.includeSessionMessageBodies) &&
-        !broadcastKeys.some((key) =>
-          params.sessionMessageSubscribers.get(key).has(client.connId ?? ""),
+        !broadcastKeys.some(
+          (key) =>
+            params.sessionMessageSubscribers.get(key).has(client.connId ?? "") &&
+            (!hasGatewayClientCap(
+              client.connect.caps,
+              GATEWAY_CLIENT_CAPS.NARRATION_MESSAGE_BODIES_OPTIONAL,
+            ) ||
+              !params.sessionMessageSubscribers.getNarration(key).has(client.connId ?? "")),
         );
       const broadcastOptions = {
         sessionEventSubscriptionKeys: broadcastKeys,

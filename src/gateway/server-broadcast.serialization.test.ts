@@ -128,7 +128,7 @@ function transcriptHandler(
   return createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds: connection.broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => recipients },
-    sessionMessageSubscribers: { get: () => recipients },
+    sessionMessageSubscribers: { get: () => recipients, getNarration: () => new Set() },
     getSessionRowProjection: () => projection,
   });
 }
@@ -153,6 +153,77 @@ const steeringNotice = (display = false) =>
   });
 
 describe("broadcast serialization failures", () => {
+  it("omits opted-in narration bodies only while no full or plugin interest remains", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
+      const scope = await seedSession("agent:main:narration-bodies", {
+        visibility: "shared",
+      });
+      const message = { role: "assistant", content: "Synthetic persisted reply" };
+      await appendTranscriptMessage(scope, { eventId: "reply", now: 1, message });
+      const { connection, projection } = await createProjectedConnection(() => cfg);
+      const peers = ["old", "narration", "new-only"].map((id) => {
+        const peer = makeClient(id);
+        peer.client.connect.caps = [
+          "session-scoped-events",
+          ...(id !== "new-only" ? ["roster-message-bodies-optional"] : []),
+          ...(id !== "old" ? ["narration-message-bodies-optional"] : []),
+        ];
+        connection.clients.add(peer.client);
+        connection.sessionEventSubscribers.subscribe(id);
+        connection.sessionMessageSubscribers.subscribe(id, scope.sessionKey, {
+          mode: "narration",
+          subscriptionId: "sidebar",
+        });
+        return peer;
+      });
+      const narrator = peers[1]!;
+      const subscribers = connection.sessionMessageSubscribers;
+      const handler = createTranscriptUpdateBroadcastHandler({
+        broadcastToConnIds: connection.broadcastToConnIds,
+        sessionEventSubscribers: connection.sessionEventSubscribers,
+        sessionMessageSubscribers: subscribers,
+        getSessionRowProjection: () => projection,
+      });
+      const publish = async (body: boolean) => {
+        for (const peer of peers) {
+          peer.socket.send.mockClear();
+        }
+        await handler({ target: scope, messageId: "reply", messageSeq: 1, message });
+        for (const peer of peers) {
+          const frames = sentFrames(peer);
+          expect(frames).toHaveLength(1);
+          expect(frames[0]).toMatchObject({
+            event: "session.message",
+            payload: { messageId: "reply", messageSeq: 1, session: { key: scope.sessionKey } },
+          });
+          if (peer === narrator && !body) {
+            expect(frames[0].payload).not.toHaveProperty("message");
+          } else {
+            expect(frames[0].payload.message).toMatchObject(message);
+          }
+        }
+      };
+      await publish(false);
+      subscribers.subscribe("narration", scope.sessionKey, { subscriptionId: "chat" });
+      await publish(true);
+      subscribers.unsubscribe("narration", scope.sessionKey, "chat");
+      await publish(false);
+      const provisional = subscribers.subscribe("narration", scope.sessionKey, {
+        subscriptionId: "pending-chat",
+        provisional: true,
+      });
+      await publish(true);
+      provisional!();
+      await publish(false);
+      narrator.client.includeSessionMessageBodies = true;
+      await publish(true);
+      narrator.client.includeSessionMessageBodies = false;
+      await publish(false);
+    });
+  });
+
   it("isolates live plugin notices from equally authorized TUI and native recipients in either order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg: OpenClawConfig = {};
