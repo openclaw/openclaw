@@ -66,16 +66,16 @@ function configWithAccounts(
   return makeTwitchChannelTestConfig({ ...extra, accounts });
 }
 
-function answerText(...answers: string[]) {
+function answers(text: string[], confirmations: boolean[] = [], fallback?: boolean) {
   mockPromptText.mockReset();
-  for (const answer of answers) {
+  mockPromptConfirm.mockReset();
+  if (fallback !== undefined) {
+    mockPromptConfirm.mockResolvedValue(fallback);
+  }
+  for (const answer of text) {
     mockPromptText.mockResolvedValueOnce(answer);
   }
-}
-
-function answerConfirm(...answers: boolean[]) {
-  mockPromptConfirm.mockReset();
-  for (const answer of answers) {
+  for (const answer of confirmations) {
     mockPromptConfirm.mockResolvedValueOnce(answer);
   }
 }
@@ -94,11 +94,7 @@ describe("setup surface helpers", () => {
   it.each([false, true])(
     "keeps existing credentials (refresh: %s) without masked prompts",
     async (refresh) => {
-      mockPromptConfirm.mockReset().mockResolvedValue(refresh);
-      if (!refresh) {
-        answerConfirm(true, false);
-      }
-      answerText("testbot", "test-client-id", "#testchannel");
+      answers(["testbot", "test-client-id", "#testchannel"], refresh ? [] : [true, false], refresh);
       const result = await finalizeTwitchSetup(refresh ? refreshConfig : defaultConfig);
       expect(result?.default).toMatchObject(refresh ? mockRefreshAccount : mockAccount);
       expect(mockPromptConfirm).toHaveBeenCalledWith(
@@ -110,8 +106,7 @@ describe("setup surface helpers", () => {
   );
 
   it("should use a sensitive prompt when replacing a configured token", async () => {
-    mockPromptConfirm.mockReset().mockResolvedValue(false);
-    answerText("testbot", "oauth:test123", "test-client-id", "#testchannel");
+    answers(["testbot", "oauth:test123", "test-client-id", "#testchannel"], [], false);
     const result = await finalizeTwitchSetup(defaultConfig);
     const prompt = expectSensitivePrompt(1);
     expect(mockPromptText).toHaveBeenCalledTimes(4);
@@ -123,8 +118,10 @@ describe("setup surface helpers", () => {
   });
 
   it("should prompt for credentials when user accepts", async () => {
-    answerConfirm(true, true, false, false);
-    answerText("testbot", "test-client-id", "#testchannel", "secret123", "refresh123");
+    answers(
+      ["testbot", "test-client-id", "#testchannel", "secret123", "refresh123"],
+      [true, true, false, false],
+    );
     const result = await finalizeTwitchSetup(refreshConfig);
     expect(result?.default).toMatchObject({
       clientSecret: "secret123",
@@ -175,8 +172,7 @@ describe("setup surface helpers", () => {
   it("uses an environment-only token without sending it to wizard prompts", async () => {
     const envToken = "oauth:environment-only";
     vi.stubEnv("OPENCLAW_TWITCH_ACCESS_TOKEN", envToken);
-    mockPromptConfirm.mockReset().mockResolvedValueOnce(true);
-    answerText("env-bot", "env-client");
+    answers(["env-bot", "env-client"], [true]);
     const result = await finalizeTwitchSetup({}, "default");
     expect(result?.default).toMatchObject({
       username: "env-bot",
@@ -217,8 +213,7 @@ describe("setup surface helpers", () => {
   });
 
   it("writes to the requested account when defaultAccount is not created yet", async () => {
-    answerText("secondary-bot", "oauth:secondary", "secondary-client", "#secondary");
-    mockPromptConfirm.mockReset().mockResolvedValue(false);
+    answers(["secondary-bot", "oauth:secondary", "secondary-client", "#secondary"], [], false);
     const result = await finalizeTwitchSetup(
       configWithAccounts(
         { default: configuredAccount("default") },
@@ -236,8 +231,7 @@ describe("setup surface helpers", () => {
 
   it("persists a token instead of using env-token shortcut for non-default finalize", async () => {
     vi.stubEnv("OPENCLAW_TWITCH_ACCESS_TOKEN", "oauth:fromenv");
-    answerText("secondary-bot", "oauth:persisted", "secondary-client", "#secondary");
-    mockPromptConfirm.mockReset().mockResolvedValue(false);
+    answers(["secondary-bot", "oauth:persisted", "secondary-client", "#secondary"], [], false);
     const result = await finalizeTwitchSetup(configWithAccounts({}), "secondary");
     expect(result?.secondary?.accessToken).toBe("oauth:persisted");
     expect(mockPromptConfirm).toHaveBeenCalledTimes(1);

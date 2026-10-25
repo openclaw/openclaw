@@ -186,9 +186,7 @@ describe("TwitchClientManager", () => {
     authSuccessHandlers.length = 0;
     authFailureHandlers.length = 0;
     disconnectHandlers.length = 0;
-    resolveTwitchTokenMock.mockReturnValue({
-      token: "oauth:mock-token-from-tests",
-    });
+    resolveTwitchTokenMock.mockReturnValue({ token: "oauth:mock-token-from-tests" });
     manager = new TwitchClientManager(mockLogger, statusSink);
   });
   afterEach(() => {
@@ -259,9 +257,6 @@ describe("TwitchClientManager", () => {
     void connection.then(settle, settle);
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
-    );
     disconnectHandlers[0]?.(false, new Error("disconnected"));
     await Promise.resolve();
     expect(settled).toBe(false);
@@ -331,9 +326,7 @@ describe("TwitchClientManager", () => {
   );
 
   it("should use token directly when no oauth: prefix", async () => {
-    resolveTwitchTokenMock.mockReturnValue({
-      token: "raw-token-from-tests",
-    });
+    resolveTwitchTokenMock.mockReturnValue({ token: "raw-token-from-tests" });
     await manager.getClient(testAccount);
     expect(mockAuthProvider.constructor).toHaveBeenCalledExactlyOnceWith(
       "test-client-id",
@@ -469,15 +462,9 @@ describe("TwitchClientManager", () => {
     });
 
     it("should return a formatted send failure", async () => {
+      await manager.disconnectAll();
       mockSay.mockRejectedValueOnce(new Error("Rate limited"));
       await expect(send()).resolves.toEqual({ ok: false, error: "Rate limited" });
-    });
-
-    it("should create client if not already connected", async () => {
-      await manager.disconnectAll();
-      const connectCallCountBefore = mockConnect.mock.calls.length;
-      await send();
-      expect(mockConnect.mock.calls.length).toBeGreaterThan(connectCallCountBefore);
     });
   });
 

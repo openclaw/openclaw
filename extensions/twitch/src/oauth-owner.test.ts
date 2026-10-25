@@ -22,6 +22,7 @@ import { setTwitchRuntime } from "./runtime.js";
 import { TwitchClientManager } from "./twitch-client.js";
 
 let provider: AuthProvider;
+const listener = () => ({ unbind() {} });
 vi.mock("@twurple/chat", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@twurple/chat")>()),
   ChatClient: class {
@@ -31,14 +32,10 @@ vi.mock("@twurple/chat", async (importOriginal) => ({
     }
     onAuthenticationSuccess(fn: () => void) {
       this.ready = fn;
-      return { unbind() {} };
+      return listener();
     }
-    onAuthenticationFailure() {
-      return { unbind() {} };
-    }
-    onDisconnect() {
-      return { unbind() {} };
-    }
+    onAuthenticationFailure = listener;
+    onDisconnect = listener;
     onMessage() {}
     connect() {
       this.ready();
@@ -73,9 +70,12 @@ function manager() {
 function connect(owner = manager()) {
   return owner.getClient(initial, current, "default");
 }
-beforeEach(async () => {
+async function reopenState() {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
+}
+beforeEach(async () => {
+  await reopenState();
   stateDir = mkdtempSync(path.join(os.tmpdir(), "twitch-oauth-owner-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   current = { channels: { twitch: { ...initial } } };
@@ -99,8 +99,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
@@ -186,8 +185,7 @@ it("retains a completed rotation when token validation is transiently unavailabl
     }),
   );
   await expect(connect()).rejects.toThrow();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   await connect();
   expect(validations).toBe(2);
   expect((await provider.getAccessTokenForIntent!("chat"))?.accessToken).toBe(rotated.access_token);
@@ -198,8 +196,7 @@ it("persists the initial rotation before chat and reopens the replacement for th
   const posts = network(async () => Response.json(rotated));
   await connect();
   expect((await provider.getAccessTokenForIntent!("chat"))?.accessToken).toBe(rotated.access_token);
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   await connect();
   expect(posts).toEqual([initial.refreshToken]);
   await provider.refreshAccessTokenForIntent!("chat");
@@ -219,41 +216,27 @@ it.each(["lost-response", "nested-rejection"] as const)(
     expect(posts).toEqual([initial.refreshToken]);
   },
 );
-it("cannot publish a held old grant after account authority changes", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const posts = network(async () => {
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  const outcome = connect().then(
-    () => "published",
-    () => "changed",
-  );
-  await entered.promise;
-  current = { channels: { twitch: { ...initial, refreshToken: "synthetic-new-login" } } };
-  release.resolve();
-  expect(await outcome).toBe("changed");
-  expect(posts).toEqual([initial.refreshToken]);
-});
-
-it("does not publish a held refresh after the channel account is disabled", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const posts = network(async () => {
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  const outcome = connect().then(
-    () => "published",
-    () => "disabled",
-  );
-  await entered.promise;
-  current = { channels: { twitch: { ...initial, enabled: false } } };
-  release.resolve();
-  expect(await outcome).toBe("disabled");
-  await expect(connect()).rejects.toThrow();
-  expect(posts).toEqual([initial.refreshToken]);
-});
+it.each([{ refreshToken: "synthetic-new-login" }, { enabled: false }])(
+  "does not publish a held refresh after authority changes: %j",
+  async (change) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const posts = network(async () => {
+      entered.resolve();
+      await release.promise;
+      return Response.json(rotated);
+    });
+    const outcome = connect().then(
+      () => "published",
+      () => "changed",
+    );
+    await entered.promise;
+    current = { channels: { twitch: { ...initial, ...change } } };
+    release.resolve();
+    expect(await outcome).toBe("changed");
+    if ("enabled" in change) {
+      await expect(connect()).rejects.toThrow();
+    }
+    expect(posts).toEqual([initial.refreshToken]);
+  },
+);
