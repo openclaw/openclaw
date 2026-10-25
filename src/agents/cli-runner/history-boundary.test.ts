@@ -18,7 +18,7 @@ import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import type { CliSessionBinding, InternalSessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
