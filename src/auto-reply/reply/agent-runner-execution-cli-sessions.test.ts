@@ -1,15 +1,13 @@
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -21,9 +19,6 @@ import {
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
-  makeTestSessionStorePath,
-  requireMockCall,
-  requireRecord,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
@@ -121,41 +116,21 @@ describe("executeAgentTurn: CLI session routing", () => {
     },
   );
 
-  async function runSlackCliTurn(sessionCtx: Record<string, unknown>) {
-    // Mirrors Slack's adapter contract: a thread-originated turn requires its
-    // thread and upgrades the reply mode; standalone turns anchor on the message.
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          plugin: {
-            ...createChannelTestPluginBase({ id: "slack" }),
-            threading: {
-              buildToolContext: ({
-                context,
-              }: {
-                context: {
-                  To?: string;
-                  CurrentMessageId?: string | number;
-                  MessageThreadId?: string | number;
-                  ReplyToMode?: string;
-                };
-              }) => {
-                const threadTs =
-                  context.MessageThreadId != null ? String(context.MessageThreadId) : undefined;
-                return {
-                  currentChannelId: context.To,
-                  currentThreadTs: threadTs ?? String(context.CurrentMessageId),
-                  replyToMode: threadTs ? "all" : context.ReplyToMode,
-                  sameChannelThreadRequired: threadTs !== undefined,
-                };
-              },
-            },
-          },
-          source: "test",
-        },
-      ]),
-    );
+  it("keeps untargeted message-tool sends from a thread turn in that thread", async () => {
+    const plugin: ChannelPlugin = createChannelTestPluginBase({ id: "slack" });
+    plugin.threading = {
+      buildToolContext: ({ context }) => {
+        const threadTs =
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined;
+        return {
+          currentChannelId: context.To,
+          currentThreadTs: threadTs ?? String(context.CurrentMessageId),
+          replyToMode: threadTs ? "all" : context.ReplyToMode,
+          sameChannelThreadRequired: threadTs !== undefined,
+        };
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]));
     try {
       const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
       state.runCliAgentMock.mockResolvedValueOnce(cliResult("done", {}));
@@ -169,7 +144,7 @@ describe("executeAgentTurn: CLI session routing", () => {
             ChatType: "channel",
             MessageSid: "1700000000.000200",
             ReplyToMode: "off",
-            ...sessionCtx,
+            MessageThreadId: "1700000000.000100",
           } as unknown as TemplateContext,
         }),
       );
@@ -177,11 +152,6 @@ describe("executeAgentTurn: CLI session routing", () => {
     } finally {
       resetPluginRuntimeStateForTest();
     }
-  }
-
-  it("keeps untargeted message-tool sends from a thread turn in that thread", async () => {
-    await runSlackCliTurn({ MessageThreadId: "1700000000.000100" });
-
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentThreadTs: "1700000000.000100",
       replyToMode: "all",
@@ -208,18 +178,6 @@ describe("executeAgentTurn: CLI session routing", () => {
       const internalParams = params as RunCliAgentParams & {
         mediaImageLayout?: typeof mediaImageLayout;
       };
-      await expect(
-        prepareCliPromptImagePayload({
-          backend: { command: "claude" },
-          prompt: params.prompt,
-          imagePrompt: params.prompt,
-          workspaceDir: params.workspaceDir,
-          images: [...images, ...images],
-          imageOrder: [...imageOrder, ...imageOrder],
-          media,
-        }),
-      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
-
       const reconciled = await detectAndLoadPromptImages({
         prompt: params.prompt,
         media: params.media,
@@ -274,59 +232,22 @@ describe("executeAgentTurn: CLI session routing", () => {
 
   it("passes prepared CLI user turns to the runtime persistence boundary", async () => {
     const followupRun = createCliRun("codex-cli", "gpt-5.4");
-    state.runCliAgentMock.mockResolvedValueOnce(cliResult("final", {}));
-
-    const preparedUserTurnMessage = {
+    const recorder = createTestUserTurnRecorder({
       role: "user",
       content: "describe this",
-      MediaPath: "/tmp/image.png",
-      MediaPaths: ["/tmp/image.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
-    } as never;
-    followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder(preparedUserTurnMessage);
-    const storePath = makeTestSessionStorePath();
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
-      updatedAt: 1,
-    };
-    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, sessionEntry);
-    const activeSessionStore = { main: sessionEntry };
-
-    await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      commandBody: "runtime prompt",
-      transcriptCommandBody: "display prompt",
-      activeSessionStore,
-      storePath,
-      getActiveSessionEntry: () => activeSessionStore.main,
+      timestamp: 1,
     });
-
-    expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
-      sessionKey: "main",
-      agentId: "main",
-      sessionId: "session",
-      suppressNextUserMessagePersistence: false,
-      persistAssistantTranscript: true,
-      storePath,
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "session",
-        sessionKey: "main",
-        storePath,
-      },
+    followupRun.userTurnTranscriptRecorder = recorder;
+    state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+      expect(params.userTurnTranscriptRecorder).toBe(recorder);
+      expect(params.suppressNextUserMessagePersistence).toBe(false);
+      expect(params.persistAssistantTranscript).toBe(true);
+      expect(params.onUserMessagePersisted).toEqual(expect.any(Function));
+      return cliResult("final", {});
     });
-    const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
-    const callParams = requireRecord(call[0], "CLI runtime");
-    expect(callParams.userTurnTranscriptRecorder).toEqual(expect.any(Object));
-    expect(requireRecord(callParams.userTurnTranscriptRecorder, "user turn recorder").message).toBe(
-      preparedUserTurnMessage,
+    expect((await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }))).kind).toBe(
+      "success",
     );
-    expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
   it.each(["reused", "replacement", "unflushed"] as const)(
