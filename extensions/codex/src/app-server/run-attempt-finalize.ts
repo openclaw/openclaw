@@ -130,14 +130,24 @@ export async function finalizeCodexAttempt(
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }
-    const result = activeProjector.buildResult(toolBridge.telemetry, {
-      yieldDetected: toolState.yieldDetected,
-      readRetainedNativeCommands,
-      // The original transcript fence excludes steering accepted during this turn.
-      steeringMessages: params.pluginRuntimeRefreshPending?.()
-        ? turnRuntime.steeringQueueRef.current?.getAcceptedMessages()
-        : undefined,
-    });
+    const steeringMessages = turnRuntime.steeringQueueRef.current?.getAcceptedMessages();
+    const result = {
+      ...activeProjector.buildResult(toolBridge.telemetry, {
+        yieldDetected: toolState.yieldDetected,
+        readRetainedNativeCommands,
+        // The original transcript fence excludes steering accepted during this turn.
+        steeringMessages: params.pluginRuntimeRefreshPending?.() ? steeringMessages : undefined,
+      }),
+      // Delivery belongs to the latest consumed input even without a runtime refresh.
+      // Historical send receipts remain available for side-effect accounting.
+      ...(steeringMessages?.length
+        ? {
+            sourceReplyDeliveryState: toolBridge.telemetry.finalSourceReplyDelivered
+              ? ("delivered" as const)
+              : ("missing" as const),
+          }
+        : {}),
+    };
     const terminalAssistantSource = result.messagesSnapshot.find(
       (message) => readMirrorIdentity(message) === `${activeTurnId}:assistant`,
     );
@@ -288,10 +298,12 @@ export async function finalizeCodexAttempt(
         (finalPromptError === null || finalPromptError === undefined) &&
         (completedTurnStatus === "completed" || locallyCompletedTurn);
       const completedSourceReply =
-        toolBridge.telemetry.finalSourceReplyDelivered ||
-        toolBridge.telemetry.messagingToolSentTargets.some(
-          (target) => target.sourceReplyFinal === true,
-        );
+        result.sourceReplyDeliveryState !== undefined
+          ? result.sourceReplyDeliveryState === "delivered"
+          : toolBridge.telemetry.finalSourceReplyDelivered ||
+            toolBridge.telemetry.messagingToolSentTargets.some(
+              (target) => target.sourceReplyFinal === true,
+            );
       if (completedSourceReply) {
         // Harness classification only sees assistant/reasoning/plan projections.
         // A reply delivered entirely through the source message tool is visible
