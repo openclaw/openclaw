@@ -145,9 +145,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
     expect(mocks.runtimeRequest).not.toHaveBeenCalled();
   } finally {
     await Promise.all(mocks.actualClients.map((client) => client.stopAndWait()));
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
   }
 });
 

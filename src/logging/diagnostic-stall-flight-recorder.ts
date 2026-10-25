@@ -10,7 +10,7 @@ import {
 } from "./diagnostic-profile.js";
 
 const WINDOW_MS = 5_000;
-const SAMPLE_MS = 10;
+const SAMPLE_MS = 25;
 const MAX_SAMPLES = 1_024;
 const MAX_PROFILE_BYTES = 1_048_576;
 

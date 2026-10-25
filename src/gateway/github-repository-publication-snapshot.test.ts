@@ -4,7 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { applyNodeRepositoryCheckpoint } from "../node-host/node-worker-repository-transfers.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import {
+  applyNodeRepositoryCheckpoint,
+  withNodeRepositoryPublication,
+} from "../node-host/node-worker-repository-transfers.js";
+import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../worker/node-workspace-transfer-protocol.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
 import {
@@ -92,6 +98,7 @@ it("preserves committed CRLF bytes when capturing clean and edited workspaces", 
   const tree = f.git("rev-parse", "HEAD^{tree}");
   expect(f.git("status", "--porcelain")).toBe("");
   const before = await state(f, [file]);
+  const manifestHome = temporary.make(".publication-home-", process.cwd());
   for (const edited of [false, true]) {
     if (edited) {
       await f.write("counter.txt", "changed\r\n");
@@ -99,6 +106,20 @@ it("preserves committed CRLF bytes when capturing clean and edited workspaces", 
     }
     const captured = await local(f);
     const remote = await remoteSnapshot(f, head);
+    const nodeSnapshot = await withNodeRepositoryPublication(
+      {
+        workspaceDir: f.cwd,
+        manifestHome,
+        baseCommit: head,
+        baseManifestRef: NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+      },
+      async (root) => {
+        const raw = await fs.readFile(path.join(root, "snapshot.json"), "utf8");
+        const digest = "sha256:" + createHash("sha256").update(raw).digest("hex");
+        return (await readGitHubRepositoryPublicationMetadata(root, digest)).snapshot;
+      },
+    );
+    expect(nodeSnapshot).toEqual(remote);
     expect(captured).toMatchObject({
       sourceHeadCommit: head,
       sourceIndexTree: tree,
@@ -189,6 +210,7 @@ it("restores accepted publication paths as unstaged without running hooks or fil
   const base = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
   await f.write("ignored-[1].txt", "publishable\n");
   f.git("--literal-pathspecs", "add", "-f", "--", "ignored-[1].txt");
+  await fs.rm(f.file("ignored-removed.txt"));
   if (process.platform !== "win32") {
     await fs.symlink("counter.txt", f.file("ignored-link.txt"));
     f.git("add", "-f", "ignored-link.txt");
@@ -215,6 +237,7 @@ it("restores accepted publication paths as unstaged without running hooks or fil
       "core.fsmonitor=false",
       ...args,
     ]);
+  await fs.writeFile(path.join(restored, "ignored-removed.txt"), "recovery-only bytes\n");
   const hooks = path.join(restored, ".git", "test-hooks");
   const sentinel = path.join(f.root, "unexpected-hook-or-filter");
   await fs.mkdir(hooks);
@@ -231,19 +254,28 @@ it("restores accepted publication paths as unstaged without running hooks or fil
   git("config", "core.fsmonitor", `printf fsmonitor > '${sentinel}'`);
   git("config", "filter.synthetic.clean", `printf filter > '${sentinel}'`);
   expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
-  const commands = await prepareRepositoryPublicationRestore({
+  const batches = await prepareRepositoryPublicationRestore({
     current: current.manifest,
     publicationStagingRoot: f.output,
     publicationDigest: digest,
   });
   const restore = () => {
-    for (const command of commands) {
-      execFileSync(process.execPath, command.argv.slice(1), {
-        cwd: restored,
-        env: f.env,
-        input: command.input,
-        stdio: "pipe",
-      });
+    for (const batch of batches) {
+      execFileSync(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+          ),
+          batch.action,
+        ],
+        {
+          cwd: restored,
+          env: f.env,
+          input: batch.input,
+          stdio: "pipe",
+        },
+      );
     }
   };
   expect(restore).toThrow();
@@ -255,7 +287,11 @@ it("restores accepted publication paths as unstaged without running hooks or fil
   restore();
   expect(await fs.readFile(sentinel, "utf8").catch(() => undefined)).toBeUndefined();
   expect(git("--literal-pathspecs", "ls-files", "--", "ignored-[1].txt")).toBe("ignored-[1].txt");
-  expect(git("diff", "--cached", "--name-only")).toBe("");
+  expect(git("diff", "--cached", "--name-only")).toBe("ignored-removed.txt");
+  expect(git("ls-files", "--", "ignored-removed.txt")).toBe("");
+  expect(await fs.readFile(path.join(restored, "ignored-removed.txt"), "utf8")).toBe(
+    "recovery-only bytes\n",
+  );
   expect(await fs.readFile(path.join(restored, "ignored-[1].txt"), "utf8")).toBe("publishable\n");
   if (process.platform !== "win32") {
     expect(await fs.readlink(path.join(restored, "ignored-link.txt"))).toBe("counter.txt");

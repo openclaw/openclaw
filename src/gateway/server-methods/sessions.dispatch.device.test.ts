@@ -38,6 +38,7 @@ import {
   invokeSessionDispatch,
   makeDispatchTestContext,
   makeSessionTarget,
+  createCodexDeviceHarness,
 } from "./sessions-dispatch.test-support.js";
 import { registerNativeDeviceDispatchTests } from "./sessions.dispatch.native-device.suite.js";
 
@@ -561,22 +562,7 @@ describe("sessions.dispatch device targets", () => {
         "sessions-dispatch-device-test",
         "default",
       );
-      registerAgentHarness({
-        id: "codex",
-        label: "Codex",
-        autoSelection: { providerIds: ["codex", "openai"] },
-        cloudPlacement: {
-          mode: "remote-exec",
-          devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-            consumesWorkerSlot: false,
-          },
-        },
-        supports: () => ({ supported: true, priority: 10 }),
-        async runAttempt() {
-          throw new Error("not used");
-        },
-      });
+      registerAgentHarness(createCodexDeviceHarness());
     });
 
     afterEach(() => {

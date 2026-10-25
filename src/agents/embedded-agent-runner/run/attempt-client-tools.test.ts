@@ -66,6 +66,19 @@ function clientTool(name: string) {
   };
 }
 
+function completedSlot(toolCallId: string, name: string, params: unknown) {
+  return { toolCallId, name, completed: true, params };
+}
+
+function wrappedTool(definitions: ReturnType<typeof prepare>["clientToolDefs"], name?: string) {
+  return wrapToolDefinition(
+    expectDefined(
+      name ? definitions.find((tool) => tool.name === name) : definitions[0],
+      name ?? "client tool",
+    ),
+  );
+}
+
 function pluginTool(
   name: string,
   pluginId: string,
@@ -154,7 +167,7 @@ function clientTurn(tool: ReturnType<typeof wrapToolDefinition>, value: number) 
 describe("prepareEmbeddedAttemptClientTools", () => {
   it("keeps reused client call ids distinct across assistant turns and stable on replay", async () => {
     const prepared = prepare();
-    const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+    const tool = wrappedTool(prepared.clientToolDefs);
     for (const value of [1, 2]) {
       const execute = clientTurn(tool, value);
       await execute();
@@ -162,8 +175,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(prepared.clientToolCallSlots).toHaveLength(value);
     }
     expect(prepared.clientToolCallSlots).toEqual([
-      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
-      { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 2 } },
+      completedSlot("lookup_0", "client_probe", { value: 1 }),
+      completedSlot("lookup_0", "client_probe", { value: 2 }),
     ]);
   });
 
@@ -180,13 +193,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ]);
     try {
       const prepared = prepare();
-      const tool = wrapToolDefinition(expectDefined(prepared.clientToolDefs[0], "client tool"));
+      const tool = wrappedTool(prepared.clientToolDefs);
       for (const value of [1, 2]) {
         const result = await clientTurn(tool, value)();
         expect(result.details).toMatchObject({ status: value === 1 ? "pending" : "blocked" });
       }
       expect(prepared.clientToolCallSlots.filter((slot) => slot.completed)).toEqual([
-        { toolCallId: "lookup_0", name: "client_probe", completed: true, params: { value: 1 } },
+        completedSlot("lookup_0", "client_probe", { value: 1 }),
       ]);
     } finally {
       restoreHooks();
@@ -207,9 +220,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       const prepared = prepare({
         clientTools: [clientTool("first_tool"), clientTool("second_tool")],
       });
-      const tools = prepared.clientToolDefs.map((definition) => wrapToolDefinition(definition));
-      const firstTool = expectDefined(tools[0], "first client tool");
-      const secondTool = expectDefined(tools[1], "second client tool");
+      const firstTool = wrappedTool(prepared.clientToolDefs, "first_tool");
+      const secondTool = wrappedTool(prepared.clientToolDefs, "second_tool");
       const first = firstTool.execute("first-call", { value: 1 });
       pending.push(Promise.allSettled([first]));
       const second = secondTool.execute("second-call", { value: 2 });
@@ -217,13 +229,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       await withTestTimeout(second, 2_000, "second client tool did not finish");
       expect(prepared.clientToolCallSlots).toEqual([
         { toolCallId: "first-call", name: "first_tool", completed: false },
-        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+        completedSlot("second-call", "second_tool", { value: 2 }),
       ]);
       firstHook.resolve();
       await withTestTimeout(first, 2_000, "first client tool did not finish");
       expect(prepared.clientToolCallSlots).toEqual([
-        { toolCallId: "first-call", name: "first_tool", completed: true, params: { value: 1 } },
-        { toolCallId: "second-call", name: "second_tool", completed: true, params: { value: 2 } },
+        completedSlot("first-call", "first_tool", { value: 1 }),
+        completedSlot("second-call", "second_tool", { value: 2 }),
       ]);
     } finally {
       firstHook.resolve();
@@ -268,7 +280,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
         clientTools: [],
         getToolAbortSignal: () => generation.signal,
       });
-      const tool = wrapToolDefinition(prepared.allCustomTools[0]!);
+      const tool = wrappedTool(prepared.allCustomTools);
       const execution =
         executionPath === "execute"
           ? tool.execute(`generation-${executionPath}`, {})
@@ -359,28 +371,17 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     result.refreshTools();
 
     const run = async (name: string) => {
-      const tool = wrapToolDefinition(
-        expectDefined(
-          result.allCustomTools.find((entry) => entry.name === name),
-          name,
-        ),
-      );
+      const tool = wrappedTool(result.allCustomTools, name);
       return (await tool.execute("call", {})).details;
     };
     expect(await run("read")).toEqual({ generation: "after" });
     expect(await run("gateway")).toEqual({ generation: "gated" });
   });
 
-  it.each(["code-mode", "tool-search"] as const)("hides client tools behind %s catalog", (mode) => {
-    const codeMode = mode === "code-mode";
-    const config = codeMode ? CODE_MODE_CONFIG : TOOL_SEARCH_CONFIG;
-    const catalogRef = seedCatalog(mode, config);
-    // Disable the other config source to prove each mode reads its owner.
+  it("hides client tools behind the Tool Search runtime catalog", () => {
     const result = prepare({
-      codeModeControlsEnabledForRun: codeMode,
-      attemptConfig: codeMode ? config : CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: codeMode ? CATALOGS_DISABLED_CONFIG : config,
-      catalogRef,
+      toolSearchRuntimeConfig: TOOL_SEARCH_CONFIG,
+      catalogRef: seedCatalog("tool-search", TOOL_SEARCH_CONFIG),
     });
     expect(result.clientToolDefs).toEqual([]);
     expect(result.allCustomTools).toEqual([]);
@@ -438,6 +439,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       uncompactedEffectiveTools: [...skillTools, trustedPlugin, shadowedPlugin],
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
+    expect(prepared.clientToolDefs).toEqual([]);
     const projection = createCodeModeCatalogProjection(
       (catalogRef.current?.entries ?? []).map((entry) => compactToolSearchCatalogEntry(entry)),
     );
@@ -495,11 +497,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       },
     };
     const catalogRef = seedCatalog("tool-search", config);
-    const previousRegistry = getGlobalPluginRegistry();
     const beforeCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeCall }]),
-    );
+    const restoreHooks = installHooks([{ hookName: "before_tool_call", handler: beforeCall }]);
     try {
       const result = prepare({
         codeModeControlsEnabledForRun: false,
@@ -514,7 +513,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(catalogRef.current?.entries.map((entry) => [entry.name, entry.source])).toEqual([
         ["client_deferred", "client"],
       ]);
-      const direct = wrapToolDefinition(expectDefined(result.clientToolDefs[0], "direct client"));
+      const direct = wrappedTool(result.clientToolDefs);
       await direct.execute("direct-call", { direct: true });
       const runtime = new ToolSearchRuntime(
         { config, catalogRef },
@@ -522,18 +521,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       );
       await runtime.call("client_deferred", { deferred: true }, { parentToolCallId: "outer-call" });
       expect(result.clientToolCallSlots).toEqual([
-        {
-          toolCallId: "direct-call",
-          name: "client_direct",
-          completed: true,
-          params: { direct: true },
-        },
-        {
-          toolCallId: expect.any(String),
-          name: "client_deferred",
-          completed: true,
-          params: { deferred: true },
-        },
+        completedSlot("direct-call", "client_direct", { direct: true }),
+        completedSlot(expect.any(String), "client_deferred", { deferred: true }),
       ]);
       expect(beforeCall.mock.calls.map(([event]) => event.toolName)).toEqual([
         "client_direct",
@@ -548,10 +537,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       expect(result.clientToolCallSlots).toHaveLength(2);
     } finally {
       clearToolSearchCatalog({ catalogRef });
-      resetGlobalHookRunner();
-      if (previousRegistry) {
-        initializeGlobalHookRunner(previousRegistry);
-      }
+      restoreHooks();
     }
   });
 

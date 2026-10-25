@@ -1,7 +1,9 @@
 import { createServer, request as requestHttp, type IncomingMessage } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { HttpStream } from "@microsoft/teams.apps/dist/http/http-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type TeamsLoopbackRequest = {
@@ -19,11 +21,7 @@ const requests: TeamsLoopbackRequest[] = [];
 type ConnectorReply = { id?: string; error?: { message?: string } };
 
 async function readJson<T>(message: IncomingMessage): Promise<T> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of message) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+  return JSON.parse((await consumeBuffer(message)).toString("utf8")) as T;
 }
 
 const provider = createServer((request, response) => {
@@ -66,21 +64,11 @@ const provider = createServer((request, response) => {
 let providerUrl = "";
 
 beforeAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.once("error", reject);
-    provider.listen(0, "127.0.0.1", resolve);
-  });
-  const address = provider.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Teams test provider did not expose a loopback address");
-  }
-  providerUrl = `http://127.0.0.1:${address.port}`;
+  providerUrl = `http://127.0.0.1:${await listenOnLoopback(provider)}`;
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    provider.close((error) => (error ? reject(error) : resolve()));
-  });
+  await provider[Symbol.asyncDispose]();
 });
 
 function createLoopbackController(

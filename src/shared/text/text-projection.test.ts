@@ -61,6 +61,24 @@ it("preserves an append when downstream filtering cancels an intermediate correc
   expectUpdate(projection.replace("Ready reply"), "Ready reply", null);
 });
 
+it("keeps settled equal-length rewrites when later checkpoint windows are unchanged", () => {
+  const rewrite = (value: string) => value.replaceAll("@", "!");
+  const projection = project({
+    activationTokens: ["@"],
+    transform: rewrite,
+    checkpoint: (value, settleBefore) => ({
+      text: rewrite(value),
+      retainStart: settleBefore,
+      retainedOutputStart: settleBefore,
+    }),
+  });
+  expectUpdate(projection.append("@first\n"), "!first\n");
+  expectUpdate(projection.append("second\n"), "!first\nsecond\n", "second\n");
+  expectUpdate(projection.append("third\n"), "!first\nsecond\nthird\n", "third\n");
+  expectUpdate(projection.replace("fresh\n"), "fresh\n", null);
+  expectUpdate(projection.append("@next\n"), "fresh\n!next\n", "!next\n");
+});
+
 it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
   const filter = text.trimTextFilter(mode);
   const projection = project(filter);

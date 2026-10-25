@@ -264,7 +264,7 @@ export function ensureReplicaSubscription(): void {
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           retainEntry(cell, {
             target: cell.target,
-            entry: structuredClone(prepared.fullEntry),
+            entry: prepared.fullEntry,
             dependencySessionIds,
             writeToken,
             snapshots: "full",

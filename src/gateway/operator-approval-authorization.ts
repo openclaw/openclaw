@@ -9,7 +9,7 @@ type OperatorApprovalAccessBinding = {
 
 /** Whether a client may inspect safe approval projections. */
 export function canReviewOperatorApproval(client: GatewayClient | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const scopes = client?.connect.scopes ?? [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
@@ -23,7 +23,7 @@ export function canReviewOperatorApproval(client: GatewayClient | null): boolean
 export function canResolveOperatorApproval(client: GatewayClient | null): boolean {
   // approvalRuntime is server-authenticated connection metadata. Public request
   // fields cannot mint this device-less resolver authority.
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const scopes = client?.connect.scopes ?? [];
   const isTrustedApprovalRuntime =
     client?.internal?.approvalRuntime === true && scopes.includes(APPROVALS_SCOPE);
   return isTrustedApprovalRuntime || canReviewOperatorApproval(client);
@@ -42,8 +42,7 @@ export function canAccessOperatorApproval(params: {
     return false;
   }
 
-  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
-  if (scopes.includes(ADMIN_SCOPE)) {
+  if (params.client?.connect.scopes?.includes(ADMIN_SCOPE)) {
     return true;
   }
   if (params.allowApprovalRuntime && params.client?.internal?.approvalRuntime === true) {

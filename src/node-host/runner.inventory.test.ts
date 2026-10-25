@@ -90,6 +90,7 @@ describe("runNodeHost", () => {
     await expectStartupTimeout();
 
     expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v1");
+    expect(lastCapturedOptions()?.caps).toContain("claude-cli-native-auth-v1");
   });
 
   it("publishes each exact worker slot transition without reconnecting", async () => {

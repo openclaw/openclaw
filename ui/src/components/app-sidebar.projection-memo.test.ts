@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
@@ -68,12 +69,13 @@ async function mount(rows: GatewaySessionRow[]) {
     createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
   );
   const context = {
-    ...createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "work" }],
-    }),
+    ...createContext(
+      gateway.gateway,
+      sessions.sessions,
+      makeBootRoster({
+        agents: [{ id: "main" }, { id: "work" }],
+      }),
+    ),
     chatSubmissions: createChatSubmissions(),
   };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
@@ -236,12 +238,7 @@ describe("sidebar projection memo", () => {
       createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
     );
     gateway.publish({ phase: "connecting", client: null, hello: null });
-    const context = createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    });
+    const context = createContext(gateway.gateway, sessions.sessions, makeBootRoster());
     onTestFinished(
       admitSidebarBootScope(gateway.gateway, {
         scope: gateway.gateway.connection.gatewayUrl,

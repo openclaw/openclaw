@@ -11,6 +11,7 @@ import {
   deleteSessionEntryLifecycle,
   patchSessionEntryCore,
   replaceSessionEntrySync,
+  updateSessionProfileInvolvementAsync,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +19,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
@@ -31,6 +33,7 @@ import {
   filterAndSortSessionEntries,
   listProjectedSessions,
   prepareProjectedSessionList,
+  prepareSessionRowSelection,
 } from "./session-utils-list.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -54,6 +57,85 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("updates empty involvement and creator indexes across row changes and topology resets", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const ada = ensureProfileForEmail("selection-ada@example.test");
+    const bob = ensureProfileForEmail("selection-bob@example.test");
+    const actor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
+    const key = "agent:main:authored";
+    const empty = "agent:main:initially-empty";
+    writeMain(key, { createdActor: actor(bob.id) });
+    writeMain(empty, {});
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      modelCatalog: [],
+    });
+    const opts = { configuredAgentsOnly: true };
+    const created = async (creatorId: string) =>
+      rowKeys(await listRows(projection, { ...opts, creatorId }));
+    const involvement = (profileId: string, personal: boolean) => [
+      ...prepareSessionRowSelection(projection, opts, { ordered: true }).involvementKeys(
+        profileId,
+        personal,
+      ),
+    ];
+    try {
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id, true)).toEqual([]);
+      expect(involvement(ada.id, false)).toEqual([]);
+      const involvementScope = { agentId: "main", sessionKey: empty };
+      const involvementParams = { expectedSessionId: empty, profileIds: [ada.id] };
+      await updateSessionProfileInvolvementAsync(involvementScope, {
+        ...involvementParams,
+        change: { kind: "mention", source: { generation: "selection", sequence: 1, timestamp: 1 } },
+      });
+      await listRows(projection, opts);
+      expect(involvement(ada.id, true)).toEqual([empty]);
+      expect(involvement(ada.id, false)).toEqual([empty]);
+      await updateSessionProfileInvolvementAsync(involvementScope, {
+        ...involvementParams,
+        change: { kind: "visibility", hidden: true },
+      });
+      await listRows(projection, opts);
+      expect(involvement(ada.id, true)).toEqual([]);
+      expect(involvement(ada.id, false)).toEqual([empty]);
+      await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
+        label: "Renamed incrementally",
+        updatedAt: 3,
+      }));
+      expect(await created(ada.id)).toEqual([]);
+      expect((await listRows(projection, { ...opts, creatorId: bob.id })).sessions).toMatchObject([
+        { key, label: "Renamed incrementally" },
+      ]);
+      expect(involvement(ada.id, false)).toEqual([empty]);
+      expect(involvement(bob.id, false)).toEqual([key]);
+
+      const added = "agent:ops:topology-added";
+      replaceSessionEntrySync(
+        { agentId: "ops", sessionKey: added },
+        { sessionId: "topology-added", updatedAt: 2, createdActor: actor(ada.id) },
+      );
+      cfg = { agents: { entries: { main: {}, ops: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect(await created(ada.id)).toEqual([added]);
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id, true)).toEqual([added]);
+      cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect(await created(ada.id)).toEqual([]);
+      expect(await created(bob.id)).toEqual([key]);
+      expect(involvement(ada.id, false)).toEqual([empty]);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
 });
 
 it("maintains list order across metadata changes and archived-row rematerialization", async () => {

@@ -1,3 +1,4 @@
+import { engineUnboundedRowLimit } from "../infra/database-engine/row-limit.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -182,7 +183,7 @@ function createSqliteLedgerQueries(db: EngineConnection) {
         .select("session_id")
         .orderBy("updated_at", "desc")
         .orderBy("session_id", "asc")
-        .limit(-1)
+        .limit(engineUnboundedRowLimit(db))
         .offset(parameter((limit) => limit)),
     ),
     readTotalBytes: prepareSqliteQuerySync<void, { total: number }>(db, () =>
@@ -192,13 +193,15 @@ function createSqliteLedgerQueries(db: EngineConnection) {
           eb.fn.coalesce(eb.fn.sum<number>("estimated_bytes"), eb.val(0)).as("total"),
         ),
     ),
-    readOldestSession: prepareSqliteQuerySync<void, { session_id: string }>(db, () =>
+    readOldestSessions: prepareSqliteQuerySync<
+      void,
+      { session_id: string; estimated_bytes: number }
+    >(db, () =>
       query
         .selectFrom("acp_replay_sessions")
-        .select("session_id")
+        .select(["session_id", "estimated_bytes"])
         .orderBy("updated_at", "asc")
-        .orderBy("session_id", "asc")
-        .limit(1),
+        .orderBy("session_id", "asc"),
     ),
     deleteOldestEvents: prepareSqliteQuerySync<
       { sessionId: string; limit: number },
@@ -226,14 +229,22 @@ function createSqliteLedgerQueries(db: EngineConnection) {
         query
           .updateTable("acp_replay_sessions")
           .set((eb) => ({
-            estimated_bytes: eb.fn<number>("max", [
-              eb.val(0),
-              eb(
+            estimated_bytes: eb
+              .case()
+              .when(
                 "estimated_bytes",
-                "-",
+                "<",
                 parameter((params) => params.freed),
-              ),
-            ]),
+              )
+              .then(0)
+              .else(
+                eb(
+                  "estimated_bytes",
+                  "-",
+                  parameter((params) => params.freed),
+                ),
+              )
+              .end(),
             complete: 0,
           }))
           .where(
@@ -349,15 +360,19 @@ function estimateSqliteLedgerBytes(db: EngineConnection): number {
 const LEDGER_TRIM_EVENT_BATCH = 64;
 
 // Keep the session's byte aggregate in sync with the deletion in the same transaction.
-function deleteOldestSqliteEvents(db: EngineConnection, sessionId: string, limit: number): number {
+function deleteOldestSqliteEvents(
+  db: EngineConnection,
+  sessionId: string,
+  limit: number,
+): { deleted: number; freed: number } {
   const queries = getSqliteLedgerQueries(db);
   const rows = queries.deleteOldestEvents({ sessionId, limit }).rows;
   if (rows.length === 0) {
-    return 0;
+    return { deleted: 0, freed: 0 };
   }
   const freed = rows.reduce((sum, row) => sum + normalizeSqliteInteger(row.estimated_bytes), 0);
   queries.subtractSessionBytes({ sessionId, freed });
-  return rows.length;
+  return { deleted: rows.length, freed };
 }
 
 function trimSqliteLedger(db: EngineConnection): void {
@@ -379,18 +394,32 @@ function trimSqliteLedger(db: EngineConnection): void {
 
   // Byte budget: evict from the least-recently-updated session in bounded
   // batches, dropping the session row itself once its events are exhausted.
-  // Aggregates keep every recheck O(maxSessions); no event scans occur.
+  // The writer owns the aggregates and eviction order for this transaction.
   let serializedBytes = estimateSqliteLedgerBytes(db);
-  while (serializedBytes > MAX_SERIALIZED_BYTES) {
-    const session = queries.readOldestSession().rows[0];
-    if (!session) {
+  if (serializedBytes <= MAX_SERIALIZED_BYTES) {
+    return;
+  }
+  for (const session of queries.readOldestSessions().rows) {
+    if (serializedBytes <= MAX_SERIALIZED_BYTES) {
       break;
     }
-    const deleted = deleteOldestSqliteEvents(db, session.session_id, LEDGER_TRIM_EVENT_BATCH);
-    if (deleted === 0) {
-      queries.deleteSession(session.session_id);
+    let sessionBytes = normalizeSqliteInteger(session.estimated_bytes);
+    while (serializedBytes > MAX_SERIALIZED_BYTES) {
+      const { deleted, freed } = deleteOldestSqliteEvents(
+        db,
+        session.session_id,
+        LEDGER_TRIM_EVENT_BATCH,
+      );
+      if (deleted === 0) {
+        queries.deleteSession(session.session_id);
+        serializedBytes -= sessionBytes;
+        break;
+      }
+      // Match the stored clamp; older aggregates can understate deleted bytes.
+      const remaining = Math.max(0, sessionBytes - freed);
+      serializedBytes -= sessionBytes - remaining;
+      sessionBytes = remaining;
     }
-    serializedBytes = estimateSqliteLedgerBytes(db);
   }
 }
 

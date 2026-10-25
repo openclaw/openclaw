@@ -1,8 +1,9 @@
 // Feishu tests prove the document create contract through the real Lark SDK.
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -25,22 +26,18 @@ async function resolveLoopbackTool(
   server: ReturnType<typeof createServer>,
   context: Record<string, unknown> = {},
 ) {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   onTestFinished(
     () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   );
-  const address = server.address() as AddressInfo;
   createFeishuClientMock.mockReturnValue(
     new Lark.Client({
       appId: "loopback-test-app",
       appSecret: "loopback-test-placeholder", // pragma: allowlist secret
-      domain: `http://127.0.0.1:${address.port}`,
+      domain: `http://127.0.0.1:${port}`,
       loggerLevel: Lark.LoggerLevel.error,
       disableTokenCache: true,
     }),
@@ -70,12 +67,9 @@ describe("feishu_doc contract over the real Lark SDK", () => {
     const requests: Array<{ method: string; path: string; body?: unknown }> = [];
     const server = createServer((request, response) => {
       void (async () => {
-        const bodyChunks: Buffer[] = [];
-        for await (const chunk of request) {
-          bodyChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        }
+        const bodyBuffer = await consumeBuffer(request);
         const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        const rawBody = Buffer.concat(bodyChunks).toString("utf8");
+        const rawBody = bodyBuffer.toString("utf8");
         requests.push({
           method: request.method ?? "",
           path: pathname,
@@ -256,12 +250,9 @@ describe("feishu_doc contract over the real Lark SDK", () => {
     ];
     const server = createServer((request, response) => {
       void (async () => {
-        const bodyChunks: Buffer[] = [];
-        for await (const chunk of request) {
-          bodyChunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        }
+        const bodyBuffer = await consumeBuffer(request);
         const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        const rawBody = Buffer.concat(bodyChunks).toString("utf8");
+        const rawBody = bodyBuffer.toString("utf8");
         requests.push({
           method: request.method ?? "",
           path: pathname,

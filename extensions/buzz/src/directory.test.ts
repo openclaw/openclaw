@@ -1,20 +1,22 @@
 import { getPublicKey, type Event } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { relayMocks } from "./buzz-bus.test-helpers.js";
+import { createBuzzRelayInfoFetchMock, relayMocks } from "./buzz-bus.test-helpers.js";
+import { buzzPlugin } from "./channel.js";
 import type { BuzzConfigInput } from "./config-schema.js";
 import {
   BuzzDirectoryState,
   BUZZ_PROFILE_KIND,
   BUZZ_ROOM_METADATA_KIND,
 } from "./directory-state.js";
-import {
-  getBuzzDirectorySelf,
-  listBuzzDirectoryGroupMembers,
-  listBuzzDirectoryGroupsLive,
-  listBuzzDirectoryPeersLive,
-} from "./directory.js";
 import type { BuzzRoomMembership } from "./room-membership.js";
+
+const getBuzzDirectorySelf = buzzPlugin.directory!.self!;
+const listBuzzDirectoryGroupMembers = buzzPlugin.directory!.listGroupMembers!;
+const listBuzzDirectoryGroupsLive = buzzPlugin.directory!.listGroupsLive!;
+const listBuzzDirectoryPeersLive = buzzPlugin.directory!.listPeersLive!;
+const runtime = createRuntimeEnv();
 
 type Directory = Pick<BuzzDirectoryState, "listGroups" | "listGroupMembers" | "listPeers" | "self">;
 type ActiveBus = { directory: Directory; refreshDirectory: () => Promise<void> };
@@ -25,7 +27,8 @@ vi.mock("nostr-tools", async (importOriginal) => {
   return { ...(await importOriginal<typeof import("nostr-tools")>()), ...mockBuzzRelay() };
 });
 
-vi.mock("./gateway.js", () => ({
+vi.mock("./gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway.js")>()),
   getActiveBuzzBus: () => gatewayMocks.activeBus,
 }));
 
@@ -43,7 +46,7 @@ function directoryParams(overrides: BuzzConfigInput = {}) {
     groups: { [ROOM_ID]: {} },
     ...overrides,
   };
-  return { cfg: { channels: { buzz } }, accountId: "default" };
+  return { cfg: { channels: { buzz } }, accountId: "default", runtime };
 }
 
 function activeBus(overrides: Partial<Directory> = {}): ActiveBus {
@@ -93,15 +96,7 @@ describe("Buzz live directory", () => {
       }),
     ];
     gatewayMocks.activeBus = undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
   });
 
   afterEach(() => {
@@ -171,7 +166,7 @@ describe("Buzz live directory", () => {
           },
         },
       } as OpenClawConfig;
-      const params = { cfg, accountId: "ada" };
+      const params = { cfg, accountId: "ada", runtime };
       await expect(
         listBuzzDirectoryGroupsLive({ ...params, query: ROOM_ID, limit: 1 }),
       ).resolves.toEqual([expect.objectContaining({ id: `buzz:${ROOM_ID}` })]);
@@ -197,9 +192,9 @@ describe("Buzz live directory", () => {
     await expect(listBuzzDirectoryGroupsFromConfig({ cfg, accountId: "default" })).resolves.toEqual(
       [expect.objectContaining({ id: `buzz:${ROOM_ID}` })],
     );
-    await expect(listBuzzDirectoryGroupsLive({ cfg, accountId: "default" })).rejects.toThrow(
-      /configured.*unavailable|unresolved/i,
-    );
+    await expect(
+      listBuzzDirectoryGroupsLive({ cfg, accountId: "default", runtime }),
+    ).rejects.toThrow(/configured.*unavailable|unresolved/i);
     expect(relayMocks.connect).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });

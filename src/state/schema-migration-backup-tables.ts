@@ -30,6 +30,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     32: [],
     // PostgreSQL-only derived vector projection; SQLite advances metadata only.
     33: [],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    34: [],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -53,5 +55,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    32: [],
   },
 };

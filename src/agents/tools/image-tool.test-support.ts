@@ -18,6 +18,7 @@ import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-med
 import type {
   describeImageWithModel,
   describeImagesWithModel,
+  ImageDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
@@ -307,3 +308,7 @@ export const resolveConfiguredImageModelForTest: ResolveModelAsync = async (
     modelRegistry: {} as never,
   };
 };
+
+export async function replyImageOk(params: ImageDescriptionRequest) {
+  return { text: "ok", model: params.model };
+}

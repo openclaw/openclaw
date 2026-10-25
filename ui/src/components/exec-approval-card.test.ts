@@ -20,6 +20,36 @@ import {
 } from "./exec-approval-card-solid.tsx";
 
 let container: HTMLDivElement;
+const ready = { busy: false, connected: true, canGrant: true, error: null };
+const elements = (selector: string) => Array.from(container.querySelectorAll(selector));
+const buttons = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+const text = (selector: string) => container.querySelector(selector)?.textContent;
+
+function mountUpdatingCard(
+  request: ExecApprovalRequest,
+  overrides: Partial<ExecApprovalCardProps>,
+) {
+  const [props, setProps] = createSignal<ExecApprovalCardProps>({
+    ...ready,
+    approval: request,
+    variant: "inline",
+    onDecision: vi.fn(),
+    ...overrides,
+  });
+  const view = mountSolid(
+    () =>
+      createComponent(ExecApprovalCard, {
+        get props() {
+          return props();
+        },
+      }),
+    { container },
+  );
+  return {
+    ...view,
+    update: (patch: Partial<ExecApprovalCardProps>) => setProps({ ...props(), ...patch }),
+  };
+}
 
 function approval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest {
   return {
@@ -60,7 +90,7 @@ function renderSurface(
   onDecision: ExecApprovalCardProps["onDecision"] = vi.fn(),
   presentation?: "mobile",
 ) {
-  const props = { approval: request, busy: false, connected: true, canGrant: true, error: null };
+  const props = { ...ready, approval: request };
   const view = mountSolid(
     () =>
       variant === "sidebar"
@@ -100,28 +130,11 @@ describe("exec approval card", () => {
   it("retires a held decision when the displayed approval changes", async () => {
     const pending = createDeferred();
     const request = approval({ expiresAtMs: Date.now() + 60_000 });
-    const [props, setProps] = createSignal<ExecApprovalCardProps>({
-      approval: request,
-      variant: "inline",
-      busy: false,
-      connected: true,
-      canGrant: true,
-      error: null,
-      onDecision: () => pending.promise,
-    });
-    const view = mountSolid(
-      () =>
-        createComponent(ExecApprovalCard, {
-          get props() {
-            return props();
-          },
-        }),
-      { container },
-    );
+    const view = mountUpdatingCard(request, { onDecision: () => pending.promise });
     const allow = () => view.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
     allow().click();
     await waitForSolid(() => expect(allow().disabled).toBe(true));
-    setProps({ ...props(), approval: { ...request, id: "replacement" } });
+    view.update({ approval: { ...request, id: "replacement" } });
     await waitForSolid(() => {
       expect(
         view.container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id"),
@@ -145,11 +158,8 @@ describe("exec approval card", () => {
     const view = mountSolid(
       () =>
         createComponent(SidebarApprovalRow, {
+          ...ready,
           approval: request,
-          busy: false,
-          connected: true,
-          canGrant: true,
-          error: null,
           openSessionHref: "/chat/synthetic-session",
           onDecision: vi.fn(),
           get onOpenSession() {
@@ -186,14 +196,12 @@ describe("exec approval card", () => {
       });
       expect(request).not.toBeNull();
       const card = renderCard(request!);
-      expect(card?.querySelector(".exec-approval-title")?.textContent).toBe(
-        "Watch application errors",
-      );
-      expect(card?.querySelector(".exec-approval-command")?.textContent).toBe("tail -F app.log");
+      expect(text(".exec-approval-title")).toBe("Watch application errors");
+      expect(text(".exec-approval-command")).toBe("tail -F app.log");
       expect(card?.textContent).toContain(
         "Runs after this turn and restarts automatically until stopped.",
       );
-      expect(card?.querySelector(".exec-approval-summary")?.textContent).toContain(
+      expect(text(".exec-approval-summary")).toContain(
         "Runs in your sandbox after you leave this chat, until stopped.",
       );
       expect(card?.textContent).toContain(
@@ -251,47 +259,24 @@ describe("exec approval card", () => {
       }
 
       for (const surface of ["inline", "sidebar"] as const) {
-        const view = mountSolid(
-          () =>
-            surface === "inline"
-              ? createComponent(ExecApprovalCard, {
-                  props: {
-                    approval: request,
-                    connected: true,
-                    busy: false,
-                    canGrant: true,
-                    error: null,
-                    variant: "inline",
-                    onDecision: vi.fn(),
-                  },
-                })
-              : createComponent(SidebarApprovalRow, {
-                  approval: request,
-                  connected: true,
-                  busy: false,
-                  canGrant: true,
-                  error: null,
-                  onDecision: vi.fn(),
-                }),
-          { container },
-        );
+        const view = renderSurface(request, surface);
         try {
-          const note = Array.from(container.querySelectorAll('[role="note"]')).find(
+          const note = elements('[role="note"]').find(
             (element) => element.textContent?.trim() === warningText,
           );
-          const buttons = Array.from(container.querySelectorAll("button"));
+          const actions = buttons();
           expect(note, surface).toBeDefined();
           expect(note?.closest("details")).toBeNull();
           expect(container.querySelector("script")).toBeNull();
-          expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+          expect(actions.map((button) => button.textContent?.trim())).toEqual([
             "Allow once",
             "Deny",
           ]);
           expect(
             Boolean(
               note &&
-              buttons[0] &&
-              note.compareDocumentPosition(buttons[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+              actions[0] &&
+              note.compareDocumentPosition(actions[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
             ),
             surface,
           ).toBe(true);
@@ -308,16 +293,18 @@ describe("exec approval card", () => {
     const onDecision = vi.fn();
     const view = renderSurface(approval({ expiresAtMs: 2_000 }), "sidebar", onDecision);
     const timer = view.getByRole("timer");
-    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons).toHaveLength(3);
+    const actions = buttons();
+    expect(actions).toHaveLength(3);
     expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
-    expect(buttons.every((button) => !button.disabled)).toBe(true);
+    expect(actions.every((button) => !button.disabled)).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(2_000);
     flush();
     expect(timer).toMatchObject({ textContent: "00:00", title: "expired" });
     expect(timer.getAttribute("aria-label")).toBe("expired");
-    expect(buttons.every((button) => button.disabled)).toBe(true);
-    for (const button of buttons) {
+    expect(actions.every((button) => button.disabled)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    for (const button of actions) {
       button.click();
     }
     expect(onDecision).not.toHaveBeenCalled();
@@ -327,7 +314,7 @@ describe("exec approval card", () => {
 
   it("preserves command text while highlighting ordered, non-overlapping valid spans", () => {
     const command = "echo hello | cat";
-    const card = renderCard(
+    renderCard(
       approval({
         kind: "exec",
         request: {
@@ -345,12 +332,8 @@ describe("exec approval card", () => {
         },
       }),
     );
-    expect(card?.querySelector(".exec-approval-command")?.textContent).toBe(command);
-    expect(Array.from(card?.querySelectorAll("mark") ?? [], (mark) => mark.textContent)).toEqual([
-      "echo",
-      "hello",
-      "cat",
-    ]);
+    expect(text(".exec-approval-command")).toBe(command);
+    expect(elements("mark").map((mark) => mark.textContent)).toEqual(["echo", "hello", "cat"]);
   });
 
   it.each(["modal", "sidebar"] as const)(
@@ -380,7 +363,7 @@ describe("exec approval card", () => {
         return resolveApprovalRequest(client, request, decision);
       });
       renderSurface(request, variant, onDecision);
-      const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+      const actions = buttons();
       const expected = [
         ["Allow once", "allow-once"],
         ["Allow while this App is open", "allow-always"],
@@ -388,10 +371,10 @@ describe("exec approval card", () => {
       ] as const;
       // The right-aligned modal footer keeps its primary decision at the trailing edge.
       const order = variant === "modal" ? expected.toReversed() : expected;
-      expect(buttons.map((button) => button.textContent?.trim())).toEqual(
+      expect(actions.map((button) => button.textContent?.trim())).toEqual(
         order.map(([label]) => label),
       );
-      for (const button of buttons) {
+      for (const button of actions) {
         button.click();
       }
       await Promise.all(onDecision.mock.results.map((result) => result.value));
@@ -452,25 +435,7 @@ describe("exec approval card", () => {
       request: { command, host: "gateway", cwd: "/workspace/project" },
       expiresAtMs: Date.now() + 60_000,
     });
-    const [props, setProps] = createSignal<ExecApprovalCardProps>({
-      approval: request,
-      variant: "inline",
-      presentation: "mobile",
-      busy: false,
-      connected: true,
-      canGrant: true,
-      error: null,
-      onDecision,
-    });
-    const view = mountSolid(
-      () =>
-        createComponent(ExecApprovalCard, {
-          get props() {
-            return props();
-          },
-        }),
-      { container },
-    );
+    const view = mountUpdatingCard(request, { presentation: "mobile", onDecision });
     const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
     expect(disclosure.open).toBe(false);
     expect(view.getByRole("timer").textContent).toContain("expires in");
@@ -482,7 +447,7 @@ describe("exec approval card", () => {
     expect(view.getByText("/workspace/project")).toBeTruthy();
     expect(onDecision).not.toHaveBeenCalled();
 
-    setProps({ ...props(), approval: { ...request }, busy: true });
+    view.update({ approval: { ...request }, busy: true });
     flush();
     expect(container.querySelector("details")).toBe(disclosure);
     expect(disclosure.open).toBe(true);
@@ -491,13 +456,13 @@ describe("exec approval card", () => {
     allow.click();
     expect(onDecision).not.toHaveBeenCalled();
 
-    setProps({ ...props(), busy: false, error: "Approval failed: connection lost" });
+    view.update({ busy: false, error: "Approval failed: connection lost" });
     flush();
     expect(view.getByRole("alert").textContent).toBe("Approval failed: connection lost");
     allow.click();
     expect(onDecision).toHaveBeenCalledExactlyOnceWith("approval-1", "allow-once");
 
-    setProps({ ...props(), approval: { ...request, id: "approval-2" }, canGrant: false });
+    view.update({ approval: { ...request, id: "approval-2" }, canGrant: false });
     flush();
     expect(container.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
     expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);

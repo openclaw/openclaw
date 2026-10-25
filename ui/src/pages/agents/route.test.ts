@@ -2,21 +2,19 @@ import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { gateway, settingsSelection, snapshot } from "./agents-page.test-support.ts";
 import { page, type AgentsRouteData } from "./route.ts";
 
-const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
+const agentsList: AgentsListResult = makeBootRoster({
   agents: [
     { id: "main", name: "Main" },
     { id: "ordinary-looking-id", kind: "system", name: "System" },
     { id: "research", name: "Research" },
   ],
-};
+});
 
 function location(url: string): RouteLocation {
   const parsed = new URL(url, "https://control.test");

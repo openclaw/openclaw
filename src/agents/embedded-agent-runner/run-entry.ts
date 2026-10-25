@@ -246,6 +246,13 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
         ...selection,
         ...params.identity,
         operatorAuthority,
+        // Only the first initial candidate receives a hook reroute; stickiness must not bypass it.
+        stickyRateLimitFallback:
+          params.behavior.kind !== "maintenance" &&
+          !hookOwnsFallbacks &&
+          (!hookSelection ||
+            (hookSelection.provider === params.selection.provider &&
+              hookSelection.modelId === params.selection.model)),
         skipAuthProfileRuntime: await sessionPlacementUsesWorkerInference(params.identity),
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,

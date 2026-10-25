@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { OpenClaw } from "./client.js";
 import { GatewayClientTransport } from "./transport.js";
-import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
+import { createSdkWebSocketServer, replySdkRequest } from "./transport.websocket.test-support.js";
 import type { OpenClawEvent } from "./types.js";
 
 let gateway: Awaited<ReturnType<typeof createSdkWebSocketServer>>;
@@ -44,15 +44,7 @@ type Reply = (payload: unknown, ok?: boolean) => void;
 type Socket = Parameters<typeof gateway.sendEvent>[0];
 function respond(handler: (request: Request, reply: Reply, socket: Socket) => unknown) {
   gateway.setRequestHandler((socket, request) => {
-    const reply: Reply = (payload, ok = true) =>
-      socket.send(
-        JSON.stringify({
-          type: "res",
-          id: request.id,
-          ok,
-          ...(ok ? { payload } : { error: payload }),
-        }),
-      );
+    const reply: Reply = (payload, ok = true) => replySdkRequest(socket, request.id, payload, ok);
     const result = handler(request, reply, socket);
     if (result !== undefined) {
       reply(result);

@@ -11,6 +11,7 @@ import {
   withStateDirEnv,
 } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { runModelsAuthLoginFlowCore } from "./auth.js";
 
 // Credential ordering is independent of the config merge; keep the real login and disk writer.
@@ -29,17 +30,14 @@ it("removes copied xAI thinking fields from disk through runModelsAuthLoginFlowC
   await withStateDirEnv("xai-login-config-", async ({ stateDir }) => {
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    const model = {
-      id: "grok-4.6",
+    const model = createTestModelDefinition("grok-4.6", {
       name: "Grok fixture",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 131072,
       maxTokens: 512,
       thinkingLevelMap: { xhigh: null },
       compat: { supportedReasoningEfforts: ["low", "high"] },
-    };
+    });
     const other = {
       ...model,
       id: "custom-model",

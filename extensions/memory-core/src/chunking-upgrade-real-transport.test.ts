@@ -1,8 +1,6 @@
-import { once } from "node:events";
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { json } from "node:stream/consumers";
@@ -16,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import type { MemoryIndexManager } from "./memory/manager.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
@@ -80,12 +79,9 @@ async function startEmbeddingServer() {
       }
     })();
   });
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   const fixture = {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     setMode: (next: ServerMode) => {
       mode = next;

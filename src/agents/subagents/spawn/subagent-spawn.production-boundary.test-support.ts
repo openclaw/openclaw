@@ -9,6 +9,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
@@ -355,6 +356,17 @@ export function createBoundSpawnInvocation(
 }
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+
+export function createSpawnTranscriptTarget(bound: BoundParent, entry: InternalSessionEntry) {
+  return {
+    agentId: "main",
+    sessionKey: bound.parentSessionKey,
+    sessionId: entry.sessionId,
+    sessionEntry: entry,
+    storePath: bound.storePath,
+    config: bound.cfg,
+  };
+}
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
 export type NativePluginSpawnTestOptions = {

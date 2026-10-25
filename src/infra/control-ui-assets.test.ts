@@ -286,7 +286,9 @@ process.exitCode = 1;
     });
 
     const runtime = { log: vi.fn<RuntimeEnv["log"]>(), error: vi.fn(), exit: vi.fn() };
-    await expect(ensureControlUiAssetsBuilt(runtime)).resolves.toMatchObject({ ok: true });
+    await expect(
+      ensureControlUiAssetsBuilt(runtime, { assetRoot: path.dirname(indexPath) }),
+    ).resolves.toMatchObject({ ok: true });
     const message = runtime.log.mock.calls.flat().join("\n");
     const commands = [...message.matchAll(/`(pnpm [^`]+)`/gu)].map((match) => match[1]);
     expect(commands).toHaveLength(2);

@@ -5,6 +5,7 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -655,6 +656,12 @@ const enChatSession = {
         "Interrupted before the agent started it. If it does not resume, copy it and send again.",
       earlier: "Show earlier messages",
       latest: "Show latest messages",
+      dismiss: "Dismiss",
+      dismissInterrupted: "Dismiss interrupted message: {preview}",
+      dismissCancelled: "Dismiss cancelled message: {preview}",
+      dismissAll: "Dismiss all",
+      dismissAllLabel: "Dismiss all interrupted and cancelled messages shown",
+      untitledInput: "message without text",
     },
     sessionSuggestions: {
       attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",

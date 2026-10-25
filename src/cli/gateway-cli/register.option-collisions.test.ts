@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGatewayCli: vi.fn(
@@ -140,20 +141,23 @@ vi.mock("./discover.js", () => ({
 }));
 
 function expectCliError(message: unknown) {
-  expect(callGatewayCli).not.toHaveBeenCalled();
+  expectCallCount(0, callGatewayCli, defaultRuntime.error);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
     ok: false,
     error: { type: "cli_error", message },
   });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
 }
 
 const parse = (...args: string[]) =>
   sharedProgram.parseAsync(["gateway", ...args], { from: "user" });
-const sharedProgram = new Command();
-sharedProgram.exitOverride();
-registerGatewayCli(sharedProgram);
+function createProgram(register = registerGatewayCli) {
+  const program = new Command();
+  program.exitOverride();
+  register(program);
+  return program;
+}
+const sharedProgram = createProgram();
 
 describe("gateway register option collisions", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -251,10 +255,10 @@ describe("gateway register option collisions", () => {
       ).rejects.toMatchObject({ name: "ExitError", code: 1 });
     });
 
-    const stdout = defaultRuntime.writeJson.mock.calls
-      .map(([value]) => JSON.stringify(value))
-      .join("\n");
-    expect(JSON.parse(stdout)).toEqual({ ...busy, requestId: "host-operation" });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      ...busy,
+      requestId: "host-operation",
+    });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
@@ -290,8 +294,6 @@ describe("gateway register option collisions", () => {
   });
 
   it("loads health presentation only for text output", async () => {
-    const program = new Command();
-    program.exitOverride();
     const loadGatewayHealthModule = vi.fn(async () => ({
       emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
       formatHealthChannelLines: mocks.formatHealthChannelLines,
@@ -304,7 +306,7 @@ describe("gateway register option collisions", () => {
     vi.doMock("../../commands/health.js", loadGatewayHealthModule);
     vi.doMock("../../../packages/terminal-core/src/health-style.js", loadHealthStyleModule);
     const { registerGatewayCli: registerFreshGatewayCli } = await import("./register.js");
-    registerFreshGatewayCli(program);
+    const program = createProgram(registerFreshGatewayCli);
 
     await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
 
@@ -314,17 +316,13 @@ describe("gateway register option collisions", () => {
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
-    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
-    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
 
-    const textProgram = new Command();
-    textProgram.exitOverride();
-    registerFreshGatewayCli(textProgram);
+    const textProgram = createProgram(registerFreshGatewayCli);
     await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
 
-    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
-    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

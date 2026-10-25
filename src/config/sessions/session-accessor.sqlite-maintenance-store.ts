@@ -115,7 +115,7 @@ export function applySessionEntryMaintenanceInDatabase(
     () => (preservation ??= readPreservation()),
     refreshCandidates,
   );
-  return prepared(database, onArchived, postimages);
+  return prepared.apply(database, onArchived, postimages);
 }
 
 type SessionEntryMaintenanceApply = (
@@ -130,10 +130,10 @@ export function prepareSessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
-): SessionEntryMaintenanceApply {
+): { requiresWrite: boolean; apply: SessionEntryMaintenanceApply } {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
-    return emptySessionEntryMaintenancePlan;
+    return { requiresWrite: false, apply: emptySessionEntryMaintenancePlan };
   }
 
   // Key projections and indexed age candidates keep unrelated entry payloads out
@@ -147,9 +147,12 @@ export function prepareSessionEntryMaintenanceInDatabase(
     Date.now() < retainedAgeFact.next.at &&
     !shouldRunSessionEntryMaintenance({ entryCount, maxEntries: maintenance.maxEntries })
   ) {
-    return (database) => {
-      stageSessionEntryMaintenanceAgeFact(database.db, { ...retainedAgeFact, entryCount });
-      return emptySessionEntryMaintenancePlan();
+    return {
+      requiresWrite: false,
+      apply(database) {
+        stageSessionEntryMaintenanceAgeFact(database.db, { ...retainedAgeFact, entryCount });
+        return emptySessionEntryMaintenancePlan();
+      },
     };
   }
   invalidateSessionEntryMaintenanceAgeFact(reader.db);
@@ -264,9 +267,12 @@ export function prepareSessionEntryMaintenanceInDatabase(
     if (durableNoCandidates) {
       value.durableNoCandidates = true;
     }
-    return (database) => {
-      stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
-      return value;
+    return {
+      requiresWrite: false,
+      apply(database) {
+        stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
+        return value;
+      },
     };
   }
   // Selected victims have not changed yet; their future age hint is not committed.
@@ -299,7 +305,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     };
   };
   const expected = readInputs(reader);
-  return (database, onArchived, postimages) => {
+  const apply: SessionEntryMaintenanceApply = (database, onArchived, postimages) => {
     if (
       !isDeepStrictEqual(expected, readInputs(database)) ||
       (capArchived + capped > 0 &&
@@ -428,4 +434,5 @@ export function prepareSessionEntryMaintenanceInDatabase(
       capped,
     };
   };
+  return { requiresWrite: true, apply };
 }

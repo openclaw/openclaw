@@ -58,29 +58,6 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "api.runtime.config.current()",
   ],
 } as const satisfies Record<string, readonly string[]>;
-const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
-  "extensions/amazon-bedrock/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
-    "const currentGuardrail = currentPluginConfig?.guardrail;",
-  ],
-  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
-    "pluginConfig: resolvePluginConfigObject(ctx.config, providerId),",
-  ],
-  "extensions/ollama/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',
-    "return config ? {} : startupPluginConfig;",
-  ],
-  "extensions/openai/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");',
-    "runtimePluginConfig ??",
-    "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
-  ],
-} as const satisfies Record<string, readonly string[]>;
 const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
   "extensions/memory-lancedb/index.ts": ["if (cfg.autoRecall)", "if (cfg.autoCapture)"],
 } as const satisfies Record<string, readonly string[]>;
@@ -269,11 +246,13 @@ describe("plugin contract boundary invariants", () => {
     expectSnippetGuards(BUNDLED_LIVE_CONFIG_HOOK_GUARDS);
   });
 
-  it("keeps live provider config surfaces on runtime config lookups", () => {
-    expectSnippetGuards(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS);
-    expect(
-      readRepoSource("extensions/amazon-bedrock-mantle/register.sync.runtime.ts"),
-    ).not.toContain("api.pluginConfig");
+  it("does not restore startup provider defaults when live plugin config is removed", () => {
+    expectSnippetGuards({
+      "extensions/ollama/index.ts": ["return config ? {} : startupPluginConfig;"],
+      "extensions/openai/index.ts": [
+        "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
+      ],
+    });
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {

@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
@@ -270,17 +271,25 @@ it("cancels an offscreen poster request and releases a parked poster without rep
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push((isIntersecting) =>
-          callback(
-            [{ isIntersecting } as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          ),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push((isIntersecting) => {
+          if (this.targets.has(target)) {
+            this.callback(
+              [{ target, isIntersecting } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   const createObjectURL = vi.fn(() => "blob:video-poster");
@@ -349,13 +358,7 @@ it("preserves the playback element when the same attachment snapshot is refreshe
 it.each(["document", "audio", "video"] as const)(
   "retains the focused %s download while admitting its source",
   async (kind) => {
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
+    stubTargetRetainingObserver("IntersectionObserver");
     const url = managedSource();
     const pending = createDeferred<{ url: string }>();
     const resolveArtifactDownload = vi.fn(() => pending.promise);

@@ -234,10 +234,6 @@ export function createUpdateCliFixture() {
     ...packageFixtures,
     baseConfig,
     baseSnapshot,
-    clawHubRiskWarning:
-      "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
-      "│ Outcome: Review                                         │\n" +
-      "╰───────────────────────────────────────────────────────────────────────╯",
     clawHubSuspiciousPayloadWarning:
       "╭─ ClawHub Security Audit ─────────────────────────────────╮\n" +
       "│ Outcome: Review                                         │\n" +

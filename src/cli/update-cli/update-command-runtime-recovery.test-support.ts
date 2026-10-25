@@ -8,7 +8,6 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import * as versionManagerPath from "../../shared/version-manager-path.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 
 const nodeRuntimeVersions = new Map<string, NodeJS.ProcessVersions>();
@@ -129,18 +128,6 @@ export const unsupportedServiceRuntimeFixture = {
   sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
   capabilityError: "Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)",
 } as const;
-
-export function runtimeRecoveryCommandFixture(serviceNode: string) {
-  return async (argv: readonly string[]) =>
-    createCommandResult({
-      stdout:
-        argv[0] === serviceNode && argv[1] === "--version"
-          ? "v22.18.0\n"
-          : argv[0] === "npm" && argv[1] === "--version"
-            ? "12.0.0\n"
-            : "",
-    });
-}
 
 export function currentGitCoreFixture(root: string, version: string) {
   const outcome: UpdateRunResult = {

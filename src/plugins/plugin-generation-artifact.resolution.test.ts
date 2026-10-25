@@ -8,11 +8,66 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as jitiFactory from "./jiti-factory.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { captureResources, writeTree } from "./plugin-generation-capture.test-support.js";
+import { captureResources } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("initializes the package resolver only when capture needs it", async () => {
+  expect(process.env.JITI_TSCONFIG_PATHS).toBeUndefined();
+  await using resources = captureResources();
+  const root = temp.make("plugin-lazy-resolution-");
+  writeTree(root, {
+    "package.json": { name: "fixture", type: "module" },
+    "index.js": "export const value = 42;",
+    "peer.js": "export const value = 7;",
+  });
+  const createResolver = vi.spyOn(jitiFactory, "createJiti");
+  const artifact = resources.keep(capturePluginGenerationArtifact(root, undefined, (run) => run()));
+  const entry = artifact.resolve(path.join(root, "index.js"));
+  artifact.prepareModule(entry);
+  // Bun needs eager source inspection; Node can wait for the first import.
+  expect(createResolver).toHaveBeenCalledTimes(process.versions.bun ? 1 : 0);
+  for (let repeat = 0; repeat < 2; repeat++) {
+    const selected = artifact.captureModule(entry, "./peer.js", ["node", "import"]);
+    expect(selected && "target" in selected && fs.readFileSync(selected.target, "utf8")).toBe(
+      "export const value = 7;",
+    );
+  }
+  expect(createResolver).toHaveBeenCalledTimes(1);
+});
+
+it("pins configured tsconfig paths when preparing a module before a deferred import", async () => {
+  vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
+  try {
+    await using resources = captureResources();
+    const root = temp.make("plugin-tsconfig-resolution-");
+    const config = (target: string) => ({
+      compilerOptions: { baseUrl: ".", paths: { "@fixture/*": [target] } },
+    });
+    writeTree(root, {
+      "package.json": { name: "fixture", type: "module" },
+      "tsconfig.json": config("./old/*"),
+      "index.js": "export const load = () => import('@fixture/value');",
+      "old/value.js": "export const value = 'old';",
+      "new/value.js": "export const value = 'new';",
+    });
+    const artifact = resources.keep(
+      capturePluginGenerationArtifact(root, undefined, (run) => run()),
+    );
+    const entry = artifact.resolve(path.join(root, "index.js"));
+    artifact.prepareModule(entry);
+    writeTree(root, { "tsconfig.json": config("./new/*") });
+    const selected = artifact.captureModule(entry, "@fixture/value", ["node", "import"]);
+    expect(selected && "target" in selected && fs.readFileSync(selected.target, "utf8")).toBe(
+      "export const value = 'old';",
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 it.each([false, true])(
   "bounds resolution work for fifty TypeScript imports (custody: %s)",

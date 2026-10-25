@@ -5,6 +5,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import {
+  acknowledgeWidgetHostInit,
+  grantedFrameWidgetFixture,
   createFrameOwner,
   dispatchFrameMessage,
   mountBoardWidgetFrame,
@@ -87,21 +89,7 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
       connection: { gatewayUrl: "https://gateway.example" },
     },
   } as unknown as ApplicationContext;
-  const widget: BoardWidget = {
-    name: "weather",
-    revision: 1,
-    tabId: "main",
-    contentKind: "html",
-    sizeW: 6,
-    sizeH: 4,
-    position: 0,
-    grantState: "granted",
-    viewTicket: "ticket",
-    viewGeneration: "generation",
-    sandboxUrl: "/mcp-app-sandbox",
-    sandboxPort: 8444,
-    sandboxOrigin: "https://sandbox.example",
-  };
+  const widget: BoardWidget = grantedFrameWidgetFixture();
   const refresh = vi.fn(async () => {});
   lifecycle = createFrameOwner(() => widget, {
     connected: () => root.isConnected,
@@ -119,15 +107,7 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
   const channel = new MessageChannel();
   onTestFinished(() => channel.port2.close());
   const initialized = Promise.withResolvers<void>();
-  channel.port2.addEventListener("message", (event) => {
-    if (event.data.type === "openclaw:widget-host-init") {
-      channel.port2.postMessage({
-        type: "openclaw:widget-host-init-ack",
-        ticket: event.data.ticket,
-      });
-      initialized.resolve();
-    }
-  });
+  acknowledgeWidgetHostInit(channel.port2, initialized);
   channel.port2.start();
   notify({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
   await initialized.promise;
@@ -168,21 +148,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
   vi.stubGlobal("fetch", fetchDocument);
   const root = document.createElement("div");
   document.body.append(root);
-  const widget: BoardWidget = {
-    name: "weather",
-    revision: 1,
-    tabId: "main",
-    contentKind: "html",
-    sizeW: 6,
-    sizeH: 4,
-    position: 0,
-    grantState: "granted",
-    viewTicket: "ticket",
-    viewGeneration: "generation",
-    sandboxUrl: "/mcp-app-sandbox",
-    sandboxPort: 8444,
-    sandboxOrigin: "https://sandbox.example",
-  };
+  const widget: BoardWidget = grantedFrameWidgetFixture();
   const context = {
     gateway: {
       snapshot: { phase: "connected" },

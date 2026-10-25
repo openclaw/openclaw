@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import { containerCheck, containerRpcRequest } from "./client-container.js";
 import { expectPreparedHandoff, useSignalHttpServer } from "./client.test-support.js";
 
@@ -298,13 +299,7 @@ describe("container mocked responses", () => {
     it.each([true, false])(
       "rejects oversized attachments (content-length=%s)",
       async (lengthHeader) => {
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1, 2, 3]));
-            controller.enqueue(new Uint8Array([4, 5]));
-            controller.close();
-          },
-        });
+        const body = createClosedChunkStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]);
         const response = respondBody(
           body,
           lengthHeader ? { headers: { "content-length": "5" } } : undefined,

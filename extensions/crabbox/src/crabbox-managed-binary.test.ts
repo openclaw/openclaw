@@ -11,6 +11,7 @@ import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
@@ -27,14 +28,7 @@ afterEach(() => {
 });
 
 function versionResult(version: string): SpawnResult {
-  return {
-    stdout: `crabbox version ${version}`,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  return commandResult({ stdout: `crabbox version ${version}` });
 }
 const runCommand: CrabboxCommandRunner = async ([binary]) =>
   versionResult(await fs.readFile(binary!, "utf8"));

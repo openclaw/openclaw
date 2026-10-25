@@ -344,7 +344,8 @@ export function isTestDefaultMemorySlotDisabled(
 export function resolveEffectivePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
+  /** Omit when the runtime config already owns prepared plugin policy. */
+  config?: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
@@ -353,6 +354,7 @@ export function resolveEffectivePluginActivationState(params: {
 }): PluginActivationState {
   return resolvePluginActivationStateShared({
     ...params,
+    config: params.config ?? normalizePluginsConfig(params.rootConfig?.plugins),
     allowBundledChannelExplicitBypassesAllowlist: true,
   });
 }

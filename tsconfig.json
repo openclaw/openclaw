@@ -35,6 +35,7 @@
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/google": ["./packages/ai/src/internal/google.ts"],
       "@openclaw/ai/internal/google-model-family": [
         "./packages/ai/src/internal/google-model-family.ts"
       ],

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersListModelAccountsResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
@@ -39,6 +40,7 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 beforeEach(installModelPickerLayout);
@@ -46,7 +48,7 @@ beforeEach(installModelPickerLayout);
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
     state,
-    selectedSession: undefined,
+    selectedSession: selectedChatSessionRow(state),
     agentDefaultModel: undefined,
     modelAccess: { allowed: true, requiredScope: "operator.write" },
     effortAccess: { allowed: true, requiredScope: "operator.write" },
@@ -79,12 +81,7 @@ describe("chat pane composer controls", () => {
         "chat.startup": { messages: [], metadata: { commands: [] } },
         "chat.history": { messages: [] },
         "sessions.list": createSessionsListResult(),
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }],
-        },
+        "agents.list": makeBootRoster(),
       });
       store.current().request.mockImplementation(async (method, params) => request(method, params));
       const hello = {

@@ -1,5 +1,8 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
-import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+} from "@openclaw/ai/internal/shared";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -88,6 +91,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   // harnesses retain the cumulative, fail-closed behavior.
   if (
     joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    params.attempt.lastToolError ||
     hasAttemptTerminalState(params.attempt) ||
     !isCurrentAttemptReplaySafe(params.attempt)
   ) {
@@ -185,6 +189,8 @@ function resolveReasoningOnlyRetryInstruction(params: IncompleteTurnRecoveryPara
   return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
     assistant &&
     assistant.stopReason !== "error" &&
+    // Replay omits token-limited reasoning, so no partial turn remains to continue.
+    !isReasoningOnlyLengthAssistantTurn(assistant) &&
     !assistant.openclawDelivery?.tts?.text?.trim() &&
     Array.isArray(assistant.content) &&
     assistant.content.length > 0 &&
@@ -387,6 +393,10 @@ export function resolveSettledToolTerminalContinuation(
     intentionalTermination ||
     parkedCodeModeRun ||
     hasUnsettledToolError ||
+    // A denied action must not reopen tools after an empty stop. Settled execution
+    // failures retain their existing continuation and text-only summary contracts.
+    (attempt.lastToolError?.executionStarted === false &&
+      assistantState.assistant?.stopReason !== "toolUse") ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||

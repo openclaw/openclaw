@@ -8,18 +8,7 @@ import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
 type NodeCommand = Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0];
-type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
-  agentId?: string;
-};
-type CatalogOperation = "list" | "read" | "continueSession" | "archive" | "openTerminal";
-export type TestSessionCatalogProvider = Omit<
-  RegisteredSessionCatalogProvider,
-  CatalogOperation
-> & {
-  [K in keyof Pick<RegisteredSessionCatalogProvider, CatalogOperation>]: (
-    params: OptionalCatalogAgent<Parameters<NonNullable<RegisteredSessionCatalogProvider[K]>>[0]>,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider[K]>>;
-};
+export type TestSessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 export const piSessionHeader = (overrides: Record<string, unknown> = {}) => ({
   type: "session",

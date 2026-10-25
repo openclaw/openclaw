@@ -25,6 +25,7 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import { createAuthorityGatewayTestEnv } from "../test-helpers.env.js";
 import * as recoveryOwner from "../worker-environments/local-workspace-recovery.js";
 import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
 
@@ -42,16 +43,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
     {
       label: "workspace-recovery-authority",
       scenario: "minimal",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_DISABLE_BONJOUR: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: createAuthorityGatewayTestEnv(),
     },
     async (state) => {
       const lock = await acquireGatewayLock({
@@ -158,7 +150,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         if (!prepared) {
           throw new Error("Expected a local sandbox projection");
         }
-        const relative = ".openclaw/tmp/oversized.bin";
+        const relative = "artifacts/oversized.bin";
         const source = path.join(prepared.workspaceDir, relative);
         const recoveryId = randomUUID();
         const destination = path.join(

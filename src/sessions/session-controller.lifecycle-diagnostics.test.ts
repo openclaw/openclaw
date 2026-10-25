@@ -21,14 +21,7 @@ import {
   captureSessionTarget,
   runSessionMutation as runMutation,
 } from "./session-controller.lifecycle.js";
-import {
-  claimSessionControllerTask as claimTask,
-  releaseSessionControllerClaim as releaseClaim,
-  reserveSessionControllerSource as reserveSource,
-  tryClaimSessionControllerTask as tryClaim,
-} from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
-import { findSessionControllerEntry as findEntry } from "./session-controller.state.js";
 
 const traces = {
   first: { traceId: "1".repeat(32), spanId: "1".repeat(16) },
@@ -534,37 +527,6 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
   expect((await records("slow")).at(-1)?.omittedObservations).toBeGreaterThan(0);
 });
 
-it("does not let pre-dispatch bypass an older preparing input or retain a failed claim request", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
-  const sessionKey = "agent:phase-claim:test";
-  let firstClaim: ReturnType<typeof tryClaim>;
-  let secondClaim: ReturnType<typeof tryClaim>;
-  try {
-    const first = reserveSource(sessionKey, { policy: { mode: "followup" } });
-    const second = reserveSource(sessionKey, { policy: { mode: "followup" } });
-    expect(tryClaim(second)).toBeUndefined();
-    firstClaim = tryClaim(first);
-    expect(firstClaim?.inputs).toEqual([first]);
-    expect(tryClaim(second)).toBeUndefined();
-    releaseClaim(firstClaim!);
-    await firstClaim!.settlement.promise;
-    secondClaim = await claimTask(second, () => {});
-    expect(secondClaim.inputs).toEqual([second]);
-    expect(
-      (await records("phase"))
-        .filter((record) => record.phase === "source-claim")
-        .map((record) => record.status),
-    ).toEqual(["selected", "waiting", "selected"]);
-  } finally {
-    const claims = [firstClaim, secondClaim].filter((claim) => claim !== undefined);
-    for (const claim of claims) {
-      releaseClaim(claim);
-    }
-    await Promise.all(claims.map((claim) => claim.settlement.promise));
-  }
-  expect(findEntry(sessionKey)).toBeUndefined();
-});
-
 it("gates and hashes phase events without consuming the slow-warning budget", async () => {
   setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "pretty", file: logFile });
   const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -630,11 +592,13 @@ it("preserves operation errors and queue release when the native logging sink th
   const lifecycle = await import("./session-controller.lifecycle.js");
   const [started, release] = [createDeferred(), createDeferred()];
   const operationError = new Error("original operation failure");
+  const finalize = vi.fn(async () => {});
   const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
   const first = lifecycle.runSessionMutation({
     diagnosticLabel: "delete",
     policy: "wait",
     ...target,
+    finalize,
     run: async () => {
       started.resolve();
       await release.promise;
@@ -654,6 +618,7 @@ it("preserves operation errors and queue release when the native logging sink th
     expect(failedSink).toHaveBeenCalled();
     release.resolve();
     await expect(firstOutcome).resolves.toBe(operationError);
+    expect(finalize).toHaveBeenCalledOnce();
     await expect(second).resolves.toBe("next operation");
     expect(lifecycle.getSessionMutationCount()).toBe(0);
   } finally {

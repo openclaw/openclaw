@@ -94,3 +94,22 @@ it("launches the stable Homebrew Node after an upgrade removed the running Cella
     expect(spawnProcess).toHaveBeenLastCalledWith(stableNode, [workerPath], expect.any(Object));
   });
 });
+
+it("keeps an embedded relay out of its downloaded worker's generic runtime mode", () => {
+  const workerUrl = pathToFileURL(path.resolve("runtime/dist/service-child-relay.mjs"));
+  const env = { BUN_BE_BUN: "1", HOME: "/synthetic-worker-home" };
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === path.resolve("runtime/dist/service-child-relay.mjs"),
+  );
+  vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+  try {
+    spawnServiceChildRelay({ workerUrl, stdio: "ignore", env, detached: false });
+    expect(vi.mocked(spawnProcess).mock.lastCall?.[2]?.env).toEqual({
+      HOME: "/synthetic-worker-home",
+    });
+    expect(env.BUN_BE_BUN).toBe("1");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

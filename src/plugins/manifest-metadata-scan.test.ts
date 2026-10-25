@@ -8,7 +8,6 @@ import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
 import { resolvePluginConfigContractsById } from "./config-contracts.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { makePluginMetadataIndex } from "./current-plugin-metadata.test-support.js";
-import { writeDoctorFiles as writeFiles } from "./doctor-contract.test-support.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -17,6 +16,7 @@ import {
   completePluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { writeArtifacts as writeFiles } from "./public-surface.test-support.js";
 
 const { manifestScanWarn } = vi.hoisted(() => ({
   manifestScanWarn: vi.fn(),
@@ -44,7 +44,7 @@ const tempRoots = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createPluginFixture(pluginName: string, contents?: unknown, bundled?: string) {
+function createPluginFixture(pluginName: string, contents?: string | object, bundled?: string) {
   const root = tempRoots.make("openclaw-manifest-metadata-");
   const home = path.join(root, "home");
   const bundledRoot = path.join(root, bundled ?? "empty-bundled");

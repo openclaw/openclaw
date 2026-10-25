@@ -13,6 +13,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -32,12 +33,7 @@ const suite = createControlUiE2eSuite({
 });
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  return suite.newBrowserContext({
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  });
+  return suite.newBrowserContext(createLightDesktopControlUiContextOptions());
 }
 
 async function expectText(locator: Locator, ...texts: string[]): Promise<void> {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { execContainerRaw, type ExecContainerRawOptions } from "./container-engine.js";
 import {
@@ -212,18 +213,6 @@ async function revoke(owner: ReturnType<typeof source>, name: string) {
   owner.controller.abort();
   await drain(name);
 }
-function barrier() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    ...finish,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
 function expectCounts(counts: Record<string, number>) {
   expect(Object.fromEntries(Object.keys(counts).map((op) => [op, calls(op).length]))).toEqual(
     counts,
@@ -313,7 +302,7 @@ it("preserves a valid same-grant source after device loss, then stops on full gr
 
 it("does not let a revoked queued caller discard another grant's private custody", async () => {
   const first = source();
-  const setup = barrier();
+  const setup = createEnteredGate();
   fixture.setup = setup.wait;
   const creating = ensure(first);
   await setup.entered;
@@ -321,7 +310,7 @@ it("does not let a revoked queued caller discard another grant's private custody
   const queued = ensure(other);
   const rejected = expect(queued).rejects.toThrow("queued access revoked");
   other.controller.abort(new Error("queued access revoked"));
-  setup.resolve();
+  setup.release();
   const { containerId } = await creating;
   await rejected;
   first.controller.abort();
@@ -402,12 +391,12 @@ it.each([
       profileId: changed === "profile" ? "other" : "guest",
     });
     if (timing === "queued") {
-      const release = barrier();
-      const blocked = withSandboxContainerLifecycle(containerName, undefined, release.wait);
-      await release.entered;
+      const gate = createEnteredGate();
+      const blocked = withSandboxContainerLifecycle(containerName, undefined, gate.wait);
+      await gate.entered;
       const queued = ensure(other);
       first.controller.abort();
-      release.resolve();
+      gate.release();
       await blocked;
       await queued;
     } else {
@@ -468,8 +457,11 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
 });
 
 it("preserves management removal intent across failed setup and queued reuse", async () => {
-  const setup = barrier();
-  fixture.setup = setup.wait;
+  const setup = createEnteredGate();
+  fixture.setup = async () => {
+    await setup.wait();
+    throw new Error("setup failed");
+  };
   const creating = ensure();
   const failed = expect(creating).rejects.toThrow("setup failed");
   await setup.entered;
@@ -482,7 +474,7 @@ it("preserves management removal intent across failed setup and queued reuse", a
   // Management publishes its removal fence before it waits for this owner queue.
   fixture.registry.set(container.name, { ...entry, runtimeState: "removing-pending" });
   const removing = removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, container.name);
-  setup.reject(new Error("setup failed"));
+  setup.release();
   await failed;
   await removing;
   await expect(queued).rejects.toThrow("is being removed");
@@ -509,7 +501,7 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
   };
   const backend = await createBackend(first);
   const cleanup = backend.prepareProcessCleanup!({});
-  const inspection = barrier();
+  const inspection = createEnteredGate();
   let inspections = 0;
   fixture.inspectState = async (container, format) => {
     if (++inspections === 1) {
@@ -532,11 +524,11 @@ it("settles old targeted cleanup from its own termination receipt after same-ID 
     const restarted = await createBackend(source());
     expect(restarted.runtimeId).toBe(backend.runtimeId);
     expect(fixture.containers.get(restarted.runtimeId)?.running).toBe(true);
-    inspection.resolve();
+    inspection.release();
     await expect(pending).resolves.toBeUndefined();
     await expect(restarted.prepareProcessCleanup!({}).terminate()).rejects.toThrow("exec failed");
   } finally {
-    inspection.resolve();
+    inspection.release();
     await pending.catch(() => {});
   }
 });

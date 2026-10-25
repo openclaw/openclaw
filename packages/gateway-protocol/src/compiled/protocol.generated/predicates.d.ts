@@ -742,6 +742,11 @@ export function isChatToolTitlesParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatToolTitlesParamsSchema
 >;
+export function isChatPendingInputsDismissParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatPendingInputsDismissParamsSchema
+>;
 export function isChatPredictParams(
   value: unknown,
 ): value is import("typebox").Static<

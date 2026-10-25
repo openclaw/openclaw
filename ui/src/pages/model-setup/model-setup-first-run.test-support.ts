@@ -3,7 +3,11 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/types.ts";
+import type {
+  ModelCatalogEntry,
+  SystemAgentSetupDetectResult,
+  WizardNextResult,
+} from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -27,6 +31,14 @@ export const missingWizardError = () =>
   });
 
 export const running = { done: false, status: "running" } as const;
+
+export const nativeModel = (name = "Fixture model"): ModelCatalogEntry => ({
+  provider: "acp-opencode",
+  id: "fixture-model",
+  name,
+  available: true,
+  agentRuntime: { id: "acp-opencode", source: "implicit" },
+});
 
 export const configuredDetection = (configuredModel: string) => ({
   ...detection,
@@ -55,17 +67,6 @@ export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({
   status: "running" as const,
   step,
 });
-
-export function configSnapshot(config: Record<string, unknown> = {}, hash = "hash-1") {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    valid: true,
-    issues: [],
-  };
-}
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -192,6 +193,25 @@ export function mountDetection(
     firstRun,
     state: { phase: "ready", result: { ...detection, ...result } },
   });
+}
+
+export async function createMountedFirstRun(
+  result: Partial<SystemAgentSetupDetectResult>,
+  handlers?: Parameters<typeof mockRequests>[1],
+  options: {
+    firstRun?: boolean;
+    refreshError?: string;
+    beforeRefresh?: () => Promise<void>;
+  } = {},
+) {
+  const fixture = createFirstRunContext(options.refreshError, options.beforeRefresh);
+  if (handlers) {
+    mockRequests(fixture.request, handlers);
+  }
+  return {
+    ...fixture,
+    ...(await mountDetection(fixture.context, fixture.client, result, options.firstRun ?? true)),
+  };
 }
 
 export function modalButton(page: ParentNode, label: string) {

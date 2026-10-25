@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  connectionSchemaFixture,
   disposeConfigFormFixture,
   renderArrayFixture,
   renderNodeFixture,
@@ -148,14 +149,7 @@ describe("config form draft lifetimes", () => {
     const onPatch = vi.fn(() => false);
     const render = () =>
       renderNodeFixture(container, {
-        schema: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
+        schema: connectionSchemaFixture(),
         value: undefined,
         sourceIdentity,
         path: ["connection"],

@@ -308,6 +308,8 @@ function ProcessesPanel(props: Props) {
   const presented = usePanePresentation(() => props.processesPresented ?? false);
   return (
     <Processes
+      showRequest={props.processesShowRequest}
+      onBackToDetails={props.onBackToProcessDetails}
       onScrollPortRef={props.onScrollPortRef}
       mobile={props.presentation === "mobile"}
       data-sidebar-panel-host

@@ -45,7 +45,7 @@ import {
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { createMediaDevicePreferences } from "./media-device-discovery.ts";
-import { admitMemoryRoute } from "./memory-route-admission.ts";
+import { canonicalMemoryRouteLocation } from "./memory-schema.ts";
 import {
   configTargetIdFromHash,
   type ConfigRouteData,
@@ -200,9 +200,31 @@ export function createConfigPage(
     abortRequests();
     pageId = nextPageId;
     routeData = nextRouteData;
-    admitMemoryRoute(context, pageId, routeData, normalizedMemoryLocation, (location) => {
-      normalizedMemoryLocation = location;
-    });
+    if (pageId !== "memory") {
+      normalizedMemoryLocation = "";
+    } else if (routeData) {
+      const routeAgentId = new URLSearchParams(routeData.search).get("agent")?.trim();
+      const intent = routeData.agentSelectionIntent;
+      const agentSelection = context.settingsAgentSelection;
+      if (
+        routeAgentId &&
+        intent?.owner === agentSelection &&
+        intent.revision === agentSelection.intentRevision
+      ) {
+        agentSelection.set(routeAgentId);
+      }
+      const canonical = canonicalMemoryRouteLocation(routeData, context.basePath);
+      if (!canonical) {
+        normalizedMemoryLocation = "";
+      } else {
+        const source = `${routeData.pathname}${routeData.search}${routeData.hash}`;
+        // Retained Settings data can repeat while the canonical replacement loads.
+        if (normalizedMemoryLocation !== source) {
+          normalizedMemoryLocation = source;
+          context.replace("memory", canonical);
+        }
+      }
+    }
     const selection = routeData
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
@@ -303,7 +325,8 @@ export function createConfigPage(
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
-    if (runtimeConfig !== runtimeConfigSource) {
+    const sourceChanged = runtimeConfig !== runtimeConfigSource;
+    if (sourceChanged) {
       retireCommands();
       if (runtimeConfigSource) {
         customThemeImportOwner.retireImport();
@@ -312,7 +335,10 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const config = runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
+    if (
+      sourceChanged ||
+      (!config.configSnapshot && !config.configLoading && !currentConfigRead(config))
+    ) {
       void runtimeConfig.ensureLoaded().catch(() => undefined);
     }
     if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {

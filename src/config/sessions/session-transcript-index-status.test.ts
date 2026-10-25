@@ -279,11 +279,14 @@ it("classifies a pending batch with bounded SQL and preserves later projection c
     }
     db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
   });
-  const statements = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  const statements = trackSqliteStatementExecutions(db, ["all", "status"], (sql) =>
+    /^update "temp"\."openclaw_transcript_index_status"\s+set\b/iu.test(sql) ? "status" : "all",
+  );
   try {
     expectStatus(maintain(db), sessionIds);
+    expect(statements.counts.status).toBe(0);
     // Classification and queue consumption are bounded commands, not commands per session.
-    expect(statements.counts.all).toBeLessThanOrEqual(16);
+    expect(statements.counts.all + statements.counts.status).toBeLessThanOrEqual(16);
   } finally {
     statements.restore();
   }
@@ -378,6 +381,23 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
   } finally {
     probes.restore();
     await broker.close();
+  }
+});
+
+it("bounds empty-window projection probes by maintenance page, not session count", () => {
+  const db = createDatabase();
+  seedSessions(db, "empty-", 1000);
+  db.exec(`DELETE FROM transcript_events;
+    DELETE FROM session_transcript_active_events;
+    DELETE FROM session_transcript_index_state;`);
+  const reads = trackSqliteStatementExecutions(db, ["projection"], (sql) =>
+    /^select .*"rowid" as "rowId" from "session_transcript_/iu.test(sql) ? "projection" : null,
+  );
+  try {
+    expectStatus(settle(db));
+    expect(reads.counts.projection).toBe(3 * Math.ceil(1000 / 128));
+  } finally {
+    reads.restore();
   }
 });
 

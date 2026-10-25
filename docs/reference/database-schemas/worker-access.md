@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Recovered operator runs retain validated profile facts until the bound catalog's
+profile row changes. Each policy check still verifies the original catalog's
+lifetime, mutation settlement, canonical identity, and required email bindings,
+including after access-policy callbacks. An unchanged row avoids rebuilding the
+same facts; pending or uncertain mutations and retired owners still refuse use.
+
 Transcript reads capture scalar anchor and turn-admission fields before yielding,
 including whether an optional idempotency key is present. These private copies
 keep later caller mutations out of the read. Message payloads retain separate
@@ -62,6 +68,9 @@ A new worker or database generation receives a complete snapshot.
 Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
+Reference and fact publications reuse the last complete scope sweep while its
+shared revision remains current. Importing scope cells invalidates that result;
+keyed publication never certifies that unrelated remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -489,6 +498,11 @@ outcomes return reads to the canonical worker. Bounded transcript payload reads
 remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
+
+Inside the durable worker, hot state and its stored entry row share one owned
+decoded entry. Mutations replace that entry instead of editing it in place;
+transaction forks retain the previous entry for rollback. Incoming postimages
+and outgoing public reads remain detached from the resident state.
 
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
@@ -1691,6 +1705,16 @@ metadata, and worker-owned heartbeat outcome writes use this path; compound
 writes retain their transactions. Heartbeat claims remain one conditional update,
 so competing runs cannot claim the same outcome.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
+Resident session run adoption without a turn can also use one SQLite node write.
+The entry writer certifies that the prepared update has no window, snapshot,
+conversation, cleanup, or identity effects. Inside native write custody, the
+existing receipt owner prepares the exact pending token, publication, serialized
+reply, and final admission before the statement executes. Native success installs
+them through the same postcommit owner; rejected preparation and definite statement
+failure preserve the prior resident state. An uncertain outcome invalidates it
+and uses normal recovery. Cold, compound, nested, oversized-reply, and PostgreSQL
+adoptions retain their managed transactions.
 
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,
@@ -5797,8 +5821,10 @@ workers still require native exit before replacement. Schema and update behavior
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
 per-transcript queue, then recheck the live session before publishing. Message
-lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
-their projection-readiness retry. Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
+lookup keeps its current-only, byte-limit, and reset-archive behavior. Projection
+waiters read status once, then await the reconcile owner's per-session completion;
+committed ready receipts can release a session before unrelated rebuilds finish.
+Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
 
 Exact transcript-event matching also uses the history worker for disk discovery,
 payload decoding, and selection. Callers supply a serializable selection for the
@@ -6669,6 +6695,13 @@ retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot
 semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
+
+Initial model-context snapshots also reuse equal string values from the loaded
+SessionManager. The context reader still owns selection and admission; its projected
+fields, property order, and mutable containers remain authoritative. Resident SDK
+edits and accessors cannot change the returned context, and frozen resident payloads
+do not make the initial model view immutable. Fresh reader-owned message containers
+are reused in place; an admitted cohort still detaches the manager's mutable view.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

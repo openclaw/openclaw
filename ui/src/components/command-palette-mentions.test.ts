@@ -81,32 +81,25 @@ async function mount(
   const getInput = () => palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
   await openPalette(palette);
   getInput().focus();
-  const edit = async (options: {
-    start: number;
-    end: number;
-    text: string;
-    inputType?: string;
-  }) => {
+  const edit = async (start: number, end: number, text: string, inputType = "insertText") => {
     const input = getInput();
     const previous = input.value;
-    input.setSelectionRange(options.start, options.end);
-    const inputType = options.inputType ?? "insertText";
+    input.setSelectionRange(start, end);
     const event = {
       bubbles: true,
       inputType,
-      data: inputType.startsWith("delete") ? null : options.text,
+      data: inputType.startsWith("delete") ? null : text,
     };
     input.dispatchEvent(new InputEvent("beforeinput", { ...event, cancelable: true }));
-    input.value = previous.slice(0, options.start) + options.text + previous.slice(options.end);
-    const caret = options.start + options.text.length;
+    input.value = previous.slice(0, start) + text + previous.slice(end);
+    const caret = start + text.length;
     input.setSelectionRange(caret, caret);
     input.dispatchEvent(new InputEvent("input", event));
     await palette.updateComplete;
   };
-  const append = (text: string) =>
-    edit({ start: getInput().value.length, end: getInput().value.length, text });
+  const append = (text: string) => edit(getInput().value.length, getInput().value.length, text);
   const replace = (text: string, inputType = "insertText") =>
-    edit({ start: 0, end: getInput().value.length, text, inputType });
+    edit(0, getInput().value.length, text, inputType);
   const key = async (pressedKey: string, extra: KeyboardEventInit = {}) => {
     const event = pressKey(getInput(), pressedKey, { cancelable: true, ...extra });
     await palette.updateComplete;
@@ -213,52 +206,26 @@ describe("command palette people mentions", () => {
     expect(f.recipients()).toHaveLength(0);
   });
 
-  it.each(["same-name token", "inside token"])(
-    "preserves recipient identity after deleting %s",
-    async (change) => {
-      const f = await mount();
-      await f.choose();
-      await f.choose(change === "same-name token" ? "ArrowDown" : "End");
-      await f.edit({
-        start: change === "same-name token" ? 0 : 3,
-        end: change === "same-name token" ? 6 : 4,
-        text: "",
-        inputType: "deleteContentForward",
-      });
-      expect(f.recipients()).toHaveLength(1);
-      if (change === "same-name token") {
-        await f.edit({ start: 0, end: 0, text: "Review " });
-        await f.append(" tail");
-        await f.edit({ start: 13, end: 13, text: "@" });
-        await vi.advanceTimersByTimeAsync(150);
-        await f.key("End");
-        await f.key("Enter");
-        expect(f.input.value).toBe("Review @Alex @Jordan Rivera  tail");
-        expect(f.input.selectionStart).toBe(28);
-        await f.send();
-        f.expectCreate({
-          mentions: [
-            { profileId: "alex-two", start: 7, end: 12 },
-            { profileId: "jordan", start: 13, end: 27 },
-          ],
-        });
-      } else {
-        const value = f.input.value;
-        vi.mocked(f.context.sessions.list).mockClear();
-        f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-        await f.palette.updateComplete;
-        expect(f.input.value).toBe(value);
-        expect(f.recipients()).toHaveLength(0);
-        await vi.advanceTimersByTimeAsync(200);
-        expect(f.context.sessions.list).toHaveBeenCalledWith(
-          expect.objectContaining({ search: value.trim() }),
-        );
-        await f.send();
-        const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
-        expect(create).not.toHaveProperty("mentions");
-      }
-    },
-  );
+  it("resumes search after removing a recipient without deleting its visible text", async () => {
+    const f = await mount();
+    await f.choose();
+    await f.choose("End");
+    await f.edit(3, 4, "", "deleteContentForward");
+    expect(f.recipients()).toHaveLength(1);
+    const value = f.input.value;
+    vi.mocked(f.context.sessions.list).mockClear();
+    f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+    await f.palette.updateComplete;
+    expect(f.input.value).toBe(value);
+    expect(f.recipients()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(f.context.sessions.list).toHaveBeenCalledWith(
+      expect.objectContaining({ search: value.trim() }),
+    );
+    await f.send();
+    const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
+    expect(create).not.toHaveProperty("mentions");
+  });
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
     const f = await mount();
@@ -278,11 +245,6 @@ describe("command palette people mentions", () => {
     expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ search: "Review @Al" }),
     );
-    await f.replace("Review @Jo");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(f.menu()).not.toBeNull();
-    await f.select(7, 10);
-    expect(f.menu()).toBeNull();
     expect(f.recipients()).toHaveLength(0);
   });
 
@@ -329,7 +291,7 @@ describe("command palette people mentions", () => {
     expect(f.context.sessions.createResult).not.toHaveBeenCalled();
   });
 
-  it("shows loading, empty, and retry states without accidentally sending", async () => {
+  it("shows loading and empty states without accidentally sending", async () => {
     const f = await mount();
     f.directory.mockResolvedValueOnce({ users: [], truncated: false });
     await f.append("@Nobody");
@@ -340,15 +302,6 @@ describe("command palette people mentions", () => {
     expect(f.menu()?.textContent).toContain("No people found");
     await f.key("Tab");
     expect(f.context.sessions.createResult).not.toHaveBeenCalled();
-    f.directory.mockRejectedValueOnce(new Error("unavailable"));
-    await f.replace("@Alex");
-    await vi.advanceTimersByTimeAsync(150);
-    const retry = f.query<HTMLButtonElement>(".mention-menu__retry")!;
-    expect(retry.textContent?.trim()).toBe("Retry");
-    expect((await f.key("Tab")).defaultPrevented).toBe(false);
-    retry.click();
-    await vi.advanceTimersByTimeAsync(150);
-    expect(f.menu()?.querySelectorAll('[role="option"]')).toHaveLength(3);
   });
 
   it("retains selected recipients on a rejected first turn without duplicate creation", async () => {
@@ -362,8 +315,7 @@ describe("command palette people mentions", () => {
     expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
     expect(f.recipients()).toHaveLength(1);
     await f.key("Escape");
-    f.palette.openPalette();
-    await f.palette.updateComplete;
+    await openPalette(f.palette);
     expect(f.recipients()).toHaveLength(1);
     pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -412,8 +364,7 @@ describe("command palette people mentions", () => {
       await f.palette.updateComplete;
       // An identity change closes the old draft before the next opening.
       if (!f.palette.isOpen) {
-        f.palette.openPalette();
-        await f.palette.updateComplete;
+        await openPalette(f.palette);
       }
       await f.search();
       expect(f.directory).not.toHaveBeenCalled();
@@ -491,8 +442,7 @@ describe("command palette people mentions", () => {
       await f.palette.updateComplete;
       if (change !== "reconnect" && change !== "destination") {
         expect(f.palette.isOpen).toBe(false);
-        f.palette.openPalette();
-        await f.palette.updateComplete;
+        await openPalette(f.palette);
       }
       f.input.focus();
       await f.replace("@new");

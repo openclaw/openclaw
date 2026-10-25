@@ -1,4 +1,3 @@
-// Covers provider install catalog entries from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
@@ -37,23 +36,21 @@ import {
   resolveProviderInstallCatalogEntry,
 } from "./provider-install-catalog.js";
 
-function registrySnapshot(
-  overrides: {
-    installRecords?: Record<string, InstalledPluginInstallRecordInfo>;
-    plugins?: InstalledPluginIndexRecord[];
-  } = {},
+function mockInstalled(
+  plugins: InstalledPluginIndexRecord[] = [],
+  installRecords: Record<string, InstalledPluginInstallRecordInfo> = {},
 ) {
-  return {
+  loadPluginRegistrySnapshot.mockReturnValue({
     version: 1 as const,
     hostContractVersion: "test",
     compatRegistryVersion: "test",
     migrationVersion: 1 as const,
     policyHash: "test",
     generatedAtMs: 0,
-    installRecords: overrides.installRecords ?? {},
-    plugins: overrides.plugins ?? [],
+    installRecords,
+    plugins,
     diagnostics: [],
-  };
+  });
 }
 
 function installedPlugin(
@@ -101,25 +98,14 @@ function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
   });
 }
 
-function mockVllmAuthChoice() {
-  resolveManifestProviderAuthChoices.mockReturnValue([
-    {
-      pluginId: "vllm",
-      providerId: "vllm",
-      methodId: "server",
-      choiceId: "vllm",
-      choiceLabel: "vLLM",
-      groupLabel: "vLLM",
-    },
-  ]);
-}
-
-function mockInstalled(
-  plugins: InstalledPluginIndexRecord[],
-  installRecords: Record<string, InstalledPluginInstallRecordInfo> = {},
-) {
-  loadPluginRegistrySnapshot.mockReturnValue(registrySnapshot({ plugins, installRecords }));
-}
+const vllmChoice = {
+  pluginId: "vllm",
+  providerId: "vllm",
+  methodId: "server",
+  choiceId: "vllm",
+  choiceLabel: "vLLM",
+  groupLabel: "vLLM",
+};
 
 function mockAuthChoice(pluginId: string, choiceLabel: string) {
   resolveManifestProviderAuthChoices.mockReturnValue([authChoice(pluginId, choiceLabel)]);
@@ -151,28 +137,10 @@ function officialProvider(
   };
 }
 
-function expectVllm(
-  install: NonNullable<ReturnType<typeof resolveProviderInstallCatalogEntry>>["install"],
-  installSource: PluginInstallSourceInfo,
-) {
-  expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
-    pluginId: "vllm",
-    providerId: "vllm",
-    methodId: "server",
-    choiceId: "vllm",
-    choiceLabel: "vLLM",
-    groupLabel: "vLLM",
-    label: "vLLM",
-    origin: "global",
-    install,
-    installSource,
-  });
-}
-
 describe("provider install catalog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadPluginRegistrySnapshot.mockReturnValue(registrySnapshot());
+    mockInstalled();
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
   });
@@ -222,11 +190,8 @@ describe("provider install catalog", () => {
   it("keeps stable label order and installed-choice priority when merging official entries", () => {
     mockInstalled([{ ...vllmPluginWithPackageInstall(), origin: "bundled" }]);
     const choice = (choiceId: string, choiceLabel: string) => ({
-      pluginId: "vllm",
-      providerId: "vllm",
-      methodId: "api-key",
+      ...authChoice("vllm", choiceLabel),
       choiceId,
-      choiceLabel,
     });
     resolveManifestProviderAuthChoices.mockReturnValue([
       choice("last", "Zulu"),
@@ -276,16 +241,13 @@ describe("provider install catalog", () => {
         integrity: "sha512-vllm",
       },
     });
-    mockVllmAuthChoice();
+    resolveManifestProviderAuthChoices.mockReturnValue([vllmChoice]);
 
-    expectVllm(
-      { npmSpec: "@openclaw/vllm@2.0.0", expectedIntegrity: "sha512-vllm", defaultChoice: "npm" },
-      {
-        defaultChoice: "npm",
-        npm: npmSource("@openclaw/vllm", "2.0.0", "sha512-vllm"),
-        warnings: [],
-      },
-    );
+    expect(resolveProviderInstallCatalogEntry("vllm")?.install).toEqual({
+      npmSpec: "@openclaw/vllm@2.0.0",
+      expectedIntegrity: "sha512-vllm",
+      defaultChoice: "npm",
+    });
   });
 
   it("preserves durable ClawHub install records for provider setup reinstall hints", () => {
@@ -297,21 +259,12 @@ describe("provider install catalog", () => {
         clawhubPackage: "openclaw/vllm",
       },
     });
-    mockVllmAuthChoice();
+    resolveManifestProviderAuthChoices.mockReturnValue([vllmChoice]);
 
-    expectVllm(
-      { clawhubSpec: "clawhub:openclaw/vllm@2026.5.2", defaultChoice: "clawhub" },
-      {
-        defaultChoice: "clawhub",
-        clawhub: {
-          spec: "clawhub:openclaw/vllm@2026.5.2",
-          packageName: "openclaw/vllm",
-          version: "2026.5.2",
-          exactVersion: true,
-        },
-        warnings: [],
-      },
-    );
+    expect(resolveProviderInstallCatalogEntry("vllm")?.install).toEqual({
+      clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
+      defaultChoice: "clawhub",
+    });
   });
 
   it("does not expose untrusted global package install intent without an install record", () => {
@@ -325,7 +278,6 @@ describe("provider install catalog", () => {
       }),
     ]);
     mockAuthChoice("demo-provider", "Demo Provider API key");
-
     expect(resolveProviderInstallCatalogEntries()).toStrictEqual([]);
   });
 
@@ -347,7 +299,6 @@ describe("provider install catalog", () => {
       }),
     ]);
     mockAuthChoice("openai", "OpenAI API key");
-
     expect(resolveProviderInstallCatalogEntries()).toStrictEqual([]);
   });
 
@@ -359,7 +310,6 @@ describe("provider install catalog", () => {
       }),
     ]);
     mockAuthChoice("demo-provider", "Demo Provider API key");
-
     expect(
       resolveProviderInstallCatalogEntries({
         config: { plugins: { enabled: false } },
@@ -376,159 +326,60 @@ describe("provider install catalog", () => {
       groupId: "codex",
       groupLabel: "Codex",
       onboardingScopes: ["text-inference" as const],
+      deprecatedChoiceIds: ["old-codex"],
+      groupHint: "Codex runtime",
+      optionKey: "codexKey",
+      cliFlag: "--codex-key",
+      cliOption: "--codex-key <key>",
+      cliDescription: "Codex key",
     };
-    const install = { npmSpec: "@openclaw/codex", defaultChoice: "npm" as const };
+    const install = {
+      npmSpec: "@openclaw/codex",
+      defaultChoice: "npm" as const,
+      minHostVersion: ">=2026.8.1",
+    };
     listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {
-        name: "@openclaw/codex",
-        source: "official",
-        kind: "provider",
-        openclaw: {
-          plugin: { id: "codex", label: "Codex" },
-          providers: [
-            { id: "codex", name: "Codex", authChoices: [{ method: "app-server", ...choice }] },
-          ],
+        ...officialProvider(
+          "codex",
+          "Codex",
+          {
+            id: "codex",
+            name: "Codex",
+            aliases: ["codex-alias", "codex-second"],
+            authChoices: [{ method: "app-server", ...choice }],
+          },
           install,
-        },
+        ),
+        name: "@openclaw/codex",
       },
     ]);
 
+    const installSource: PluginInstallSourceInfo = {
+      defaultChoice: "npm",
+      npm: {
+        spec: "@openclaw/codex",
+        packageName: "@openclaw/codex",
+        selectorKind: "none",
+        exactVersion: false,
+        pinState: "floating-without-integrity",
+      },
+      warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
+    };
     expect(resolveProviderInstallCatalogEntry("codex")).toEqual({
       pluginId: "codex",
       providerId: "codex",
+      providerAliases: ["codex-alias", "codex-second"],
       methodId: "app-server",
       ...choice,
       label: "Codex",
       origin: "bundled",
       install,
-      installSource: {
-        defaultChoice: "npm",
-        npm: {
-          spec: "@openclaw/codex",
-          packageName: "@openclaw/codex",
-          selectorKind: "none",
-          exactVersion: false,
-          pinState: "floating-without-integrity",
-        },
-        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
-      },
+      installSource,
     });
-  });
-
-  it("surfaces the pinned Telnyx auth choice before the plugin is installed", () => {
-    const integrity =
-      "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==";
-    const choice = {
-      choiceId: "telnyx-api-key",
-      choiceLabel: "Telnyx API key",
-      choiceHint: "OpenAI-compatible Telnyx AI inference endpoint",
-      groupId: "telnyx",
-      groupLabel: "Telnyx",
-      groupHint: "OpenAI-compatible Telnyx AI inference endpoint",
-      optionKey: "telnyxApiKey",
-      cliFlag: "--telnyx-api-key",
-      cliOption: "--telnyx-api-key <key>",
-      cliDescription: "Telnyx API key",
-      onboardingScopes: ["text-inference" as const],
-    };
-    const install = {
-      clawhubSpec: "clawhub:@telnyx/openclaw-provider@0.2.0",
-      npmSpec: "@telnyx/openclaw-provider@0.2.0",
-      defaultChoice: "npm" as const,
-      expectedIntegrity: integrity,
-      minHostVersion: ">=2026.8.1",
-    };
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
-      {
-        name: "@telnyx/openclaw-provider",
-        source: "external",
-        kind: "provider",
-        openclaw: {
-          plugin: { id: "telnyx", label: "Telnyx" },
-          providers: [
-            {
-              id: "telnyx",
-              name: "Telnyx",
-              docs: "/providers/telnyx",
-              envVars: ["TELNYX_API_KEY"],
-              authChoices: [{ method: "api-key", ...choice }],
-            },
-          ],
-          install,
-        },
-      },
-    ]);
-
-    expect(resolveProviderInstallCatalogEntry("telnyx-api-key")).toEqual({
-      pluginId: "telnyx",
-      providerId: "telnyx",
-      methodId: "api-key",
-      ...choice,
-      label: "Telnyx",
-      origin: "bundled",
-      install,
-      installSource: {
-        defaultChoice: "npm",
-        clawhub: {
-          spec: "clawhub:@telnyx/openclaw-provider@0.2.0",
-          packageName: "@telnyx/openclaw-provider",
-          version: "0.2.0",
-          exactVersion: true,
-        },
-        npm: npmSource("@telnyx/openclaw-provider", "0.2.0", integrity),
-        warnings: [],
-      },
-    });
-  });
-
-  it("preserves official external provider aliases for configured-plugin repair", () => {
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
-      officialProvider(
-        "gmi",
-        "GMI Cloud",
-        {
-          id: "gmi",
-          aliases: ["gmi-cloud", "gmicloud"],
-          name: "GMI Cloud",
-          authChoices: [
-            { method: "api-key", choiceId: "gmi-api-key", choiceLabel: "GMI Cloud API key" },
-          ],
-        },
-        { npmSpec: "@openclaw/gmi-provider", defaultChoice: "npm" },
-      ),
-    ]);
-
-    expect(resolveProviderInstallCatalogEntry("gmi-api-key")).toMatchObject({
-      pluginId: "gmi",
-      providerId: "gmi",
-      providerAliases: ["gmi-cloud", "gmicloud"],
-    });
-  });
-
-  it("resolves deprecated official external auth choices before their plugin is installed", () => {
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
-      officialProvider(
-        "qwen",
-        "Qwen Cloud",
-        {
-          id: "qwen",
-          name: "Qwen Cloud",
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "qwen-api-key",
-              deprecatedChoiceIds: ["modelstudio-api-key"],
-              choiceLabel: "Qwen Cloud API key",
-            },
-          ],
-        },
-        { npmSpec: "@openclaw/qwen-provider", defaultChoice: "npm" },
-      ),
-    ]);
-
-    expect(resolveDeprecatedProviderInstallCatalogEntry("modelstudio-api-key")).toMatchObject({
-      pluginId: "qwen",
-      choiceId: "qwen-api-key",
+    expect(resolveDeprecatedProviderInstallCatalogEntry("old-codex")).toMatchObject({
+      pluginId: "codex",
+      choiceId: "codex",
     });
   });
 });

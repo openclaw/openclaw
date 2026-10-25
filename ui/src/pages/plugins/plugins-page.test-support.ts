@@ -19,6 +19,7 @@ import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsPage } from "./plugins-page.tsx";
@@ -130,18 +131,7 @@ export function createInspectResult(
       enabled: false,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: createPluginDeclaredSurface(),
     components: {
       mapped: [],
       skills: [],
@@ -199,6 +189,21 @@ function createSnapshot(
   });
 }
 
+export function createPluginCapabilities(
+  generation: number,
+  methods: string[] = [],
+): NonNullable<ApplicationGatewaySnapshot["pluginCapabilities"]> {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods,
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
+  };
+}
+
 export function createGateway(client: GatewayBrowserClient, connected = true): GatewayHarness {
   let snapshot = createSnapshot(client, connected);
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
@@ -228,15 +233,10 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     publishPlugins() {
       snapshot = {
         ...snapshot,
-        pluginCapabilities: {
-          ok: true,
-          generation: (snapshot.pluginCapabilities?.generation ?? 0) + 1,
-          descriptors: [],
-          methods: snapshot.hello?.features?.methods ?? [],
-          controlUiTabs: [],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        },
+        pluginCapabilities: createPluginCapabilities(
+          (snapshot.pluginCapabilities?.generation ?? 0) + 1,
+          snapshot.hello?.features?.methods ?? [],
+        ),
       };
       for (const listener of listeners) {
         listener(snapshot);

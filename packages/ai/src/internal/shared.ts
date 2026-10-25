@@ -7,8 +7,7 @@ export { hasMediaPayload, isImageWithMediaPayload } from "../media-payload.js";
 export * from "../providers/transform-messages.js";
 export * from "../replay-turn-classification.js";
 export {
-  createDiagnosticArray,
-  createDiagnosticRecord,
+  projectPreparedDiagnosticValue,
   isCredentialFieldName,
 } from "../utils/credential-redaction.js";
 export { projectProviderError } from "../utils/provider-error.js";

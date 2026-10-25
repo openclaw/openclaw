@@ -226,6 +226,10 @@ suite.define(() => {
         await model.click();
         await gateway.deferNext("sessions.patch", { key, model: "openai/model-b" });
         await selectChatModelOption(pane, "openai/model-b");
+        await page
+          .getByRole("dialog", { name: "Switch to Model B?", exact: true })
+          .getByRole("button", { name: "Switch model", exact: true })
+          .click();
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
         const effort = pane.locator("[data-chat-thinking-select]");
         await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("true");

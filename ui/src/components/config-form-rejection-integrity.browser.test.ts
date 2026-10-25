@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover nested config edit rejection and draft preservation.
-import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import {
+  connectionSchemaFixture,
+  renderObjectFixture,
+  renderArrayFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -143,14 +147,7 @@ describe("config form rejection integrity", () => {
     const schema = {
       type: "object",
       properties: {
-        connection: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
+        connection: connectionSchemaFixture(),
       },
     };
     const renderValue = () => {
@@ -212,14 +209,7 @@ describe("config form rejection integrity", () => {
     const schema = {
       type: "object",
       properties: {
-        connection: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
+        connection: connectionSchemaFixture(),
       },
     };
     const renderValue = () => {

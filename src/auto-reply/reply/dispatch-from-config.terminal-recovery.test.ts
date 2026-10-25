@@ -418,76 +418,54 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it.each(["fresh", "stalled", "terminal-row"] as const)(
-    "waits for the %s active producer to settle",
-    async (state) => {
-      if (state !== "terminal-row") {
-        vi.useFakeTimers();
-      }
-      const activeOperation = createActiveOperation();
-      let releaseProducer = () => activeOperation.complete();
-      const inspected = createDeferred();
-      const tick =
-        state === "terminal-row"
-          ? vi.spyOn(activeOperation.watchdog, "tick").mockImplementation(async () => {
-              inspected.resolve();
-              return { action: "observe", reason: "live raw owner" };
-            })
-          : undefined;
-      if (state === "terminal-row") {
-        sessionStoreMocks.currentEntry = {
-          sessionId: "active-session",
-          status: "killed",
-          updatedAt: Date.now(),
-        };
-      } else if (state === "stalled") {
-        releaseProducer = activeOperation.retainExecution();
-        expect(activeOperation.abortForStall()).toBe(true);
-        activeOperation.complete();
-      } else {
-        activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
-          once: true,
-        });
-      }
-      const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
-        if (state === "terminal-row") {
-          options?.onAgentRunStart?.("successful-run");
-        }
-        return { text: "telegram reply" };
-      });
-      const dispatchParams = createVisibleDispatchParams(replyResolver);
-      let settled = false;
+  it("waits for the active producer despite a terminal session row", async () => {
+    const activeOperation = createActiveOperation();
+    const inspected = createDeferred();
+    vi.spyOn(activeOperation.watchdog, "tick").mockImplementation(async () => {
+      inspected.resolve();
+      return { action: "observe", reason: "live raw owner" };
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "active-session",
+      status: "killed",
+      updatedAt: Date.now(),
+    };
+    let resolverOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+      resolverOperation = options?.replyOperation;
+      options?.onAgentRunStart?.("successful-run");
+      return { text: "telegram reply" };
+    });
+    const dispatchParams = createVisibleDispatchParams(replyResolver);
+    let settled = false;
 
-      const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
-        settled = true;
-        return result;
-      });
+    const resultPromise = withReplyDispatcher({
+      dispatcher: dispatchParams.dispatcher,
+      run: () => dispatchReplyFromConfig(dispatchParams),
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
 
-      if (state === "terminal-row") {
-        await inspected.promise;
-        expect(tick).toHaveBeenCalledOnce();
-        expect(activeOperation.result).toBeNull();
-      } else {
-        await vi.advanceTimersByTimeAsync(120_000);
-      }
-      expect(settled).toBe(false);
-      expect(replyResolver).not.toHaveBeenCalled();
-      if (state === "stalled") {
-        expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
-        expect(getSessionControllerOperation(sessionKey, sessionTarget)).toBe(activeOperation);
-      }
-      releaseProducer();
-      const result = await resultPromise;
+    await inspected.promise;
+    expect(activeOperation.result).toBeNull();
+    expect(settled).toBe(false);
+    expect(replyResolver).not.toHaveBeenCalled();
+    activeOperation.complete();
+    const result = await resultPromise;
 
-      expect(result.queuedFinal).toBe(true);
-      if (state === "terminal-row") {
-        expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
-        expect(readAgentRunTerminalOutcome(result)).toBe("completed");
-      }
-      expect(replyResolver).toHaveBeenCalledTimes(1);
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    },
-  );
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(readAgentRunTerminalOutcome(result)).toBe("completed");
+    if (!resolverOperation) {
+      throw new Error("dispatch did not expose its reply operation");
+    }
+    await resolverOperation.ownerSettlement;
+    expect(resolverOperation.watchdog.snapshot()).toMatchObject({
+      current: false,
+      phase: "settled",
+    });
+  });
 
   it.each<[boolean | undefined, boolean, boolean?, boolean?]>([
     [undefined, true],

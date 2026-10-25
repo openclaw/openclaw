@@ -8,6 +8,24 @@ import {
   type BoardWidgetFrameOwner,
 } from "./board-widget-frame.tsx";
 
+export function grantedFrameWidgetFixture(): BoardWidget {
+  return {
+    name: "weather",
+    revision: 1,
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    position: 0,
+    grantState: "granted",
+    viewTicket: "ticket",
+    viewGeneration: "generation",
+    sandboxUrl: "/mcp-app-sandbox",
+    sandboxPort: 8444,
+    sandboxOrigin: "https://sandbox.example",
+  };
+}
+
 type FrameHost = Parameters<typeof createBoardWidgetFrame>[0];
 
 export function createFrameOwner(
@@ -64,4 +82,16 @@ export function dispatchFrameMessage(
   return window.dispatchEvent(
     new MessageEvent("message", { source: frame.contentWindow, ...init }),
   );
+}
+
+export function acknowledgeWidgetHostInit(port: MessagePort, ready: { resolve: () => void }) {
+  port.addEventListener("message", (event) => {
+    if (event.data.type === "openclaw:widget-host-init") {
+      port.postMessage({
+        type: "openclaw:widget-host-init-ack",
+        ticket: event.data.ticket,
+      });
+      ready.resolve();
+    }
+  });
 }

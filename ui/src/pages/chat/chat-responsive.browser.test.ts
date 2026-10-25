@@ -2339,9 +2339,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14],
-          placeholder: 16,
-          textarea: 16,
+          labels: [13, 13],
+          placeholder: 14,
+          textarea: 14,
         });
         if (width === 320) {
           expect(attach.width).toBeGreaterThanOrEqual(36);
