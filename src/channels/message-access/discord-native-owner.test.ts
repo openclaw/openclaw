@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginCommandRuntime } from "../../plugins/plugin-command-runtime.js";
-import type { PluginCommandContext } from "../../plugins/types.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
 import { configureNativeAcp, installNativeAcpRuntime } from "./native-acp-owner.test-support.js";
@@ -46,14 +45,20 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
         commands.ownerAllowFrom = [`discord:${user}`];
       }
       publishConfig();
-      const handler = vi.fn(async (_ctx: PluginCommandContext) => ({ text: "owner-ok" }));
+      const handler = async () => ({ text: "owner-ok" });
       const name = "ownerprobe";
       registerPluginCommand(name, { name, description: "Owner", handler });
-      const command = createPluginCommandRuntime()
+      const candidate = createPluginCommandRuntime()
         .listNativeCandidates("discord")
         .find((entry) => entry.name === name)!;
+      const selected = candidate.prepareDispatch();
+      if (selected.kind !== "plugin") {
+        throw new Error("Expected a plugin dispatch");
+      }
+      const execute = vi.fn(selected.execute);
+      const command = { ...candidate, prepareDispatch: () => ({ ...selected, execute }) };
       const interaction = await run({ pluginCommand: command });
-      const observed = handler.mock.calls[0]?.[0];
+      const observed = execute.mock.calls[0]?.[0];
       expect(interaction.followUp).toHaveBeenCalledWith(
         expect.objectContaining({ content: "owner-ok" }),
       );
@@ -79,7 +84,7 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
       expect((await run({ pluginCommand: command })).followUp).toHaveBeenCalledWith(
         expect.objectContaining({ content: denied }),
       );
-      expect(handler).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
     }),
 );
 
