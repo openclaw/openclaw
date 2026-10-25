@@ -6,7 +6,10 @@ import {
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as publicationStore from "./github-publication-store-async.js";
 import {
@@ -58,10 +61,12 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     let now = performance.now();
     vi.spyOn(performance, "now").mockImplementation(() => now);
     withEngineStoreAdmission(() =>
-      seedLocalPublication(openOpenClawStateDatabase(), {
-        requestId: "base-fetch-unconfirmed",
-        status: "publishing",
-      }),
+      runOpenClawStateWriteTransaction((database) =>
+        seedLocalPublication(database, {
+          requestId: "base-fetch-unconfirmed",
+          status: "publishing",
+        }),
+      ),
     );
     const transport = githubPublicationTestMocks().runCommand;
     const original = transport.getMockImplementation()!;
@@ -122,7 +127,9 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
   it("recovers the original publication after a transient fetch failure without another push or PR", async () => {
     const requestId = "transient-fetch";
     withEngineStoreAdmission(() =>
-      seedLocalPublication(openOpenClawStateDatabase(), { requestId, status: "publishing" }),
+      runOpenClawStateWriteTransaction((database) =>
+        seedLocalPublication(database, { requestId, status: "publishing" }),
+      ),
     );
     let now = performance.now();
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -266,7 +273,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
         }
       },
     );
-    const resume = runtime.coordinator.resumeSessionRequests;
+    const resume = runtime.coordinator.resumeSessionRequests.bind(runtime.coordinator);
     vi.spyOn(runtime.coordinator, "resumeSessionRequests").mockImplementation(async (...args) => {
       if (boundary === "resume") {
         await Promise.resolve();
@@ -384,10 +391,12 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
 
   it("loads pending requests from before the runtime subscribed", async () => {
     withEngineStoreAdmission(() =>
-      seedLocalPublication(openOpenClawStateDatabase(), {
-        requestId: "pending-before-runtime",
-        status: "requested",
-      }),
+      runOpenClawStateWriteTransaction((database) =>
+        seedLocalPublication(database, {
+          requestId: "pending-before-runtime",
+          status: "requested",
+        }),
+      ),
     );
     const { runtime, recovery } = createRuntime();
     await runtime.reconcilePublications();
