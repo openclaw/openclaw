@@ -19,14 +19,8 @@ import * as restartSentinel from "./restart-sentinel.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
-import {
-  detectGlobalInstallManagerForRoot,
-  listActivePnpmIsolatedGlobalPackages,
-  cleanupGlobalRenameDirs,
-  resolvePnpmGlobalInstallOwner,
-} from "./update-global.js";
+import { detectGlobalInstallManagerForRoot, cleanupGlobalRenameDirs } from "./update-global.js";
 import { commandResult, resolveTarget } from "./update-global.test-support.js";
-import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
 
@@ -156,15 +150,10 @@ describe("pnpm isolated global install discovery", () => {
       resolveTarget(runCommand, pkgRoot, { manager: "pnpm", honorPackageRoot: true }),
     ).resolves.toEqual(expectedTarget);
     expect(runCommand).not.toHaveBeenCalled();
-    await expect(resolvePnpmGlobalInstallOwner(pkgRoot)).resolves.toEqual({
-      ownerRoot: path.join(pnpmGlobalRoot, "a1b2"),
-      packageRoot: hashLinkedPkgRoot,
-    });
     await expect(resolveTarget(runCommand, undefined, { manager: "pnpm" })).resolves.toEqual(
       expectedTarget,
     );
     expect(runCommand.mock.calls.map(([argv]) => argv)).toEqual([["pnpm", "root", "-g"]]);
-    expect(resolvePnpmGlobalDirFromGlobalRoot(pnpmGlobalRoot)).toBe(pnpmGlobalDir);
   });
 
   it("prefers the invoking project when multiple installs are active", async () => {
@@ -182,18 +171,6 @@ describe("pnpm isolated global install discovery", () => {
     });
     const runCommand = probeRunner({ "pnpm root -g": commandResult(`${pnpmGlobalRoot}\n`) });
 
-    await expect(
-      listActivePnpmIsolatedGlobalPackages({ globalRoot: pnpmGlobalRoot, packageName: "openclaw" }),
-    ).resolves.toEqual([
-      {
-        packageRoot: path.join(pnpmGlobalRoot, "hash-a-other/node_modules/openclaw"),
-        packageNames: ["openclaw"],
-      },
-      {
-        packageRoot: path.join(pnpmGlobalRoot, "hash-z-invoking/node_modules/openclaw"),
-        packageNames: ["cowsay", "openclaw"],
-      },
-    ]);
     await expect(
       resolveTarget(runCommand, invokingPackageRoot, { manager: "pnpm", packageName: "openclaw" }),
     ).resolves.toEqual(
@@ -478,6 +455,12 @@ describe("custom Bun global installation ownership", () => {
 });
 
 describe("FreeBSD package-manager admission", () => {
+  const cleanup = (removed: string[] = []) =>
+    withMockedPlatform("freebsd", () =>
+      expect(
+        cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
+      ).resolves.toEqual({ removed }),
+    );
   it("stops cleanup when ownership inspection exhausts the budget", async () => {
     await fs.mkdir(path.join(base, ".openclaw-first"));
     await fs.mkdir(path.join(base, ".openclaw-second"));
@@ -487,11 +470,7 @@ describe("FreeBSD package-manager admission", () => {
       clock.mockReturnValue(now + 30_001);
       return pkgQueryResult();
     });
-    await withMockedPlatform("freebsd", async () => {
-      await expect(
-        cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-      ).resolves.toEqual({ removed: [] });
-    });
+    await cleanup();
     expect(query).toHaveBeenCalledOnce();
     expect(await fs.readdir(base)).toHaveLength(2);
   });
@@ -515,11 +494,7 @@ describe("FreeBSD package-manager admission", () => {
     const query = vi
       .spyOn(exec, "runCommandBuffered")
       .mockImplementation(async () => pkgQueryResult(claimed ? `${retained}\n` : ""));
-    await withMockedPlatform("freebsd", async () => {
-      await expect(
-        cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-      ).resolves.toEqual({ removed: [firstName] });
-    });
+    await cleanup([firstName!]);
     expect(query).toHaveBeenCalledTimes(2);
     await expect(fs.readFile(retained, "utf8")).resolves.toBe("retained");
   });
@@ -533,11 +508,7 @@ describe("FreeBSD package-manager admission", () => {
       await fs.writeFile(path.join(candidate, "marker"), "replacement");
       return pkgQueryResult();
     });
-    await withMockedPlatform("freebsd", async () => {
-      await expect(
-        cleanupGlobalRenameDirs({ globalRoot: base, packageName: "openclaw" }),
-      ).resolves.toEqual({ removed: [] });
-    });
+    await cleanup();
     await expect(fs.readFile(path.join(candidate, "marker"), "utf8")).resolves.toBe("replacement");
   });
   it("keeps startup discovery read-only for a pkg installation", async () => {

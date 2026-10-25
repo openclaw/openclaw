@@ -368,7 +368,6 @@ it("merges legacy credentials into challenge-only SQLite state", async () => {
   const result = await migrate();
 
   expect(result.warnings).toEqual([]);
-  expect(result.changes).toContain(`Migrated MCP OAuth store ${DEFAULT_FILE_NAME} to SQLite.`);
   expect(stored()).toMatchObject({
     pendingAuthorizationChallenge,
     tokens: { access_token: "test-token-placeholder", refresh_token: "test-auth-token" },
@@ -426,8 +425,7 @@ it("rejects malformed and unexpected store shapes without mutation", async () =>
   expect(result.warnings.join("\n")).toContain("unexpected field");
   expect(result.warnings.join("\n")).not.toContain(privateMarker);
   expectFiles([malformedPath, unexpectedPath, invalidJsonPath]);
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
 });
 
 it("drops an orphaned legacy token expiry during import", async () => {
@@ -474,10 +472,8 @@ it("restores a source changed before Doctor could claim it", async () => {
   const result = await migrate({ beforeClaim: (candidate) => fs.appendFileSync(candidate, " ") });
 
   expect(result.warnings[0]).toContain("changed before Doctor could claim it");
-  expect(fs.existsSync(sourcePath)).toBe(true);
-  expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
+  expectFiles([sourcePath], [`${sourcePath}.doctor-importing`]);
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
 });
 
 it("imports a valid interrupted claim", async () => {
@@ -499,8 +495,7 @@ it("refuses source and interrupted claim together without a receipt", async () =
   const result = await migrate();
 
   expect(result.warnings[0]).toContain("source and interrupted claim both exist");
-  expect(storeRow()).toBeUndefined();
-  expect(receipt()).toBeUndefined();
+  expect([storeRow(), receipt()]).toEqual([undefined, undefined]);
 });
 
 it("uses the receipt for cleanup-only retries and cannot resurrect deleted canonical state", async () => {

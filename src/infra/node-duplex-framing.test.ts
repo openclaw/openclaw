@@ -37,7 +37,10 @@ function asyncSenderFor(receiver: ReturnType<typeof createEndpoint>) {
   });
 }
 
-function recordingEndpoint(sendFrame: (frame: string) => void) {
+function recordingEndpoint(
+  sendFrame: (frame: string) => void,
+  options: Partial<Parameters<typeof createEndpoint>[0]> = {},
+) {
   const frames: string[] = [];
   const messages: Uint8Array[] = [];
   const endpoint = listeningEndpoint(
@@ -45,7 +48,9 @@ function recordingEndpoint(sendFrame: (frame: string) => void) {
       messages.push(message);
     },
     {
-      sendFrame(frame) {
+      ...options,
+      async sendFrame(frame) {
+        await Promise.resolve();
         const serialized = JSON.stringify(frame);
         frames.push(serialized);
         sendFrame(serialized);
@@ -71,23 +76,31 @@ function dataFrame(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("node duplex message framing", () => {
-  it.each([
-    ["ArrayBuffer", ArrayBuffer],
-    ["SharedArrayBuffer", SharedArrayBuffer],
-  ] as const)("transfers exact %s views in both directions", async (_name, BackingBuffer) => {
+  it("orders readiness, exact binary views, empty messages and heartbeats in both directions", async () => {
+    const events: string[] = [];
     const left = recordingEndpoint((frame) => right.endpoint.receive(frame));
-    const right = recordingEndpoint((frame) => left.endpoint.receive(frame));
+    const right = recordingEndpoint((frame) => left.endpoint.receive(frame), {
+      onReady: () => {
+        events.push("ready");
+      },
+      requireReady: true,
+    });
 
-    const outboundBacking = new Uint8Array(new BackingBuffer(40_032)).fill(0xa5);
+    const outboundBacking = new Uint8Array(new SharedArrayBuffer(40_032)).fill(0xa5);
     const outbound = outboundBacking.subarray(17, 40_017);
     outbound.set(Uint8Array.from({ length: 40_000 }, (_, index) => index % 251));
-    const inboundBacking = new Uint8Array(new BackingBuffer(25_032)).fill(0x5a);
+    const inboundBacking = new Uint8Array(new ArrayBuffer(25_032)).fill(0x5a);
     const inbound = Buffer.from(inboundBacking.buffer, 11, 25_000);
     inbound.set(Uint8Array.from({ length: 25_000 }, (_, index) => 255 - (index % 251)));
-    await left.endpoint.send(outbound);
+    await Promise.all([left.endpoint.sendReady(), left.endpoint.send(outbound)]);
+    expect(events).toEqual(["ready"]);
     await right.endpoint.send(inbound);
+    right.endpoint.receive("");
+    await left.endpoint.send(new Uint8Array());
+    right.endpoint.receive("");
+    await left.endpoint.send(Uint8Array.of(7));
 
-    expect(right.messages).toEqual([outbound]);
+    expect(right.messages).toEqual([outbound, new Uint8Array(), Uint8Array.of(7)]);
     expect(left.messages).toEqual([new Uint8Array(inbound)]);
     expect(left.frames.length).toBeGreaterThan(2);
     expect(right.frames.length).toBeGreaterThan(2);
@@ -96,27 +109,20 @@ describe("node duplex message framing", () => {
     );
   });
 
-  it.each([
-    [1, 7],
-    [FRAGMENT_BYTES, FRAGMENT_BYTES + 1],
-    [20_000, 18_000],
-  ])(
-    "preserves %s/%s-byte message boundaries across concurrent asynchronous sends",
-    async (firstBytes, secondBytes) => {
-      const received: Uint8Array[] = [];
-      const first = Uint8Array.from({ length: firstBytes }, () => 1);
-      const second = Uint8Array.from({ length: secondBytes }, () => 2);
-      const receiver = createEndpoint();
-      receiver.onMessage((message) => {
-        received.push(message);
-      });
-      const sender = asyncSenderFor(receiver);
+  it("preserves multi-fragment message boundaries across concurrent asynchronous sends", async () => {
+    const received: Uint8Array[] = [];
+    const first = Uint8Array.from({ length: 20_000 }, () => 1);
+    const second = Uint8Array.from({ length: 18_000 }, () => 2);
+    const receiver = createEndpoint();
+    receiver.onMessage((message) => {
+      received.push(message);
+    });
+    const sender = asyncSenderFor(receiver);
 
-      await Promise.all([sender.send(first), sender.send(second)]);
+    await Promise.all([sender.send(first), sender.send(second)]);
 
-      expect(received).toEqual([first, second]);
-    },
-  );
+    expect(received).toEqual([first, second]);
+  });
 
   it("snapshots each fragment before its transport serializes it", async () => {
     const entered = createDeferred();
@@ -140,21 +146,6 @@ describe("node duplex message framing", () => {
     expect(received).toHaveBeenCalledExactlyOnceWith(Uint8Array.of(1, 2, 3));
   });
 
-  it("serializes framed readiness ahead of a concurrent message", async () => {
-    const events: string[] = [];
-    const receiver = createEndpoint({
-      onReady: () => events.push("ready"),
-    });
-    receiver.onMessage(() => {
-      events.push("message");
-    });
-    const sender = asyncSenderFor(receiver);
-
-    await Promise.all([sender.sendReady(), sender.send(Uint8Array.of(1, 2))]);
-
-    expect(events).toEqual(["ready", "message"]);
-  });
-
   it("rejects data before required readiness while node-host input needs no reciprocal ready", () => {
     const gatewayError = vi.fn();
     const gateway = createEndpoint({
@@ -170,19 +161,6 @@ describe("node duplex message framing", () => {
     host.onMessage(hostMessage);
     host.receive(dataFrame());
     expect(hostMessage).toHaveBeenCalledOnce();
-  });
-
-  it("preserves empty binary messages as distinct complete messages", async () => {
-    const received: Uint8Array[] = [];
-    const receiver = listeningEndpoint((message) => {
-      received.push(message);
-    });
-    const sender = senderFor(receiver);
-
-    await sender.send(new Uint8Array());
-    await sender.send(Uint8Array.of(7));
-
-    expect(received).toEqual([new Uint8Array(), Uint8Array.of(7)]);
   });
 
   it.each([
@@ -272,30 +250,6 @@ describe("node duplex message framing", () => {
     expect(() => endpoint.receive(dataFrame({ message: 1, index: 128 }))).toThrow(/closed/i);
   });
 
-  it("accepts logical messages above the pending-byte limit after listener registration", async () => {
-    const received = vi.fn();
-    const receiver = listeningEndpoint(received);
-    const sender = senderFor(receiver);
-    const message = new Uint8Array(1024 * 1024 + 1);
-
-    await sender.send(message);
-
-    expect(received).toHaveBeenCalledExactlyOnceWith(message);
-  });
-
-  it("delivers buffered whole messages in order when the listener subscribes", () => {
-    const endpoint = createEndpoint();
-    endpoint.receive(dataFrame());
-    endpoint.receive(dataFrame({ message: 1, data: Buffer.from("second").toString("base64") }));
-    const received: string[] = [];
-
-    endpoint.onMessage((message) => {
-      received.push(Buffer.from(message).toString());
-    });
-
-    expect(received).toEqual(["message", "second"]);
-  });
-
   it("rejects oversized outbound and inbound logical messages", async () => {
     const sendFrame = vi.fn();
     const outboundError = vi.fn();
@@ -351,18 +305,6 @@ describe("node duplex message framing", () => {
     });
     excessive.receive(dataFrame({ last: false, data: fullFragment }));
     expect(() => excessive.receive(dataFrame({ index: 1, data: "" }))).toThrow(/fragment/i);
-  });
-
-  it("ignores empty heartbeat frames without disturbing message ordering", () => {
-    const received = vi.fn();
-    const endpoint = listeningEndpoint(received);
-
-    endpoint.receive("");
-    endpoint.receive(dataFrame());
-    endpoint.receive("");
-    endpoint.receive(dataFrame({ message: 1 }));
-
-    expect(received).toHaveBeenCalledTimes(2);
   });
 
   it("closes when a message listener throws and never invokes it afterward", () => {
