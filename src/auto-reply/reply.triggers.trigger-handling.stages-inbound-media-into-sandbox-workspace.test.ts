@@ -185,9 +185,14 @@ describe("stageSandboxMedia", () => {
     await fs.mkdir(dirname(existingProjectFile), { recursive: true });
     await fs.writeFile(existingProjectFile, "project-file");
     const mediaUri = `media://inbound/${fileName}`;
+    const blockedPath = join(home, "blocked-host.png");
+    await fs.writeFile(blockedPath, "blocked");
     const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-    ctx.media = [{ ...ctx.media?.[0], contentType: "image/png" }];
-    sessionCtx.media = ctx.media;
+    ctx.media = [
+      { ...ctx.media?.[0], contentType: "image/png" },
+      { path: blockedPath, contentType: "image/png" },
+    ];
+    sessionCtx.media = structuredClone(ctx.media);
 
     const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
 
@@ -196,34 +201,15 @@ describe("stageSandboxMedia", () => {
     expect(stagedRelativePath).toMatch(
       new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/input-${fileName}$`),
     );
-    expect(result.staged.get(0)).toBe(stagedPath);
+    expect(result.staged).toEqual(new Map([[0, stagedPath]]));
     expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
     expect(sessionCtx.media).toEqual(ctx.media);
     await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
     await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
-
-    const blockedPath = join(home, "blocked-host.png");
-    await fs.writeFile(blockedPath, "blocked");
-    const partialCtx = {
-      media: [
-        { path: mediaUri, contentType: "image/png" },
-        { path: blockedPath, contentType: "image/png" },
-      ],
-    };
-    const partialSessionCtx = { media: structuredClone(partialCtx.media) };
-    const partialResult = await stage(
-      { ctx: partialCtx, sessionCtx: partialSessionCtx },
-      cfg,
-      workspaceDir,
-    );
-    expect([...partialResult.staged.keys()]).toEqual([0]);
-    expect(partialResult.staged.get(0)).toBe(partialCtx.media[0]?.path);
-    expect(partialCtx).not.toHaveProperty("MediaWorkspaceDir");
-    expect(partialCtx.media[0]).toMatchObject({ workspaceDir });
-    expect(partialCtx.media[1]).toMatchObject({ path: blockedPath, contentType: "image/png" });
-    expect(partialCtx.media[1]).not.toHaveProperty("workspaceDir");
-    expect(partialSessionCtx.media).toEqual(partialCtx.media);
-    expect((await fs.readdir(dirname(partialResult.staged.get(0)!))).toSorted()).toEqual([
+    expect(ctx).not.toHaveProperty("MediaWorkspaceDir");
+    expect(ctx.media?.[1]).toMatchObject({ path: blockedPath, contentType: "image/png" });
+    expect(ctx.media?.[1]).not.toHaveProperty("workspaceDir");
+    expect((await fs.readdir(dirname(stagedPath))).toSorted()).toEqual([
       ".gitignore",
       `input-${fileName}`,
     ]);
@@ -232,11 +218,7 @@ describe("stageSandboxMedia", () => {
   it("blocks remote paths outside the attachment roots before spawning", async ({
     media: { cfg, workspaceDir },
   }) => {
-    const remote = createSandboxMediaContexts("/etc/passwd");
-    for (const context of [remote.ctx, remote.sessionCtx]) {
-      context.Provider = "imessage";
-      context.MediaRemoteHost = "user@gateway-host";
-    }
+    const remote = createRemoteContexts("/etc/passwd");
     const result = await stage(remote, cfg, workspaceDir);
     expect(processExecMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     expectUnstaged({ ...remote, result }, "/etc/passwd");

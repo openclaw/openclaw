@@ -372,15 +372,14 @@ describe("commands registry", () => {
   it("detects known text commands", () => {
     for (const command of listChatCommands()) {
       for (const alias of command.textAliases) {
-        expect(resolveTextCommand(alias)?.command.key).toBe(command.key);
-        expect(resolveTextCommand(`${alias}:`)?.command.key).toBe(command.key);
-
-        if (command.acceptsArgs) {
-          expect(resolveTextCommand(`${alias} list`)?.command.key).toBe(command.key);
-          expect(resolveTextCommand(`${alias}: list`)?.command.key).toBe(command.key);
-        } else {
-          expect(resolveTextCommand(`${alias} list`)).toBeNull();
-          expect(resolveTextCommand(`${alias}: list`)).toBeNull();
+        for (const separator of ["", ":"]) {
+          expect(resolveTextCommand(`${alias}${separator}`)?.command.key).toBe(command.key);
+          const withArgs = resolveTextCommand(`${alias}${separator} list`);
+          if (command.acceptsArgs) {
+            expect(withArgs?.command.key).toBe(command.key);
+          } else {
+            expect(withArgs).toBeNull();
+          }
         }
       }
     }
@@ -390,21 +389,17 @@ describe("commands registry", () => {
   it("respects text command gating", () => {
     setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
-    expect(shouldHandleTextCommands({ cfg, surface: "discord", commandSource: "text" })).toBe(
-      false,
-    );
-    expect(shouldHandleTextCommands({ cfg, surface: "whatsapp", commandSource: "text" })).toBe(
-      true,
-    );
-    expect(shouldHandleTextCommands({ cfg, surface: "discord", commandSource: "native" })).toBe(
-      true,
-    );
+    const handles = (surface: string, commandSource = "text") =>
+      shouldHandleTextCommands({ cfg, surface, commandSource });
+    expect(handles("discord")).toBe(false);
+    expect(handles("whatsapp")).toBe(true);
+    expect(handles("discord", "native")).toBe(true);
     setActivePluginRegistry(createNativeCommandsRegistry("slack"));
     for (const [surface, expected] of [
       ["discord", true],
       [" SLACK ", false],
     ] as const) {
-      expect(shouldHandleTextCommands({ cfg, surface, commandSource: "text" })).toBe(expected);
+      expect(handles(surface)).toBe(expected);
     }
   });
 
