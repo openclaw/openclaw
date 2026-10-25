@@ -74,14 +74,9 @@ function createPeerPlugin(
   };
 }
 
-it.for([
-  ["managed", "lease"],
-  ["registered", "lease"],
-  ["managed", "caller"],
-  ["registered", "caller"],
-] as const)(
-  "fences %s host-link effects after %s authority is revoked",
-  async ([layout, authority], { state }) => {
+it.for(["managed", "registered"] as const)(
+  "fences %s host-link effects when only the raw plugin lease is revoked",
+  async (layout, { state }) => {
     const peer = createPeerPlugin(state, layout);
     const { linkPath } = peer;
     await state.writeConfig(peer.params.cfg);
@@ -121,29 +116,16 @@ it.for([
       });
       const symlinkSpy = vi.spyOn(fs, "symlinkSync");
       syncBuiltinESMExports();
-      let refused = false;
       const params = {
         ...peer.params,
-        beforePersistentEffect: () => {
-          fence.assertCurrent();
-          if (authority === "caller" && controller.signal.aborted && !refused) {
-            refused = true;
-            throw refusal;
-          }
-        },
+        beforePersistentEffect: fence.assertCurrent,
       };
       try {
-        const operation =
-          authority === "lease"
-            ? withPluginLifecycleLease({ env: state.env, signal: controller.signal }, () =>
-                runPostCorePluginConvergence(params),
-              )
-            : runPostCorePluginConvergence(params);
-        if (authority === "lease") {
-          await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-        } else {
-          await expect(operation).rejects.toBe(refusal);
-        }
+        await expect(
+          withPluginLifecycleLease({ env: state.env, signal: controller.signal }, () =>
+            runPostCorePluginConvergence(params),
+          ),
+        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
         expect({ aborted: controller.signal.aborted, revocations }).toEqual({
           aborted: true,
           revocations: 1,

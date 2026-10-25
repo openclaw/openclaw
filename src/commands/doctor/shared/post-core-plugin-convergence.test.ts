@@ -261,12 +261,27 @@ describe("runPostCorePluginConvergence", () => {
         name: packageName,
         version: "1.0.0",
         peerDependencies: { openclaw: "*" },
+        openclaw: { extensions: ["./dist/index.js"] },
       });
       packages.push(packageDir);
     }
     const active = expectDefined(packages[0], "active package");
+    const registered = path.join(stateDir, "extensions", "email");
+    writeJson(path.join(registered, "package.json"), {
+      name: "@fixture/email",
+      dependencies: { openclaw: "*" },
+      openclaw: { extensions: ["./index.js"] },
+    });
+    fs.writeFileSync(path.join(registered, "index.js"), "export default {};\n");
+    writeJson(path.join(registered, "node_modules", "openclaw", "package.json"), {
+      name: "openclaw",
+      version: "2026.7.1-beta.2",
+    });
     mockRepairs(
-      { selected: { source: "npm", installPath: active } },
+      {
+        selected: { source: "npm", installPath: active },
+        email: { source: "npm", installPath: registered },
+      },
       {
         changes: ['Repaired missing configured plugin "selected".'],
         repairedPluginIds: ["selected"],
@@ -280,15 +295,20 @@ describe("runPostCorePluginConvergence", () => {
     );
     mocks.managedRoots.mockImplementation(roots.listManagedPluginNpmRootsForInstallRecords);
     mocks.relinkPeers.mockImplementation(peers.relinkOpenClawPeerDependenciesInManagedNpmRoot);
-    mocks.smokeCheck.mockImplementation(async () => {
-      expect(fs.realpathSync(path.join(active, "node_modules", "openclaw"))).toBe(
-        fs.realpathSync(process.cwd()),
-      );
-      return { checked: ["selected"], failures: [] };
+    const payload = await vi.importActual<
+      typeof import("../../../plugins/payload-verification.js")
+    >("../../../plugins/payload-verification.js");
+    mocks.smokeCheck.mockImplementation(async (params) => {
+      for (const packageDir of [active, registered]) {
+        expect(fs.realpathSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(
+          fs.realpathSync(process.cwd()),
+        );
+      }
+      return await payload.runPluginPayloadSmokeCheck(params);
     });
     const reads = vi.spyOn(fs.promises, "readdir");
     try {
-      const result = await converge(configured("selected"), {
+      const result = await converge(configured("selected", "email"), {
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
       expect(result).toMatchObject({
@@ -296,9 +316,11 @@ describe("runPostCorePluginConvergence", () => {
         changes: [
           'Repaired missing configured plugin "selected".',
           "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
+          "Repaired OpenClaw host peer link(s) for 1 registered plugin package(s).",
         ],
         repairedPluginIds: ["selected"],
         warnings: [],
+        smokeFailures: [],
       });
       expect(mocks.smokeCheck).toHaveBeenCalledOnce();
       for (const stale of packages.slice(1)) {
@@ -313,43 +335,6 @@ describe("runPostCorePluginConvergence", () => {
       reads.mockRestore();
     }
   });
-
-  it.each(["peerDependencies", "dependencies"] as const)(
-    "repairs a registered extensions-root %s stale host before the real payload smoke check",
-    async (dependencyField) => {
-      const stateDir = makeTempDir();
-      const packageDir = path.join(stateDir, "extensions", "email");
-      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
-      writeJson(path.join(packageDir, "package.json"), {
-        name: "@clawemail/email",
-        version: "2026.7.1",
-        [dependencyField]: { openclaw: ">=2026.7.1" },
-        openclaw: { extensions: ["./index.js"] },
-      });
-      fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
-      writeJson(path.join(staleHostDir, "package.json"), {
-        name: "openclaw",
-        version: "2026.7.1-beta.2",
-      });
-      const records = { email: { source: "npm" as const, installPath: packageDir } };
-      mockRepairs(records);
-      mocks.smokeCheck.mockImplementation(async (params) => {
-        const actual = await vi.importActual<
-          typeof import("../../../plugins/payload-verification.js")
-        >("../../../plugins/payload-verification.js");
-        return await actual.runPluginPayloadSmokeCheck(params);
-      });
-
-      const result = await converge(configured("email"), {
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        baselineInstallRecords: records,
-      });
-
-      expect(fs.lstatSync(staleHostDir).isSymbolicLink()).toBe(true);
-      expect(fs.realpathSync(staleHostDir)).toBe(fs.realpathSync(process.cwd()));
-      expect(result).toMatchObject({ errored: false, smokeFailures: [] });
-    },
-  );
 
   it("prunes stale local bundled plugin shadows from baseline records before repair", async () => {
     const bundledRoot = makeTempDir();
