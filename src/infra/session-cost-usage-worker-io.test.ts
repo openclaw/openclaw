@@ -407,13 +407,10 @@ if (!isMainThread) {
         expect(worker.threadId).toBe(-1);
         expect(scope.hasPendingWork).toBe(false);
       } finally {
-        try {
-          releaseNative();
-        } finally {
-          scope.beginClose(reason);
-          await outcome;
-          await scope.drain();
-        }
+        releaseNative();
+        scope.beginClose(reason);
+        await outcome;
+        await scope.drain();
       }
     });
   } finally {
