@@ -19,6 +19,11 @@ import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-proj
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
 import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
+import {
+  browserResourceMethodResponses,
+  createBrowserResourceScenarios,
+} from "./control-ui-browser-resource-scenarios.ts";
+import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
@@ -54,6 +59,7 @@ export type InteractionSandbox = { sandboxUrl: string; sandboxPort: number };
 export type InteractionEvidence = Record<string, number | boolean>;
 
 type InteractionFixtureOptions = {
+  heavyContent?: boolean;
   runningSessions?: boolean;
   longSessionLabels?: boolean;
   longUserMessages?: boolean;
@@ -62,6 +68,7 @@ type InteractionFixtureOptions = {
   boardFrameResources?: boolean;
   canvasFrameRetention?: boolean;
   mcpAppResources?: boolean;
+  browserResources?: boolean;
 };
 
 type TranscriptPlatformSnapshot = {
@@ -83,6 +90,7 @@ export type InteractionScenario = {
   fixture?: InteractionFixtureOptions;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
+  observationBrowser?: boolean;
   visibility?: "hidden";
   projectionFamily?: ProjectionFamily;
   projectionIdle?: boolean;
@@ -294,7 +302,8 @@ export function createInteractionFixture(
     ...(options.nativeBoardResources ||
     options.progressCardClocks ||
     options.boardFrameResources ||
-    options.mcpAppResources
+    options.mcpAppResources ||
+    options.browserResources
       ? {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -305,11 +314,17 @@ export function createInteractionFixture(
               ? ["progressCard.get", "sessions.list"]
               : []),
             ...(options.mcpAppResources ? ["board.widget.appView", "mcp.app.view"] : []),
+            ...(options.browserResources ? ["browser.dashboard.request"] : []),
           ],
-          ...(options.nativeBoardResources || options.progressCardClocks
+          ...(options.nativeBoardResources || options.progressCardClocks || options.browserResources
             ? {
                 controlUiWidgetKinds: [
-                  { pluginId: "session", kind: "session:progress", label: "Session progress" },
+                  ...(options.nativeBoardResources || options.progressCardClocks
+                    ? [{ pluginId: "session", kind: "session:progress", label: "Session progress" }]
+                    : []),
+                  ...(options.browserResources
+                    ? [{ pluginId: "browser", kind: "browser:dashboard", label: "Browser" }]
+                    : []),
                 ],
               }
             : {}),
@@ -329,7 +344,7 @@ export function createInteractionFixture(
         .map((key) => [
           key,
           {
-            messages: Array.from({ length: 400 }, (_, index) => ({
+            messages: Array.from({ length: options.heavyContent ? 0 : 400 }, (_, index) => ({
               role: index % 2 === 0 ? "user" : "assistant",
               content: `Transcript ${sessionKeys.indexOf(key)} message ${index}.\n${"Synthetic transcript detail.\n".repeat(
                 options.longUserMessages && index % 2 === 0 ? 80 : 4,
@@ -350,6 +365,7 @@ export function createInteractionFixture(
       contextWindow: 128_000,
     })),
     methodResponses: {
+      ...(options.browserResources ? browserResourceMethodResponses() : {}),
       ...(options.mcpAppResources
         ? {
             "board.get": {
@@ -605,8 +621,20 @@ async function prepareChat(page: Page) {
   await frames(page);
 }
 
-async function openInteractionDashboard(page: Page) {
-  await prepareChat(page);
+async function openInteractionPanel(
+  page: Page,
+  panel: "Dashboard" | "Browser" = "Dashboard",
+  sessionIndex: 0 | 1 = 0,
+) {
+  if (sessionIndex === 0) {
+    await prepareChat(page);
+  } else {
+    await page
+      .locator(activePane)
+      .getByText("Transcript 1 message 399.", { exact: false })
+      .waitFor();
+    await frames(page);
+  }
   const pane = page.locator(activePane);
   const mobileHeader = pane.locator(".agent-chat__header--mobile");
   const mobile = await mobileHeader.isVisible();
@@ -622,7 +650,7 @@ async function openInteractionDashboard(page: Page) {
     await host.getByRole("button", { name: "Panels", exact: true }).click();
     await host
       .locator(".chat-panel-launcher-mobile")
-      .getByRole("button", { name: "Dashboard", exact: true })
+      .getByRole("button", { name: panel, exact: true })
       .click();
   } else {
     if ((await toggle.getAttribute("aria-expanded")) !== "true") {
@@ -633,7 +661,7 @@ async function openInteractionDashboard(page: Page) {
       .getByRole("button")
       .filter({
         has: page
-          .getByText("Dashboard", { exact: true })
+          .getByText(panel, { exact: true })
           .and(page.locator(".side-panel-type-option__label")),
       })
       .click();
@@ -680,7 +708,7 @@ async function waitForMcpResourceContexts(page: Page) {
 }
 
 async function prepareMcpResources(page: Page) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   for (let index = 0; index < mcpResourceCount; index++) {
     const inner = mcpResourceFrame(page, index).contentFrame().frameLocator("iframe");
     await clickBoardWidgetControl(page, inner.getByRole("button", { name: "Count", exact: true }));
@@ -731,7 +759,7 @@ async function resizeMcpResources(
 }
 
 async function prepareNativeBoard(page: Page, gateway: MockGatewayControls) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   await gateway.waitForRequest("board.get", { match: { sessionKey: sessionKeys[0] } });
   await page.waitForFunction((expected) => {
     const widgets = [
@@ -795,7 +823,7 @@ async function selectResourceBoardTab(page: Page, tab: "main" | "second") {
 }
 
 async function prepareResourceBoard(page: Page) {
-  await openInteractionDashboard(page);
+  await openInteractionPanel(page);
   await waitForResourceBoardTab(page, "main");
   const first = resourceBoardFrame(page, "main-0");
   await clickBoardWidgetControl(
@@ -1532,6 +1560,58 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...(
+    ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const
+  ).flatMap((family): InteractionScenario[] => {
+    const active: InteractionScenario = {
+      id: `projection-${family}`,
+      route: "/instance-resource-fixture.html",
+      expected:
+        "Real production consumers on an isolated benchmark document; native observer/listener/subscription counts and retained scope/cleanup contracts, with twenty bounded native publication batches.",
+      projectionFamily: family,
+      prepare: async (page) => {
+        if (await page.locator("openclaw-app").count()) {
+          throw new Error("Instance resources require the benchmark-only blank document");
+        }
+      },
+      run: async (page): Promise<void> => {
+        await runProjectionFixture(page);
+      },
+    };
+    const idle = (["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+      id: `projection-${family}-idle-${visibility}`,
+      route: "/instance-resource-fixture.html",
+      expected: `Actual ${family} consumers stay mounted for three ${visibility} native-clock seconds; no global count instrumentation exists in CPU mode.`,
+      projectionFamily: family,
+      projectionIdle: true,
+      visibility: visibility === "hidden" ? visibility : undefined,
+      prepare: async () => {},
+      run: async (page): Promise<void> => {
+        const state = () => page.evaluate(() => document.visibilityState);
+        if ((await state()) !== visibility) {
+          throw new Error(`Expected ${visibility} instance document`);
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 3_000);
+        });
+        if ((await state()) !== visibility) {
+          throw new Error("Instance idle visibility changed");
+        }
+      },
+    }));
+    return [active].concat(idle);
+  }),
+  ...heavyContentScenarios,
+  ...createBrowserResourceScenarios({
+    route: controlUiSessionPath(sessionKeys[0]),
+    openPanel: openInteractionPanel,
+    switchSession,
+    prepare: settleSidebarBackgroundWork,
+    settle: async (page) => {
+      await frames(page);
+      await settleSidebarCapture(page);
+    },
+  }),
   ...(["sdk-avatars", "sdk-avatar-identities"] as const).map((family): InteractionScenario => ({
     id: `projection-${family}`,
     route: controlUiSessionPath(sessionKeys[0]),
@@ -1667,7 +1747,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await settleSidebarBackgroundWork(page);
     },
     run: async (page) => {
-      await openInteractionDashboard(page);
+      await openInteractionPanel(page);
       await waitForResourceBoardTab(page, "main");
       const count = await page.locator(boardFrameSelector).count();
       if (count !== 3) {

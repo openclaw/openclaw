@@ -1,7 +1,7 @@
 import type { LoadedRecord } from "./model.js";
 
 /** Character budget for the rendered standing index (about 1k tokens). */
-export const MEMORY_INDEX_MAX_CHARS = 4_000;
+const MEMORY_INDEX_MAX_CHARS = 4_000;
 const RECENT_DAYS = 14;
 const DAY_MS = 86_400_000;
 const TITLE_MAX = 80;

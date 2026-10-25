@@ -567,7 +567,7 @@ extensions/policy/src/policy-routing.ts	2
 extensions/policy/src/policy-state-tools.ts	1
 extensions/qa-channel/src/bus-client.ts	3
 extensions/qa-channel/src/channel-actions.ts	2
-extensions/qa-channel/src/channel-base.ts	6
+extensions/qa-channel/src/channel-base.ts	5
 extensions/qa-channel/src/channel.ts	3
 extensions/qa-channel/src/gateway.ts	2
 extensions/qa-lab/src/auth-profile.fixture.ts	3

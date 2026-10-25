@@ -825,10 +825,7 @@ describe("before_prompt_build dispatch", () => {
   });
 
   it("allows detached descendants to dispatch after the outer call settles", async () => {
-    let releaseDetached: (() => void) | undefined;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferredCore();
     let detachedDispatch: Promise<unknown> | undefined;
     const promptBuild = vi.fn(async (event: unknown) => {
       const prompt = (event as { prompt: string }).prompt;
@@ -851,7 +848,7 @@ describe("before_prompt_build dispatch", () => {
     );
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
-    releaseDetached?.();
+    releaseDetached();
     const pendingDetachedDispatch = detachedDispatch;
     if (!pendingDetachedDispatch) {
       throw new Error("detached prompt dispatch was not created");

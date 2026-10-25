@@ -187,6 +187,51 @@ it("creates long-lived observations outside importer and caller authority", () =
   expect(scopes).toEqual([undefined]);
 });
 
+it("keeps notification snapshots while duplicate subscriptions change during delivery", () => {
+  const directory = timedDirectory("reentrant");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
+  const events: string[] = [];
+  const duplicate = (filename?: string) => events.push(`duplicate ${filename}`);
+  observe(
+    directory,
+    vi.fn((filename?: string) => {
+      events.push(`mutator ${filename}`);
+      if (filename === "outer") {
+        first.close();
+        observe(
+          directory,
+          vi.fn((name?: string) => events.push(`late ${name}`)),
+        );
+        change("change", "inner");
+      }
+    }),
+  );
+  const first = observeOwnedDirectory(directory, duplicate);
+  subscriptions.push(first, observeOwnedDirectory(directory, duplicate));
+  const change = watch.mock.calls[0]![2];
+  change("change", "outer");
+  first.close();
+  change("change", "next");
+  expect(events).toEqual([
+    "mutator outer",
+    "mutator inner",
+    "duplicate inner",
+    "late inner",
+    "duplicate outer",
+    "duplicate outer",
+    "mutator next",
+    "duplicate next",
+    "late next",
+  ]);
+  for (const subscription of subscriptions) {
+    subscription.close();
+  }
+  const replacement = observe(directory);
+  first.close();
+  watch.mock.calls.at(-1)![2]("change", "replacement");
+  expect(replacement).toHaveBeenCalledWith("replacement", "change");
+});
+
 it("shares one watcher, forwards invalidation and reconciles an atomic replacement", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

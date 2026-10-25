@@ -311,6 +311,14 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
   },
+  knowledgeRegistry: {
+    ...pluginRuntimeProcess("knowledge", "src/registry-client", "src/registry-worker"),
+    sourceWorkerName: "registry-worker",
+  },
+  knowledgeStorage: {
+    ...pluginRuntimeProcess("knowledge", "src/storage-client", "src/storage-worker"),
+    sourceWorkerName: "storage-worker",
+  },
   mxcLauncher: {
     plugin: "mxc",
     ownerSource: "extensions/mxc/src/plugin-root.ts",

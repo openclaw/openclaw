@@ -1460,7 +1460,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["replaceSqliteTranscriptEventsInTransaction"],
         evidence:
-          "Full replacement runs only inside worker write transactions: session-manual-compact-mutation.worker.ts:43, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
+          "Full replacement runs only inside worker write transactions: session-manual-compact.worker.ts:59, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
       },
     ],
   ],
@@ -2581,11 +2581,12 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: [
           "repairAcpSessionMetaKeysForDoctor",
+          "repairAcpSessionMetaKeysForDoctor.validate",
           "inspectAcpSessionClaimsForDoctor",
           "updateAcpSessionIdentityForDoctor",
         ],
         evidence:
-          "Doctor repair: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
+          "Doctor repair, including the synchronous createVerifiedSqliteSnapshot validation callback: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
       },
     ],
   ],

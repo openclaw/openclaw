@@ -26,6 +26,7 @@ import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
+import { subscribeCiGatewayUpdates } from "./chat-ci-gateway-updates.ts";
 
 registerEnglishCatalog(registerChatCiEnglish);
 registerEnglishCatalog(registerGitHubEnglish);
@@ -107,6 +108,13 @@ type ChatCiDetailsProps = ChatCiDisclosureProps & {
 };
 
 export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-ci-details": ChatCiDetailsElement;
+  }
+}
+
 function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
   const retryRef = props.controls?.ref();
   const skippedRef = props.controls?.ref();
@@ -146,12 +154,14 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
     connection.transition(gateway?.snapshot ?? { client: null, phase: "stopped" });
     reset();
     // Revoke in-flight request scopes on every connection edge, before later acknowledgments.
-    stopGateway = gateway?.subscribe((snapshot) => {
-      if (connection.transition(snapshot)) {
-        reset();
-        queueMicrotask(load);
-      }
-    });
+    stopGateway = gateway
+      ? subscribeCiGatewayUpdates(gateway, "details", (snapshot) => {
+          if (connection.transition(snapshot)) {
+            reset();
+            queueMicrotask(load);
+          }
+        })
+      : undefined;
     queueMicrotask(load);
   }
 

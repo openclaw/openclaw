@@ -1423,7 +1423,6 @@
 .mention-menu .chat-author-avatar {
   flex-basis: 22px;
   border: 0;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 68%, transparent);
 }
 
 @media (max-width: 640px) {

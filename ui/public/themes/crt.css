@@ -14,6 +14,10 @@
   --openclaw-corner-radius-scale: 0.25;
   --overlay-shadow: var(--shadow-md);
 
+  .identity-avatar--agent {
+    border-radius: inherit;
+  }
+
   /* One face for the whole console, prose included — same opt-in character
      decision as Phosphor; the mono choice is why this theme is not a default. */
   --mono:

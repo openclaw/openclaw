@@ -272,7 +272,7 @@ export function DiffBlock(props: {
       },
     });
   const renderLine = presentation.renderLine;
-  const hasLineNumbers = () => props.lines.some((line) => line.lineNo !== undefined);
+  const hasLineNumbers = createMemo(() => props.lines.some((line) => line.lineNo !== undefined));
   return (
     <>
       {!initialPresentation && <presentation.SyntaxLifetime />}
