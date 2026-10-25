@@ -38,8 +38,12 @@
 // Usage polling adds usage.cost and sessions.usage overview reads to the
 // mixed rotation; each round reports response cache statuses, including partials.
 // Use separate matching --allocations passes; their traced GC timing is diagnostic.
+// --worker-heap-done-file/--worker-heap-peer-done-file also gate paired timing soaks
+// before post-window collection or teardown; give each arm fresh, distinct paths.
+// --node-policy-churn adds a paired synthetic node and node list/describe/invoke traffic;
+// use memory-soak --mixed-rpc --plugins 40 --list-interval-ms 500 for policy load.
 import { spawn, type ChildProcess } from "node:child_process";
-import { createCipheriv, createHash, randomUUID } from "node:crypto";
+import { createCipheriv, createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
   appendFileSync,
@@ -61,6 +65,7 @@ import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Value } from "typebox/value";
 import { z } from "zod";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
@@ -68,6 +73,10 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
 import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
+import {
+  publicKeyRawBase64UrlFromEd25519Pem,
+  signEd25519Payload,
+} from "../../src/infra/ed25519-signature.js";
 import { encodePngRgba } from "../../src/media/png-encode.js";
 import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
@@ -150,6 +159,7 @@ const { values } = parseArgs({
     "mixed-rpc": { type: "boolean", default: false },
     "poll-between-rounds": { type: "boolean", default: false },
     "usage-rpc": { type: "boolean", default: false },
+    "node-policy-churn": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -330,6 +340,9 @@ if (
 }
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
+if (values["node-policy-churn"] && (!soakScenario || !values["mixed-rpc"] || !pluginCount)) {
+  throw new Error("--node-policy-churn requires memory-soak --mixed-rpc --plugins > 0");
+}
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
 const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
 const historyPayloadBytes =
@@ -919,14 +932,12 @@ const workerHeapPeerDoneFile = values["worker-heap-peer-done-file"];
 if (
   Boolean(workerHeapDoneFile) !== Boolean(workerHeapPeerDoneFile) ||
   (workerHeapDoneFile &&
-    (!values["worker-retained-heap"] ||
-      scenario !== "memory-soak" ||
-      values["mixed-rpc"] ||
+    (scenario !== "memory-soak" ||
       values["fingerprint-retention"] ||
       !workerHeapEvidence.acceptanceTiming))
 ) {
   throw new Error(
-    "Worker heap pair markers require both paths and an unprofiled memory soak without mixed RPCs or fingerprint retention",
+    "Measurement pair markers require both paths and a timing-compatible memory soak without fingerprint retention",
   );
 }
 if (
@@ -1327,6 +1338,7 @@ if (scenario === "plugins.reload" || scenario === "plugin.scope" || pluginCount 
   const plugin = writePluginFixtures(output, {
     count: Math.max(1, pluginCount),
     activationOnStartup: true,
+    nodePolicy: values["node-policy-churn"],
   });
   if (scenario === "plugins.reload") {
     reloadPluginId = plugin.pluginIds[0];
@@ -2435,6 +2447,12 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+let policyNode: ReturnType<typeof createGatewayWsClient> | undefined;
+let policyNodeId: string | undefined;
+const policyNodeCommands = Array.from(
+  { length: values["node-policy-churn"] ? pluginCount : 0 },
+  (_, index) => `bench-plugin-${String(index + 1).padStart(2, "0")}.echo`,
+);
 const githubOptionsClients: ReturnType<typeof createGatewayWsClient>[] = [];
 const chatDeltaDeliveryMs: number[] = [];
 const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
@@ -2844,6 +2862,7 @@ const mixedRpcMethods = [
   "chat.history",
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
+  ...(values["node-policy-churn"] ? ["node.list", "node.describe", "node.invoke"] : []),
   ...dashboardRpcShapes.map(({ method }) => method),
   ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
@@ -4472,6 +4491,7 @@ function cleanup() {
     for (const client of [...clients, ...githubOptionsClients]) {
       client.close();
     }
+    policyNode?.close();
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
@@ -4644,6 +4664,106 @@ try {
   const sender = clients[0];
   if (!sender) {
     throw new Error("no sender client");
+  }
+  if (values["node-policy-churn"]) {
+    const nodeKeys = generateKeyPairSync("ed25519");
+    const publicKey = publicKeyRawBase64UrlFromEd25519Pem(
+      nodeKeys.publicKey.export({ type: "spki", format: "pem" }),
+    );
+    policyNodeId = createHash("sha256").update(Buffer.from(publicKey, "base64url")).digest("hex");
+    const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
+    policyNode = createGatewayWsClient({
+      ...clientConnection,
+      onEvent: (event) => {
+        if (event.event === "connect.challenge" && isRecord(event.payload)) {
+          const { nonce, ts } = event.payload;
+          if (typeof nonce === "string" && typeof ts === "number") {
+            challenge.resolve({ nonce, ts });
+          }
+        }
+        if (event.event === "node.invoke.request" && isRecord(event.payload)) {
+          const { id, nodeId, command } = event.payload;
+          void rpc(policyNode!, "node.invoke.result", {
+            id,
+            nodeId,
+            ok: true,
+            payloadJSON: JSON.stringify({ synthetic: true, command }),
+          }).catch((error: unknown) => {
+            subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+          });
+        }
+      },
+    });
+    trackClientFrames(policyNode);
+    policyNode.ws.on("error", (error) => {
+      subscriberFailure ??= error;
+    });
+    policyNode.ws.on("close", (code) => {
+      if (!closing) {
+        subscriberFailure ??= new Error(`synthetic node unexpectedly closed (${code})`);
+      }
+    });
+    await policyNode.waitOpen();
+    const { nonce, ts } = await Promise.race([
+      challenge.promise,
+      delay(12_000, undefined, { ref: false }).then(() => {
+        throw new Error("Synthetic node challenge timed out");
+      }),
+    ]);
+    const nodeClient = {
+      id: "node-host",
+      version: "1.0.0",
+      platform: "linux",
+      deviceFamily: "linux",
+      mode: "node",
+      displayName: "Synthetic policy node",
+    };
+    const hello = await rpc(policyNode, "connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: nodeClient,
+      role: "node",
+      scopes: [],
+      caps: [],
+      commands: policyNodeCommands,
+      device: {
+        id: policyNodeId,
+        publicKey,
+        signedAt: ts,
+        nonce,
+        signature: signEd25519Payload(
+          nodeKeys.privateKey.export({ type: "pkcs8", format: "pem" }),
+          buildDeviceAuthPayloadV3({
+            deviceId: policyNodeId,
+            clientId: nodeClient.id,
+            clientMode: nodeClient.mode,
+            platform: nodeClient.platform,
+            deviceFamily: nodeClient.deviceFamily,
+            role: "node",
+            scopes: [],
+            signedAtMs: ts,
+            nonce,
+          }),
+        ),
+      },
+    });
+    if (!Value.Check(HelloOkSchema, hello) || hello.auth.role !== "node") {
+      throw new Error("Synthetic node did not complete its real Gateway handshake");
+    }
+    let node = await rpc(sender, "node.describe", { nodeId: policyNodeId });
+    if (isRecord(node) && typeof node.pendingRequestId === "string") {
+      await rpc(sender, "node.pair.approve", { requestId: node.pendingRequestId });
+      node = await rpc(sender, "node.describe", { nodeId: policyNodeId });
+    }
+    const admittedCommands = isRecord(node) && Array.isArray(node.commands) ? node.commands : [];
+    if (
+      !isRecord(node) ||
+      !node.connected ||
+      !node.paired ||
+      policyNodeCommands.some((command) => !admittedCommands.includes(command))
+    ) {
+      throw new Error("Synthetic node policy commands were not paired and admitted");
+    }
   }
   const sessionEventLineage: Array<{ key: string; parentSessionKey?: string }> = [];
   const verifySessionEventLineage = async (key: string) => {
@@ -5291,6 +5411,7 @@ try {
     ? await readGatewayResources(gateway, { includeWorkers: true })
     : undefined;
   const measurementStartedAt = Date.now();
+  const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
   const wholeChatDiagnosticsEnabled =
     scenario === "chat.send" &&
@@ -5617,6 +5738,51 @@ try {
                       }
                     } finally {
                       peer.close();
+                    }
+                  } else if (method === "node.list" || method === "node.describe") {
+                    const payload = await rpc(
+                      client,
+                      method,
+                      method === "node.list" ? {} : { nodeId: policyNodeId },
+                      onResponse,
+                    );
+                    const node =
+                      method === "node.list" && isRecord(payload) && Array.isArray(payload.nodes)
+                        ? payload.nodes.find(
+                            (entry: unknown) => isRecord(entry) && entry.nodeId === policyNodeId,
+                          )
+                        : payload;
+                    const admittedCommands =
+                      isRecord(node) && Array.isArray(node.commands) ? node.commands : [];
+                    if (
+                      !isRecord(node) ||
+                      !node.connected ||
+                      !node.paired ||
+                      policyNodeCommands.some((command) => !admittedCommands.includes(command))
+                    ) {
+                      throw new Error(`${method} lost the synthetic node's admitted commands`);
+                    }
+                  } else if (method === "node.invoke") {
+                    const command =
+                      policyNodeCommands[(round + clientIndex) % policyNodeCommands.length]!;
+                    const result = await rpc(
+                      client,
+                      method,
+                      {
+                        nodeId: policyNodeId,
+                        command,
+                        params: {},
+                        idempotencyKey: randomUUID(),
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(result) ||
+                      !isRecord(result.payload) ||
+                      result.payload.synthetic !== true ||
+                      result.payload.command !== command
+                    ) {
+                      throw new Error("node.invoke did not return the synthetic node's echo");
                     }
                   } else if (method === "chat.history") {
                     const history = await rpc(
@@ -6284,13 +6450,16 @@ try {
     ? await readGatewayResources(gateway, { includeWorkers: true })
     : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  const wholeSoakCpu = wholeSoakCpuBefore
+    ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
+    : undefined;
   if (workerHeapDoneFile && workerHeapPeerDoneFile) {
     writeFileSync(workerHeapDoneFile, String(Date.now()));
     // Long captures need room for a slower peer before either side forces GC.
     const deadline = Date.now() + Math.max(120_000, Date.now() - measurementStartedAt);
     while (!existsSync(workerHeapPeerDoneFile)) {
       if (Date.now() >= deadline) {
-        throw new Error("Worker heap peer did not finish its timing window");
+        throw new Error("Measurement peer did not finish its timing window");
       }
       await delay(100);
     }
@@ -6635,6 +6804,10 @@ try {
     workerCreationCounts: values["worker-creation-counts"],
     coldHistorySessions: coldHistoryKeys.length,
     coldHistoryRequests: coldHistorySequence,
+    nodePolicyChurn: values["node-policy-churn"],
+    ...(values["node-policy-churn"]
+      ? { policyNodeId, policyNodeCommandCount: policyNodeCommands.length }
+      : {}),
     stressSessionStore: values["stress-session-store"],
     stressToolSearch: values["stress-tool-search"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
@@ -6814,6 +6987,7 @@ try {
           retainedProfile,
           wholeSoakAllocation,
           wholeSoakDiagnostics: wholeWorkloadDiagnostics,
+          wholeSoakCpu,
           wholeSoakGc,
         }
       : {}),

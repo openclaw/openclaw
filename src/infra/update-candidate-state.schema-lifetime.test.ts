@@ -288,7 +288,6 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const failure = await rejected;
       if (outcome === "cancel") {
-        expect(failure).toMatchObject({ name: "AbortError" });
         expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);

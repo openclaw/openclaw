@@ -47,6 +47,13 @@ and account. Removing the final attachment keeps new-session mode while
 instructions remain; clearing both files and instructions restores navigation.
 Reloading or leaving the app does not preserve this in-memory draft.
 
+## Automatic session names
+
+New Dashboard conversations receive a title from their opening task. After six more
+user messages, the Gateway makes one attempt to refine that title using recent
+conversation context. A failed attempt keeps the existing title. Manually named
+sessions and conversations created before this feature keep their names.
+
 ## Temporary disconnections
 
 When the connection drops, the Control UI keeps loaded catalogs, automation

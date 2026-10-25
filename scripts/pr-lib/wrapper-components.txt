@@ -2281,6 +2281,7 @@ src/infra/session-cost-usage-worker.types.ts
 src/sessions/session-agent-work-admission.ts
 src/sessions/session-lifecycle-identity.ts
 src/config/sessions/cli-history-boundary.ts
+src/config/sessions/session-accessor.sqlite-archive-worker-lifetime.ts
 src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts

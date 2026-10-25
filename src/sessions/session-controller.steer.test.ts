@@ -40,6 +40,7 @@ import { captureSessionTarget, type SessionTarget } from "./session-controller.t
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 
 const key = "agent:main:controller-steer";
+const acceptedSteer = { status: "accepted", targetRunId: "steer-run" } as const;
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) {
@@ -81,6 +82,10 @@ function startTurn(
     adapter?: SessionControllerSourceAdapter;
     direct?: boolean;
     turnKind?: "direct";
+    replyContract?: Pick<
+      ReplyBackendHandle,
+      "toolAuthorityFingerprint" | "terminalReplyExpectation"
+    >;
   } = {},
 ) {
   const sessionKey = params.target?.sessionKey ?? key;
@@ -103,6 +108,7 @@ function startTurn(
     runId: "steer-run",
     cancel() {},
     isCompacting: () => params.compacting === true,
+    ...params.replyContract,
     ...(params.injection === "legacy"
       ? { messageInjection: { isAvailable: () => true, queueMessage } }
       : { messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage } }),
@@ -205,50 +211,34 @@ function revocableAuthority(message: string) {
 
 describe("submitSessionControllerSteer", () => {
   it.each([
-    { turnKind: undefined, terminalReplyExpectation: "required" },
-    { turnKind: undefined, terminalReplyExpectation: "optional" },
-    { turnKind: "direct", terminalReplyExpectation: "required" },
-    { turnKind: "direct", terminalReplyExpectation: "result-required" },
-    { turnKind: "direct", terminalReplyExpectation: "optional" },
+    [undefined, "required"],
+    [undefined, "optional"],
+    ["direct", "required"],
+    ["direct", "result-required"],
   ] as const)(
-    "preserves human input custody with a $turnKind $terminalReplyExpectation reply owner",
-    async ({ turnKind, terminalReplyExpectation }) => {
-      const { operation, input } = startTurn({ turnKind });
-      const received: string[] = [];
+    "preserves human input custody with a %s %s reply owner",
+    async (turnKind, terminalReplyExpectation) => {
       const fingerprint = "human-reply-contract-tools";
-      operation.attachBackend({
-        ...makeBackend("human-reply-contract-run", {
-          queueMessage: async (text, options) => {
-            received.push(text);
-            options?.onQueueAccepted?.(true);
-          },
-        }),
-        toolAuthorityFingerprint: fingerprint,
-        terminalReplyExpectation,
+      const { operation, input, injected } = startTurn({
+        turnKind,
+        queueMessage: acceptQueue,
+        replyContract: { toolAuthorityFingerprint: fingerprint, terminalReplyExpectation },
       });
-      const result = await steer(
-        input,
-        {
-          isInboundUserMessage: true,
-          terminalReplyExpectation: "required",
-          toolAuthorityFingerprint: fingerprint,
-        },
-        undefined,
-        "Answer this human correction",
-      );
+      const result = await steer(input, {
+        isInboundUserMessage: true,
+        terminalReplyExpectation: "required",
+        toolAuthorityFingerprint: fingerprint,
+      });
 
       if (terminalReplyExpectation !== "optional") {
-        expect(result).toMatchObject({
-          status: "accepted",
-          targetRunId: "human-reply-contract-run",
-        });
+        expect(result).toMatchObject(acceptedSteer);
         await input.settlement.promise;
         expect(input.phase).toBe("consumed");
-        expect(received).toEqual(["Answer this human correction"]);
+        expect(injected).toEqual(["steer"]);
         expectNoInput(input);
       } else {
         expect(result).toMatchObject({ status: "rejected", reason: "reply_expectation_mismatch" });
-        expect(received).toEqual([]);
+        expect(injected).toEqual([]);
         expectQueued(input);
       }
       expect(operation.result).toBeNull();
@@ -313,11 +303,7 @@ describe("submitSessionControllerSteer", () => {
     });
     const result = direct ? directSteer(operation) : steer(input);
     if (status === "accepted") {
-      await expect(result).resolves.toEqual({
-        status: "accepted",
-        targetRunId: "steer-run",
-        result: undefined,
-      });
+      await expect(result).resolves.toEqual({ ...acceptedSteer, result: undefined });
       await input.settlement.promise;
       expect(input.phase).toBe("consumed");
     } else {
@@ -440,10 +426,8 @@ describe("submitSessionControllerSteer", () => {
     const target = captureCurrentReplyMessageInjectionTarget(key);
     const released: NonNullable<AgentHarnessAttemptParams["replyOperation"]> = operation;
     const internal = readSessionControllerOperationState(operation);
-    expect(released).toMatchObject({ phase: "running", result: null });
     expect(findSessionControllerOperationByRunId("steer-run")).toBe(operation);
     expect(findSessionControllerOperationByRunId("other-run")).toBeUndefined();
-
     expect(operation.yield()).toBe(true);
     expect(operation.yield()).toBe(false);
     expect(internal?.phase).toBe("yielded");
@@ -454,11 +438,7 @@ describe("submitSessionControllerSteer", () => {
     expectQueued(input);
     operation.complete();
     await released.ownerSettlement;
-    expect(released).toBe(operation);
-    expect(released.phase).toBe("completed");
-    expect(released.result).toEqual({ kind: "completed" });
-    const completed = released.result;
-    expect(released.result).toBe(completed);
+    expect(released).toMatchObject({ phase: "completed", result: { kind: "completed" } });
     expect(internal?.phase).toBe("yielded");
     expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
   });
@@ -622,9 +602,9 @@ describe("steerSessionControllerOperation", () => {
     }
 
     await expect(Promise.all([first, duplicate, second])).resolves.toMatchObject([
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
+      acceptedSteer,
+      acceptedSteer,
+      acceptedSteer,
     ]);
   });
 

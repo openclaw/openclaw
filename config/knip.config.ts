@@ -112,6 +112,7 @@ const repositoryScriptEntries = [
   // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
   "scripts/perf/acp-ledger-eviction-measure.ts!",
   "scripts/perf/plugin-blob-registration-measure.ts!",
+  "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",

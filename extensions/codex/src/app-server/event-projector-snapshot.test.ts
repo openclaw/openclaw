@@ -126,32 +126,40 @@ describe("buildCodexMessagesSnapshot", () => {
     );
   });
 
-  it("keeps a persisted earlier answer separate from a later tool-authored reply", async () => {
-    const projector = await createProjector();
-    await fixture.complete(projector, finalItem("earlier-answer", "Earlier answer."));
-    const prefix = projector.buildSteeringTranscriptPrefix();
-    commitSteeringPrefix(projector, prefix);
+  it.each(["final_answer", "partial_answer"])(
+    "keeps a persisted %s separate from a later tool-authored reply",
+    async (phase) => {
+      const projector = await createProjector();
+      await fixture.complete(
+        projector,
+        fixture.message("earlier-answer", "Earlier answer.", phase),
+      );
+      const prefix = projector.buildSteeringTranscriptPrefix();
+      commitSteeringPrefix(projector, prefix);
 
-    const result = projector.buildResult({
-      ...buildEmptyToolTelemetry(),
-      messagingToolSourceReplyPayloads: [
-        {
-          text: "Later tool reply.",
-          sourceReplyFinal: true,
-          toolAuthored: true,
-          toolAuthoredForToolCallId: "later-call",
-          toolAuthoredForTurnId: "turn-1",
-        },
-      ],
-    });
+      const result = projector.buildResult({
+        ...buildEmptyToolTelemetry(),
+        messagingToolSourceReplyPayloads: [
+          {
+            text: "Later tool reply.",
+            sourceReplyFinal: true,
+            toolAuthored: true,
+            toolAuthoredForToolCallId: "later-call",
+            toolAuthoredForTurnId: "turn-1",
+          },
+        ],
+      });
 
-    expect(result.assistantTexts).toEqual([]);
-    expect(result.lastAssistant).toBeUndefined();
-    expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
-    expect(prefix).toMatchObject([{ role: "assistant", content: fixture.text("Earlier answer.") }]);
-    expect(prefix[0]).not.toHaveProperty("turnId");
-    expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
-  });
+      expect(result.assistantTexts).toEqual([]);
+      expect(result.lastAssistant).toBeUndefined();
+      expect(result.currentAttemptAssistant).toMatchObject({ turnId: "turn-1" });
+      expect(prefix).toMatchObject([
+        { role: "assistant", content: fixture.text("Earlier answer.") },
+      ]);
+      expect(prefix[0]).not.toHaveProperty("turnId");
+      expect(prefix.map(readMirrorIdentity)).toEqual(["turn-1:assistant:earlier-answer"]);
+    },
+  );
 
   it("adopts the saved prefix for a raw completion with a replacement identity", async () => {
     const completionId = "raw-completed";
