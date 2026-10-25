@@ -655,6 +655,60 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
   });
 
+  it("reports a rejected vector store probe instead of the pre-probe vector state", async () => {
+    const manager = memoryManager({
+      backend: "builtin" as const,
+      provider: "memory-remote",
+      vector: { enabled: true, storeAvailable: true, semanticAvailable: true, available: true },
+    });
+    manager.probeVectorStoreAvailability.mockRejectedValue(new Error("vector store unreachable"));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { plugins: { slots: { memory: "memory-remote" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-remote" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    });
+
+    expect(result).toMatchObject({
+      vector: {
+        enabled: true,
+        storeAvailable: false,
+        semanticAvailable: false,
+        available: false,
+        loadError: "vector store unreachable",
+      },
+    });
+  });
+
+  it("reports a rejected semantic vector probe without marking the store unavailable", async () => {
+    const { probeVectorStoreAvailability: _storeProbe, ...manager } = memoryManager({
+      backend: "builtin" as const,
+      provider: "memory-remote",
+      vector: { enabled: true, storeAvailable: true, semanticAvailable: true, available: true },
+    });
+    manager.probeVectorAvailability.mockRejectedValue(new Error("embedding index offline"));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { plugins: { slots: { memory: "memory-remote" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-remote" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    });
+
+    expect(result).toMatchObject({
+      vector: {
+        enabled: true,
+        storeAvailable: true,
+        semanticAvailable: false,
+        available: false,
+        loadError: "embedding index offline",
+      },
+    });
+  });
+
   it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
 
