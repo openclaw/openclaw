@@ -5,7 +5,6 @@ import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   loadSqliteVecExtension,

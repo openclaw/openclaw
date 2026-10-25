@@ -46,8 +46,6 @@ let config: OpenClawConfig = {
   },
 };
 
-let projectionFixture: UsageSessionStoreFixture = { store: {} };
-
 const baseParams = {
   startDate: "2026-02-01",
   endDate: "2026-02-02",
