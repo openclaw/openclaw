@@ -102,6 +102,7 @@ export type InitialChatSnapshotHydration = {
   titlePending?: boolean;
   sessionKey: string;
   connected: boolean;
+  adoptReadySnapshot?: () => void;
   promise: Promise<void>;
 };
 

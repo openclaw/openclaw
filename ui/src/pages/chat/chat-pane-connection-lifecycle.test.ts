@@ -205,13 +205,21 @@ describe("chat pane connection lifecycle", () => {
         },
       },
     };
-    applyChatCacheSnapshot(h.state, snapshot);
-    cacheChatSessionSnapshot(
-      h.state.chatMessagesBySession,
-      h.state,
-      { sessionKey: h.state.sessionKey },
-      snapshot,
-    );
+    chatHistoryRequests(h.state).initialSnapshotHydration = {
+      sessionKey: h.state.sessionKey,
+      connected: false,
+      promise: Promise.resolve(),
+      adoptReadySnapshot: () => {
+        applyChatCacheSnapshot(h.state, snapshot);
+        cacheChatSessionSnapshot(
+          h.state.chatMessagesBySession,
+          h.state,
+          { sessionKey: h.state.sessionKey },
+          snapshot,
+        );
+      },
+    };
+    expect(h.state.chatMessages).toEqual([]);
     h.dispatchConnect();
     await h.requested;
     expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
