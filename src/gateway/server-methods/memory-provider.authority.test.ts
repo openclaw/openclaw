@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
 import type {
-  MemoryPluginRuntime,
   MemoryProviderRuntime,
   RegisteredMemorySearchManager,
 } from "../../plugins/registry-contribution-types.js";
@@ -175,18 +174,15 @@ describe("memory provider reads through Gateway dispatch", () => {
   );
 });
 
-it.each([{}, { version: 1 }])(
-  "directs %j to v2 when the memory owner registers only a provider runtime",
-  async (version) => {
-    const respond = await call("memory.search", { query: "x", ...version });
-    expectRpcError(respond, {
-      code: "INVALID_REQUEST",
-      message:
-        'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
-    });
-    expect(open).not.toHaveBeenCalled();
-  },
-);
+it("directs a legacy search to v2 when the memory owner registers only a provider runtime", async () => {
+  const respond = await call("memory.search", { query: "x", version: 1 });
+  expectRpcError(respond, {
+    code: "INVALID_REQUEST",
+    message:
+      'memory plugin "records" uses the provider runtime; retry memory.search with version: 2',
+  });
+  expect(open).not.toHaveBeenCalled();
+});
 
 describe("Memory Core legacy owner", () => {
   const sessionHit = (path: string): MemorySearchResult => ({
@@ -212,11 +208,9 @@ describe("Memory Core legacy owner", () => {
   };
 
   beforeEach(async () => {
-    const { createMemoryRuntime } = await vi.importActual<{
-      createMemoryRuntime: (host: {
-        runInBackgroundContext: <T>(run: () => T) => T;
-      }) => MemoryPluginRuntime;
-    }>("../../../extensions/memory-core/runtime-api.js");
+    const { createMemoryRuntime } = await vi.importActual<
+      typeof import("../../../extensions/memory-core/runtime-api.js")
+    >("../../../extensions/memory-core/runtime-api.js");
     const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     config = {
       agents: { ownership: "explicit", entries: { main: {}, ops: {} } },

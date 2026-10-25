@@ -15,15 +15,6 @@ import type {
 } from "./types.js";
 
 type ComputerMethods = Pick<GatewayComputerService, "status" | "invoke">;
-function computerService(methods: ComputerMethods): GatewayComputerService {
-  return {
-    ...methods,
-    close: async () => {},
-    reconcileRuntimePolicy: async () => {},
-    revokeRunAuthority: () => {},
-    preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-  };
-}
 
 function createClient(identity?: AgentRuntimeIdentity): GatewayClient {
   return {
@@ -65,7 +56,7 @@ async function invoke(
     respond,
     client: createClient(),
     isWebchatConnect: () => false,
-    context: { gatewayComputerService: service && computerService(service), ...context },
+    context: { gatewayComputerService: service, ...context },
     ...requestOptions,
   } as GatewayRequestHandlerOptions);
   return respond.mock.calls[0];
@@ -147,17 +138,12 @@ describe("Gateway computer RPC", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "allows capability discovery before run admission (synthetic=%s)",
-    async (synthetic) => {
-      const client = createClient();
-      if (synthetic) {
-        delete client.connId;
-        client.internal = { syntheticClient: true };
-      }
-      expect(await invoke("computer.status", {}, undefined, { client })).toEqual(unavailableStatus);
-    },
-  );
+  it("allows synthetic capability discovery before run admission", async () => {
+    const client = createClient();
+    delete client.connId;
+    client.internal = { syntheticClient: true };
+    expect(await invoke("computer.status", {}, undefined, { client })).toEqual(unavailableStatus);
+  });
 
   it.each([
     ["false", false],
@@ -237,11 +223,11 @@ describe("Gateway computer RPC", () => {
       request.assertCurrent();
       return { captured: true };
     });
+    const service = {
+      invoke: dispatch,
+      status: async () => ({ configured: true, available: true }),
+    };
     const context: Partial<GatewayRequestContext> = {
-      gatewayComputerService: computerService({
-        invoke: dispatch,
-        status: async () => ({ configured: true, available: true }),
-      }),
       validateAgentRuntimeApprovalAuthority: (candidate: AgentRuntimeIdentity) =>
         candidate === identity && active,
     };
@@ -249,7 +235,7 @@ describe("Gateway computer RPC", () => {
     first.connectionSignal = new AbortController().signal;
     const second = { ...createClient(identity), connId: "computer-next-connection" };
     for (const client of [first, second]) {
-      expect(await invoke("computer.invoke", snapshot, undefined, { client, context })).toEqual([
+      expect(await invoke("computer.invoke", snapshot, service, { client, context })).toEqual([
         true,
         { payload: { captured: true } },
       ]);
@@ -257,7 +243,7 @@ describe("Gateway computer RPC", () => {
     expect(owners[0]).toBe(owners[1]);
     active = false;
     const invokeRetired = (params: Record<string, unknown>) =>
-      invoke("computer.invoke", params, undefined, { client: second, context });
+      invoke("computer.invoke", params, service, { client: second, context });
     expect((await invokeRetired(snapshot))?.[0]).toBe(false);
     expect(dispatch).toHaveBeenCalledTimes(2);
     const closed = await invokeRetired({

@@ -26,12 +26,7 @@ async function call(
 const writeClient = { connect: { scopes: ["operator.write"] } };
 
 function workspaceContext(workspace: string) {
-  return {
-    getRuntimeConfig: () => ({
-      agents: { entries: { main: { workspace } } },
-    }),
-    nodeRegistry: { get: vi.fn(), invoke: vi.fn() },
-  };
+  return nodeContext(vi.fn(), null, { agents: { entries: { main: { workspace } } } });
 }
 
 const connectedNode = {
@@ -222,22 +217,25 @@ describe("fs.listDir", () => {
     });
   });
 
-  it("keeps node path errors as request errors and transport failures as unavailable", async () => {
-    const missing = "Error: ENOENT: no such file or directory, scandir '/Users/de'";
-    const invoke = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, error: { code: "INVALID_REQUEST", message: missing } })
-      .mockResolvedValueOnce({ ok: false, error: { code: "TIMEOUT", message: "node timed out" } });
-    const context = nodeContext(invoke);
-    expect((await call({ nodeId: "macbook", path: "/Users/de" }, context))[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: missing,
-    });
-    expect((await call({ nodeId: "macbook" }, context))[2]).toMatchObject({
-      code: "UNAVAILABLE",
-      message: "node timed out",
-    });
-  });
+  it.each([
+    [
+      "INVALID_REQUEST",
+      "Error: ENOENT: no such file or directory, scandir '/Users/de'",
+      "INVALID_REQUEST",
+    ],
+    ["TIMEOUT", "node timed out", "UNAVAILABLE"],
+  ])(
+    "preserves node %s errors with the appropriate availability code",
+    async (code, message, expectedCode) => {
+      const context = nodeContext(
+        vi.fn().mockResolvedValueOnce({ ok: false, error: { code, message } }),
+      );
+      expect((await call({ nodeId: "macbook", path: "/Users/de" }, context))[2]).toMatchObject({
+        code: expectedCode,
+        message,
+      });
+    },
+  );
 
   it("rejects node listings blocked by the live command policy", async () => {
     const invoke = vi.fn();
