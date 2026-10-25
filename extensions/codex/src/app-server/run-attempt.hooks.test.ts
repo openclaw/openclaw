@@ -32,7 +32,6 @@ import {
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
-  turnStartResult,
 } from "./run-attempt-test-harness.js";
 
 type ReplyBackend = Parameters<
@@ -358,17 +357,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
     );
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        return {
-          turn: {
-            ...turnStartResult("turn-1", "completed").turn,
-            items: [{ id: "msg-1", type: "agentMessage", text: "hello back", status: "completed" }],
-          },
-        };
-      }
-      return undefined;
-    });
+    const harness = createStartedThreadHarness();
     const params = diagnosticParams(true);
     const sessionManager = openFileBackedSessionManagerForTest(params.sessionFile, {
       sessionId: "diagnostic-session-1",
@@ -379,7 +368,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     params.sessionKey = "agent:diagnostic:diagnostic-session-1";
     params.runId = "diagnostic-run-1";
     const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
+    await harness.notify(agentMessage("msg-1", "hello back", { status: "completed" }));
+    await complete(harness);
     await run;
     await vi.waitFor(() => expect(find("model.call.completed")).toBeDefined(), fastWait);
 
