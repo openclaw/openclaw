@@ -40,6 +40,7 @@ import { captureSessionTarget, type SessionTarget } from "./session-controller.t
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 
 const key = "agent:main:controller-steer";
+const acceptedSteer = { status: "accepted", targetRunId: "steer-run" } as const;
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) {
@@ -230,10 +231,7 @@ describe("submitSessionControllerSteer", () => {
       });
 
       if (terminalReplyExpectation !== "optional") {
-        expect(result).toMatchObject({
-          status: "accepted",
-          targetRunId: "steer-run",
-        });
+        expect(result).toMatchObject(acceptedSteer);
         await input.settlement.promise;
         expect(input.phase).toBe("consumed");
         expect(injected).toEqual(["steer"]);
@@ -305,11 +303,7 @@ describe("submitSessionControllerSteer", () => {
     });
     const result = direct ? directSteer(operation) : steer(input);
     if (status === "accepted") {
-      await expect(result).resolves.toEqual({
-        status: "accepted",
-        targetRunId: "steer-run",
-        result: undefined,
-      });
+      await expect(result).resolves.toEqual({ ...acceptedSteer, result: undefined });
       await input.settlement.promise;
       expect(input.phase).toBe("consumed");
     } else {
@@ -608,9 +602,9 @@ describe("steerSessionControllerOperation", () => {
     }
 
     await expect(Promise.all([first, duplicate, second])).resolves.toMatchObject([
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
-      { status: "accepted", targetRunId: "steer-run" },
+      acceptedSteer,
+      acceptedSteer,
+      acceptedSteer,
     ]);
   });
 

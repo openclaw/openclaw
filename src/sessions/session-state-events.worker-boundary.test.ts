@@ -73,6 +73,7 @@ import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kern
 
 type Database = ReturnType<typeof createDatabaseOptions>;
 let database: Database;
+const cleanups: Array<() => void | Promise<unknown>> = [];
 const query = (sql: string, options = database) =>
   openOpenClawStateDatabase(options).db.prepare(sql);
 const stateEvents = async (options = database) =>
@@ -135,7 +136,26 @@ function holdWorker() {
       await release.promise;
     },
   );
-  return { entered, release, blocking };
+  const pending: Promise<unknown>[] = [blocking];
+  cleanups.push(async () => {
+    release.resolve();
+    await Promise.allSettled(pending);
+  });
+  return {
+    entered,
+    release,
+    blocking,
+    track<T>(promise: Promise<T>) {
+      pending.push(promise);
+      return promise;
+    },
+  };
+}
+
+function ambientRead(sessionKey = watcher) {
+  const read = prepareAmbientGroupWatchTargetsRead(sessionKey, database);
+  cleanups.push(() => read.release());
+  return read;
 }
 
 beforeEach(() => {
@@ -144,6 +164,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
   vi.restoreAllMocks();
   publishSystemEventStoreResolver(undefined);
   clearRuntimeConfigSnapshot();
@@ -156,70 +179,62 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
   await seedChild(database);
   const lateTarget = "agent:main:late-target";
   const { db } = openOpenClawStateDatabase(database);
-  const { entered, release, blocking } = holdWorker();
-  let resetting: Promise<void> | undefined;
-  let deleting: Promise<void> | undefined;
-  const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
-  try {
-    await withinTest(entered.promise, signal);
-    resetting = handleSessionStateSessionReset(watcher);
-    deleting = handleSessionStateSessionDeleted(child, "main");
-    expect(read.isCurrent()).toBe(false);
-    const replacement = createDatabaseOptions();
-    const replacementDb = openOpenClawStateDatabase(replacement).db;
-    for (const options of [database, replacement]) {
-      query(
-        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 0)",
+  const { entered, release, blocking, track } = holdWorker();
+  const read = ambientRead();
+  await withinTest(entered.promise, signal);
+  const resetting = track(handleSessionStateSessionReset(watcher));
+  const deleting = track(handleSessionStateSessionDeleted(child, "main"));
+  expect(read.isCurrent()).toBe(false);
+  const replacement = createDatabaseOptions();
+  const replacementDb = openOpenClawStateDatabase(replacement).db;
+  for (const options of [database, replacement]) {
+    query(
+      "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 0)",
+      options,
+    ).run(watcher, lateTarget);
+    expect(
+      upsertSessionUpstreamLink(
+        {
+          sessionKey: child,
+          agentId: "main",
+          catalogId: "codex",
+          hostId: "gateway:local",
+          threadId: "late-link",
+          upstreamKind: "codex-app-server",
+          upstreamRef: null,
+          marker: null,
+        },
         options,
-      ).run(watcher, lateTarget);
-      expect(
-        upsertSessionUpstreamLink(
-          {
-            sessionKey: child,
-            agentId: "main",
-            catalogId: "codex",
-            hostId: "gateway:local",
-            threadId: "late-link",
-            upstreamKind: "codex-app-server",
-            upstreamRef: null,
-            marker: null,
-          },
-          options,
-        ),
-      ).toBe(true);
-    }
-    release.resolve();
-    await withinTest(Promise.all([blocking, resetting, deleting]), signal);
-    expect(readCursor(database, watcher, lateTarget)).toBeUndefined();
-    expect(await getSessionStateVersion(child, "main", database)).toBe(0);
-    expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
-    expect(readCursor(replacement, watcher, lateTarget)).toBeDefined();
-    expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
-      "late-link",
-    );
-  } finally {
-    read.release();
-    release.resolve();
-    await Promise.allSettled([blocking, resetting, deleting]);
+      ),
+    ).toBe(true);
   }
+  release.resolve();
+  await withinTest(Promise.all([blocking, resetting, deleting]), signal);
+  expect(readCursor(database, watcher, lateTarget)).toBeUndefined();
+  expect(await getSessionStateVersion(child, "main", database)).toBe(0);
+  expect(readSessionUpstreamLinkInDatabase(db, child, "main")).toBeUndefined();
+  expect(readCursor(replacement, watcher, lateTarget)).toBeDefined();
+  expect(readSessionUpstreamLinkInDatabase(replacementDb, child, "main")?.threadId).toBe(
+    "late-link",
+  );
 });
 
 it("revokes ambient reads through signal cleanup and overlapping pruning", async () => {
   const group = "agent:main:telegram:group:cleanup";
   for (const operation of ["reset", "delete", "reset-with-prune"] as const) {
     await groupWatch(group);
-    const before = prepareAmbientGroupWatchTargetsRead(watcher, database);
+    const before = ambientRead();
     expect(await before.read()).toEqual([group]);
     let finishPrune =
       operation === "reset-with-prune"
         ? beginAmbientWatchPrune(captureOpenClawStateWorkerContext(database).admission.identity.key)
         : undefined;
-    const during: ReturnType<typeof prepareAmbientGroupWatchTargetsRead>[] = [];
+    const during: ReturnType<typeof ambientRead>[] = [];
     const stages: string[] = [];
     const admission = probe.admission(workerAdmission, (request, grant, admit) => {
       stages.push(request.stage);
       expect(before.isCurrent()).toBe(false);
-      const read = prepareAmbientGroupWatchTargetsRead(watcher, database);
+      const read = ambientRead();
       during.push(read);
       expect(read.isCurrent()).toBe(false);
       admit(request, grant);
@@ -236,27 +251,16 @@ it("revokes ambient reads through signal cleanup and overlapping pruning", async
         expect(read.isCurrent()).toBe(false);
       }
       if (finishPrune) {
-        const held = prepareAmbientGroupWatchTargetsRead(watcher, database);
-        try {
-          expect(held.isCurrent()).toBe(false);
-        } finally {
-          held.release();
-        }
+        expect(ambientRead().isCurrent()).toBe(false);
         finishPrune();
         finishPrune = undefined;
       }
-      const after = prepareAmbientGroupWatchTargetsRead(watcher, database);
-      try {
-        expect(after.isCurrent()).toBe(true);
-        expect(await after.read()).toEqual([]);
-      } finally {
-        after.release();
-      }
+      const after = ambientRead();
+      expect(after.isCurrent()).toBe(true);
+      expect(await after.read()).toEqual([]);
     } finally {
       finishPrune?.();
       admission.mockRestore();
-      before.release();
-      during.forEach((read) => read.release());
     }
   }
 });
@@ -388,35 +392,28 @@ it.each([
     if (!replaced) {
       enqueueSystemEvent("ordinary queued event", { sessionKey: nestedWatcher });
     }
-    const { entered, release, blocking } = holdWorker();
-    let draining: Promise<string | undefined> | undefined;
-    try {
-      await entered.promise;
-      draining = drain(nestedWatcher);
+    const { entered, release, blocking, track } = holdWorker();
+    await entered.promise;
+    const draining = track(drain(nestedWatcher));
+    expect(queuedNotices()).toHaveLength(0);
+    if (replaced) {
+      currentStore = `${originalStore}.replacement`;
+      query(
+        "UPDATE session_watch_cursors SET watcher_store_path = ? WHERE watcher_session_key = ?",
+      ).run(currentStore, nestedWatcher);
+    } else {
+      publishSystemEventStoreResolver(() => currentStore);
+    }
+    release.resolve();
+    await blocking;
+    const formatted = await draining;
+    if (replaced) {
+      expect(formatted).toBeUndefined();
+      expect(readCursor(database, nestedWatcher)).toEqual(before);
       expect(queuedNotices()).toHaveLength(0);
-      if (replaced) {
-        currentStore = `${originalStore}.replacement`;
-        query(
-          "UPDATE session_watch_cursors SET watcher_store_path = ? WHERE watcher_session_key = ?",
-        ).run(currentStore, nestedWatcher);
-      } else {
-        publishSystemEventStoreResolver(() => currentStore);
-      }
-      release.resolve();
-      await blocking;
-      const formatted = await draining;
-      if (replaced) {
-        expect(formatted).toBeUndefined();
-        expect(readCursor(database, nestedWatcher)).toEqual(before);
-        expect(queuedNotices()).toHaveLength(0);
-      } else {
-        expect(formatted).toContain("ordinary queued event");
-        expect(formatted).toContain(`Session "${child}" changed`);
-      }
-    } finally {
-      release.resolve();
-      await blocking;
-      await draining;
+    } else {
+      expect(formatted).toContain("ordinary queued event");
+      expect(formatted).toContain(`Session "${child}" changed`);
     }
   },
 );
