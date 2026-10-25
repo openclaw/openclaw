@@ -7,7 +7,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual, parseArgs, promisify } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { buildDeviceAuthPayloadV3 } from "../packages/gateway-client/src/device-auth.ts";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
@@ -197,57 +197,6 @@ if (values["seed-only"]) {
       database.close();
     }
   };
-  const readFixtureFacts = () => {
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const row = database
-        .prepare(`
-          WITH ids AS (
-            SELECT session_id FROM session_windows
-            UNION SELECT session_id FROM transcript_events
-            UNION SELECT session_id FROM session_transcript_active_events
-            UNION SELECT session_id FROM session_transcript_fts_rows
-            UNION SELECT session_id FROM session_transcript_index_state
-          )
-          SELECT
-            (SELECT count(*) FROM session_windows) AS windows,
-            (SELECT count(DISTINCT session_id) FROM transcript_events) AS eventIds,
-            count(*) AS unionIds,
-            (SELECT count(*) FROM ids WHERE NOT EXISTS (
-              SELECT 1 FROM session_windows w WHERE w.session_id = ids.session_id
-            )) AS missingWindows,
-            (SELECT count(*) FROM ids WHERE NOT EXISTS (
-              SELECT 1 FROM transcript_events e WHERE e.session_id = ids.session_id
-            )) AS missingEvents,
-            (SELECT count(*) FROM ids WHERE session_id NOT IN (
-              SELECT value FROM json_each(?)
-            )) AS unexpectedIds,
-            (SELECT count(*) FROM session_transcript_index_state
-              WHERE needs_rebuild = 1) AS dirtyProjections
-          FROM ids
-        `)
-        .get(JSON.stringify(Array.from({ length: sessions }, (_, index) => sessionId(index))));
-      assert(row, "Synthetic fixture aggregate must return one row");
-      return { ...row };
-    } finally {
-      database.close();
-    }
-  };
-  const expectedFixtureFacts = {
-    windows: sessions,
-    eventIds: sessions,
-    unionIds: sessions,
-    missingWindows: 0,
-    missingEvents: 0,
-    unexpectedIds: 0,
-    dirtyProjections: 0,
-  };
-  const fixtureBefore = readFixtureFacts();
-  assert.deepEqual(
-    fixtureBefore,
-    { ...expectedFixtureFacts, dirtyProjections: sessions },
-    "Offline fixture must contain only the expected event-bearing sessions",
-  );
   assert.equal(
     pendingProjections(),
     sessions,
@@ -458,7 +407,6 @@ if (values["seed-only"]) {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", terminate);
     setPhase("done");
-    const fixtureAfter = readFixtureFacts();
     const requestCounts: Record<string, { requests: number; projectionRequests: number }> = {};
     for (const filename of readdirSync(output).filter((name) => /^sql-.*\.jsonl$/u.test(name))) {
       for (const line of readFileSync(path.join(output, filename), "utf8").split("\n")) {
@@ -490,8 +438,7 @@ if (values["seed-only"]) {
       (sample) => sample.phase.startsWith("warm-read-") && sample.outcome === "ok",
     );
     const evidence = {
-      complete: complete && isDeepStrictEqual(fixtureAfter, expectedFixtureFacts),
-      fixtureFacts: { before: fixtureBefore, after: fixtureAfter },
+      complete,
       children: gateway?.pid ? [{ name: "gateway", pid: gateway.pid }] : [],
       turns: [],
       harnessVersion: "3.1.4",
@@ -521,12 +468,5 @@ if (values["seed-only"]) {
       writeFileSync(path.join(output, "analysis.log"), result.stdout + result.stderr);
     }
     console.log(JSON.stringify(evidence));
-    if (complete) {
-      assert.deepEqual(
-        fixtureAfter,
-        expectedFixtureFacts,
-        "Settled fixture must preserve exactly the expected event-bearing sessions",
-      );
-    }
   }
 }

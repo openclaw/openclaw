@@ -279,11 +279,14 @@ it("classifies a pending batch with bounded SQL and preserves later projection c
     }
     db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
   });
-  const statements = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  const statements = trackSqliteStatementExecutions(db, ["all", "status"], (sql) =>
+    /^update "temp"\."openclaw_transcript_index_status"\s+set\b/iu.test(sql) ? "status" : "all",
+  );
   try {
     expectStatus(maintain(db), sessionIds);
+    expect(statements.counts.status).toBe(0);
     // Classification and queue consumption are bounded commands, not commands per session.
-    expect(statements.counts.all).toBeLessThanOrEqual(16);
+    expect(statements.counts.all + statements.counts.status).toBeLessThanOrEqual(16);
   } finally {
     statements.restore();
   }
