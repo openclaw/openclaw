@@ -170,7 +170,9 @@ export function message(
 
 export async function loaded(docId = "cv_inline", parent: Element | ShadowRoot = document.body) {
   const view = mount(client, docId, parent);
-  return { view, frame: await frameFor(view) };
+  const frame = await frameFor(view);
+  await settle(view);
+  return { view, frame };
 }
 
 export function proxyReady(frame: HTMLIFrameElement) {

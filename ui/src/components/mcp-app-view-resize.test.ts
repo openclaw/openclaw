@@ -20,7 +20,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   const { createMcpAppBridgeMocks } = await import("./mcp-app-view-mocks.test-support.ts");
   const mocks = createMcpAppBridgeMocks(bridgeMocks);
   class AppBridge extends mocks.AppBridge {
-    async connect() {
+    override async connect() {
       if (bridgeMocks.earlyHeight !== undefined) {
         this.onsizechange?.({ height: bridgeMocks.earlyHeight });
       }

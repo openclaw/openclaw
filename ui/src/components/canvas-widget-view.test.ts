@@ -716,7 +716,7 @@ describe("Canvas widget view", () => {
     const { view, frame } = await loaded(`cv_prompt_${change}`);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     proxyReady(frame);
-    await Promise.resolve();
+    await settle(view);
     let onMessage!: (event: MessageEvent) => void;
     const postMessage = vi.fn();
     const close = vi.fn();

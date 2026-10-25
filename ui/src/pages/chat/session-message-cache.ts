@@ -126,7 +126,8 @@ export function createChatWidgetLayout(
     read: (key) => {
       rowRevision();
       const snapshot = current();
-      return snapshot && (key.startsWith("row:v1:") ? admitted : snapshot)?.widgetHeights?.[key];
+      const heights = (key.startsWith("row:v1:") ? admitted : snapshot)?.widgetHeights;
+      return snapshot && (heights?.[key] ?? admitted?.widgetHeights?.[key]);
     },
     write: (key, measuredHeight, rowKey, settled = false) => {
       const snapshot = current();

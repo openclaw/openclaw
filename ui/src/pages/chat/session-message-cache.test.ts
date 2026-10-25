@@ -141,6 +141,7 @@ describe("session message cache", () => {
     const layout = context.layout();
     expect(layout.read(row)).toBe(1000);
     for (let i = 0; i < 100; i++) layout.write(`canvas:other-${i}`, 48);
+    expect(layout.read("canvas:pending")).toBe(600);
     layout.write("canvas:first", 100, "widget-row", true);
     expect(layout.read(row)).toBeUndefined();
     expect(layout.write("canvas:pending", 200, "widget-row")).toBe(600);
