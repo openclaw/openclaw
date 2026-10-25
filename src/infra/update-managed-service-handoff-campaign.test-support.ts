@@ -6,6 +6,9 @@ import type { ManagedServiceManagerBoundaryResult } from "./update-managed-servi
 import { renderUpdateRunReport } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
+const failedStep = (step: string, details: object = {}) =>
+  expect.objectContaining({ step, status: "failed", ...details });
+
 export function registerManagedCampaignFailureTests(
   runManagedServiceManagerBoundary: (
     kind: "systemd",
@@ -51,13 +54,7 @@ export function registerManagedCampaignFailureTests(
       const diagnostic =
         "Package publication recovery permissions are unsafe: /fixture/.openclaw.package-activation-test (mode 0750, nlink 2).";
       const failureMessage = "Package publication is incomplete.";
-      const facts = [
-        {
-          check: "package-activation",
-          code: reason,
-          message: failureMessage,
-        },
-      ];
+      const facts = [{ check: "package-activation", code: reason, message: failureMessage }];
       const { commands, parentSignal, run, state, sentinel, sensitiveFilesRemoved } =
         await runManagedServiceManagerBoundary("systemd", {
           ledger: true,
@@ -106,18 +103,13 @@ export function registerManagedCampaignFailureTests(
         phase: "finished",
         reason,
         after: { version: "2.0.0" },
+        verification: { recovery: { serviceRestartSafe: false } },
       });
       expect(recorded.steps).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            step: "package-activation",
-            status: "failed",
-            ...(structuredFacts ? { failureFacts: facts } : {}),
-          }),
+          failedStep("package-activation", structuredFacts ? { failureFacts: facts } : {}),
           expect.objectContaining({ step: "diagnostic:package-activation", detail: diagnostic }),
-          expect.objectContaining({
-            step: "managed-service-handoff",
-            status: "failed",
+          failedStep("managed-service-handoff", {
             detail: `${reason}: ${structuredFacts ? failureMessage : diagnostic}`,
           }),
         ]),
@@ -125,7 +117,6 @@ export function registerManagedCampaignFailureTests(
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain(reason);
       expect(report).toContain(structuredFacts ? failureMessage : diagnostic);
-      expect(recorded.verification.recovery).toMatchObject({ serviceRestartSafe: false });
       expect(report).toContain(
         gatewayHealth === "ready"
           ? "Recorded recovery: verified serving 1.0.0"
@@ -253,18 +244,11 @@ export function registerManagedCampaignFailureTests(
       expect(run).toMatchObject({
         status: "failed",
         reason,
-        steps: expect.arrayContaining([
-          expect.objectContaining({
-            step: "requested",
-            status: "failed",
-          }),
-        ]),
+        steps: expect.arrayContaining([failedStep("requested")]),
       });
       if (!diagnosticFailure) {
         expect(run?.steps).toContainEqual(
-          expect.objectContaining({
-            step: "managed-service",
-            status: "failed",
+          failedStep("managed-service", {
             failureFacts: [
               expect.objectContaining({
                 check: "managed-service",

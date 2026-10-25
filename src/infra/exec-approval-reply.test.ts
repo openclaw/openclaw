@@ -229,23 +229,18 @@ describe("exec approval reply helpers", () => {
   });
 
   it("parses exec approval command text", () => {
-    expect(
-      [
-        "/approve req-1 deny",
-        "approve req-1 allow-once",
-        "/approve@clover req-1 allow-once",
-        "  /approve req-1 always",
-        "/approve req-1 allow-always",
-        "/approve req-1 maybe",
-      ].map(parseExecApprovalCommandText),
-    ).toEqual([
-      { approvalId: "req-1", decision: "deny" },
-      { approvalId: "req-1", decision: "allow-once" },
-      { approvalId: "req-1", decision: "allow-once" },
-      { approvalId: "req-1", decision: "allow-always" },
-      { approvalId: "req-1", decision: "allow-always" },
-      null,
-    ]);
+    for (const [command, decision] of [
+      ["/approve req-1 deny", "deny"],
+      ["approve req-1 allow-once", "allow-once"],
+      ["/approve@clover req-1 allow-once", "allow-once"],
+      ["  /approve req-1 always", "allow-always"],
+      ["/approve req-1 allow-always", "allow-always"],
+      ["/approve req-1 maybe", null],
+    ] as const) {
+      expect(parseExecApprovalCommandText(command)).toEqual(
+        decision ? { approvalId: "req-1", decision } : null,
+      );
+    }
   });
 
   it("builds unavailable payloads for approver DMs", () => {

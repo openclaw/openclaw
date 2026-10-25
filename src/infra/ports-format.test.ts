@@ -12,11 +12,19 @@ import {
   isExpectedGatewayListeners,
   isSameProcessSpecificIpv4WithLoopbackListeners,
 } from "./ports-format.js";
+import type { PortListener } from "./ports-types.js";
 
 const gatewayAlreadyRunningHint = `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`;
 const multipleListenersHint =
   "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const listenersAt = (addresses: string[], overrides: Partial<PortListener> = {}) =>
+  addresses.map((address) => ({
+    pid: 4242,
+    commandLine: "openclaw-gateway",
+    address,
+    ...overrides,
+  }));
 
 function writeScript(entry: string, directory: string, packageName = "openclaw"): string {
   const root = path.join(tempDirs.make("port-identity-"), directory);
@@ -118,20 +126,14 @@ describe("ports-format", () => {
   });
 
   it("treats single-process loopback dual-stack gateway listeners as benign", () => {
-    const listeners = [
-      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-      { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
-    ];
+    const listeners = listenersAt(["127.0.0.1:18789", "[::1]:18789"]);
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
     expect(buildPortHints(listeners, 18789)).toEqual([]);
   });
 
   it("treats a single-process specific IPv4 plus loopback alias as benign", () => {
-    const listeners = [
-      { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
-      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-    ];
+    const listeners = listenersAt(["100.64.0.1:18789", "127.0.0.1:18789"]);
 
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
     expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
@@ -144,52 +146,32 @@ describe("ports-format", () => {
   });
 
   it.each([
-    { addresses: ["[::ffff:127.0.0.1]:18789"], expected: true, dual: false, specific: false },
-    {
-      addresses: ["[::ffff:127.0.0.1]:18789", "[::1]:18789"],
-      expected: true,
-      dual: true,
-      specific: false,
+    [["[::ffff:127.0.0.1]:18789"], true, false, false],
+    [["[::ffff:127.0.0.1]:18789", "[::1]:18789"], true, true, false],
+    [["127.0.0.1:18789", "[::ffff:127.0.0.1]:18789"], false, false, false],
+    [["192.0.2.1:18789", "[::ffff:127.0.0.1]:18789"], true, false, true],
+  ] satisfies Array<[string[], boolean, boolean, boolean]>)(
+    "preserves mapped listener classification for %j",
+    (input, expected, dual, specific) => {
+      const orders = input.length === 1 ? [input] : [input, input.toReversed()];
+      for (const addresses of orders) {
+        const listeners = listenersAt(addresses);
+        expect(isExpectedGatewayListeners(listeners, 18789)).toBe(expected);
+        expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(dual);
+        expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "192.0.2.1")).toBe(
+          specific,
+        );
+        expect(buildPortHints(listeners, 18789)).toEqual(
+          expected ? [] : [gatewayAlreadyRunningHint, multipleListenersHint],
+        );
+      }
     },
-    {
-      addresses: ["127.0.0.1:18789", "[::ffff:127.0.0.1]:18789"],
-      expected: false,
-      dual: false,
-      specific: false,
-    },
-    {
-      addresses: ["192.0.2.1:18789", "[::ffff:127.0.0.1]:18789"],
-      expected: true,
-      dual: false,
-      specific: true,
-    },
-  ])("preserves mapped listener classification for $addresses", (entry) => {
-    const orders =
-      entry.addresses.length === 1
-        ? [entry.addresses]
-        : [entry.addresses, entry.addresses.toReversed()];
-    for (const addresses of orders) {
-      const listeners = addresses.map((address) => ({
-        pid: 4242,
-        commandLine: "openclaw-gateway",
-        address,
-      }));
-      expect(isExpectedGatewayListeners(listeners, 18789)).toBe(entry.expected);
-      expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(entry.dual);
-      expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "192.0.2.1")).toBe(
-        entry.specific,
-      );
-      expect(buildPortHints(listeners, 18789)).toEqual(
-        entry.expected ? [] : [gatewayAlreadyRunningHint, multipleListenersHint],
-      );
-    }
-  });
+  );
 
   it("checks exact alias ownership without relying on process display metadata", () => {
-    const listeners = [
-      { pid: 4242, commandLine: "opaque-wrapper", address: "100.64.0.1:18789" },
-      { pid: 4242, commandLine: "opaque-wrapper", address: "127.0.0.1:18789" },
-    ];
+    const listeners = listenersAt(["100.64.0.1:18789", "127.0.0.1:18789"], {
+      commandLine: "opaque-wrapper",
+    });
 
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(false);
     expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
@@ -200,37 +182,15 @@ describe("ports-format", () => {
   it.each([
     [
       "mixed process ids",
-      [
-        { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
-        { pid: 4243, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-      ],
+      [...listenersAt(["100.64.0.1:18789"]), ...listenersAt(["127.0.0.1:18789"], { pid: 4243 })],
     ],
-    [
-      "an IPv6 selected address",
-      [
-        { pid: 4242, commandLine: "openclaw-gateway", address: "[fd7a:115c:a1e0::1]:18789" },
-        { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-      ],
-    ],
-    [
-      "a missing loopback alias",
-      [{ pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" }],
-    ],
+    ["an IPv6 selected address", listenersAt(["[fd7a:115c:a1e0::1]:18789", "127.0.0.1:18789"])],
+    ["a missing loopback alias", listenersAt(["100.64.0.1:18789"])],
     [
       "missing process metadata",
-      [
-        { commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
-        { commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-      ],
+      listenersAt(["100.64.0.1:18789", "127.0.0.1:18789"], { pid: undefined }),
     ],
-    [
-      "an extra listener",
-      [
-        { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
-        { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-        { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
-      ],
-    ],
+    ["an extra listener", listenersAt(["100.64.0.1:18789", "127.0.0.1:18789", "[::1]:18789"])],
   ])("rejects specific-address ownership with %s", (_label, listeners) => {
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(false);
     expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
@@ -242,10 +202,7 @@ describe("ports-format", () => {
   it("keeps Gateway conflict hints for ambiguous Gateway listeners", () => {
     expect(
       buildPortHints(
-        [
-          { pid: 4242, commandLine: "openclaw-gateway", address: "0.0.0.0:18789" },
-          { pid: 4243, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
-        ],
+        [...listenersAt(["0.0.0.0:18789"]), ...listenersAt(["127.0.0.1:18789"], { pid: 4243 })],
         18789,
       ),
     ).toEqual([gatewayAlreadyRunningHint, multipleListenersHint]);
