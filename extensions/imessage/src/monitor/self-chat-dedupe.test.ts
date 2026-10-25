@@ -114,6 +114,52 @@ describe("self-chat dedupe", () => {
     ).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
+  it("drops an agent reply echo recorded under the direct chat_id reply target", async () => {
+    await rememberPersistedIMessageEcho({
+      scope: "default:chat_id:42",
+      text: "Stub reply",
+      messageId: "GUID-agent-reply",
+    });
+
+    expect(
+      await resolveEcho(
+        selfChatMessage({ id: 123710, chat_id: 42, guid: "GUID-agent-reply", text: "Stub reply" }),
+      ),
+    ).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
+  it("drops a direct reply echo that arrives before its send completes", async () => {
+    await rememberPersistedIMessageEcho({
+      scope: "default:chat_id:42",
+      text: "Stub reply",
+      ttlMs: 60_000,
+      pending: true,
+    });
+
+    expect(
+      await resolveEcho(
+        selfChatMessage({ id: 123711, chat_id: 42, guid: "GUID-agent-reply", text: "Stub reply" }),
+      ),
+    ).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
+  it("answers the other person's same-text message in an ordinary direct chat", async () => {
+    // A send that returned no message ID leaves a text-only record under the reply target.
+    await rememberPersistedIMessageEcho({ scope: "default:chat_id:42", text: "OK" });
+
+    const decision = await resolveEcho({
+      id: 123712,
+      chat_id: 42,
+      sender: "+15550001111",
+      chat_identifier: "+15550001111",
+      destination_caller_id: SELF_CHAT_HANDLE,
+      guid: "GUID-friend-ok",
+      text: "OK",
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("does not drop a real self-chat image just because a recent agent image had the same fact", async () => {
     useFakeTimersAt();
 
