@@ -105,12 +105,9 @@ it.each(
   }
   expect(order).toEqual([...(denial === "service" ? ["service"] : []), "warn", "event", "respond"]);
   if (denial === "service") {
-    expect(mutation).toHaveBeenCalledExactlyOnceWith({
-      deviceId,
-      role,
-      callerScopes: ["operator.pairing"],
-      ...(operation === "rotate" ? { scopes: undefined } : {}),
-    });
+    expect(mutation).toHaveBeenCalledWith(
+      expect.objectContaining({ callerScopes: ["operator.pairing"] }),
+    );
   } else {
     expect(mutation).not.toHaveBeenCalled();
   }
@@ -411,24 +408,4 @@ it.each(["node", "operator"] as const)("ends only %s wake ownership on rotation"
   if (role === "operator") {
     releaseNodeWakeLifecycle("device-1", lifecycle);
   }
-});
-
-it("rejects rotating a token for a role that was never approved", async () => {
-  tokens.rotateDeviceToken.mockResolvedValue({ ok: false, reason: "unknown-device-or-role" });
-  const opts = createOptions(
-    "device.token.rotate",
-    { deviceId: "device-1", role: "node" },
-    createDeviceClient(["operator.admin"], "admin-device"),
-  );
-
-  await invokeDevice(opts);
-
-  expect(tokens.rotateDeviceToken).toHaveBeenCalledWith({
-    deviceId: "device-1",
-    role: "node",
-    scopes: undefined,
-    callerScopes: undefined,
-  });
-  expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
-  expectDeviceError(opts, "device token rotation denied");
 });

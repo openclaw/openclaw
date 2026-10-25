@@ -201,45 +201,6 @@ describe("catalog list completion ownership", () => {
     }
   });
 
-  it("keeps work started before retirement owned when registration follows an await", async () => {
-    const {
-      before,
-      root,
-      lifetime,
-      run,
-      release: releaseWork,
-      finish,
-    } = admit("catalog-register-after-retirement");
-    const releaseListing = createDeferredCore();
-    const publish = vi.fn();
-    let publication: Promise<void> | undefined;
-    let signal: AbortSignal | undefined;
-    const listing = run(publish, async (params) => {
-      signal = params.signal;
-      publication = releaseWork.promise.then(() => params.onHost(host));
-      await releaseListing.promise;
-      params.waitUntil(publication);
-    });
-    try {
-      lifetime.retire();
-      releaseListing.resolve();
-      await expect(listing).resolves.toBeUndefined();
-      root!.release();
-      lifetime.finishListing();
-      expect(signal?.aborted).toBe(true);
-      expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
-      releaseWork.resolve();
-      await publication;
-      expect(publish).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(before.length);
-    } finally {
-      releaseListing.resolve();
-      releaseWork.resolve();
-      await Promise.allSettled([listing, publication]);
-      finish();
-    }
-  });
-
   it.each([
     { background: false, throws: false },
     { background: false, throws: true },
@@ -411,7 +372,13 @@ describe("catalog list completion ownership", () => {
     },
   );
 
-  it.each(["signal", "aggregate-failure", "provider-failure", "gateway-drain"] as const)(
+  it.each([
+    "signal",
+    "aggregate-failure",
+    "provider-failure",
+    "gateway-drain",
+    "late-registration",
+  ] as const)(
     "retires delivery on %s without declaring an ignoring producer finished",
     async (retirement) => {
       const controller = new AbortController();
@@ -420,10 +387,12 @@ describe("catalog list completion ownership", () => {
       ]);
       lifetime.subscribe("active", ignore, current);
       const publish = vi.fn();
+      const registration = createDeferredCore();
+      let listing: Promise<unknown> | undefined;
       let publication: Promise<void> | undefined;
       let signal: AbortSignal | undefined;
       try {
-        const listing = run(publish, async (params) => {
+        listing = run(publish, async (params) => {
           signal = params.signal;
           const completion =
             retirement === "gateway-drain"
@@ -432,11 +401,18 @@ describe("catalog list completion ownership", () => {
                 })
               : release.promise;
           publication = completion.then(() => params.onHost(host));
+          if (retirement === "late-registration") {
+            await registration.promise;
+          }
           params.waitUntil(publication);
           if (retirement === "provider-failure") {
             throw new Error("provider failed");
           }
         });
+        if (retirement === "late-registration") {
+          lifetime.retire();
+          registration.resolve();
+        }
         if (retirement === "provider-failure") {
           await expect(listing).rejects.toThrow("provider failed");
         } else {
@@ -460,9 +436,10 @@ describe("catalog list completion ownership", () => {
         expect(publish).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount()).toBe(before.length);
       } finally {
+        registration.resolve();
         release.resolve();
         lifetime.retire();
-        await publication;
+        await Promise.allSettled([listing, publication]);
         finish();
         if (retirement === "gateway-drain") {
           resetGatewayWorkAdmission();
