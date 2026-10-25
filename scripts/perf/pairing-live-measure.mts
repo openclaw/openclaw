@@ -49,15 +49,23 @@ function setPhase(next: string) {
 }
 writeFileSync(path.join(output, "phase"), phase);
 const server = createServer((req, res) => {
-  if (req.url === "/watch") watches++;
-  if (req.url === "/sent") sends++;
+  if (req.url === "/watch") {
+    watches++;
+  }
+  if (req.url === "/sent") {
+    sends++;
+  }
   res.setHeader("Content-Type", "application/json");
   if (req.url === "/next") {
     delivered += events.length;
     res.end(JSON.stringify(events.splice(0)));
-  } else res.end("{}");
+  } else {
+    res.end("{}");
+  }
 });
-await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+await new Promise<void>((resolve) => {
+  server.listen(0, "127.0.0.1", resolve);
+});
 const address = server.address();
 assert(address && typeof address !== "string");
 const bridgeUrl = `http://127.0.0.1:${address.port}`;
@@ -156,6 +164,7 @@ try {
   const nodeConfig = writeGatewayBenchConfig(nodeRoot, BASE_GATEWAY_BENCH_CONFIG, {});
   const node = launch(
     [
+      ...gatewayBenchCpuProfileArgs(output),
       "dist/entry.js",
       "node",
       "run",
@@ -177,8 +186,9 @@ try {
     assert(node.exitCode === null && node.signalCode === null, "node host exited");
     for (const kind of ["device", "node"]) {
       const list = (await call(`${kind}.pair.list`)) as { pending: { requestId: string }[] };
-      for (const entry of list.pending)
+      for (const entry of list.pending) {
         await call(`${kind}.pair.approve`, { requestId: entry.requestId });
+      }
     }
     const list = (await call("node.list")) as { nodes: { connected: boolean }[] };
     return list.nodes.some((entry) => entry.connected);
@@ -219,8 +229,12 @@ try {
         nextMessage++;
       }
       const current = read();
-      if (current.surface !== previous.surface) evidence.hostSurfaceChanges++;
-      if (current.revision !== previous.revision) evidence.heartbeatRevisionChanges++;
+      if (current.surface !== previous.surface) {
+        evidence.hostSurfaceChanges++;
+      }
+      if (current.revision !== previous.revision) {
+        evidence.heartbeatRevisionChanges++;
+      }
       previous = current;
       await delay(250);
     }
@@ -238,10 +252,13 @@ try {
   evidence.ok = true;
 } finally {
   client?.close();
-  for (const child of children.toReversed())
+  for (const child of children.toReversed()) {
     await stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2_000 });
+  }
   server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   setPhase("done");
   writeFileSync(
     path.join(output, "evidence.json"),
