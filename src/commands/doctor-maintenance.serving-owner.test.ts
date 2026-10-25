@@ -129,12 +129,10 @@ it.each([
           restoreObservation = sql.restore;
           const leaseQueries = () =>
             sql.queries.filter((query) => /from\s+"?state_leases"?/iu.test(query));
-          let atStop: string[] | undefined;
           const reachedStop = new Error("synthetic service stop boundary reached");
           boundary.stop.mockReset().mockImplementation(async (params) => {
             params.assertCurrent?.();
             if (params.phase !== "inspect") {
-              atStop = leaseQueries();
               throw reachedStop;
             }
             return {
@@ -225,9 +223,7 @@ it.each([
             await settled;
           }
           expect(boundary.stop).toHaveBeenCalledTimes(live ? 2 : 1);
-          if (live) {
-            expect(atStop).toEqual([]);
-          }
+          // Includes the service-stop boundary: no lease query may run on this thread.
           expect(leaseQueries()).toEqual([]);
           expect(fs.existsSync(databasePath)).toBe(before !== undefined);
           if (before) {
