@@ -124,9 +124,11 @@ final class NativeConversationController {
     private func installCallbacks(on bridge: NativeConversationBridge) {
         bridge.onReady = { [weak self, weak bridge] in
             guard let self, let bridge, self.bridge === bridge else { return }
+            var focusTransferredDraft = false
             if let draft = self.loadedDraft {
                 if self.viewModel.matchesWebConversationContext(draft.context), self.viewModel.input == draft.text {
                     self.viewModel.input = ""
+                    focusTransferredDraft = true
                 }
                 self.initialDraft = nil
                 self.loadedDraft = nil
@@ -147,6 +149,8 @@ final class NativeConversationController {
             self.present(visible: self.visible, active: self.active)
             if let context = self.viewModel.webConversationContext, context != self.loadedContext {
                 self.navigate(context, source: .synchronization)
+            } else if focusTransferredDraft {
+                self.focusComposer()
             }
         }
         bridge.onState = { [weak self, weak bridge] state in
@@ -227,17 +231,14 @@ final class NativeConversationController {
     }
 
     private func routeURL(baseURL: URL) -> URL? {
-        guard let context = self.viewModel.webConversationContext,
-              let path = WebChatRoute.dashboardPath(
-                  sessionKey: context.sessionKey,
-                  agentID: context.agentId)
-        else { return nil }
+        guard let context = self.viewModel.webConversationContext else { return nil }
         self.loadedContext = context
         self.loadedDraft = self.initialDraft.flatMap { $0.text(for: context) == nil ? nil : $0 }
-        return DashboardRouteMap.dashboardURL(
-            byAppendingSameAppPath: path,
-            search: WebChatRoute.dashboardSearch(draft: self.loadedDraft?.text),
-            to: baseURL)
+        return WebChatRoute.documentURL(
+            sessionKey: context.sessionKey,
+            agentID: context.agentId,
+            draft: self.loadedDraft?.text,
+            baseURL: baseURL)
     }
 
     private func navigate(
