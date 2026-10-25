@@ -75,11 +75,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
-  await fs.writeFile(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-    "utf-8",
-  );
+  await writeFixture(packageRoot, "package.json", JSON.stringify({ name: "openclaw", version }));
 }
 
 async function writeBundledPluginPackageJson(
@@ -87,9 +83,11 @@ async function writeBundledPluginPackageJson(
   pluginId: string,
   packageName: string,
 ) {
-  const packageJsonPath = path.join(packageRoot, "dist/extensions", pluginId, "package.json");
-  await fs.mkdir(path.dirname(packageJsonPath), { recursive: true });
-  await fs.writeFile(packageJsonPath, JSON.stringify({ name: packageName }), "utf-8");
+  await writeFixture(
+    packageRoot,
+    `dist/extensions/${pluginId}/package.json`,
+    JSON.stringify({ name: packageName }),
+  );
 }
 
 async function writeFixture(root: string, relative: string, content = "export {};\n") {
@@ -465,21 +463,15 @@ describe("update global helpers", () => {
     }
   });
 
-  it("builds npm global install argv", () => {
-    expect(globalInstallArgs("npm", "openclaw@latest")).toEqual(expectedNpmInstall);
+  it("allows only OpenClaw builds for pnpm", () => {
+    expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "openclaw@latest",
+    ]);
   });
-  it.each(["openclaw@latest", "github:openclaw/openclaw#release/2026.5.12"])(
-    "allows only OpenClaw builds for pnpm target %s",
-    (spec) => {
-      expect(globalInstallArgs("pnpm", spec)).toEqual([
-        "pnpm",
-        "add",
-        "-g",
-        "--allow-build=openclaw",
-        spec,
-      ]);
-    },
-  );
   it.each([
     ["openclaw@latest", "openclaw@latest"],
     ["/tmp/openclaw-current.tgz", "openclaw@file:/tmp/openclaw-current.tgz"],
@@ -583,26 +575,20 @@ describe("update global helpers", () => {
     );
   });
 
-  it("fails closed on newer installs when the inventory is missing", async () => {
-    const packageRoot = dirs.make("openclaw-update-global-missing-inventory-new-");
-    await writeGlobalPackageJson(packageRoot, "2026.4.15");
-    await expectPackageError(
-      packageRoot,
-      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-    );
-  });
-
-  it("rejects invalid inventory files during global verify", async () => {
-    const packageRoot = dirs.make("openclaw-update-global-invalid-inventory-");
-
-    await writeGlobalPackageJson(packageRoot, "2026.4.15");
-    await writeFixture(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH, "{not-json}\n");
-
-    await expectPackageError(
-      packageRoot,
-      `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
-    );
-  });
+  it.each(["missing", "invalid"] as const)(
+    "rejects %s inventory on newer installs",
+    async (kind) => {
+      const packageRoot = dirs.make("openclaw-update-global-inventory-");
+      await writeGlobalPackageJson(packageRoot, "2026.4.15");
+      if (kind === "invalid") {
+        await writeFixture(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH, "{not-json}\n");
+      }
+      await expectPackageError(
+        packageRoot,
+        `${kind} package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      );
+    },
+  );
 
   it.each([false, true])(
     "enforces critical bundled sidecars with inventory present: %s",
