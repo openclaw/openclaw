@@ -285,14 +285,24 @@ it.each([
 );
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
-  const { send, connect, ready, messages, stderr, stop } = startWorkerFixture();
+  const { send, connect, ready, messages, stderr, stop } = startWorkerFixture(true, undefined, {
+    initialWorkerCapacity: null,
+  });
   const resumeInvocation = createDeferredCore();
   const capacityPublished = createDeferredCore();
   try {
     await ready();
     expect(readyMessage(messages)).toMatchObject({
-      workerHostingEnabled: true,
+      workerHostingEnabled: false,
     });
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 2 });
     const connection = {
       ...currentGateway,
       capabilities: ["node.worker.bundleRetention.v1"],
@@ -317,10 +327,6 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
     connect(3, connection);
     await setImmediate();
-    const callbacks = fixture.start.mock.calls[0]?.[0];
-    if (!callbacks) {
-      throw new Error("runtime was not started");
-    }
     const count = messages.length;
     // Capacity is owned by the supervisor; cleanup from an old invocation can
     // notify it after reconnect without acquiring that invocation's authority.
@@ -332,7 +338,9 @@ it("publishes hosting through the app route and retires it on disconnect", async
       ),
     );
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     send({
       type: "invoke",
@@ -343,27 +351,6 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(stderr).not.toHaveBeenCalled();
   } finally {
     resumeInvocation.resolve();
-    await stop();
-  }
-});
-
-it("reports hosting only after supervisor capacity exists", async () => {
-  const { ready, messages, stop } = startWorkerFixture(true, undefined, {
-    initialWorkerCapacity: null,
-  });
-  try {
-    await ready();
-    expect(readyMessage(messages)).toMatchObject({
-      workerHostingEnabled: false,
-    });
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
-    const callbacks = fixture.start.mock.calls[0]?.[0];
-    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([
-      { type: "worker-hosting", enabled: true },
-    ]);
-  } finally {
     await stop();
   }
   expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({

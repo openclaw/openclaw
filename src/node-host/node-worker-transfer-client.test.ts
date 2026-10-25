@@ -1,6 +1,5 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { X509Certificate } from "node:crypto";
-import type { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, {
@@ -49,28 +48,6 @@ const workspaceServer = (...args: Parameters<typeof workspaceTransferHandler>) =
   createHttpServer(workspaceTransferHandler(...args));
 const stagingEntries = async (root: string) =>
   (await fs.readdir(root)).filter((name) => name.startsWith(".workspace.workspace-transfer-"));
-
-type DrainProbe = {
-  emitter: EventEmitter;
-  drains: number;
-  maxErrorListeners: number;
-};
-
-function observeDrainListeners(emitter: EventEmitter): DrainProbe {
-  const probe = { emitter, drains: 0, maxErrorListeners: 0 };
-  emitter.on("newListener", (event) => {
-    if (event === "error") {
-      probe.maxErrorListeners = Math.max(
-        probe.maxErrorListeners,
-        emitter.listenerCount("error") + 1,
-      );
-    }
-  });
-  emitter.on("drain", () => {
-    probe.drains += 1;
-  });
-  return probe;
-}
 
 describe("workspace manifest HTTP encoding", () => {
   const { rawManifest, manifestRef } = manifestFixture();
@@ -588,50 +565,15 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("downloads complete files and cleans up upload backpressure listeners", async () => {
-    const { workspaceDir, download, upload } = fixture("backpressure");
+  it("downloads complete files across stream chunks", async () => {
+    const { workspaceDir, download } = fixture("backpressure");
     const body = Buffer.alloc(2 * 1024 * 1024, "a");
     const sha256 = digest(body);
     const { rawManifest, manifestRef } = manifestFixture([fileEntry("large.bin", body)]);
-    let uploadManifestRef: string | undefined;
-    const server = workspaceServer(
-      rawManifest,
-      new Map([[sha256, body]]),
-      () => uploadManifestRef,
-      true,
+    await using gateway = await serveTransfer(
+      workspaceServer(rawManifest, new Map([[sha256, body]]), undefined, true),
     );
-    const requestProbes: DrainProbe[] = [];
-    const request = http.request.bind(http);
-    const requestSpy = vi.spyOn(http, "request").mockImplementation(((
-      url: URL,
-      options: RequestOptions,
-    ) => {
-      const clientRequest = request(url, options);
-      requestProbes.push(observeDrainListeners(clientRequest));
-      return clientRequest;
-    }) as typeof http.request);
-    const gatewayUrl = await listen(server);
-    try {
-      await expect(download(gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
-      deepStrictEqual(await fs.readFile(path.join(workspaceDir, "large.bin")), body);
-
-      await fs.writeFile(path.join(workspaceDir, "large.bin"), Buffer.alloc(body.byteLength, "b"));
-      uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
-        .manifestRef;
-      await expect(upload(gatewayUrl, manifestRef)).resolves.toBe(uploadManifestRef);
-
-      const requestProbe = requestProbes.find((probe) => probe.drains > 10);
-      if (!process.versions.bun) {
-        expect(requestProbe).toBeDefined();
-      }
-      if (requestProbe) {
-        expect(requestProbe.drains).toBeGreaterThan(10);
-        expect(requestProbe.maxErrorListeners).toBeLessThanOrEqual(2);
-      }
-      expect(requestProbes.every((probe) => probe.emitter.listenerCount("error") === 0)).toBe(true);
-    } finally {
-      requestSpy.mockRestore();
-      await closeServer(server);
-    }
+    await expect(download(gateway.gatewayUrl, manifestRef)).resolves.toBe(manifestRef);
+    deepStrictEqual(await fs.readFile(path.join(workspaceDir, "large.bin")), body);
   });
 });

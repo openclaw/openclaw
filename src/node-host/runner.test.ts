@@ -530,33 +530,13 @@ describe("runNodeHost", () => {
     expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
   });
 
-  it("exits after three identical permanent Gateway upgrade rejections", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      const rejection = upgradeError({
-        httpStatus: 403,
-        gatewayErrorType: "proxy_attribution_required",
-        gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
-      });
-      options?.onConnectError?.(rejection);
-      options?.onConnectError?.(rejection);
-      expect(client.stopAndWait).not.toHaveBeenCalled();
-      options?.onConnectError?.(rejection);
-      await vi.waitFor(() => expect(process.exitCode).toBe(1));
-      expect(client.stopAndWait).toHaveBeenCalledOnce();
-      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(stderr).toHaveBeenCalledWith(
-        "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
-      );
-    });
-  });
-
-  it("keeps retrying transient upgrade failures and resets permanent rejection streaks", async () => {
+  it("resets permanent rejection streaks on transient failures and hello, exiting only at three", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const permanentRejection = upgradeError({
         httpStatus: 403,
         gatewayErrorType: "proxy_attribution_required",
+        gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
       });
       const rejectTwice = () => {
         options?.onConnectError?.(permanentRejection);
@@ -581,6 +561,13 @@ describe("runNodeHost", () => {
       rejectTwice();
       expect(client.stopAndWait).not.toHaveBeenCalled();
       expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
+      options?.onConnectError?.(permanentRejection);
+      await vi.waitFor(() => expect(process.exitCode).toBe(1));
+      expect(client.stopAndWait).toHaveBeenCalledOnce();
+      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(
+        "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
+      );
     });
   });
 
@@ -624,20 +611,6 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("publishes the latest inventory queued during a failed optional publication", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initial = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise);
-      receiveHello(options, 3);
-      await expectPublications(client, 1);
-      changeTools([]);
-      initial.reject(new Error("temporary publish failure"));
-      await vi.waitFor(() =>
-        expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, { tools: [] }),
-      );
-    });
-  });
-
   it("deduplicates inventory when the desired value returns to the in-flight value", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const initialPluginTools = [...mocks.nodePluginTools];
@@ -676,29 +649,33 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("retains the latest inventory when it returns to a previously rejected value", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initialPluginTools = [...mocks.nodePluginTools];
-      const initial = createDeferred<unknown>();
-      const second = createDeferred<unknown>();
-      await beginPublication(client, options, initial.promise, second.promise);
-      changeTools([]);
-      initial.reject(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "temporary validation failure",
-        }),
-      );
-      await expectPublications(client, 2);
-      changeTools(initialPluginTools);
-      second.resolve({});
-      await vi.waitFor(() => {
-        const publications = getPublications(client);
-        expect(publications).toHaveLength(3);
-        expect(publications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
+  it.each([
+    [3, new Error("temporary publish failure")],
+    [4, new GatewayClientRequestError({ code: "INVALID_REQUEST", message: "validation failure" })],
+  ] as const)(
+    "retains queued inventory across a v%s publication failure: %s",
+    async (protocol, error) => {
+      await withReadyNodeHost(async ({ client, options }) => {
+        const initialPluginTools = [...mocks.nodePluginTools];
+        const initial = createDeferred<unknown>();
+        const second = createDeferred<unknown>();
+        queuePluginResponses(client, initial.promise, second.promise);
+        receiveHello(options, protocol);
+        await expectPublications(client, 1);
+        changeTools([]);
+        initial.reject(error);
+        await expectPublications(client, 2);
+        expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, { tools: [] });
+        changeTools(initialPluginTools);
+        second.resolve({});
+        await vi.waitFor(() => {
+          const publications = getPublications(client);
+          expect(publications).toHaveLength(3);
+          expect(publications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
+        });
       });
-    });
-  });
+    },
+  );
 
   it("retires in-flight inventory before manifest reconnect", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
