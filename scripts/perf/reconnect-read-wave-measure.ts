@@ -65,7 +65,6 @@ const { values } = parseArgs({
     side: { type: "string" },
     retention: { type: "boolean", default: false },
     "list-stress": { type: "boolean", default: false },
-    "stress-seconds": { type: "string", default: "30" },
     profile: { type: "boolean", default: false },
     entry: { type: "string", default: "dist/entry.js" },
   },
@@ -844,7 +843,6 @@ async function runController() {
         request: rpc,
         command,
         output,
-        durationMs: integer(values["stress-seconds"], "--stress-seconds", 10) * 1000,
         profile: values.profile,
         retention: values.retention,
       });
