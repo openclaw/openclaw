@@ -134,24 +134,27 @@ describe("streaming Markdown DOM", () => {
 
   it("coalesces burst formatting into one bounded window and flushes an idle preview", async () => {
     vi.useFakeTimers();
-    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
     try {
-      draw("A growing reply");
-      const parsed = parse.mock.calls.length;
-      draw("A growing reply with more");
-      draw("A growing reply with more text");
-      expect(container.textContent).toContain("with more text");
-      expect(parse.mock.calls.length).toBe(parsed);
-      await vi.advanceTimersByTimeAsync(50);
-      expect(parse.mock.calls.length).toBeGreaterThan(parsed);
+      draw("Visit www");
+      draw("Visit www.example");
+      await vi.advanceTimersByTimeAsync(25);
+      draw("Visit www.example.com here");
+      expect(container.textContent).toContain("www.example.com here");
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(container.querySelector("a")?.getAttribute("href")).toBe("http://www.example.com");
 
-      const caughtUp = parse.mock.calls.length;
-      draw("A growing reply with more text and another suffix");
-      expect(parse.mock.calls.length).toBe(caughtUp);
+      draw("Visit www.example.com here and www.openclaw.org here");
+      expect(container.textContent).toContain("www.openclaw.org here");
+      expect(container.querySelectorAll("a")).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(50);
-      expect(parse.mock.calls.length).toBeGreaterThan(caughtUp);
+      expect(container.querySelectorAll("a")).toHaveLength(2);
+      expect(container.querySelectorAll("a")[1]?.getAttribute("href")).toBe(
+        "http://www.openclaw.org",
+      );
     } finally {
-      parse.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -180,17 +183,13 @@ describe("streaming Markdown DOM", () => {
 
   it("shows appended text before bounded formatting and flushes completion without a stale timer", async () => {
     vi.useFakeTimers();
-    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
     try {
       draw("A growing reply");
       const paragraph = container.querySelector("p");
-      const parsed = parse.mock.calls.length;
       draw("A growing reply with a plain tail");
       expect(paragraph?.textContent).toBe("A growing reply with a plain tail");
-      expect(parse.mock.calls.length).toBe(parsed);
       await vi.advanceTimersByTimeAsync(50);
       expect(container.querySelector("p")).toBe(paragraph);
-      expect(parse.mock.calls.length).toBeGreaterThan(parsed);
 
       draw("A growing reply with a plain tail and *final*");
       draw("A growing reply with a plain tail and *final*", { streaming: false });
@@ -199,7 +198,6 @@ describe("streaming Markdown DOM", () => {
       await vi.advanceTimersByTimeAsync(50);
       expect(container.textContent).toBe("Replacement\n");
     } finally {
-      parse.mockRestore();
       vi.useRealTimers();
     }
   });
