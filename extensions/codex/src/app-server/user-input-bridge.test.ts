@@ -22,12 +22,7 @@ function requestParams(overrides: Record<string, unknown> = {}, secret = false) 
         question: secret ? "Enter token" : "Pick a mode",
         isOther: secret,
         isSecret: secret,
-        options: secret
-          ? null
-          : [
-              { label: "Fast", description: "Use less reasoning" },
-              { label: "Deep", description: "Use more reasoning" },
-            ],
+        options: secret ? null : [{ label: "Deep", description: "Use more reasoning" }],
       },
     ],
     ...overrides,
@@ -72,22 +67,27 @@ function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
 }
 
 describe("Codex app-server user input bridge", () => {
-  it("cancels the gateway record on run abort", async () => {
+  it.each([false, true])("cancels the gateway record (already resolved: %s)", async (resolved) => {
     const controller = new AbortController();
-    const { prompt, gateway, onOrdinaryResponse, bridge } = setup({ signal: controller.signal });
-    const response = bridge.handleRequest({ id: "input-abort", params: requestParams() });
-    await prompt();
-    const lateAnswer = gateway.call(
-      "question.resolve",
-      {},
-      { answers: { answers: { choice: ["Late answer"] } } },
+    const { prompt, gateway, onOrdinaryResponse, bridge } = setup({
+      signal: resolved ? undefined : controller.signal,
+    });
+    const response = bridge.handleRequest(
+      { id: resolved ? 42 : "input-abort", params: requestParams() },
+      resolved ? controller.signal : undefined,
     );
-    controller.abort();
+    await prompt();
+    const lateAnswer =
+      !resolved &&
+      gateway.call("question.resolve", {}, { answers: { answers: { choice: ["Late answer"] } } });
+    controller.abort(resolved ? new CodexServerRequestResolvedError() : undefined);
     await lateAnswer;
     const returned = await response;
     expect(returned).toEqual({ answers: {} });
-    expect(onOrdinaryResponse).toHaveBeenCalledOnce();
-    expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
+    expect(onOrdinaryResponse).toHaveBeenCalledTimes(resolved ? 0 : 1);
+    if (!resolved) {
+      expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(returned);
+    }
     expectCancelled(gateway);
   });
 
@@ -129,35 +129,34 @@ describe("Codex app-server user input bridge", () => {
     expect(params.onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("keeps secret questions on the warned text-only path", async () => {
-    const { prompt, gateway, onOrdinaryResponse, request, answerText } = setup();
-    const response = request("input-secret", requestParams({}, true));
-    const payload = await prompt();
-    expect(payload.text).toContain("This channel may show your reply");
-    expect(payload.channelData).toBeUndefined();
-    expect(gateway.calls).toHaveLength(0);
-    await expect(answerText("private")).resolves.toBe(true);
-    await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
-    expect(onOrdinaryResponse).not.toHaveBeenCalled();
-  });
-
-  it("requires isSecret to be an own input property", async () => {
-    const { prompt, gateway, request, answerText } = setup();
-    const question = Object.assign(Object.create({ isSecret: true }), {
-      id: "token",
-      header: "Token",
-      question: "Enter token",
-      isOther: true,
-      options: null,
-    });
-
-    const response = request("input-inherited-secret", requestParams({ questions: [question] }));
-    const payload = await prompt();
-    expect(gateway.calls.some((entry) => entry.method === "question.request")).toBe(true);
-    expect(payload.text).not.toContain("This channel may show your reply");
-    await answerText("public");
-    await expect(response).resolves.toEqual({ answers: { token: { answers: ["public"] } } });
-  });
+  it.each([true, false])(
+    "uses warned text-only input only for own isSecret (%s)",
+    async (secret) => {
+      const { prompt, gateway, onOrdinaryResponse, request, answerText } = setup();
+      const { isSecret, ...question } = requestParams({}, true).questions[0]!;
+      const response = request(
+        "input-secret",
+        requestParams({
+          questions: [
+            secret
+              ? { ...question, isSecret }
+              : Object.assign(Object.create({ isSecret }), question),
+          ],
+        }),
+      );
+      const payload = await prompt();
+      expect(payload.text?.includes("This channel may show your reply")).toBe(secret);
+      if (secret) {
+        expect(payload.channelData).toBeUndefined();
+        expect(gateway.calls).toHaveLength(0);
+      } else {
+        expect(gateway.calls.some((entry) => entry.method === "question.request")).toBe(true);
+      }
+      await expect(answerText("private")).resolves.toBe(true);
+      await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
+      expect(onOrdinaryResponse).toHaveBeenCalledTimes(secret ? 0 : 1);
+    },
+  );
 
   it("queues a replacement secret request when an earlier prompt later fails", async () => {
     const firstDelivery = createDeferred<void>();
@@ -179,18 +178,6 @@ describe("Codex app-server user input bridge", () => {
     await expect(replacement).resolves.toEqual({
       answers: { token: { answers: ["replacement secret"] } },
     });
-  });
-
-  it("dismisses a resolved inbound request without recording an invented empty answer", async () => {
-    const controller = new AbortController();
-    const { prompt, gateway, onOrdinaryResponse, bridge } = setup();
-    const response = bridge.handleRequest({ id: 42, params: requestParams() }, controller.signal);
-    await prompt();
-    controller.abort(new CodexServerRequestResolvedError());
-
-    await expect(response).resolves.toEqual({ answers: {} });
-    expect(onOrdinaryResponse).not.toHaveBeenCalled();
-    expectCancelled(gateway);
   });
 
   it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {
