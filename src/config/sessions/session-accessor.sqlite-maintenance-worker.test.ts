@@ -106,6 +106,8 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       }
       const planningPhases: string[] = [];
       const workerThreadIds: number[] = [];
+      const writeOutcomes: { kind: "committed" | "not-committed"; admitted: boolean }[] = [];
+      let writeAdmitted = false;
       let foregroundProgressed = false;
       observeSessionMaintenancePlanningWorker({
         async afterPrepare() {
@@ -123,8 +125,12 @@ it.for(["cold", "warm-cap", "removal"] as const)(
           }
         },
         beforeExecute: () => planningPhases.push("planning"),
+        beforeAdmission: (request) => {
+          writeAdmitted ||= request.stage === "transaction";
+        },
         afterExecute: (result) => {
           workerThreadIds.push(result.workerThreadId);
+          writeOutcomes.push({ kind: result.kind, admitted: writeAdmitted });
         },
       });
       const completed = observeMaintenance();
@@ -165,6 +171,9 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       }
       expect(planningPhases).toEqual(["prepared", "planning"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
+      expect(writeOutcomes).toEqual([
+        { kind: remove ? "committed" : "not-committed", admitted: remove },
+      ]);
       const expectedLabel = scenario === "warm-cap" ? "foreground progressed" : "updated";
       expect(loadSessionEntry(active)?.label).toBe(expectedLabel);
       if (scenario === "warm-cap") {
