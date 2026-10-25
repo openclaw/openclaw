@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes as Codes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import * as recovery from "../app/stale-chunk-reload.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { gatePart, mountFailure } from "./login-gate.test-support.ts";
@@ -57,6 +58,14 @@ it("waits through a failed HEAD handoff probe and admits only one click", async 
   expect(reload).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(probe).toHaveBeenCalledTimes(2);
+  expect(probe).toHaveBeenCalledWith(
+    new URL("/index.html", window.location.href).href,
+    expect.objectContaining({
+      method: "HEAD",
+      cache: "no-store",
+      signal: expect.any(AbortSignal),
+    }),
+  );
   expect(reload).toHaveBeenCalledOnce();
 });
 it.each(["bounded wait", "rejected retry"])("returns to Retry after %s", async (failure) => {
@@ -169,4 +178,37 @@ it("keeps a replacement attempt when the previous probe settles", async () => {
   expectAttempt().toHaveResolvedWith(false);
   expectAttempt().toHaveResolvedWith(true);
   expect(probe).toHaveBeenCalledOnce();
+});
+it.each(["automatic first", "manual first"])("navigates once with %s", async (order) => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const finish = deferredProbe();
+  const element = await mountMismatch();
+  const deps = { storage: sessionStorage, buildId: "new-build", reload };
+  let automatic: Promise<boolean>;
+  if (order === "automatic first") {
+    automatic = recovery.scheduleStaleChunkReload(deps);
+    refresh(element).click();
+  } else {
+    refresh(element).click();
+    automatic = recovery.scheduleStaleChunkReload(deps);
+  }
+  finish();
+  await automatic;
+  await vi.waitFor(() => expectAttempt().toHaveResolved());
+  expect(probe).toHaveBeenCalledOnce();
+  expect(reload).toHaveBeenCalledOnce();
+});
+it("rechecks unsaved-input guards after the probe without discarding data", async () => {
+  let unsaved = false;
+  const explain = vi.fn();
+  const release = registerControlUiReloadGuard(() => !unsaved, explain);
+  try {
+    const { finish } = await pendingRefresh();
+    unsaved = true;
+    finish();
+    await expectCancelled();
+    expect(explain).toHaveBeenCalled();
+  } finally {
+    release();
+  }
 });
