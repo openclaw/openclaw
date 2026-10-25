@@ -294,12 +294,15 @@ it("shows native desktop state and reconciles Keep computer awake with the nativ
   expect(page.textContent).not.toContain("Keep computer awake");
 });
 
-it.each([deviceTag, permissionsTag])("waits for the initial native snapshot on %s", async (tag) => {
-  const { capability } = createCapability(null);
-  const waitingPage = await mount(tag, capability);
-  expect(waitingPage.textContent).toContain("Waiting for settings from the app");
-  expect(waitingPage.querySelector("input.settings-toggle__input")).toBeNull();
-});
+it.each([deviceTag, permissionsTag] as const)(
+  "waits for the initial native snapshot on %s",
+  async (tag) => {
+    const { capability } = createCapability(null);
+    const waitingPage = await mount(tag, capability);
+    expect(waitingPage.textContent).toContain("Waiting for settings from the app");
+    expect(waitingPage.querySelector("input.settings-toggle__input")).toBeNull();
+  },
+);
 
 it("gates unavailable native controls and delegates Mac panels", async () => {
   const snapshot = createNativeDeviceSettingsSnapshot();
