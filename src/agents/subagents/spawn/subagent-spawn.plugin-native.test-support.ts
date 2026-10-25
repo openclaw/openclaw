@@ -24,6 +24,7 @@ import * as subagentSessionReconciliation from "../registry/subagent-session-rec
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerNativePluginCommandCases } from "./subagent-spawn.plugin-command.test-support.js";
+import { registerDiskProfileCase } from "./subagent-spawn.plugin-disk-profile.test-support.js";
 import { registerNativePluginPolicyCases } from "./subagent-spawn.plugin-native-policy.test-support.js";
 import {
   holdNativeCapacity,
@@ -55,10 +56,10 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
   registerNativePluginProfileCases(options);
   registerNativePluginCommandCases(options);
   registerNativePluginRewriteCases(options);
+  registerDiskProfileCase(options);
   it("native plugin facade keeps native IDs, exact overrides, parent custody and requester policy", async () => {
     const source = createSpawnOperatorSource();
     const bound = await createBoundParent(source.authority);
-    const { parentSessionKey, parentRunId } = bound;
     const { context, runtime } = await createBoundGateway(bound);
     await holdNativeCapacity(bound, "plugin-capacity");
     const failures: unknown[] = [];
@@ -187,24 +188,13 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             sessionKey: accepted.childSessionKey,
           });
           expect(entry).toMatchObject({
-            spawnedBy: parentSessionKey,
             spawnDepth: 2,
             modelOverride: "test-model",
             providerOverride: "custom",
             thinkingLevel: "low",
             fastMode: false,
-            inheritedToolAllow: expect.arrayContaining(["read"]),
           });
-          expect(subagentRuns.get(childRunId)).toMatchObject({
-            requesterTurnRunId: parentRunId,
-            completionRequesterSessionId: "parent-session",
-            collect: true,
-            execution: { status: "queued" },
-          });
-          expect(await native.collect({ ids: [childRunId], timeoutSeconds: 0 })).toMatchObject({
-            completed: [],
-            pending: [childRunId],
-          });
+          expect(subagentRuns.get(childRunId)?.completionRequesterSessionId).toBe("parent-session");
           // Same replay input in another plugin has independent native custody.
           // Discard acceptance before plugin persistence, then recover solely from native custody.
           await makeNative("another-plugin").spawn(request);

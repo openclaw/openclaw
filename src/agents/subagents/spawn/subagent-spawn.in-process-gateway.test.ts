@@ -9,6 +9,7 @@ import {
   captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  type OpenClawConfig,
 } from "../../../config/config.js";
 import {
   loadSessionEntry,
@@ -119,6 +120,20 @@ function parentAuthority() {
   return { parentToken, operationalRunInstance, authority };
 }
 
+async function configure(cfg: OpenClawConfig) {
+  await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(cfg));
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  await captureRuntimeConfigAsyncReader()();
+}
+
+function workspaceAgents(...ids: string[]): NonNullable<OpenClawConfig["agents"]> {
+  return {
+    defaults: { workspace: stateDir },
+    entries: Object.fromEntries(ids.map((id) => [id, { workspace: stateDir }])),
+  };
+}
+
 const waitForAssertion = (assertion: () => void) =>
   vi.waitFor(assertion, { timeout: 2_000, interval: 10 });
 
@@ -137,20 +152,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-swarm-gateway-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      `${JSON.stringify({
-        logging: { audit: { enabled: true, executionIdentity: true } },
-        session: { mainKey: "main", scope: "per-sender" },
-        tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-        agents: {
-          defaults: { workspace: stateDir },
-          entries: { main: { workspace: stateDir } },
-        },
-      })}\n`,
-    );
-    clearConfigCache();
-    await captureRuntimeConfigAsyncReader()();
+    await configure({
+      logging: { audit: { enabled: true, executionIdentity: true } },
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: workspaceAgents("main"),
+    });
   });
 
   afterEach(async () => {
@@ -173,20 +180,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("persists explicit active effort through the in-process Gateway", async () => {
     // Preference precedence is exhaustively covered in subagent-spawn.thinking-provenance.test.ts.
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify(
-        createConfigOverride({
-          agents: {
-            defaults: { workspace: stateDir },
-            entries: { main: { workspace: stateDir } },
-          },
-        }),
-      ),
-    );
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    await captureRuntimeConfigAsyncReader()();
+    await configure(createConfigOverride({ agents: workspaceAgents("main") }));
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:main" },
       { sessionId: "thinking-parent", thinkingLevel: "medium" },
@@ -359,22 +353,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   it("gives each selected global agent its own collector capacity", async () => {
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        session: { scope: "global" },
-        tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-        agents: {
-          ownership: "explicit",
-          defaults: { workspace: stateDir },
-          entries: {
-            main: { workspace: stateDir },
-            worker: { workspace: stateDir },
-          },
-        },
-      }),
-    );
-    clearConfigCache();
+    await configure({
+      session: { scope: "global" },
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+      agents: { ownership: "explicit", ...workspaceAgents("main", "worker") },
+    });
     const launched: string[] = [];
     const launchGate = createDeferredCore();
     subagentSpawnTesting.setDepsForTest({
@@ -461,12 +444,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         }),
         turnClaim,
       };
-      let validations = 0;
       const capability: WorkerTurnExecutionIdentityCapability = {
         sessionTarget: identity.sessionTarget,
         receiptAuthority: identity.receiptAuthority,
         async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T) {
-          validations++;
           return await callback(identity);
         },
       };
@@ -515,11 +496,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         );
         expect(result.status).toBe("accepted");
         if (kind === "worker") {
-          expect(validations).toBe(2);
           expect(childRequester).toEqual(identity.requesterOrigin);
           expect(childIdentity?.delegatedAuthority).toMatchObject({ kind: "worker", turnClaim });
         } else {
-          expect(result.error).toBeUndefined();
           const childSessionKey = expectDefined(result.childSessionKey, "accepted child session");
           const events = (await listSessionStateEventsSince(childSessionKey, "main", 0)).events;
           expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);

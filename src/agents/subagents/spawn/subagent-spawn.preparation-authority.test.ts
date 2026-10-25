@@ -14,6 +14,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { forkSessionEntryFromParent } from "../../../auto-reply/reply/session-fork.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
+  appendTranscriptMessage,
   listSessionChildEntriesReadOnly,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -101,6 +102,31 @@ function finalizeParentTools(bound: BoundParent, tools: AnyAgentTool[]) {
   });
 }
 
+function spawnDispatch(
+  gateway: ReturnType<typeof createPreparationGateway>,
+  dispatch: (params: Record<string, unknown>) => unknown | Promise<unknown>,
+  allowAbort = false,
+) {
+  return async <T>(
+    method: string,
+    params: Record<string, unknown>,
+    options?: DispatchGatewayMethodInProcessOptions,
+  ) => {
+    if (method === "agent") {
+      await dispatch(params);
+      return { runId: params.idempotencyKey, status: "accepted" } as T;
+    }
+    if (method !== "sessions.delete" && !(allowAbort && method === "chat.abort")) {
+      throw new Error(`Unexpected spawn RPC ${method}`);
+    }
+    return await gateway.dispatchSessionMethod<T>(method, params, {
+      timeoutMs: options?.timeoutMs,
+      signal: options?.signal,
+      assertCurrent: options?.sessionMutationCommitGuard,
+    });
+  };
+}
+
 function createPreparationGateway(context: BoundParent["context"], deleted: string[]) {
   const gatewayContext = context as unknown as GatewayRequestContext;
   const recovery = gatewayContext.recoveryRuntime;
@@ -169,36 +195,15 @@ describe("pending spawn preparation authority", () => {
       const bindingFixture = installSpawnThreadBindingFixture();
       const bound = await createBoundParent();
       const { cfg, storePath, context, admission, parent, admitted } = bound;
-      await replaceTranscriptEvents(
-        { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
-        [
-          {
-            type: "session",
-            version: 3,
-            id: "parent-session",
-            timestamp: "2026-09-05T00:00:00Z",
-            cwd: fixture.stateDir,
-          },
-          {
-            type: "message",
-            id: "parent-message",
-            parentId: null,
-            timestamp: "2026-09-05T00:00:01Z",
-            message: { role: "user", content: "synthetic parent context" },
-          },
-          {
-            type: "message",
-            id: "parent-answer",
-            parentId: "parent-message",
-            timestamp: "2026-09-05T00:00:02Z",
-            message: {
-              role: "assistant",
-              content: "synthetic completed reply",
-              stopReason: "stop",
-            },
-          },
-        ],
-      );
+      for (const message of [
+        { role: "user", content: "synthetic parent context" },
+        { role: "assistant", content: "synthetic completed reply", stopReason: "stop" },
+      ]) {
+        await appendTranscriptMessage(
+          { agentId: "main", sessionId: "parent-session", sessionKey: parentSessionKey, storePath },
+          { message },
+        );
+      }
       const writerGate = createEnteredGate();
       const forkQueued = createDeferred<{ childSessionKey: string; initialSessionId: string }>();
       const forkSettled = createDeferred<
@@ -236,24 +241,7 @@ describe("pending spawn preparation authority", () => {
           }
         },
         resolveContextEngine: async () => new LegacyContextEngine(),
-        dispatchGatewayMethodInProcess: async <T>(
-          method: string,
-          params: Record<string, unknown>,
-          options?: DispatchGatewayMethodInProcessOptions,
-        ) => {
-          if (method === "agent") {
-            dispatch(params);
-            return { runId: params.idempotencyKey, status: "accepted" } as T;
-          }
-          if (method !== "sessions.delete") {
-            throw new Error(`Unexpected spawn RPC ${method}`);
-          }
-          return await gateway.dispatchSessionMethod<T>(method, params, {
-            timeoutMs: options?.timeoutMs,
-            signal: options?.signal,
-            assertCurrent: options?.sessionMutationCommitGuard,
-          });
-        },
+        dispatchGatewayMethodInProcess: spawnDispatch(gateway, dispatch),
       });
       const [tool] = finalizeParentTools(bound, [
         createSessionsSpawnTool({
@@ -272,10 +260,7 @@ describe("pending spawn preparation authority", () => {
           attachments: [{ name: "synthetic.txt", content: "synthetic attachment" }],
           expectsCompletionMessage: false,
         }),
-      ).then(
-        (value) => value,
-        (error: unknown) => error,
-      );
+      ).catch((error: unknown) => error);
       try {
         const { childSessionKey, initialSessionId } = await Promise.race([
           forkQueued.promise,
@@ -454,12 +439,9 @@ describe("pending spawn preparation authority", () => {
         }
         return Object.assign(new LegacyContextEngine(), { prepareSubagentSpawn: prepare });
       },
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-        options?: DispatchGatewayMethodInProcessOptions,
-      ) => {
-        if (method === "agent") {
+      dispatchGatewayMethodInProcess: spawnDispatch(
+        gateway,
+        async (params) => {
           agentDispatch(params);
           if (closure === "native acceptance") {
             const childSessionKey = params.sessionKey as string;
@@ -480,17 +462,9 @@ describe("pending spawn preparation authority", () => {
             acceptedEntered.resolve();
             await acceptedGate.promise;
           }
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
-        }
-        if (method !== "chat.abort" && method !== "sessions.delete") {
-          throw new Error(`Unexpected spawn RPC ${method}`);
-        }
-        return await gateway.dispatchSessionMethod<T>(method, params, {
-          timeoutMs: options?.timeoutMs,
-          signal: options?.signal,
-          assertCurrent: options?.sessionMutationCommitGuard,
-        });
-      },
+        },
+        true,
+      ),
     });
     const invocationAbort = new AbortController();
     const host = closure.startsWith("projected")
@@ -514,15 +488,11 @@ describe("pending spawn preparation authority", () => {
       signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
     });
     let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
+    const observed = copyAgentToolMetadata(source, {
       ...source,
       execute: (...args) => {
         const pending = source.execute!(...args);
-        // Observe, but still forward the real source promise through the native wrappers.
-        forwarded = pending.then(
-          (result) => result,
-          (error: unknown) => error,
-        );
+        forwarded = pending.catch((error: unknown) => error);
         return pending;
       },
     });
@@ -551,10 +521,7 @@ describe("pending spawn preparation authority", () => {
         closure === "native call signal" ? invocationAbort.signal : undefined,
       ),
     );
-    const wrappedOutcome = wrapped.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
+    const wrappedOutcome = wrapped.catch((error: unknown) => error);
     try {
       // A rejected spawn never enters preparation; report it instead of waiting for the test timeout.
       const childSessionKey = await awaitGateBeforeSettlement(

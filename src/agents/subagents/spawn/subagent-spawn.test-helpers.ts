@@ -1,5 +1,3 @@
-// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
-// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
 import { expect, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
@@ -225,16 +223,12 @@ export function throwBoundFailures(failures: unknown[]): void {
   }
 }
 
-/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
 ) {
   return {
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
+    session: { mainKey: "main", scope: "per-sender" },
     tools: {
       sessions_spawn: {
         attachments: {
@@ -245,11 +239,7 @@ export function createSubagentSpawnTestConfig(
         },
       },
     },
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-      },
-    },
+    agents: { defaults: { workspace: workspaceDir } },
     ...overrides,
   };
 }
@@ -257,22 +247,16 @@ export function createSubagentSpawnTestConfig(
 export function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
     agents: {
-      defaults: {
-        workspace: os.tmpdir(),
-      },
+      defaults: { workspace: os.tmpdir() },
       entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });
 }
 
-/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
-    if (opts.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (opts.method === "sessions.delete") {
+    if (opts.method === "sessions.patch" || opts.method === "sessions.delete") {
       return { ok: true };
     }
     if (opts.method === "agent") {
@@ -282,17 +266,12 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-function identityDeliveryContext(value: unknown) {
-  return value;
-}
-
 async function mutateEmptyStore(_storePath: string, mutator: SessionStoreMutator) {
   const store: SessionStore = {};
   await mutator(store);
   return store;
 }
 
-/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -315,7 +294,6 @@ export function installSessionStoreCaptureMock(
   );
 }
 
-/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -329,13 +307,13 @@ export function expectPersistedRuntimeModel(params: {
   } else {
     expect(persistedKey).toMatch(params.sessionKey);
   }
-  expect(persistedEntry?.modelProvider).toBe(params.provider);
-  expect(persistedEntry?.model).toBe(params.model);
-  expect(persistedEntry?.providerOverride).toBe(params.provider);
-  expect(persistedEntry?.modelOverride).toBe(params.model);
-  if (params.overrideSource) {
-    expect(persistedEntry?.modelOverrideSource).toBe(params.overrideSource);
-  }
+  expect(persistedEntry).toMatchObject({
+    modelProvider: params.provider,
+    model: params.model,
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    ...(params.overrideSource ? { modelOverrideSource: params.overrideSource } : {}),
+  });
 }
 
 type SpawnTestConversation = {
@@ -399,8 +377,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
-    // The helper rewires imports with vi.doMock, so each test starts from a
-    // fresh module graph unless explicitly sharing mocks.
+    // vi.doMock requires a fresh graph unless the fixture explicitly shares mocks.
     vi.resetModules();
   }
 
@@ -504,7 +481,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       storeKeys: [targetParams.key],
       store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
-    normalizeDeliveryContext: identityDeliveryContext,
+    normalizeDeliveryContext: (value: unknown) => value,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
