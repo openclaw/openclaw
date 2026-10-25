@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { pendingSessionsYield } from "../chat-sessions-yield.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
-import {
-  message as historyMessage,
-  nativeMessage,
-  text,
-} from "../chat-thread-fixtures.test-support.ts";
 import { createProps } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
+function makeMessage(
+  id: string,
+  seq: number,
+  fields: { role?: string; timestamp?: number; runId?: string; [key: string]: unknown } = {},
+) {
+  const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
+  return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
+}
 const chatItems = (overrides: Partial<BuildChatItemsProps>) =>
   buildChatItems(createProps({ sessionKey, ...overrides }));
 type Chain = ReturnType<typeof projectTranscriptChain>;
@@ -36,37 +39,50 @@ const messagesIn = (items: readonly Parameters<typeof chatItemGroups>[0][]) =>
   items.flatMap(chatItemGroups).flatMap((group) => group.messages.map(({ message }) => message));
 
 describe("PR preparation handoff", () => {
-  const prUrl = "https://github.com/example/app/pull/1";
   const prepareCall = {
     type: "toolCall",
     id: "prepare-call",
     name: "github_publish",
-    arguments: { action: "prepare_pr", pullRequestUrl: prUrl },
+    arguments: { action: "prepare_pr", pullRequestUrl: "https://github.com/example/app/pull/1" },
   };
   const receipt = { status: "started", async: true, yielded: true };
-  const preparing = text("Preparing your PR.");
-  const ready = `PR preparation result: ${JSON.stringify({ status: "prepared", url: prUrl })}`;
-  const preparedMessage = (role: string, content: unknown, timestamp: number, extra = {}) =>
-    historyMessage(role, content, timestamp, { runId: "prepare-run", ...extra });
   const messages = [
-    nativeMessage("user", "Prepare my PR.", 1_000, {
-      id: "prepare-request",
-      seq: 1,
+    makeMessage("prepare-request", 1, {
+      role: "user",
       runId: "prepare-run",
+      content: "Prepare my PR.",
+      timestamp: 1_000,
     }),
-    preparedMessage("assistant", [preparing, prepareCall], 2_000, { stopReason: "toolUse" }),
-    preparedMessage("toolResult", [text(JSON.stringify(receipt))], 2_001, {
+    {
+      role: "assistant",
+      runId: "prepare-run",
+      timestamp: 2_000,
+      stopReason: "toolUse",
+      content: [{ type: "text", text: "Preparing your PR." }, prepareCall],
+    },
+    {
+      role: "toolResult",
+      runId: "prepare-run",
+      timestamp: 2_001,
       toolCallId: "prepare-call",
       toolName: "github_publish",
-    }),
-    historyMessage("user", `[System] ${ready}`, 3_000, {
+      content: [{ type: "text", text: JSON.stringify(receipt) }],
+    },
+    {
+      role: "user",
       runId: "resume-run",
+      timestamp: 3_000,
       provenance: { kind: "internal_system", sourceTool: "plugin" },
-    }),
-    historyMessage("assistant", "Your PR is ready for work.", 4_000, {
+      content:
+        '[System] PR preparation result: {"status":"prepared","url":"https://github.com/example/app/pull/1"}',
+    },
+    {
+      role: "assistant",
       runId: "resume-run",
+      timestamp: 4_000,
       stopReason: "stop",
-    }),
+      content: "Your PR is ready for work.",
+    },
   ];
 
   it.each(
@@ -83,7 +99,7 @@ describe("PR preparation handoff", () => {
               {
                 ...messages[1],
                 content: [
-                  preparing,
+                  { type: "text", text: "Preparing your PR." },
                   { type: "toolCall", id: "exec-call", name: "exec", arguments: {} },
                 ],
               },
@@ -117,7 +133,7 @@ describe("PR preparation handoff", () => {
             ]
           : [];
       const persisted = source === "live" ? [...entries.slice(0, 2), ...entries.slice(3)] : entries;
-      const chain = projectHistory(persisted, { toolMessages, showToolCalls });
+      const chain = projectHistory(persisted, { messages: persisted, toolMessages, showToolCalls });
       const frames = framesOf(chain);
       expect(frames.map((frame) => [frame.runId, frame.outcome.kind])).toEqual([
         ["prepare-run", "completed"],
@@ -133,10 +149,14 @@ describe("PR preparation handoff", () => {
         label: "System",
         startsTurn: true,
         timestamp: 3_000,
-        text: ready,
+        text: 'PR preparation result: {"status":"prepared","url":"https://github.com/example/app/pull/1"}',
       });
-      for (const detail of ["prepare_pr", prUrl]) {
-        expect(JSON.stringify(frames[0]).includes(detail)).toBe(showToolCalls);
+      if (showToolCalls) {
+        expect(JSON.stringify(frames[0])).toContain("prepare_pr");
+        expect(JSON.stringify(frames[0])).toContain("https://github.com/example/app/pull/1");
+      } else {
+        expect(JSON.stringify(frames[0])).not.toContain("prepare_pr");
+        expect(JSON.stringify(frames[0])).not.toContain("https://github.com/example/app/pull/1");
       }
       // Preparation is not a private child wait and must not change its consumers.
       expect(pendingSessionsYield(entries.slice(0, 3))).toBeNull();
@@ -164,9 +184,9 @@ describe("PR preparation handoff", () => {
         {
           ...messages[1],
           content: unpaired
-            ? [preparing]
+            ? [{ type: "text", text: "Preparing your PR." }]
             : [
-                preparing,
+                { type: "text", text: "Preparing your PR." },
                 {
                   ...prepareCall,
                   arguments: { ...prepareCall.arguments, action: action ?? "prepare_pr" },
@@ -177,11 +197,11 @@ describe("PR preparation handoff", () => {
           ...messages[2],
           details,
           isError,
-          content: [text(JSON.stringify(details))],
+          content: [{ type: "text", text: JSON.stringify(details) }],
         },
         ...messages.slice(3),
       ];
-      const frame = framesOf(projectHistory(entries, { showToolCalls }))[0];
+      const frame = framesOf(projectHistory(entries, { messages: entries, showToolCalls }))[0];
       expect(frame?.outcome.kind).toBe("interrupted");
       if (!showToolCalls) {
         expect(JSON.stringify(messagesIn([frame!]))).not.toContain("yielded");
@@ -192,17 +212,48 @@ describe("PR preparation handoff", () => {
   it.each(["aborted", "error", "timeout", "live-abort"])(
     "preserves an actual %s after handoff",
     (reason) => {
-      const terminal = preparedMessage(
-        "assistant",
-        "Preparation stopped.",
-        2_100,
-        reason === "live-abort" ? {} : { stopReason: reason },
-      );
+      const terminal = {
+        role: "assistant",
+        runId: "prepare-run",
+        timestamp: 2_100,
+        content: "Preparation stopped.",
+        ...(reason === "live-abort" ? {} : { stopReason: reason }),
+      };
       if (reason === "live-abort") {
         rememberLiveTerminalRun(terminal, "prepare-run", "aborted");
       }
       const entries = [...messages.slice(0, 3), terminal, ...messages.slice(3)];
-      expect(framesOf(projectHistory(entries))[0]?.outcome.kind).toBe("failed");
+      expect(framesOf(projectHistory(entries, { messages: entries }))[0]?.outcome.kind).toBe(
+        "failed",
+      );
     },
   );
+
+  it("does not merge later human input or borrow its live status", () => {
+    const later = makeMessage("A different request.", 6, {
+      role: "user",
+      runId: "later-run",
+      timestamp: 5_000,
+    });
+    const entries = [...messages.slice(0, 3), later];
+    const props = {
+      messages: entries,
+      runId: "later-run",
+      runActive: true,
+      runWorking: true,
+      streamStartedAt: 6_000,
+    };
+    const items = chatItems(props);
+    expect(items.find((item) => item.kind === "reading-indicator")).toMatchObject({
+      runId: "later-run",
+      startedAt: 6_000,
+    });
+    expect(items.find((item) => item.kind === "reading-indicator")).not.toHaveProperty("request");
+    const chain = chainFor(items, props);
+    expect(framesOf(chain).map((frame) => [frame.runId, frame.outcome.kind])).toEqual([
+      ["prepare-run", "completed"],
+      ["later-run", "active"],
+    ]);
+    expect(chain.transcriptItems.at(-2)).toMatchObject({ kind: "group", role: "user" });
+  });
 });
