@@ -1,6 +1,10 @@
+// Load temp-home cleanup dependencies during collection, outside the test deadline.
+import "../test-utils/session-state-cleanup.js";
 import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
+import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,7 +13,7 @@ import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
 } from "../agents/mcp-oauth-identity.js";
-import { readMcpOAuthPendingAuthorization } from "../agents/mcp-oauth-store.js";
+import { readMcpOAuthPendingAuthorization, type McpOAuthStore } from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
@@ -216,6 +220,137 @@ it("keeps per-requester list, status, and doctor probes read only", async () => 
           .get("mcp_oauth_pending_authorizations"),
       ).toBeUndefined();
     });
+  });
+});
+
+it("warns only for expired native OAuth tokens without a refresh token", async () => {
+  await withTempHome(`openclaw-mcp-expiry-${randomUUID()}-`, async (home) => {
+    const logs: string[] = [];
+    const json: unknown[] = [];
+    vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => json.push(value));
+    const serverUrl = "https://mcp.example.com/rpc";
+    const { run } = createCli();
+    const cases: {
+      name: string;
+      store: McpOAuthStore;
+      expectedState: "authorized" | "requires-authorization";
+      expectedExpiryWarning: boolean;
+      oauth?: { authProfileId: string };
+    }[] = [
+      {
+        name: "expired-without-refresh",
+        store: { tokens: oauthTokens("fixture-access-token"), tokenExpiresAt: 0 },
+        expectedState: "authorized",
+        expectedExpiryWarning: true,
+      },
+      {
+        name: "unexpired-without-refresh",
+        store: {
+          tokens: oauthTokens("fixture-access-token"),
+          tokenExpiresAt: Date.now() + 3_600_000,
+        },
+        expectedState: "authorized",
+        expectedExpiryWarning: false,
+      },
+      {
+        name: "expired-with-refresh",
+        store: {
+          tokens: oauthTokens("fixture-access-token", "fixture-refresh-token"),
+          tokenExpiresAt: 0,
+        },
+        expectedState: "authorized",
+        expectedExpiryWarning: false,
+      },
+      {
+        name: "unknown-expiry",
+        store: { tokens: oauthTokens("fixture-access-token") },
+        expectedState: "authorized",
+        expectedExpiryWarning: false,
+      },
+      {
+        name: "additional-authorization-required",
+        store: {
+          tokens: oauthTokens("fixture-access-token"),
+          tokenExpiresAt: 0,
+          pendingAuthorizationChallenge: { requiresAuthorization: true },
+        },
+        expectedState: "requires-authorization",
+        expectedExpiryWarning: false,
+      },
+      {
+        name: "auth-profile-with-unused-native-tokens",
+        store: { tokens: oauthTokens("fixture-access-token"), tokenExpiresAt: 0 },
+        oauth: { authProfileId: "fixture:mcp" },
+        expectedState: "authorized",
+        expectedExpiryWarning: false,
+      },
+    ];
+
+    await fs.writeFile(
+      path.join(home, ".openclaw", "openclaw.json"),
+      JSON.stringify({
+        mcp: {
+          servers: Object.fromEntries(
+            cases.map(({ name, oauth }) => [name, oauthServer(serverUrl, oauth)]),
+          ),
+        },
+      }),
+    );
+    for (const { name, store } of cases) {
+      seedMcpOAuthStoreForTest(operatorMcpOAuthIdentity(name, serverUrl).storeKey, store);
+    }
+    await run("status");
+    await run("status", "--json");
+    const status = json.at(-1);
+    expect(JSON.stringify(status)).not.toContain("fixture-access-token");
+    expect(JSON.stringify(status)).not.toContain("fixture-refresh-token");
+    await run("doctor", "--json");
+    const doctor = json.at(-1);
+    expect(doctor).toMatchObject({ ok: true });
+
+    for (const scenario of cases) {
+      expect(status, scenario.name).toMatchObject({
+        servers: expect.arrayContaining([
+          expect.objectContaining({
+            name: scenario.name,
+            authStatus: expect.objectContaining({ state: scenario.expectedState, hasTokens: true }),
+          }),
+        ]),
+      });
+      const row = logs.findIndex((line) => line.startsWith(`- ${scenario.name}:`));
+      expect(row, scenario.name).toBeGreaterThanOrEqual(0);
+      if (scenario.expectedExpiryWarning) {
+        expect(logs[row + 1], scenario.name).toContain(
+          "OAuth access token has expired and cannot be refreshed.",
+        );
+        expect(status, scenario.name).toMatchObject({
+          servers: expect.arrayContaining([
+            expect.objectContaining({
+              name: scenario.name,
+              oauthWarning: expect.stringContaining(`mcp login ${scenario.name}`),
+            }),
+          ]),
+        });
+      } else {
+        expect(logs[row + 1] ?? "", scenario.name).not.toContain("cannot be refreshed");
+        expect(status, scenario.name).not.toMatchObject({
+          servers: expect.arrayContaining([
+            expect.objectContaining({ name: scenario.name, oauthWarning: expect.any(String) }),
+          ]),
+        });
+      }
+      const issues = scenario.expectedExpiryWarning
+        ? [{ level: "warning", message: expect.stringContaining(`mcp login ${scenario.name}`) }]
+        : scenario.expectedState === "requires-authorization"
+          ? [{ level: "warning", message: expect.stringContaining("additional authorization") }]
+          : [];
+      expect(doctor, scenario.name).toMatchObject({
+        servers: expect.arrayContaining([
+          expect.objectContaining({ name: scenario.name, ok: true, issues }),
+        ]),
+      });
+    }
   });
 });
 

@@ -1,8 +1,19 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { resolveMcpAuthProfileId } from "../agents/mcp-auth-profile.js";
+import { mcpOAuthSignInHint, operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import type { McpOAuthLoginLifecycle } from "../agents/mcp-oauth-provider.js";
-import { completeMcpOAuthAuthorization, startMcpOAuthAuthorization } from "../agents/mcp-oauth.js";
-import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
+import {
+  completeMcpOAuthAuthorization,
+  readMcpOAuthCredentialsStatus,
+  startMcpOAuthAuthorization,
+  type McpOAuthPrincipalStatus,
+} from "../agents/mcp-oauth.js";
+import {
+  resolveMcpTransportConfig,
+  type ResolvedHttpMcpTransportConfig,
+} from "../agents/mcp-transport-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   startOAuthLoopbackCallbackServer,
@@ -12,6 +23,47 @@ import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 
 const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
+export type McpStatusAuthStatusJson = McpOAuthPrincipalStatus & {
+  hasTokens: boolean;
+  requiresAuthorization: boolean;
+  hasClientInformation: boolean;
+  hasCodeVerifier: boolean;
+  hasDiscoveryState: boolean;
+  hasLastAuthorizationUrl: boolean;
+};
+
+export async function readMcpCliOAuthStatus(
+  name: string,
+  server: ResolvedHttpMcpTransportConfig,
+  config: OpenClawConfig,
+): Promise<{ authStatus: McpStatusAuthStatusJson; oauthWarning?: string }> {
+  const identity = operatorMcpOAuthIdentity(name, server.url, config);
+  const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
+  const status = await readMcpOAuthCredentialsStatus(identity, store);
+  const oauthWarning =
+    !resolveMcpAuthProfileId(server) &&
+    status.state === "authorized" &&
+    status.expiresAt !== undefined &&
+    status.expiresAt <= Date.now() &&
+    !store.tokens?.refresh_token
+      ? `OAuth access token has expired and cannot be refreshed. ${mcpOAuthSignInHint(identity)}`
+      : undefined;
+  return {
+    // Keep the six documented legacy booleans additive to the authorization state.
+    authStatus: {
+      hasTokens: Boolean(store.tokens),
+      requiresAuthorization: store.pendingAuthorizationChallenge?.requiresAuthorization === true,
+      hasClientInformation: Boolean(store.clientInformation),
+      hasCodeVerifier: Boolean(store.codeVerifier),
+      hasDiscoveryState: Boolean(store.discoveryState),
+      hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
+      ...status,
+    },
+    oauthWarning,
+  };
+}
 
 export async function loginMcpServer(params: {
   name: string;
