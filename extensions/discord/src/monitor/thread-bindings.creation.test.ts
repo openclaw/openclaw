@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/acp-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { getDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
@@ -56,31 +56,29 @@ const expectTarget = (manager: Manager, thread: string, target: string | undefin
   expect(manager.getByThreadId(thread)?.targetSessionKey).toBe(target);
 
 installThreadBindingLifecycleTestHooks();
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await resetThreadBindingsForTests();
+});
 
 it("reuses a restored channel webhook after unbinding without sharing it across accounts", async () => {
   let manager = await createTestThreadBindingManager({ persist: true });
-  let other: Manager | undefined;
-  try {
-    await bindTestThread(manager);
-    await resetThreadBindingsForTests();
-    manager = await createTestThreadBindingManager({ persist: true });
-    await manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
-    const withoutWebhook = { webhookId: undefined, webhookToken: undefined };
-    await expect(
-      bindTestThread(manager, { threadId: "thread-2", ...withoutWebhook }),
-    ).resolves.toMatchObject({ webhookId: "wh-1", webhookToken: "tok-1" });
-    expect(hoisted.restPost).not.toHaveBeenCalled();
+  await bindTestThread(manager);
+  await resetThreadBindingsForTests();
+  manager = await createTestThreadBindingManager({ persist: true });
+  await manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
+  const withoutWebhook = { webhookId: undefined, webhookToken: undefined };
+  await expect(
+    bindTestThread(manager, { threadId: "thread-2", ...withoutWebhook }),
+  ).resolves.toMatchObject({ webhookId: "wh-1", webhookToken: "tok-1" });
+  expect(hoisted.restPost).not.toHaveBeenCalled();
 
-    other = await createTestThreadBindingManager({ accountId: "other", persist: true });
-    await expect(bindTestThread(other, withoutWebhook)).resolves.toMatchObject({
-      webhookId: "wh-created",
-      webhookToken: "tok-created",
-    });
-    expect(hoisted.restPost).toHaveBeenCalledOnce();
-  } finally {
-    await other?.unbindBySessionKey({ targetSessionKey: childSessionKey, sendFarewell: false });
-    await manager.unbindBySessionKey({ targetSessionKey: childSessionKey, sendFarewell: false });
-  }
+  const other = await createTestThreadBindingManager({ accountId: "other", persist: true });
+  await expect(bindTestThread(other, withoutWebhook)).resolves.toMatchObject({
+    webhookId: "wh-created",
+    webhookToken: "tok-created",
+  });
+  expect(hoisted.restPost).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -318,9 +316,8 @@ it.each(["before-delete", "after-commit"] as const)(
     }
     const error = new IncognitoSessionEndedError();
     let current = true;
-    const opened = vi
-      .spyOn(runtime.state, "openKeyedStoreV2")
-      .mockImplementation(<T>(options: Parameters<typeof open>[0]) => {
+    vi.spyOn(runtime.state, "openKeyedStoreV2").mockImplementation(
+      <T>(options: Parameters<typeof open>[0]) => {
         const store = open<T>(options);
         const remove = store.delete.bind(store);
         vi.spyOn(store, "delete").mockImplementation(async (...args) => {
@@ -333,38 +330,34 @@ it.each(["before-delete", "after-commit"] as const)(
           return remove(...args);
         });
         return store;
-      });
+      },
+    );
     const release = vi.fn();
-    try {
-      const failure = await reconcile({
-        prepareSession: async ({ sessionKey: key }) => ({
-          session: {
-            cfg: EMPTY_DISCORD_TEST_CONFIG,
-            storePath: "/fixture",
-            ...session(key),
-            acp: undefined,
-          },
-          assertCurrent() {
-            if (!current) {
-              throw error;
-            }
-          },
-          release,
-        }),
-      }).catch((caught: unknown) => caught);
-      expect(() => rethrowIncognitoSessionError(failure)).toThrow();
-      const stored = (await persisted.entries()).map(({ value }) => value.targetSessionKey);
-      if (phase === "before-delete") {
-        expectTarget(manager, "prepared", sessionKey("prepared"));
-        expect(stored).toContain(sessionKey("prepared"));
-      } else {
-        expect(manager.getByThreadId("prepared")).toBeUndefined();
-        expect(stored).toEqual([sessionKey("orphan")]);
-      }
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      opened.mockRestore();
-      await manager.stop();
+    const failure = await reconcile({
+      prepareSession: async ({ sessionKey: key }) => ({
+        session: {
+          cfg: EMPTY_DISCORD_TEST_CONFIG,
+          storePath: "/fixture",
+          ...session(key),
+          acp: undefined,
+        },
+        assertCurrent() {
+          if (!current) {
+            throw error;
+          }
+        },
+        release,
+      }),
+    }).catch((caught: unknown) => caught);
+    expect(() => rethrowIncognitoSessionError(failure)).toThrow();
+    const stored = (await persisted.entries()).map(({ value }) => value.targetSessionKey);
+    if (phase === "before-delete") {
+      expectTarget(manager, "prepared", sessionKey("prepared"));
+      expect(stored).toContain(sessionKey("prepared"));
+    } else {
+      expect(manager.getByThreadId("prepared")).toBeUndefined();
+      expect(stored).toEqual([sessionKey("orphan")]);
     }
+    expect(release).toHaveBeenCalledOnce();
   },
 );
