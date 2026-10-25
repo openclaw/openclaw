@@ -1,0 +1,15 @@
+{
+  "componentId": "joint-architecture-reports",
+  "pathClass": "JOINT_OPERATIONAL",
+  "logicalName": "Architecture Reports Directory",
+  "declarationRule": "path.join(workspace, 'outputs/architecture-reports')",
+  "declaredValue": null,
+  "declarationSource": "registry-entry",
+  "lifecycle": "derived",
+  "startupRequirementRule": false,
+  "capabilityDependencies": [],
+  "taskDependencyRules": ["phase-4e-specification"],
+  "fallbackPolicy": null,
+  "validationPolicy": { "requireExists": true },
+  "notes": "Valid JOINT-operational declaration."
+}

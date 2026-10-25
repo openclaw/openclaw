@@ -1,0 +1,15 @@
+{
+  "componentId": "n8n-service",
+  "pathClass": "EXTERNAL_SERVICE",
+  "logicalName": "n8n Automation Service",
+  "declarationRule": null,
+  "declaredValue": "http://localhost:5678",
+  "declarationSource": "registry-spec",
+  "lifecycle": "runtime",
+  "startupRequirementRule": false,
+  "capabilityDependencies": ["workflow-automation"],
+  "taskDependencyRules": [],
+  "fallbackPolicy": { "allowed": true, "approved": false },
+  "validationPolicy": { "probeType": "http", "timeout": 5000 },
+  "notes": "Valid external-service declaration."
+}
