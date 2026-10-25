@@ -321,12 +321,8 @@ try {
     buildGatewayBenchChildArgs(
       path.resolve(values.entry),
       port,
-      [
-        "--import",
-        path.resolve("scripts/tsx.mjs"),
-        "--import",
-        path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
-      ],
+      // Native type stripping keeps built package imports out of tsconfig source aliases.
+      ["--import", path.resolve("scripts/lib/gateway-bench-profile-preload.ts")],
       "trusted-proxy",
     ),
     "gateway",
