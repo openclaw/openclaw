@@ -20,7 +20,7 @@ const emptyRepoActivity =
 const searchRange = /(?:created|updated|closed|merged|committer-date):([^ ]+)\.\.([^ ]+)/;
 
 /** Synthetic wire responses are generated per page, never retained as an input corpus. */
-export function createReportRunFixtureFetch(): (
+function createReportRunFixtureFetch(): (
   input: string | URL,
   init?: RequestInit,
 ) => Promise<Response> {
