@@ -140,7 +140,9 @@ describe("session message cache", () => {
     );
     const layout = context.layout();
     expect(layout.read(row)).toBe(1000);
-    for (let i = 0; i < 100; i++) layout.write(`canvas:other-${i}`, 48);
+    for (let i = 0; i < 100; i++) {
+      layout.write(`canvas:other-${i}`, 48);
+    }
     expect(layout.read("canvas:pending")).toBe(600);
     layout.write("canvas:first", 100, "widget-row", true);
     expect(layout.read(row)).toBeUndefined();
@@ -155,7 +157,9 @@ describe("session message cache", () => {
       const row = 'row:v1:768:gutter:revision-1:"widget-row"';
       context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700 } }));
       const layout = context.layout();
-      if (early) layout.write("canvas:widget", 200, "widget-row");
+      if (early) {
+        layout.write("canvas:widget", 200, "widget-row");
+      }
       expect(layout.read(row)).toBe(700);
       layout.write("canvas:widget", 200, "widget-row", true);
       expect(layout.read(row)).toBeUndefined();

@@ -8,7 +8,7 @@ import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayEventListener } from "../api/gateway.ts";
-import { type ApplicationContext } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   bumpCanvasWidgetFrameConnectionGeneration,

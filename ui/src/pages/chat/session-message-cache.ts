@@ -133,13 +133,13 @@ export function createChatWidgetLayout(
       const snapshot = current();
       if (measuredHeight === null) {
         invalidateRow(rowKey, key);
-        return;
+        return undefined;
       }
       const row = key.startsWith("row:v1:");
       const floor = row || (rowKey && !settled) ? admitted?.widgetHeights?.[key] : 0;
       const height = Math.max(measuredHeight, floor ?? 0);
       if (!snapshot || !Number.isFinite(height) || height < (row ? 1 : 48) || height > 8000) {
-        return;
+        return undefined;
       }
       if (snapshot.widgetHeights?.[key] !== height) {
         const widgetHeights = Object.fromEntries(

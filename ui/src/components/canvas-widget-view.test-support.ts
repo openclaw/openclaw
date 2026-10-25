@@ -137,13 +137,15 @@ export function mount(
 
 export async function frameFor(view: OpenClawCanvasWidgetView): Promise<HTMLIFrameElement> {
   const frame = view.querySelector("iframe");
-  if (frame) return frame;
+  if (frame) {
+    return frame;
+  }
   return new Promise((resolve) => {
     const observer = new MutationObserver(() => {
-      const frame = view.querySelector("iframe");
-      if (frame) {
+      const nextFrame = view.querySelector("iframe");
+      if (nextFrame) {
         observer.disconnect();
-        resolve(frame);
+        resolve(nextFrame);
       }
     });
     observer.observe(view, { childList: true, subtree: true });

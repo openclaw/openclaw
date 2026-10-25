@@ -284,8 +284,8 @@ function WidgetFrame(props: {
     onSettled(() => {
       widgetFramePromptActive.set(element, () => props.promptAllowed());
       widgetFrameResize.set(element, (nextHeight) => {
-        const height = props.params.onHeightChange?.(nextHeight, true) ?? nextHeight;
-        setReportedHeight(height);
+        const appliedHeight = props.params.onHeightChange?.(nextHeight, true) ?? nextHeight;
+        setReportedHeight(appliedHeight);
       });
       const releaseTheme = registerWidgetThemeFrame(element, "*");
       props.onFrame(element);
