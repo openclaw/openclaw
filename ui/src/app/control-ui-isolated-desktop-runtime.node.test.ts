@@ -25,7 +25,7 @@ function routePreloads(html: string, route: "chat" | "new"): string[] {
 }
 
 it.each([false, true])(
-  "keeps desktop lazy and prioritizes the composer: %s",
+  "keeps desktop lazy and prioritizes route dependencies: %s",
   async (hasComposer) => {
     const root = tempDirs.make("control-ui-isolated-desktop-");
     const local = (name: string) => path.join(root, name);
@@ -148,7 +148,7 @@ it.each([false, true])(
       if (route === "chat") {
         const chatHint = hints.find((hint) => hint.includes(chatChunk!.fileName));
         expect(chatHint).toBeDefined();
-        expect(chatHint?.includes('fetchpriority="low"')).toBe(!hasComposer);
+        expect(chatHint).not.toContain('fetchpriority="low"');
       }
     }
     const desktopChunk = isolated.chunks.find((chunk) => chunk.exports.includes("default"));

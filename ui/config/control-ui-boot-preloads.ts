@@ -188,19 +188,9 @@ export function controlUiBootPreloadsPlugin(): Plugin {
                 : {
                     rel: "modulepreload",
                     crossorigin: "",
-                    // Interaction hints must not occupy HTTP/1 connections
-                    // ahead of signing or first-screen route dependencies.
-                    ...(assets.interactionOnly[route].has(file) ||
-                    (route === "chat" &&
-                      bundle[file]?.type === "chunk" &&
-                      bundle[file].name.startsWith("control-ui-boot-chat") &&
-                      Object.keys(bundle[file].modules).every(
-                        (id) =>
-                          controlUiBootManifestKey(id) !==
-                          "ui/src/pages/chat/components/chat-composer.tsx",
-                      ))
-                      ? { fetchpriority: "low" }
-                      : {}),
+                    // Every route dependency can gate its first frame. Only
+                    // interaction-only hints yield to post-connect requests.
+                    ...(assets.interactionOnly[route].has(file) ? { fetchpriority: "low" } : {}),
                     href: `./${file}`,
                   },
             }));
