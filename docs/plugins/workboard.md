@@ -297,14 +297,21 @@ sessions or its Board agent conversation.
 
 ## Card fields
 
-| Field       | Values                                                                                                        |
-| ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                     |
-| `priority`  | `low`, `normal`, `high`, `urgent`                                                                             |
-| `labels`    | free-form strings                                                                                             |
-| `agentId`   | optional assigned agent                                                                                       |
-| linked refs | optional task, run, session, or source URL                                                                    |
-| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status) |
+| Field       | Values                                                                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`     | required, up to 180 characters                                                                                                         |
+| `notes`     | optional, up to 4000 characters                                                                                                        |
+| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                                              |
+| `priority`  | `low`, `normal`, `high`, `urgent`                                                                                                      |
+| `labels`    | free-form strings, up to 40 characters each; duplicates are removed and only the first 12 distinct labels are kept, extras are dropped |
+| `agentId`   | optional assigned agent                                                                                                                |
+| linked refs | optional task, run, session, or source URL                                                                                             |
+| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status)                          |
+
+Longer values are rejected with an error such as `labels must be 40 characters or fewer.`
+When creating cards (for example with `workboard_create`), `parents` (card ids, up to 120 characters
+each) and `skills` (up to 80 characters each) accept at most 20 distinct entries; more
+are rejected.
 
 Cards also carry compact metadata:
 
