@@ -386,11 +386,7 @@ it("keeps an uncertain dispatch claimed until retry reconciliation", () =>
           getNodeSqliteKysely<Pick<DB, "session_suggestions">>(db)
             .updateTable("session_suggestions")
             .set({ dispatch_started_at: 0 })
-            .where("session_key", "=", sessionKey)
-            .where("id", "=", id)
-            .where("state", "=", "pending")
-            .where("dispatch_token", "is not", null)
-            .where("dispatch_resolution", "=", "send"),
+            .where("id", "=", id),
         ),
       { agentId: "main", env: state.env },
     );
@@ -471,25 +467,21 @@ it.each(["dispatch", "claim", "release", "finalize", "release-unexpected"] as co
         dispatched.resolve();
       }
       const result = await pending;
-      expect(result.responses).toMatchObject([
-        [
-          false,
-          undefined,
-          {
-            code: "UNAVAILABLE",
-            ...(phase === "release-unexpected"
-              ? {
-                  message: "release storage failed",
-                  retryable: true,
-                  retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-                }
-              : {
-                  retryable: false,
-                  details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
-                }),
-          },
-        ],
-      ]);
+      expect(result.responses).toHaveLength(1);
+      expect(result.responses[0]?.slice(0, 2)).toEqual([false, undefined]);
+      expect(result.responses[0]?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        ...(phase === "release-unexpected"
+          ? {
+              message: "release storage failed",
+              retryable: true,
+              retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+            }
+          : {
+              retryable: false,
+              details: { code: "SESSION_SUGGESTION_SESSION_CHANGED", sessionKey },
+            }),
+      });
       if (phase !== "release-unexpected") {
         expect(broadcast).not.toHaveBeenCalled();
       }

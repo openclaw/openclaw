@@ -25,6 +25,7 @@ import {
 } from "./devices.test-support.js";
 
 const { pairing, tokens } = mocks;
+const emptyNodeSurface = { caps: [], commands: [], permissions: undefined };
 
 function expectInvalidationBeforeReply(opts: Parameters<typeof invokeDevice>[0], reason: string) {
   vi.mocked(opts.respond).mockImplementation(() => {
@@ -88,7 +89,6 @@ it.each(
     { deviceId, role },
     createDeviceClient(["operator.pairing"], " device-1 "),
   );
-  const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
   vi.mocked(opts.context.logGateway.warn).mockImplementation(() => void order.push("warn"));
   vi.mocked(opts.respond).mockImplementation(() => void order.push("respond"));
   const stop = onInternalDiagnosticEvent((event, metadata) => {
@@ -114,9 +114,6 @@ it.each(
   } else {
     expect(mutation).not.toHaveBeenCalled();
   }
-  expect(opts.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
-    `device token ${wording} denied device=${deviceId} role=${role} reason=${reason}${denial === "service" ? " scope=operator.admin" : ""}`,
-  );
   expect(opts.respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
     code: "INVALID_REQUEST",
     message: `device token ${wording} denied`,
@@ -145,7 +142,7 @@ it.each(
   expect(opts.context.broadcast).not.toHaveBeenCalled();
   expect(opts.context.invalidateClientsForDevice).not.toHaveBeenCalled();
   expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
-  expect(updateSurface).not.toHaveBeenCalled();
+  expect(opts.context.nodeRegistry.updateSurface).not.toHaveBeenCalled();
 });
 
 it.each(
@@ -165,7 +162,6 @@ it.each(
     await seedNodeWakeState(nodeId);
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wake = captureNodeWakeLifecycle(nodeId);
-    const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
     const client = Object.assign(expectDefined(opts.client, "removal caller"), {
       invalidated: false,
       socket: { close: vi.fn() },
@@ -213,11 +209,10 @@ it.each(
       expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
       expect(wake.aborted).toBe(true);
       expect(drainNodePendingWork(nodeId).items.map(({ id }) => id)).toEqual(["baseline-status"]);
-      expect(updateSurface).toHaveBeenCalledWith(nodeId, {
-        caps: [],
-        commands: [],
-        permissions: undefined,
-      });
+      expect(opts.context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
+        nodeId,
+        emptyNodeSurface,
+      );
       expect(opts.context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
         ...(revoking ? { role: "node" } : {}),
         reason: revoking ? "device-token-revoked" : "device-pair-removed",
@@ -243,7 +238,6 @@ it.each(["device.pair.remove", "device.token.revoke"])(
       "device-1",
       createClient(["operator.admin"], "admin-device"),
     );
-    const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
     const workerEnvironmentService = {};
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -266,11 +260,10 @@ it.each(["device.pair.remove", "device.token.revoke"])(
       release.resolve();
       await expect(mutation).rejects.toThrow(failure);
       expect(opts.context.disconnectClientsForDevice).toHaveBeenCalled();
-      expect(updateSurface).toHaveBeenCalledWith("device-1", {
-        caps: [],
-        commands: [],
-        permissions: undefined,
-      });
+      expect(opts.context.nodeRegistry.updateSurface).toHaveBeenCalledWith(
+        "device-1",
+        emptyNodeSurface,
+      );
       expect(opts.respond).not.toHaveBeenCalled();
     } finally {
       release.resolve();

@@ -369,22 +369,20 @@ describe("progress card request authorization", () => {
             );
           }
           const before = await getCard(target);
-          const get = vi.spyOn(progressCardStore, "get");
-          const put = vi.spyOn(progressCardStore, "put");
-          let storeCalls;
-          try {
+          {
+            using get = vi.spyOn(progressCardStore, "get");
+            using put = vi.spyOn(progressCardStore, "put");
             release.resolve();
             await pending;
-            storeCalls = { get: [...get.mock.calls], put: [...put.mock.calls] };
-          } finally {
-            get.mockRestore();
-            put.mockRestore();
+            if (replace) {
+              expect(get).not.toHaveBeenCalled();
+              expect(put).not.toHaveBeenCalled();
+            }
           }
           const after = await getCard(target);
           if (replace) {
             expect(respond.mock.calls).toEqual([[false, undefined, changedAuthority()]]);
             expect(after).toEqual(before);
-            expect(storeCalls).toEqual({ get: [], put: [] });
             expect(broadcast).not.toHaveBeenCalled();
           } else {
             const writing = method === "progressCard.put";

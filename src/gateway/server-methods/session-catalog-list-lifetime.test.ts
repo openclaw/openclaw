@@ -64,12 +64,14 @@ function preparationGate() {
 
 describe("catalog list completion ownership", () => {
   it.each([
+    { stage: "success", retirement: "none" },
+    { stage: "success", retirement: "lifetime" },
     { stage: "preparation", retirement: "none" },
     { stage: "publication", retirement: "none" },
     { stage: "preparation", retirement: "lifetime" },
     { stage: "preparation", retirement: "subscriber" },
   ])(
-    "reports late $stage failure without losing settlement (retirement=$retirement)",
+    "settles deferred $stage delivery without losing ownership (retirement=$retirement)",
     async ({ stage, retirement }) => {
       const { before, root, lifetime, finish } = admit("catalog-late-delivery-failure");
       const owner = new GatewayConnectionWork();
@@ -82,6 +84,7 @@ describe("catalog list completion ownership", () => {
         }
       });
       catalogLog.warn.mockClear();
+      let drained = false;
       try {
         await owner.track(() =>
           root.run(async () => {
@@ -99,6 +102,11 @@ describe("catalog list completion ownership", () => {
           }),
         );
         finish();
+        const closing = owner.drain().then(() => {
+          drained = true;
+        });
+        await nextTurn();
+        expect(drained).toBe(false);
         expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
         if (retirement === "lifetime") {
           lifetime.retire();
@@ -110,57 +118,18 @@ describe("catalog list completion ownership", () => {
         } else {
           preparation.resolve();
         }
-        await owner.drain();
-        expect(delivered).toHaveBeenCalledTimes(stage === "publication" ? 1 : 0);
+        await closing;
+        expect(delivered).toHaveBeenCalledTimes(
+          stage === "publication" || (stage === "success" && retirement === "none") ? 1 : 0,
+        );
         expect(catalogLog.warn.mock.calls).toEqual(
-          retirement !== "none"
+          retirement !== "none" || stage === "success"
             ? []
             : [["Session catalog progress update failed; refresh the catalog to retry."]],
         );
         expect(getActiveGatewayRootWorkHolders()).toEqual(before);
       } finally {
         preparation.resolve();
-        finish();
-        await owner.drain();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "owns deferred subscriber delivery and rechecks retirement (retired=%s)",
-    async (retired) => {
-      const { before, root, lifetime, finish } = admit("catalog-deferred-subscriber");
-      const owner = new GatewayConnectionWork();
-      const delivered = vi.fn();
-      const { release, prepare } = preparationGate();
-      let drained = false;
-      try {
-        await owner.track(() =>
-          root!.run(async () => {
-            lifetime.subscribe("active", delivered, current, undefined, prepare);
-            await lifetime.runProvider(
-              () => lifetime.publish(catalog, new Map()),
-              async (params) => params.onHost(host),
-            );
-          }),
-        );
-        root!.release();
-        lifetime.finishListing();
-        const closing = owner.drain().then(() => {
-          drained = true;
-        });
-        await nextTurn();
-        expect(drained).toBe(false);
-        expect(getActiveGatewayRootWorkCount()).toBe(before.length + 1);
-        if (retired) {
-          lifetime.retire();
-        }
-        release.resolve();
-        await closing;
-        expect(delivered).toHaveBeenCalledTimes(retired ? 0 : 1);
-        expect(getActiveGatewayRootWorkCount()).toBe(before.length);
-      } finally {
-        release.resolve();
         finish();
         await owner.drain();
       }
