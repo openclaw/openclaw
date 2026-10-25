@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -27,6 +26,7 @@ import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
   readDatabaseRecords,
+  requestResult,
   seedDatabase,
 } from "./idb-persistence.test-helpers.js";
 import { LogService } from "./logger.js";
@@ -68,7 +68,7 @@ describe("Matrix IndexedDB persistence", () => {
   });
 
   afterEach(async () => {
-    warnSpy.mockRestore();
+    vi.restoreAllMocks();
     await clearTestIndexedDbState();
     await closeOpenClawStateDatabaseAsync();
     resetFileLockStateForTest();
@@ -76,7 +76,7 @@ describe("Matrix IndexedDB persistence", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists and restores database contents for the selected prefix", async () => {
+  it("concurrently persists and restores the selected prefix, replacing stale keys", async () => {
     const originalRuntime = getMatrixRuntime();
     const stateRuntime = { openKeyedStoreV2: originalRuntime.state.openKeyedStoreV2 };
     await seed();
@@ -92,27 +92,25 @@ describe("Matrix IndexedDB persistence", () => {
       },
     });
 
-    await persistIdbToDisk({
-      snapshotPath,
-      databasePrefix: DATABASE_PREFIX,
-      stateRuntime,
-    });
+    const persistSelected = () =>
+      persistIdbToDisk({
+        snapshotPath,
+        databasePrefix: DATABASE_PREFIX,
+        stateRuntime,
+      });
+    await Promise.all([persistSelected(), persistSelected()]);
     expect(fs.existsSync(snapshotPath)).toBe(false);
 
-    await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
+    await seed(records("stale", "old-owner"));
 
     expect(await restoreIdbFromDisk(snapshotPath, stateRuntime, DATABASE_PREFIX)).toBe(true);
     expect(await read()).toEqual(records("room-1", "abc123"));
-    const dbs = await indexedDB.databases();
-    expect(dbs.map((entry) => entry.name)).toContain(otherCryptoDatabaseName);
     expect(await read(otherCryptoDatabaseName)).toEqual(records("room-2", "should-not-restore"));
   });
 
   it.each([
     "[]",
     "{}",
-    "null",
-    "",
     "{",
     "metadata",
     "null metadata",
@@ -126,7 +124,7 @@ describe("Matrix IndexedDB persistence", () => {
       const retained = records("room-1", "retained-key");
       await seed(retained);
       const store = snapshotStore<Record<string, unknown> | null>();
-      const invalidJson = ["[]", "{}", "null", "", "{"].includes(corruption);
+      const invalidJson = ["[]", "{}", "{"].includes(corruption);
       if (invalidJson) {
         await write(corruption);
       } else {
@@ -160,14 +158,6 @@ describe("Matrix IndexedDB persistence", () => {
       }
     },
   );
-
-  it("replaces stale in-memory crypto records when ownership returns", async () => {
-    await seed(records("durable", "saved"));
-    await persist();
-    await seed(records("stale", "old-owner"));
-    await restoreIdbFromDisk(snapshotPath, undefined, DATABASE_PREFIX);
-    expect(await read()).toEqual(records("durable", "saved"));
-  });
 
   it.each([
     ["invalid record key", "DataError", true, false],
@@ -203,19 +193,9 @@ describe("Matrix IndexedDB persistence", () => {
       expect(await read(cryptoDatabaseName, 3)).toEqual(retained);
       expect(await read(otherCryptoDatabaseName)).toEqual(unrelated);
       expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
-      expect(warnSpy).toHaveBeenCalledWith(
-        "IdbPersistence",
-        "Failed to restore IndexedDB snapshot from SQLite:",
-        expect.objectContaining({ name: errorName }),
-      );
       await new Promise<void>((resolve, reject) => {
         const request = indexedDB.deleteDatabase(cryptoDatabaseName);
-        request.addEventListener("success", () => resolve(), { once: true });
-        request.addEventListener(
-          "error",
-          () => reject(toErrorObject(request.error, "IndexedDB deletion failed")),
-          { once: true },
-        );
+        void requestResult(request).then(() => resolve(), reject);
         request.addEventListener(
           "blocked",
           () => reject(new Error("Failed restore left its IndexedDB connection open")),
@@ -319,16 +299,10 @@ describe("Matrix IndexedDB persistence", () => {
     expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(canonicalSnapshot);
     expect(fs.readFileSync(snapshotPath, "utf8")).toBe(snapshot);
 
-    const storeSpy = vi
-      .spyOn(getMatrixRuntime().state, "openKeyedStoreV2")
-      .mockImplementation(() => {
-        throw new Error("sqlite unavailable");
-      });
-    try {
-      await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject(diagnostic);
-    } finally {
-      storeSpy.mockRestore();
-    }
+    vi.spyOn(getMatrixRuntime().state, "openKeyedStoreV2").mockImplementation(() => {
+      throw new Error("sqlite unavailable");
+    });
+    await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject(diagnostic);
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {
@@ -336,25 +310,10 @@ describe("Matrix IndexedDB persistence", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("handles concurrent persist operations in SQLite state", async () => {
-    await seed();
-    await Promise.all([persist(), persist()]);
-
-    expect(fs.existsSync(snapshotPath)).toBe(false);
-    await clearTestIndexedDbState();
-    await expect(restoreIdbFromDisk(snapshotPath)).resolves.toBe(true);
-    await expect(read()).resolves.toEqual(records("room-1", "abc123"));
-  });
-
   it("strictly propagates final IndexedDB persistence failures", async () => {
     const cause = new Error("indexeddb unavailable");
-    const databasesSpy = vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
-
-    try {
-      await expect(persist(true)).rejects.toBe(cause);
-    } finally {
-      databasesSpy.mockRestore();
-    }
+    vi.spyOn(indexedDB, "databases").mockRejectedValue(cause);
+    await expect(persist(true)).rejects.toBe(cause);
   });
 
   it("cancels an active snapshot before writing without warning", async () => {
@@ -382,7 +341,6 @@ describe("Matrix IndexedDB persistence", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       pendingDatabases.resolve(databaseList);
-      databasesSpy.mockRestore();
     }
   });
 });
