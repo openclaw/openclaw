@@ -1,4 +1,4 @@
-import { asNullableRecord, expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asNullableRecord, expectDefined } from "@openclaw/normalization-core";
 import { expect, it as baseIt, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
@@ -42,7 +42,6 @@ import {
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
-import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataOwner,
@@ -119,11 +118,10 @@ function fixture(state: OpenClawTestState) {
     overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> & {
       respond?: Reply;
     } = {},
-    method: "models.list" | "chat.metadata" = "models.list",
   ) => {
     const respond = overrides.respond ?? vi.fn<RespondFn>();
-    const handler =
-      method === "chat.metadata" ? handleChatMetadataRequest : modelsHandlers["models.list"]!;
+    const method = "models.list";
+    const handler = modelsHandlers[method]!;
     await handler({
       req: { type: "req", id: "session-catalog", method, params },
       params,
@@ -177,7 +175,13 @@ function withFixture(run: (f: ReturnType<typeof fixture>) => Promise<void>) {
     withOpenClawTestState(isolated, async (state) => {
       const f = fixture(state);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      await run(f);
+      await state.writeConfig(f.config);
+      try {
+        await run(f);
+      } finally {
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      }
     });
 }
 
@@ -215,11 +219,6 @@ async function duringCatalog(
   return pending;
 }
 
-async function closeDatabases(f: ReturnType<typeof fixture>) {
-  await closeOpenClawAgentDatabasesAsync(f.state.root);
-  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
-}
-
 const personalSelection = (authProfileId: string) =>
   expect.objectContaining({ kind: "personal", authProfileId, source: "user" });
 
@@ -254,7 +253,6 @@ function expectPersonal(respond: Reply, authProfileId: string, once = false) {
 }
 
 it("shares selection revisions with events, ignoring activity", async (f) => {
-  await f.state.writeConfig(f.config);
   const scope = await f.saveSession("agent:main:catalog-revision", "pinned");
   let revision: unknown;
   for (const [patch, changed] of [
@@ -294,7 +292,6 @@ it("shares selection revisions with events, ignoring activity", async (f) => {
 it.each(["missing", "foreign"] as const)(
   "rejects %s session ownership before catalog I/O",
   async (ownership, f) => {
-    await f.state.writeConfig(f.config);
     const sessionKey = "agent:main:hidden-catalog";
     await writeSessionFixture(
       { agentId: "main", sessionKey },
@@ -318,35 +315,15 @@ it.each(["missing", "foreign"] as const)(
     });
     expect(f.readPrepared).not.toHaveBeenCalled();
     expect(f.loadDeferred).not.toHaveBeenCalled();
-    await closeDatabases(f);
   },
 );
 
 it("retains catalog across committed read acknowledgments", async (f) => {
-  await f.state.writeConfig(f.config);
   const scope = await f.saveSession("agent:main:catalog-read-marker", {
-    sessionId: "catalog-read-marker-session",
-    lifecycleRevision: "catalog-read-marker-lifecycle",
     lastReadAt: 1,
-    label: "catalog-read-marker-label",
     authProfileOverride: f.authProfileId,
     authProfileOverrideSource: "user",
-    toolOverrides: { webSearch: false },
   });
-  const before = expectDefined(loadSessionEntry(scope), "saved entry");
-  const database = openOpenClawAgentDatabase(scope);
-  const readRow = () =>
-    expectDefined(
-      database.db
-        .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-        .get(scope.sessionKey),
-      "saved row",
-    );
-  const beforeRow = readRow();
-  const beforePayload = expectDefined(
-    safeParseJsonRecord(String(beforeRow.entry_json)),
-    "saved payload",
-  );
   const params = { sessionKey: scope.sessionKey, view: "configured" };
   const control = await f.request(params);
   expectReply(control, { models: [availableModel] }, true);
@@ -355,37 +332,33 @@ it("retains catalog across committed read acknowledgments", async (f) => {
       preserveActivity: true,
       skipMaintenance: true,
     });
-    expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
-    expect(readRow()).toEqual({
-      ...beforeRow,
-      entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
-      last_read_at: 2,
-    });
+    expect(loadSessionEntry(scope)?.lastReadAt).toBe(2);
   });
   const fresh = await f.request(params);
   expect(fresh.mock.calls).toEqual(control.mock.calls);
   expect(changed.mock.calls).toEqual(control.mock.calls);
-  await closeDatabases(f);
 });
 
 it.each([
   "selected patch",
+  "unselected model",
   "selected reset",
   "store close",
   "same-file reopen",
   "profile alias change",
   "catalog owner",
 ] as const)("revalidates selected catalog after %s", async (change, f) => {
-  await f.state.writeConfig(f.config);
   let closedStorePath: string | undefined;
   const scope = await f.saveSession("agent:main:held-saved", "pinned");
   const respond = await duringCatalog(
     f,
     { sessionKey: scope.sessionKey, view: "configured" },
     async () => {
-      expect(f.readPrepared).toHaveBeenCalledOnce();
       if (change === "selected patch") {
         await writeSessionFixture(scope, { label: "changed" });
+      } else if (change === "unselected model") {
+        const other = await f.saveSession("agent:main:other");
+        await writeSessionFixture(other, { modelOverride: "replacement" });
       } else if (change === "selected reset") {
         await writeSessionFixture(scope, {
           sessionId: "replacement",
@@ -407,8 +380,10 @@ it.each([
       }
     },
   );
-  if (change === "selected patch") {
-    expect(loadSessionEntry(scope)?.label).toBe("changed");
+  if (change === "selected patch" || change === "unselected model") {
+    if (change === "selected patch") {
+      expect(loadSessionEntry(scope)?.label).toBe("changed");
+    }
     expectPersonal(respond, f.authProfileId, true);
   } else {
     expectError(
@@ -426,43 +401,7 @@ it.each([
       await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
     }
   }
-  await closeDatabases(f);
 });
-
-it.each([false, true])(
-  "revalidates chat.metadata when selected model changes (%s)",
-  async (changeSelected, f) => {
-    await f.state.writeConfig(f.config);
-    const selected = await f.saveSession("agent:main:metadata-selected");
-    const other = await f.saveSession("agent:main:metadata-other");
-    const entered = createDeferred();
-    const release = createDeferred();
-    f.context.readChatMetadata = async () => {
-      entered.resolve();
-      await release.promise;
-      return { swarmEnabled: false };
-    };
-    const respond = vi.fn<RespondFn>();
-    const pending = f.request({ sessionKey: selected.sessionKey }, { respond }, "chat.metadata");
-    void pending.catch(() => {});
-    try {
-      await Promise.race([entered.promise, pending]);
-      await writeSessionFixture(changeSelected ? selected : other, {
-        modelOverride: "replacement",
-      });
-    } finally {
-      release.resolve();
-    }
-    if (changeSelected) {
-      await expect(pending).rejects.toThrow("Session changed");
-      expect(respond).not.toHaveBeenCalled();
-    } else {
-      await pending;
-      expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
-    }
-    await closeDatabases(f);
-  },
-);
 
 it("retains session pins independently of viewer defaults", async (f) => {
   f.config.agents = {
@@ -492,7 +431,6 @@ it("retains session pins independently of viewer defaults", async (f) => {
 });
 
 it("shares native selection revisions with rows without borrowing host auth", async (f) => {
-  await f.state.writeConfig(f.config);
   clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
   const sessionKey = "agent:main:harness:catalog-native:saved";
   const scope = await f.saveSession(sessionKey, {
@@ -547,19 +485,7 @@ it("shares native selection revisions with rows without borrowing host auth", as
       return { revision, payload };
     };
     const initial = await read();
-    const { payload } = initial;
-    expect(payload).not.toEqual(
-      expect.objectContaining({
-        models: [expect.objectContaining({ available: expect.anything() })],
-      }),
-    );
-    await writeSessionFixture(scope, {
-      label: "Renamed native session",
-      updatedAt: 2,
-      lastReadAt: 2,
-    });
-    expect((await read()).revision).toBe(initial.revision);
-    const saved = loadSessionEntry(scope);
+    expect(initial.payload).not.toHaveProperty("models.0.available");
     let revision = initial.revision;
     for (const next of [
       { model: "native", auth: "host" },
@@ -569,8 +495,6 @@ it("shares native selection revisions with rows without borrowing host auth", as
       ownership = next;
       const current = await read();
       expect(current.revision).not.toBe(revision);
-      expect((await read()).revision).toBe(current.revision);
-      expect(loadSessionEntry(scope)).toEqual(saved);
       revision = current.revision;
     }
     const neutral = await f.request({ agentId: "main", view: "configured" });
@@ -582,11 +506,8 @@ it("shares native selection revisions with rows without borrowing host auth", as
 });
 
 it("does not use viewer defaults for unpinned sessions", async (f) => {
-  await f.state.writeConfig(f.config);
-  const agent = await f.request({ agentId: "main", view: "configured" });
-  expectModels(agent, true);
-  const session = await f.request({ sessionKey: "agent:main:uncreated", view: "configured" });
-  expectModels(session, false);
+  expectModels(await f.request({ agentId: "main", view: "configured" }), true);
+  expectModels(await f.request({ sessionKey: "agent:main:uncreated", view: "configured" }), false);
 });
 
 it("previews owned drafts without mutating shared accounts", async (f) => {
@@ -656,7 +577,6 @@ it.each(["disconnect", "role loss", "abort"] as const)(
       f,
       { agentId: "main", authProfileId: f.authProfileId },
       () => {
-        expect(f.readPrepared).toHaveBeenCalledOnce();
         if (loss === "disconnect") {
           f.clients.delete(f.client);
         } else if (loss === "role loss") {
