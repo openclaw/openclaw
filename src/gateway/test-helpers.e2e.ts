@@ -84,68 +84,50 @@ export async function connectGatewayClient(params: {
   const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
   const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  const safe = normalizeLowercaseStringOrEmpty(
+    `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
+      /[^a-zA-Z0-9._-]+/g,
+      "_",
+    ),
+  );
   const deviceIdentity =
     params.deviceIdentity ??
     loadOrCreateDeviceIdentity({
-      path: (() => {
-        const safe = normalizeLowercaseStringOrEmpty(
-          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
-            /[^a-zA-Z0-9._-]+/g,
-            "_",
-          ),
-        );
-        return path.join(
-          identityRoot,
-          "test-device-identities",
-          safe,
-          "client",
-          "credentials.sqlite",
-        );
-      })(),
+      path: path.join(identityRoot, "test-device-identities", safe, "client", "credentials.sqlite"),
     });
+  const {
+    timeoutMs,
+    timeoutMessage,
+    signal,
+    verifyCleanup,
+    connectChallengeTimeoutMs,
+    requestTimeoutMs,
+    ...options
+  } = params;
   return await acquireGatewayTestClient(
     {
-      url: params.url,
-      token: params.token,
-      deviceToken: params.deviceToken,
-      origin: params.origin,
-      edgeAuthHeaders: params.edgeAuthHeaders,
-      tlsFingerprint: params.tlsFingerprint,
-      ...(params.connectChallengeTimeoutMs !== undefined
-        ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
-        : {}),
-      preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs ?? params.timeoutMs,
-      ...(params.requestTimeoutMs !== undefined
-        ? { requestTimeoutMs: params.requestTimeoutMs }
-        : {}),
-      minProtocol: params.minProtocol,
-      maxProtocol: params.maxProtocol,
+      ...options,
+      ...(connectChallengeTimeoutMs !== undefined ? { connectChallengeTimeoutMs } : {}),
+      preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs ?? timeoutMs,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
-      modelCatalog: params.modelCatalog,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
       platform,
-      deviceFamily: params.deviceFamily,
       mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
       role,
       scopes,
-      caps: params.caps,
-      commands: params.commands,
-      permissions: params.permissions,
-      instanceId: params.instanceId,
       deviceIdentity,
-      onEvent: params.onEvent,
-      onHelloOk: params.onHelloOk,
     },
     {
       // The Gateway answers or closes an unfinished handshake at its preauth deadline.
       // Wait past that verdict instead of racing it with a shorter fixture timer.
-      timeoutMs: params.timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
-      timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
+      timeoutMs: timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
+      timeoutMessage: timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,
-      signal: params.signal,
-      verifyCleanup: params.verifyCleanup,
+      signal,
+      verifyCleanup,
     },
   );
 }
