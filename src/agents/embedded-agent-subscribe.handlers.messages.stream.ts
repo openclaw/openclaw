@@ -358,12 +358,26 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
     let isAppend = false;
     let replyDirectives = params.parsedStreamDirectives;
     let audioDirectiveCount = params.previousAudioDirectiveCount;
+    // The trim owner holds boundary whitespace out of preview deltas, so the raw
+    // directive text and the prepared visible delta differ only at the edges.
+    // When the projection has already appended exactly this visible delta, the
+    // canonical full-reply parse would only trim those same edges. A delta ending
+    // in "[" stays canonical because the directive accumulator holds it as a
+    // possible marker, and text_end always stays canonical.
+    const boundaryWhitespaceAppend =
+      params.appendDelta !== null &&
+      params.appendDelta === params.visibleDelta &&
+      params.previousText === params.previousCleaned &&
+      params.parsedStreamDirectives !== null &&
+      params.parsedStreamDirectives.text !== params.visibleDelta &&
+      params.parsedStreamDirectives.text.trim() === params.visibleDelta.trim() &&
+      !params.visibleDelta.endsWith("[");
     if (
       params.evtType !== "text_end" &&
       params.parsedStreamDirectives &&
       !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
       !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-      params.parsedStreamDirectives.text === params.visibleDelta &&
+      (params.parsedStreamDirectives.text === params.visibleDelta || boundaryWhitespaceAppend) &&
       params.appendDelta !== null &&
       params.previousText === params.previousCleaned &&
       (directiveCodePrefix || !hasDirectiveMarker)
