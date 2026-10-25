@@ -137,6 +137,20 @@ it("shows uninstall dry-run preview without mutating config or acquiring write m
   expectRuntimeLogIncludes("context engine slot");
 });
 
+it("escapes terminal controls from the installed manifest name in the preview", async () => {
+  configureAlphaInstall();
+  setPluginSnapshot({ id: "alpha", name: "alpha\u001b[31m\nforged-row" });
+
+  await uninstall("alpha", "--dry-run");
+
+  const output = cli.pluginsCliRuntimeLogs.join("\n");
+  expect(output).not.toContain("\u001b");
+  const previewLine = output
+    .split("\n")
+    .find((line) => line.includes("Plugin: alpha") && line.includes("forged-row"));
+  expect(previewLine).toContain("\\nforged-row");
+});
+
 it("forwards online --keep-files without deleting files or writing config locally", async () => {
   configureAlphaInstall();
   cli.resolvePluginLifecycleGatewayMock.mockResolvedValue(cli.pluginLifecycleGatewayMock);
