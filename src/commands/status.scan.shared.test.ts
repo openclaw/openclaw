@@ -241,28 +241,43 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe?.error).toBe("missing scope: operator.read; warn");
   });
 
-  it("uses a bounded local status RPC fallback when the detail probe times out", async () => {
-    mocks.probeGateway.mockResolvedValue(
-      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
-    );
-    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+  it.each([true, false])(
+    "uses bounded local fallback with explicit credentials=%s",
+    async (explicit) => {
+      if (!explicit) {
+        mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({ auth: {}, warning: undefined });
+      }
+      mocks.probeGateway.mockResolvedValue({
+        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+        ...(!explicit
+          ? {
+              auth: {
+                role: "operator",
+                scopes: ["operator.read"],
+                capability: "read_only" as const,
+              },
+            }
+          : {}),
+      });
+      mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
-    const result = await resolveGatewayProbeSnapshot({}, createStatusGatewayProbeBudget(8000));
+      const result = await resolveGatewayProbeSnapshot({}, createStatusGatewayProbeBudget(8000));
 
-    const gatewayCall = readGatewayCall();
-    expect(gatewayCall).toMatchObject({
-      token: "tok",
-      password: "pw",
-      timeoutMs: 2000,
-    });
-    expect(gatewayCall).not.toHaveProperty("deviceIdentity");
-    expect(result).toMatchObject({
-      gatewayReachable: true,
-      gatewayProbe: { ok: true, error: "timeout", auth: { capability: "read_only" } },
-      gatewayProbeAuthWarning: "warn",
-    });
-    expect(result.gatewayProbe?.status).toEqual({ sessions: 1 });
-  });
+      const gatewayCall = readGatewayCall();
+      expect(gatewayCall).toMatchObject({
+        token: explicit ? "tok" : undefined,
+        password: explicit ? "pw" : undefined,
+        timeoutMs: 2000,
+      });
+      expect(gatewayCall).not.toHaveProperty("deviceIdentity");
+      expect(result).toMatchObject({
+        gatewayReachable: true,
+        gatewayProbe: { ok: true, error: "timeout", auth: { capability: "read_only" } },
+        gatewayProbeAuthWarning: explicit ? "warn" : undefined,
+      });
+      expect(result.gatewayProbe?.status).toEqual({ sessions: 1 });
+    },
+  );
 
   it("does not use the local status RPC fallback for dotted localhost", async () => {
     mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
@@ -390,30 +405,6 @@ describe("resolveGatewayProbeSnapshot", () => {
       await closeMinimalGatewayServer(gateway);
       await Promise.allSettled([pending]);
     }
-  });
-
-  it("lets callGateway reuse paired-device auth for local status RPC fallback", async () => {
-    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
-      auth: {},
-      warning: undefined,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
-      auth: {
-        role: "operator",
-        scopes: ["operator.read"],
-        capability: "read_only",
-      },
-    });
-    mocks.callGateway.mockResolvedValue({ sessions: 1 });
-
-    const result = await resolveGatewayProbeSnapshot();
-
-    const gatewayCall = readGatewayCall();
-    expect(gatewayCall.token).toBeUndefined();
-    expect(gatewayCall.password).toBeUndefined();
-    expect(gatewayCall).not.toHaveProperty("deviceIdentity");
-    expect(result.gatewayReachable).toBe(true);
   });
 
   it("does not use the status RPC fallback for remote probe failures", async () => {
