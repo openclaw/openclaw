@@ -97,9 +97,13 @@ vi.mock("../commands/channel-setup/plugin-install.js", () => ({
 const readFirstCallArg = (mock: Parameters<typeof mockFirstRecordArg>[0]) =>
   mockFirstRecordArg(mock, "channel auth");
 
-function readFirstLogMessage(runtime: { log: ReturnType<typeof vi.fn> }): string {
-  const [message] = runtime.log.mock.calls[0] ?? [];
-  return String(message);
+const firstLog = () => String(mocks.runtime.log.mock.calls[0]?.[0]);
+const expectCall = (mock: Parameters<typeof mockFirstRecordArg>[0], fields: object) =>
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+function expectNoCalls(...callbacks: Parameters<typeof mockFirstRecordArg>[0][]) {
+  for (const callback of callbacks) {
+    expect(callback).not.toHaveBeenCalled();
+  }
 }
 
 function gatewayRequestError(message: string, gatewayCode: string): Error {
@@ -121,6 +125,7 @@ describe("channel-auth", () => {
   };
   const unreachableGateway = () =>
     mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+  const login = () => runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
   const plugin = {
     id: "whatsapp",
     auth: { login: mocks.login },
@@ -172,9 +177,8 @@ describe("channel-auth", () => {
 
       await run({ channel: "whatsapp" }, runtime);
 
-      expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
+      expectNoCalls(mocks.applyPluginAutoEnable, mocks.replaceConfigFile);
       expect(readFirstCallArg(action).cfg).toBe(runtimeConfig);
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
 
@@ -197,7 +201,7 @@ describe("channel-auth", () => {
 
     await runChannelLogout({}, runtime);
 
-    expect(mocks.logoutAccount).toHaveBeenCalledWith(expect.objectContaining({ account }));
+    expectCall(mocks.logoutAccount, { account });
   });
 
   it("skips gateway runtime reconcile in remote mode and warns without failing login", async () => {
@@ -206,27 +210,27 @@ describe("channel-auth", () => {
       channels: { whatsapp: {} },
     });
 
-    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+    await login();
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(readFirstLogMessage(runtime)).toContain("Gateway is in remote mode");
+    expect(firstLog()).toContain("Gateway is in remote mode");
   });
 
   it("reports an unconfigured start decision after saving login", async () => {
     const outcome = { status: "skipped", reason: "unconfigured" };
     mocks.callGateway.mockResolvedValue({ started: false, outcome });
 
-    await expect(
-      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
-    ).resolves.toBeUndefined();
+    await expect(login()).resolves.toBeUndefined();
 
     expect(mocks.login).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(readFirstLogMessage(runtime)).toContain(`whatsapp/acct-1`);
-    expect(readFirstLogMessage(runtime)).toContain(outcome.reason);
-    expect(readFirstLogMessage(runtime)).toContain(
+    for (const text of [
+      "whatsapp/acct-1",
+      outcome.reason,
       "openclaw channels status --channel whatsapp --probe",
-    );
+    ]) {
+      expect(firstLog()).toContain(text);
+    }
   });
 
   it.each([false, true])(
@@ -240,22 +244,17 @@ describe("channel-auth", () => {
       } else {
         mocks.callGateway.mockResolvedValueOnce(undefined);
       }
-      await expect(
-        runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
-      ).resolves.toBeUndefined();
-      expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-      expect(mocks.callGateway).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ method: "channels.start" }),
-      );
-      expect(mocks.callGateway).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          method: "gateway.restart.request",
-          params: { reason: "channel login: load whatsapp" },
-        }),
-      );
-      expect(readFirstLogMessage(runtime)).toContain(
+      await expect(login()).resolves.toBeUndefined();
+      expect(mocks.callGateway.mock.calls).toEqual([
+        [expect.objectContaining({ method: "channels.start" })],
+        [
+          expect.objectContaining({
+            method: "gateway.restart.request",
+            params: { reason: "channel login: load whatsapp" },
+          }),
+        ],
+      ]);
+      expect(firstLog()).toContain(
         fails
           ? "running gateway did not restart it: invalid channels.start channel"
           : "Gateway restart requested to load whatsapp",
@@ -300,13 +299,11 @@ describe("channel-auth", () => {
       expect(mocks.resolveAccount.mock.calls[0]?.[0]).toEqual(autoEnabledCfg);
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       if (mode === "login") {
-        const login = readFirstCallArg(mocks.login);
-        expect(login.cfg).toEqual(runtimeConfig);
-        expect(login.channelInput).toBe("whatsapp");
+        const { cfg, channelInput } = readFirstCallArg(mocks.login);
+        expect({ cfg, channelInput }).toEqual({ cfg: runtimeConfig, channelInput: "whatsapp" });
       } else {
-        const call = readFirstCallArg(mocks.callGateway);
-        expect(call.config).toEqual(runtimeConfig);
-        expect(call.method).toBe("channels.logout");
+        const { config, method } = readFirstCallArg(mocks.callGateway);
+        expect({ config, method }).toEqual({ config: runtimeConfig, method: "channels.logout" });
       }
     },
   );
@@ -367,8 +364,7 @@ describe("channel-auth", () => {
       "remote gateway unreachable",
     );
 
-    expect(mocks.logoutAccount).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
+    expectNoCalls(mocks.logoutAccount, runtime.log);
   });
 
   it.each(["multiple", "disabled"] as const)(
@@ -388,9 +384,7 @@ describe("channel-auth", () => {
           ? "Multiple configured channels support logout"
           : "No configured channel supports logout",
       );
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-      expect(mocks.logoutAccount).not.toHaveBeenCalled();
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+      expectNoCalls(mocks.callGateway, mocks.logoutAccount, mocks.replaceConfigFile);
     },
   );
 
@@ -435,14 +429,6 @@ describe("channel-auth", () => {
           id: plugin.id,
           pluginId: plugin.id,
           origin: "bundled",
-          meta: {
-            id: plugin.id,
-            label: "Fixture",
-            selectionLabel: "Fixture",
-            docsPath: "",
-            blurb: "",
-          },
-          install: { npmSpec: plugin.id },
         },
       ]);
       mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue({
@@ -457,12 +443,10 @@ describe("channel-auth", () => {
         mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
         await runAuth(mode, ["--agent", "research"], ["--agent", " ops "]);
         expect(runtime.error).not.toHaveBeenCalled();
-        expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-          expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
-        );
-        expect(mode === "login" ? mocks.login : mocks.logoutAccount).toHaveBeenCalledWith(
-          expect.objectContaining({ accountId: "work" }),
-        );
+        expectCall(mocks.loadChannelSetupPluginRegistrySnapshotForChannel, {
+          workspaceDir: "/tmp/ops-workspace",
+        });
+        expectCall(mode === "login" ? mocks.login : mocks.logoutAccount, { accountId: "work" });
       },
     );
 
@@ -471,12 +455,14 @@ describe("channel-auth", () => {
         name: "AgentSelectionRequiredError",
         message: expect.stringContaining("no explicit owner"),
       });
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
-      expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-      expect(mocks.login).not.toHaveBeenCalled();
-      expect(mocks.logoutAccount).not.toHaveBeenCalled();
+      expectNoCalls(
+        runtime.error,
+        runtime.exit,
+        mocks.listChannelPluginCatalogEntries,
+        mocks.loadChannelSetupPluginRegistrySnapshotForChannel,
+        mocks.login,
+        mocks.logoutAccount,
+      );
     });
 
     it.each([
@@ -488,9 +474,7 @@ describe("channel-auth", () => {
       await runAuth("logout", ["--agent", agent]);
       expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
       expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
-      expect(mocks.login).not.toHaveBeenCalled();
-      expect(mocks.logoutAccount).not.toHaveBeenCalled();
+      expectNoCalls(mocks.listChannelPluginCatalogEntries, mocks.login, mocks.logoutAccount);
     });
   });
 });

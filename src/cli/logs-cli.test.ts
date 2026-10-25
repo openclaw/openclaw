@@ -25,8 +25,8 @@ function journalPage(line: string, cursor: string) {
 }
 
 const logFile = "/tmp/openclaw.log";
-function logPage(lines: string[], cursor?: number) {
-  return { file: logFile, lines, ...(cursor === undefined ? {} : { cursor }) };
+function logPage(lines: string[], cursor?: number, extra = {}) {
+  return { file: logFile, lines, ...(cursor === undefined ? {} : { cursor }), ...extra };
 }
 const recoveredLine = JSON.stringify({
   time: "2026-05-29T20:00:00.000Z",
@@ -34,11 +34,11 @@ const recoveredLine = JSON.stringify({
   0: "rpc recovered line",
 });
 
-async function withTty<T>(stream: NodeJS.WriteStream, run: () => Promise<T>): Promise<T> {
+async function withTty<T>(stream: NodeJS.WriteStream, action: () => Promise<T>): Promise<T> {
   const previous = Object.getOwnPropertyDescriptor(stream, "isTTY");
   Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
   try {
-    return await run();
+    return await action();
   } finally {
     if (previous) {
       Object.defineProperty(stream, "isTTY", previous);
@@ -90,18 +90,18 @@ function expectText(text: string, includes: string[], excludes: string[] = []) {
   }
 }
 
-const captureOutput = () => ({
-  stdoutWrites: captureStdoutWrites(),
-  stderrWrites: captureStderrWrites(),
-});
-
-async function runFailure(args: string[]) {
-  const { stdoutWrites, stderrWrites } = captureOutput();
-  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+async function run(args: string[] = [], failure = false) {
+  const stdoutWrites = captureStdoutWrites();
+  const stderrWrites = captureStderrWrites();
+  const exit = failure && vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   await runLogsCli(["logs", ...args]);
-  expect(exit).toHaveBeenCalledWith(1);
+  if (exit) {
+    expect(exit).toHaveBeenCalledWith(1);
+  }
   return { stdout: stdoutWrites.join(""), stderr: stderrWrites.join("") };
 }
+const runFailure = (args: string[]) => run(args, true);
+const follow = ["--follow", "--plain", "--interval", "1"];
 
 function useJournal() {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -114,38 +114,24 @@ beforeEach(() => {
 });
 
 it("writes output directly to stdout/stderr", async () => {
-  callGatewayFromCli.mockResolvedValueOnce({
-    file: "/tmp/openclaw.log",
-    lines: ["raw line"],
-    truncated: true,
-    reset: true,
-  });
-
-  const { stdoutWrites, stderrWrites } = captureOutput();
-
-  await runLogsCli(["logs"]);
-
-  expectText(stdoutWrites.join(""), ["Log file:", "raw line"]);
-  expectText(stderrWrites.join(""), [
-    "Log tail truncated (increase --limit or --max-bytes).",
-    "Log cursor reset",
-  ]);
+  callGatewayFromCli.mockResolvedValueOnce(
+    logPage(["raw line"], undefined, { truncated: true, reset: true }),
+  );
+  const { stdout, stderr } = await run();
+  expectText(stdout, ["Log file:", "raw line"]);
+  expectText(stderr, ["Log tail truncated (increase --limit or --max-bytes).", "Log cursor reset"]);
 });
 
 it("reports a byte-budget re-anchor without claiming rotation in JSON output", async () => {
-  callGatewayFromCli.mockResolvedValueOnce({
-    file: "/tmp/openclaw.log",
-    lines: ["line after skipped burst"],
-    truncated: true,
-    reset: true,
-    skippedBytes: 4096,
-  });
-
-  const { stdoutWrites, stderrWrites } = captureOutput();
-
-  await runLogsCli(["logs", "--json"]);
-
-  const output = `${stdoutWrites.join("")}\n${stderrWrites.join("")}`;
+  callGatewayFromCli.mockResolvedValueOnce(
+    logPage(["line after skipped burst"], undefined, {
+      truncated: true,
+      reset: true,
+      skippedBytes: 4096,
+    }),
+  );
+  const { stdout, stderr } = await run(["--json"]);
+  const output = `${stdout}\n${stderr}`;
   expectText(output, ["re-anchored (skipped 4096 bytes)"], ["file rotated"]);
 });
 
@@ -172,11 +158,8 @@ it.each([
           }),
         ),
       });
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--no-color", ...args]);
-
-      expect(stdoutWrites.join("").trim().split("\n")).toEqual([
+      const { stdout } = await run(["--no-color", ...args]);
+      expect(stdout.trim().split("\n")).toEqual([
         "Log file: /tmp/openclaw.log",
         `${time} info gateway valid timestamp`,
         "info gateway missing timestamp",
@@ -214,14 +197,11 @@ it("retains calendar log identity in text and JSON", async () => {
     _meta: { name: JSON.stringify(context), logLevelName: "INFO" },
   });
   callGatewayFromCli.mockResolvedValueOnce(logPage([raw, "raw control"]));
-  const writes = captureStdoutWrites();
-  await runLogsCli(["logs", "--plain", "--no-color"]);
-  expectText(writes.join(""), ["info calendar sent\n", "raw control\n"]);
-  writes.length = 0;
+  const { stdout } = await run(["--plain", "--no-color"]);
+  expectText(stdout, ["info calendar sent\n", "raw control\n"]);
   callGatewayFromCli.mockResolvedValueOnce(logPage([raw, "raw control"]));
-  await runLogsCli(["logs", "--json"]);
-  const records = writes
-    .join("")
+  const json = await run(["--json"]);
+  const records = json.stdout
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
@@ -236,17 +216,14 @@ it("falls back to the configured local log on scope-upgrade errors", async () =>
     new Error("scope upgrade pending approval (requestId: req-123)"),
   );
   readConfiguredLogTail.mockResolvedValueOnce(logPage(["local fallback line"], 5));
-  const { stdoutWrites, stderrWrites } = captureOutput();
-
-  await runLogsCli(["logs"]);
-
+  const { stdout, stderr } = await run();
   expect(readConfiguredLogTail).toHaveBeenCalledExactlyOnceWith({
     cursor: undefined,
     limit: 200,
     maxBytes: 250_000,
   });
-  expect(stdoutWrites.join("")).toContain("local fallback line");
-  expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
+  expect(stdout).toContain("local fallback line");
+  expect(stderr).toContain("Local Gateway RPC unavailable");
 });
 
 it("reads local logs and warns when broken config prevents Gateway target resolution", async () => {
@@ -260,12 +237,9 @@ it("reads local logs and warns when broken config prevents Gateway target resolu
     return { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" };
   });
   readConfiguredLogTail.mockResolvedValueOnce(logPage(["Gateway startup failed"], 5));
-  const { stdoutWrites, stderrWrites } = captureOutput();
-
-  await runLogsCli(["logs", "--json"]);
-
-  expect(stdoutWrites.join("")).toContain("Gateway startup failed");
-  expectText(stderrWrites.join(""), ["Configuration could not be read", "openclaw doctor --fix"]);
+  const { stdout, stderr } = await run(["--json"]);
+  expect(stdout).toContain("Gateway startup failed");
+  expectText(stderr, ["Configuration could not be read", "openclaw doctor --fix"]);
   expect(callGatewayFromCli).not.toHaveBeenCalled();
 });
 
@@ -284,16 +258,14 @@ it("switches back to Gateway logs.tail after temporary journal fallback", async 
       return journalPage("journal while probing", "def");
     });
 
-  // Pin UTC: the recovered-line assertion below checks a rendered
-  // timestamp, which otherwise follows the host time zone.
+  // Pin the rendered timestamp independently of the host time zone.
   const { stdout } = await withEnvAsync({ TZ: "UTC" }, () =>
-    runFailure(["--follow", "--plain", "--interval", "1", "--timeout", "250"]),
+    runFailure([...follow, "--timeout", "250"]),
   );
 
   expectRecoveryCalls(3, 2);
   expectGatewayPoll(2, undefined, "250");
-  const output = stdout;
-  expectText(output, [
+  expectText(stdout, [
     "journal bridge line",
     "journal while probing",
     "Log file: /tmp/openclaw.log",
@@ -334,12 +306,11 @@ it("keeps journal polling responsive while a Gateway recovery probe is pending",
     return true;
   });
 
-  await runLogsCli(["logs", "--follow", "--plain", "--interval", "1"]);
+  await runLogsCli(["logs", ...follow]);
 
   expect(stdoutWrites.join("")).toContain("second journal line");
   expectGatewayPoll(2, undefined, "30000");
-  expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
-  expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
+  expectRecoveryCalls(2, 2);
   const probeExtra = callGatewayFromCli.mock.calls[1]?.[3] as { signal?: AbortSignal };
   expect(probeExtra.signal?.aborted).toBe(true);
   expect(stderrWrites.join("")).toContain("output stdout closed");
@@ -362,20 +333,19 @@ it("prints source changes when Gateway RPC falls back to journal and recovers", 
     .mockResolvedValueOnce(journalPage("overlap line", "abc"))
     .mockResolvedValueOnce(journalPage("journal after recovery", "def"));
 
-  const { stdout, stderr } = await runFailure(["--follow", "--plain", "--interval", "1"]);
+  const { stdout, stderr } = await runFailure(follow);
 
   expectRecoveryCalls(5, 2);
   expectJournalArgs(2, ["--since=2026-06-01 00:00:03.000 UTC"]);
   const secondJournalArgs = execFileUtf8Tail.mock.calls[1]?.[1] as string[];
   expect(secondJournalArgs).not.toContain("--after-cursor=s=abc");
-  const output = stdout;
-  expect(output.match(/Log file: \/tmp\/openclaw\.log/g)).toHaveLength(2);
-  expectText(output, [
+  expect(stdout.match(/Log file: \/tmp\/openclaw\.log/g)).toHaveLength(2);
+  expectText(stdout, [
     "Log source: journalctl --user --boot --user-unit=openclaw-gateway.service _PID=2557",
     "initial rpc line",
   ]);
-  expect(output.match(/overlap line/g)).toHaveLength(2);
-  expect(output).toContain("journal after recovery");
+  expect(stdout.match(/overlap line/g)).toHaveLength(2);
+  expect(stdout).toContain("journal after recovery");
   expect(stderr).toContain("reading active systemd gateway journal");
 });
 
@@ -396,10 +366,8 @@ it("keeps journal cursor across repeated fallback before Gateway recovery", asyn
     )
     .mockResolvedValueOnce(journalPage("second journal bridge line", "def"));
 
-  const { stdout, stderr } = await runFailure(["--follow", "--plain", "--interval", "1"]);
-
-  expect(readConfiguredLogTail).not.toHaveBeenCalled();
-  expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
+  const { stdout, stderr } = await runFailure(follow);
+  expectRecoveryCalls(4, 2);
   expectJournalArgs(1, [
     "--user",
     "--boot",
@@ -409,7 +377,6 @@ it("keeps journal cursor across repeated fallback before Gateway recovery", asyn
     "--show-cursor",
   ]);
   expectJournalArgs(2, ["--after-cursor=s=abc"]);
-  expect(callGatewayFromCli).toHaveBeenCalledTimes(4);
   expectGatewayPoll(2, undefined);
   expectGatewayPoll(3, undefined);
   expectGatewayPoll(4, 10);

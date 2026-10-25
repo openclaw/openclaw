@@ -45,6 +45,19 @@ type SessionRow = TuiSessionList["sessions"][number];
 const tty = createCliTtyMock();
 const unresolvedHandoff =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
+const session = { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" };
+const resolvedConnection = {
+  url: "wss://resolved.example/control",
+  token: "resolved-token",
+  tlsFingerprint: "sha256:resolved-pin",
+};
+const createHandoff = (sessionKey = session.key, gatewayUrl = "wss://gateway.example/openclaw") =>
+  encodeResumeHandoff({ sessionKey, gatewayUrl });
+
+function expectNoTui(client: ReturnType<typeof createGatewayClient>) {
+  expect(client.listSessions).not.toHaveBeenCalled();
+  expect(mocks.runTui).not.toHaveBeenCalled();
+}
 
 function createGatewayClient(
   rows: SessionRow[],
@@ -53,11 +66,7 @@ function createGatewayClient(
     token?: string;
     password?: string;
     tlsFingerprint?: string;
-  } = {
-    url: "wss://resolved.example/control",
-    token: "resolved-token",
-    tlsFingerprint: "sha256:resolved-pin",
-  },
+  } = { ...resolvedConnection },
 ) {
   const client = {
     connection,
@@ -122,31 +131,17 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
-  it.each([["an explicit URL", undefined, "wss://other.example/ws"]])(
-    "rejects a handoff combined with %s",
-    async (_name, query, url) => {
-      const handoff = encodeResumeHandoff({
-        sessionKey: "agent:main:alpha",
-        gatewayUrl: "wss://gateway.example/openclaw",
-      });
+  it("rejects a handoff combined with an explicit URL", async () => {
+    await expect(
+      runResumeCommand(undefined, { handoff: createHandoff(), url: "wss://other.example/ws" }),
+    ).rejects.toThrow("--handoff cannot be combined with a positional query or --url.");
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
 
-      await expect(runResumeCommand(query, { handoff, ...(url ? { url } : {}) })).rejects.toThrow(
-        "--handoff cannot be combined with a positional query or --url.",
-      );
-      expect(mocks.connect).not.toHaveBeenCalled();
-      expect(mocks.runTui).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      name: "named dashboard face",
-      presentation: { displayName: "Handoff session", boardFace: "dashboard" },
-    },
-  ])("binds an exact handoff and explicit auth with canonical $name", async ({ presentation }) => {
+  it("binds an exact handoff and explicit auth with canonical dashboard presentation", async () => {
     const sessionKey = "agent:main: hostile-'\"$&;|<>^()%![]{}\\`-%PATH% ";
     const url = "wss://gateway.example/openclaw/$&;=()+,![]{}'`/%25PATH%25";
-    const handoff = encodeResumeHandoff({ sessionKey, gatewayUrl: url });
     const client = createGatewayClient([], {
       url: "wss://normalized.example/different-path",
       token: "explicit-token",
@@ -157,11 +152,12 @@ describe("runResumeCommand", () => {
       ok: true,
       key: sessionKey,
       agentId: "main",
-      ...presentation,
+      displayName: "Handoff session",
+      boardFace: "dashboard",
     });
 
     await runResumeCommand(undefined, {
-      handoff,
+      handoff: createHandoff(sessionKey, url),
       token: "explicit-token",
       password: "explicit-password",
       tlsFingerprint: "sha256:explicit-pin",
@@ -198,38 +194,28 @@ describe("runResumeCommand", () => {
     ["mismatched returned agent", { ok: true, key: "agent:main:alpha", agentId: "work" }],
     ["mismatched canonical key owner", { ok: true, key: "agent:work:alpha", agentId: "main" }],
   ])("rejects a %s handoff resolution without discovery or TUI launch", async (_name, result) => {
-    const handoff = encodeResumeHandoff({
-      sessionKey: "agent:main:alpha",
-      gatewayUrl: "wss://gateway.example/openclaw",
-    });
     const client = createGatewayClient([]);
     client.resolveSession.mockResolvedValue(result);
 
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
+    await expect(runResumeCommand(undefined, { handoff: createHandoff() })).rejects.toThrow(
       "Could not resolve the session handoff.",
     );
-    expect(client.listSessions).not.toHaveBeenCalled();
-    expect(mocks.runTui).not.toHaveBeenCalled();
+    expectNoTui(client);
     expect(client.stop).toHaveBeenCalledOnce();
   });
 
   it("rejects a handoff resolution RPC error without exposing it or launching the TUI", async () => {
-    const handoff = encodeResumeHandoff({
-      sessionKey: "agent:main:alpha",
-      gatewayUrl: "wss://gateway.example/openclaw",
-    });
     const client = createGatewayClient([]);
     client.resolveSession.mockRejectedValue(new Error("sensitive upstream details"));
 
-    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(unresolvedHandoff);
-    expect(client.listSessions).not.toHaveBeenCalled();
-    expect(mocks.runTui).not.toHaveBeenCalled();
+    await expect(runResumeCommand(undefined, { handoff: createHandoff() })).rejects.toThrow(
+      unresolvedHandoff,
+    );
+    expectNoTui(client);
   });
 
   it("omits the bare global session from the interactive picker", async () => {
-    const client = createGatewayClient([
-      { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
-    ]);
+    const client = createGatewayClient([session]);
     mocks.selectStyled.mockResolvedValue("agent:main:alpha");
 
     await runResumeCommand(undefined, {});
@@ -244,20 +230,14 @@ describe("runResumeCommand", () => {
     );
     expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
-        boundGateway: {
-          url: "wss://resolved.example/control",
-          token: "resolved-token",
-          tlsFingerprint: "sha256:resolved-pin",
-        },
+        boundGateway: resolvedConnection,
         session: "agent:main:alpha",
       }),
     );
   });
 
   it("resolves the resume connection once and hands it to the TUI as bound", async () => {
-    createGatewayClient([
-      { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
-    ]);
+    createGatewayClient([session]);
 
     await runResumeCommand("agent:main:alpha", { url: "wss://gateway.example/control" });
 
@@ -266,11 +246,7 @@ describe("runResumeCommand", () => {
     });
     expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
-        boundGateway: {
-          url: "wss://resolved.example/control",
-          token: "resolved-token",
-          tlsFingerprint: "sha256:resolved-pin",
-        },
+        boundGateway: resolvedConnection,
         session: "agent:main:alpha",
       }),
     );
