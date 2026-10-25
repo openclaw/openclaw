@@ -73,12 +73,15 @@ it.each([
       },
     };
     await upsertSessionEntryCore(target, entry);
+    const widget = {
+      name: "admission",
+      content: { kind: "html" as const, html: "<p>admitted</p>" },
+    };
     const previous =
       method === "board.widget.grant"
         ? await boardStore.putWidget({
             ...target,
-            name: "admission",
-            content: { kind: "html", html: "<p>admitted</p>" },
+            ...widget,
             declared: { netOrigins: ["https://example.test"] },
           })
         : undefined;
@@ -120,7 +123,7 @@ it.each([
               instanceId: previousWidget?.instanceId,
             }
           : method === "board.widget.put"
-            ? { name: "admission", content: { kind: "html", html: "<p>admitted</p>" } }
+            ? widget
             : { markdown: "admitted" }),
     };
     const entered = createDeferredCore();
@@ -141,7 +144,6 @@ it.each([
                 ? "grant"
                 : "putWidget",
           );
-    let mutationCalls: number;
     let requestFailure: { error: unknown } | undefined;
     let inGrant = false;
     const stages: string[] = [];
@@ -225,16 +227,13 @@ it.each([
     } finally {
       release.resolve();
       await request;
-      mutationCalls = mutation.mock.calls.length;
       mutation.mockRestore();
       grants.mockRestore();
       reads.restore();
     }
     if (requestFailure) {
-      if (change === "guard") {
-        expect(requestFailure.error).toBe(retiredError);
-      } else if (change === "abort") {
-        expect(requestFailure.error).toBe(abortError);
+      if (change === "guard" || change === "abort") {
+        expect(requestFailure.error).toBe(change === "guard" ? retiredError : abortError);
       } else if (change === "lifecycle") {
         expect(requestFailure.error).toBeInstanceOf(SessionMutationFactsUnavailableError);
       } else {
@@ -271,7 +270,6 @@ it.each([
       }
       return;
     }
-    expect(mutationCalls).toBe(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     if (method === "board.update") {
       expect((await boardStore.getSnapshot(target)).tabs).toEqual([

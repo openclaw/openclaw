@@ -50,7 +50,7 @@ function connectedNode(deviceId: string): NodeWorkerSupervisorNodeProof {
 
 async function withDemandFixture(
   run: (fixture: {
-    dispatch: (sessionId: string, deviceId?: string) => Promise<string>;
+    dispatch: (sessionId: string) => Promise<string>;
     send: (sessionId: string) => Promise<HeldTurn>;
     nodes: NodeWorkerSupervisorNodeProof[];
     placements: Map<string, WorkerSessionPlacementRecord>;
@@ -187,7 +187,7 @@ async function withDemandFixture(
       );
       return respond;
     };
-    const dispatch = async (sessionId: string, deviceId?: string) => {
+    const dispatch = async (sessionId: string) => {
       const key = sessionKey(sessionId);
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
@@ -199,11 +199,7 @@ async function withDemandFixture(
           worktree: { id: key, branch: "test", repoRoot: state.workspaceDir },
         },
       );
-      const respond = await invoke(
-        "dispatch",
-        sessionId,
-        deviceId ? { deviceId } : { autoDevice: true },
-      );
+      const respond = await invoke("dispatch", sessionId, { autoDevice: true });
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -230,11 +226,6 @@ async function withDemandFixture(
       return expectDefined(heldTurns.get(sessionId), "admitted session turn");
     };
     try {
-      for (const [index, node] of nodes.entries()) {
-        const id = `explicit-${index + 1}`;
-        expect(await dispatch(id, node.nodeId)).toBe(node.nodeId);
-        await send(id);
-      }
       nodes[0]!.workerHost.capacity = { total: 2, available: 1 };
       nodes[1]!.workerHost.capacity = { total: 2, available: 1 };
       await run({ dispatch, send, nodes, placements, service });

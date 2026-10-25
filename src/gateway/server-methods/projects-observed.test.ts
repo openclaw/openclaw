@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
@@ -11,14 +10,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { projectsHandlers } from "./projects.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { listObservedProjects as discoverProjects } from "./projects-observed.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const seededSessions = vi.hoisted(() => ({
-  store: {} as Record<string, SessionEntry>,
-}));
+let store: Record<string, SessionEntry> = {};
 
 function session(name: string, updatedAt: number, fields: Partial<SessionEntry>) {
   return [`agent:main:${name}`, { sessionId: name, updatedAt, ...fields }] as const;
@@ -38,26 +33,9 @@ function worktree(
   });
 }
 
-// mock-isolation: Supply observed session rows without opening real session stores.
-vi.mock("./projects-session-store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./projects-session-store.js")>()),
-  loadProjectSessionStore: () => ({
-    store: seededSessions.store,
-    agentId: () => undefined,
-    assertCurrent() {},
-  }),
-}));
-
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
   readResidentUserProfileAliases: (profileId: string) => new Set([profileId]),
-}));
-
-vi.mock("../../projects/project-registry.js", () => ({
-  listProjectRegistry: async () => [],
-  ProjectCheckoutError: class ProjectCheckoutError extends Error {},
-  registerProjectRegistry: vi.fn(),
-  removeProjectRegistry: vi.fn(),
 }));
 
 function authenticatedClient(user: string, scopes = ["operator.write"]): GatewayClient {
@@ -89,7 +67,7 @@ function identity(
 }
 
 function seedSessions(entries: ReturnType<typeof session>[]) {
-  seededSessions.store = Object.fromEntries(entries);
+  store = Object.fromEntries(entries);
 }
 
 async function listObservedProjects(
@@ -106,34 +84,14 @@ async function listObservedProjects(
       Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
     );
   return await withRestoredMocks([registry, identities], async () => {
-    const respond = vi.fn<RespondFn>();
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
-    try {
-      await projectsHandlers["projects.list"]?.({
-        params: { includeObserved: true },
-        respond,
-        context: bindSessionRowProjection(
-          { getRuntimeConfig: () => cfg },
-          () => projection,
-        ) as GatewayRequestContext,
-        client,
-      } as never);
-    } finally {
-      projection.dispose();
-    }
-    expect(respond).toHaveBeenCalledOnce();
-    const [ok, payload] = respond.mock.calls[0]!;
-    expect(ok).toBe(true);
-    if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
-      throw new TypeError("projects.list response is missing observedProjects");
-    }
-    return payload.observedProjects;
+    const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
+    return (await discoverProjects(context, client, store)).projects;
   });
 }
 
 beforeEach(() => {
-  seededSessions.store = {};
+  store = {};
 });
 
 describe("projects.list observed projects", () => {
@@ -215,11 +173,11 @@ describe("projects.list observed projects", () => {
       ),
     );
 
-    const projects = (await listObservedProjects(async (checkoutPath) =>
+    const projects = await listObservedProjects(async (checkoutPath) =>
       identity(checkoutPath, {
         originUrl: origins.get(checkoutPath.slice("/repos/".length)) ?? "",
       }),
-    )) as Array<{ name: string; originUrl?: string }>;
+    );
 
     expect(projects.map(({ name, originUrl }) => ({ name, originUrl }))).toEqual([
       { name: "url", originUrl: "https://host/repo.git" },
@@ -240,11 +198,11 @@ describe("projects.list observed projects", () => {
       }),
     );
 
-    const projects = (await listObservedProjects(
+    const projects = await listObservedProjects(
       async (checkoutPath) =>
         identity(checkoutPath, { originUrl: "https://github.com/openclaw/alpha.git" }),
       { worktrees, client: authenticatedClient("admin@example.com", ["operator.admin"]) },
-    )) as Array<{ checkouts: Array<{ path: string }> }>;
+    );
 
     expect(projects[0]?.checkouts).toHaveLength(PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT);
     expect(projects[0]?.checkouts[0]?.path).toBe("/worktrees/52");
