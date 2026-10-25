@@ -15,19 +15,16 @@ import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 import { resolveLogbookConfig, type LogbookConfig } from "./config.js";
 import { dayKeyFor } from "./day.js";
 import { LogbookService } from "./service.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
+import { quietLogger, workerModuleUrl } from "./test-fixtures.test-support.js";
 
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 const runtimeSource = fileURLToPath(new URL("../index.ts", import.meta.url));
-const quietLogger = { info() {}, warn() {}, error() {}, debug() {} };
 const snapshot = { payload: { base64: Buffer.from("synthetic image").toString("base64") } };
 const completionDefaults = await createPluginRuntimeMock().llm.complete({ messages: [] });
 const completion = (text: string) => ({ ...completionDefaults, text });
