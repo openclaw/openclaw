@@ -1,4 +1,4 @@
-import { createServer, type IncomingHttpHeaders } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { context, diag, metrics as otelMetrics, propagation, trace } from "@opentelemetry/api";
 import { logs as otelLogs } from "@opentelemetry/api-logs";
 import {
@@ -91,7 +91,7 @@ type ModelUsageEventInput = Omit<
   "seq" | "ts"
 >;
 
-type StartedService = {
+export type StartedService = {
   service: ReturnType<typeof createDiagnosticsOtelService>;
   ctx: OpenClawPluginServiceContext;
 };
@@ -154,32 +154,21 @@ export async function startOtelService({
 }
 
 export async function startOtelServiceWithHostUsage() {
-  let listener: InternalDiagnosticListener | undefined;
+  const onEvent = vi.fn(onTrustedInternalDiagnosticEvent);
   const started = await startOtelService({
     traces: true,
     configure: (ctx) => {
-      const internalDiagnostics = ctx.internalDiagnostics;
-      if (!internalDiagnostics) {
-        throw new Error("expected internal diagnostics for trusted OTel service");
-      }
-      const onEvent = internalDiagnostics.onEvent;
-      ctx.internalDiagnostics = {
-        ...internalDiagnostics,
-        onEvent: (registeredListener) => {
-          listener = registeredListener;
-          return onEvent(registeredListener);
-        },
-      };
+      ctx.internalDiagnostics!.onEvent = onEvent;
     },
   });
+  const listener = onEvent.mock.calls[0]?.[0];
   if (!listener) {
     throw new Error("expected OTel service to register a diagnostics listener");
   }
-  const registeredListener = listener;
   return {
     ...started,
     emitHostPluginUsage(event: ModelUsageEventInput, hostPluginId: string) {
-      registeredListener({ ...event, seq: 1, ts: Date.now() }, { trusted: true, internal: true }, {
+      listener({ ...event, seq: 1, ts: Date.now() }, { trusted: true, internal: true }, {
         hostPluginId,
       } as Parameters<InternalDiagnosticListener>[2] & {
         hostPluginId: string;
@@ -194,13 +183,13 @@ export async function stopStartedOtelServices() {
   await Promise.all(services.map(({ service, ctx }) => Promise.resolve(service.stop?.(ctx))));
 }
 
-export async function startOtlpReceiver() {
-  const requests: Array<{
-    contentType: string | undefined;
-    headers: IncomingHttpHeaders;
-    method: string | undefined;
-    url: string;
-  }> = [];
+export async function startOtlpReceiver(statusForRequest = (_count: number) => 200) {
+  const requests: Array<
+    Pick<IncomingMessage, "headers" | "method"> & {
+      contentType: string | undefined;
+      url: string;
+    }
+  > = [];
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
@@ -210,7 +199,11 @@ export async function startOtlpReceiver() {
         method: request.method,
         url: request.url ?? "",
       });
-      response.writeHead(200, { "content-type": "application/x-protobuf" });
+      const status = statusForRequest(requests.length);
+      response.writeHead(status, {
+        "content-type": "application/x-protobuf",
+        ...(status === 503 ? { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" } : {}),
+      });
       response.end();
     });
   });
