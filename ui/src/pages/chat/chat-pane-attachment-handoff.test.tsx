@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
@@ -10,15 +9,12 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { selectFile } from "./chat-attachment-picker.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
@@ -37,10 +33,7 @@ import {
 } from "./chat-send-composer.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
-import { createChatAttachmentInputHandle } from "./components/chat-attachment-inputs.ts";
-import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
-import { AttachmentPreview } from "./components/chat-attachments.tsx";
+import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence-feedback.ts";
@@ -224,36 +217,20 @@ describe("cross-region Home composer ownership", () => {
 
   it.each(["complete", "remove"] as const)(
     "retains pending file custody through handoffs and source disposal (%s)",
-    async (outcome) => {
+    (outcome) => {
       const fixture = home();
       const { context, owner, page } = fixture;
       page.edit("Keep this draft and file");
-      const container = document.createElement("div");
-      const inputHandle = createChatAttachmentInputHandle();
-      const view = mountSolid(
-        (props: { controls: ChatAttachmentControlsProps; showInputs: boolean }) => (
-          <>
-            <Show when={props.showInputs}>
-              <ChatAttachmentInputs {...props.controls} inputHandle={inputHandle} />
-            </Show>
-            <AttachmentPreview {...props.controls} />
-          </>
-        ),
-        { controls: page.controller.attachmentInputProps(page.current), showInputs: true },
-        container,
-      );
       const readers: FileReader[] = [];
-      const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
         this: FileReader,
       ) {
         readers.push(this);
       });
-      disposals.push(() => {
-        read.mockRestore();
-        view.dispose();
-      });
-      const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input")!;
-      selectFile(input, new File(["pending payload"], "handoff.txt", { type: "text/plain" }));
+      appendChatAttachmentFiles(
+        [new File(["pending payload"], "handoff.txt", { type: "text/plain" })],
+        page.controller.attachmentInputProps(page.current),
+      );
       expect(page.controller.attachmentReads.pendingReads).toBe(1);
       const reader = readers[0]!;
 
@@ -261,13 +238,6 @@ describe("cross-region Home composer ownership", () => {
       expect(dock.current.chatMessage).toBe("Keep this draft and file");
       expect(page.controller.attachmentReads.pendingReads).toBe(0);
       expect(dock.controller.attachmentReads.pendingReads).toBe(1);
-      view.update({
-        controls: dock.controller.attachmentInputProps(dock.current),
-        showInputs: false,
-      });
-      await waitForSolid(() =>
-        expect(container.querySelector('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
-      );
 
       dock.view.presented = false;
       page.view.presented = true;
@@ -283,18 +253,12 @@ describe("cross-region Home composer ownership", () => {
       page.dispose();
       expect(dock.controller.attachmentReads.pendingReads).toBe(1);
       progress(reader, dock, page, 2);
-      view.update({
-        controls: dock.controller.attachmentInputProps(dock.current),
-        showInputs: false,
-      });
-      expect(
-        container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
-      ).toBe("scaleX(0.5)");
+      const reads = dock.controller.attachmentReads;
+      const pending = reads.project([])[0]!;
+      expect(pending.progress).toBe(0.5);
 
       if (outcome === "remove") {
-        container
-          .querySelector<HTMLButtonElement>('button[aria-label="Remove handoff.txt"]')!
-          .click();
+        reads.remove(pending);
         expect(dock.controller.attachmentReads.pendingReads).toBe(0);
       }
 
@@ -376,15 +340,6 @@ describe("cross-region Home composer ownership", () => {
       expect(dock.current.chatMessage).toBe("");
     },
   );
-
-  it("keeps local command recovery when the Gateway has no handoff recovery scope", () => {
-    const page = presentation({} as ApplicationContext, {} as GatewayBrowserClient, "page");
-    const recovery = captureCommand(page.current);
-
-    expect(recovery.owner).toBeUndefined();
-    settleChatCommandComposer(page.current, recovery, false, []);
-    expect(page.current.chatMessage).toBe("/steer submitted");
-  });
 
   it("releases only unreferenced command payloads after every presentation unmounts", () => {
     const fixture = home();

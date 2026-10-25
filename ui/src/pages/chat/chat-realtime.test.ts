@@ -277,22 +277,20 @@ it.each(["failed", "cancelled", "succeeded"] as const)(
   async (outcome) => {
     configure({ realtimeTalkInputDeviceId: "usb-mic" });
     const recover = await microphoneRecovery();
-    let finish!: () => void;
-    startSpy.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          finish = () =>
-            outcome === "failed" ? reject(new Error("Microphone access is blocked")) : resolve();
-        }),
-    );
+    const pending = createDeferred<void>();
+    startSpy.mockImplementationOnce(() => pending.promise);
     const retry = recover();
-    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
     expect(inspectSession().localOptions.inputDeviceId).toBeUndefined();
     configure({ realtimeTalkInputDeviceId: "newer-mic" });
     if (outcome === "cancelled") {
       stopChatRealtimeTalk(state);
     }
-    finish();
+    if (outcome === "failed") {
+      pending.reject(new Error("Microphone access is blocked"));
+    } else {
+      pending.resolve();
+    }
     await retry;
     expect(loadSettings().realtimeTalkInputDeviceId).toBe("newer-mic");
     expect(read().realtimeTalkUseSystemDefault).toBeNull();

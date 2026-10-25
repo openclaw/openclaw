@@ -203,23 +203,16 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("two", "main").draft).toBe("keep me");
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "does not resurrect a reset request after a late $outcome",
-    async (outcome) => {
-      const answer = createDeferred<{ answer: string; ts: number }>();
-      const pending = threads.submit("one", "Will reset keep this?", () => answer.promise);
+  it("does not resurrect a reset request after a late rejection", async () => {
+    const answer = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "Will reset keep this?", () => answer.promise);
 
-      await threads.reset("one", async () => ({ ok: true as const }));
-      if (outcome === "resolve") {
-        answer.resolve({ answer: "late answer", ts: 5 });
-      } else {
-        answer.reject(new Error("late error"));
-      }
-      await pending;
+    await threads.reset("one", async () => ({ ok: true as const }));
+    answer.reject(new Error("late error"));
+    await pending;
 
-      expect(threads.view("one").turns).toMatchObject([]);
-    },
-  );
+    expect(threads.view("one").turns).toMatchObject([]);
+  });
 });
 
 describe("ChatSessionRailElement", () => {

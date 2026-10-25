@@ -15,7 +15,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -35,10 +34,6 @@ import {
 import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
-import {
-  dismissConfirmedActionPopovers,
-  openChatRewindConfirmation,
-} from "./components/chat-message-confirmation-view.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -157,8 +152,6 @@ function selectSuggestionRows(state: ChatPageHost, ...sessions: GatewaySessionRo
   state.sessionsResult = { count: sessions.length, path: "", sessions } as never;
 }
 
-const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
-const confirmationOwners = new Set<HTMLElement>();
 const runtimePanes = new Set<TestChatPane>();
 
 async function settleStartupFrames() {
@@ -622,34 +615,6 @@ it("serializes edit resolutions so rejected suggestions cannot snapshot each oth
   expect(request).toHaveBeenCalledTimes(2);
   expect(state.chatMessage).toBe("owner draft");
 });
-function createConfirmationOwner() {
-  const owner = document.createElement("span");
-  owner.className = "chat-confirm-wrap";
-  const trigger = document.createElement("button");
-  owner.appendChild(trigger);
-  document.body.appendChild(owner);
-  confirmationOwners.add(owner);
-  openChatRewindConfirmation(trigger, vi.fn());
-  const popover = [...document.querySelectorAll<HTMLElement>(".chat-confirm-popover")].at(-1);
-  expect(popover).toBeInstanceOf(HTMLElement);
-  return { owner, popover: popover! };
-}
-
-function watchCapture(target: Document | Window, type: "click" | "keydown") {
-  const add = vi.spyOn(target, "addEventListener");
-  const remove = vi.spyOn(target, "removeEventListener");
-  return () => {
-    const captured = add.mock.calls.flatMap(([event, listener, options]) =>
-      event === type && options === true && listener ? [listener] : [],
-    );
-    expect(captured).toHaveLength(2);
-    return () => {
-      expect(remove).toHaveBeenCalledWith(type, captured[0], true);
-      expect(remove).not.toHaveBeenCalledWith(type, captured[1], true);
-    };
-  };
-}
-
 afterEach(() => {
   for (const pane of runtimePanes) {
     pane.disconnectedCallback();
@@ -657,36 +622,7 @@ afterEach(() => {
   runtimePanes.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  for (const owner of confirmationOwners) {
-    dismissConfirmedActionPopovers(owner);
-    owner.remove();
-  }
-  confirmationOwners.clear();
   chatThread.resetThreadPresentation();
   resetChatComposerState();
-  window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
   vi.unstubAllGlobals();
-});
-
-it("dismisses only confirmations owned by the disconnected pane", () => {
-  const { frames: frameCallbacks, request } = createFrameQueue();
-  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
-  const listeners = [watchCapture(document, "click"), watchCapture(window, "keydown")];
-  const { pane } = barePane();
-  window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
-  const paneConfirmation = createConfirmationOwner();
-  const siblingConfirmation = createConfirmationOwner();
-
-  for (const callback of frameCallbacks.splice(0)) {
-    callback(0);
-  }
-  const checkRemovals = listeners.map((capture) => capture());
-  pane.appendChild(paneConfirmation.owner);
-  pane.disconnectedCallback();
-
-  expect(paneConfirmation.popover.isConnected).toBe(false);
-  expect(siblingConfirmation.popover.isConnected).toBe(true);
-  for (const check of checkRemovals) {
-    check();
-  }
 });

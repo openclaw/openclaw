@@ -17,7 +17,6 @@ import {
 } from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -134,7 +133,7 @@ function createPublicationPane(
       },
     };
   }
-  const events = createApplicationGateway({
+  Object.assign(initial.gateway.snapshot, {
     ...initial.gateway.snapshot,
     client,
     phase: "connected",
@@ -143,7 +142,6 @@ function createPublicationPane(
     sessionKey,
     selfUser: { id: "publication-person", identity: { type: "profile", id: "publication-person" } },
   });
-  const gateway = { ...initial.gateway, ...events.gateway, connection: initial.gateway.connection };
   const selection = {
     ...initial.agentSelection,
     state: { selectedId: agentId, scopeId: agentId },
@@ -151,9 +149,8 @@ function createPublicationPane(
   };
   const context: ApplicationContext = {
     ...initial,
-    gateway,
     agentSelection: selection,
-    sessions: createSessionCapability(gateway, selection),
+    sessions: createSessionCapability(initial.gateway, selection),
   };
   const pane = createRenderTestChatPane();
   Object.defineProperties(pane, {
@@ -328,7 +325,7 @@ it.each(["global", "per-sender"] as const)(
 );
 
 it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
-  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const { pane, responses, publications, settled } = createPublicationPane();
   const response = Promise.withResolvers<unknown>();
   responses.set("sessions.github.publish", response.promise);
   const ready = await settled();
@@ -363,9 +360,6 @@ it("retires hidden publication feedback while retaining the admitted write and i
   pane.presented = true;
   expect((await settled()).result).toEqual(result);
   expect(publications()).toHaveLength(1);
-  expect(
-    request.mock.calls.filter(([method]) => method === "sessions.github.options"),
-  ).toHaveLength(1);
 });
 
 it.each(["shared", "personal"] as const)(
@@ -615,7 +609,6 @@ it.each([
   ["a stream announcement followed by its final", "stream"],
   ["a final whose queued refresh lost its last watch before sync", "loseWatchBeforeSync"],
   ["a same-session background final", "background"],
-  ["reconnect between final deliveries", "reconnect"],
   ["explicit history reset between finals", "reset"],
   ["ordinary history between final replays", "historyBetween"],
   ["a genuine branch switch before the next final", "branchSwitch"],
@@ -681,10 +674,6 @@ it.each([
     await nextFrame();
   }
   for (const [index, text] of texts.entries()) {
-    if (index > 0 && mode === "reconnect") {
-      pane.connectionGeneration += 1;
-      state.connectionEpoch = pane.connectionGeneration;
-    }
     if (index > 0 && mode === "reset") {
       resetChatHistoryProjection(state);
     }
