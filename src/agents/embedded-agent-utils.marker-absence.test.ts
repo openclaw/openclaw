@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
 import * as finalTags from "../shared/text/final-tags.js";
 import * as reasoningTags from "../shared/text/reasoning-tags.js";
@@ -15,7 +17,8 @@ import {
 // Filter arrays cache their transforms, so keep the same spies for the entire module.
 const reasoning = vi.spyOn(reasoningTags, "stripReasoningTagsFromText");
 const final = vi.spyOn(finalTags, "stripFinalTags");
-const transforms = [reasoning, final];
+const inbound = vi.spyOn(inboundMetadata, "stripInboundMetadata");
+const transforms = [reasoning, final, inbound];
 beforeEach(() => transforms.forEach((spy) => spy.mockClear()));
 afterAll(() => transforms.forEach((spy) => spy.mockRestore()));
 function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
@@ -152,4 +155,56 @@ it("resets rejected and activated heads after replacement", () => {
   expect(stream.append("<final>Tail</final>").text).toBe(literal + "Tail");
   expect(stream.replace("").text).toBe("");
   expect(stream.append("< / final >Fresh").text).toBe("Fresh");
+});
+
+it.each(["[docs](https://example.com) ", "Context: "])(
+  "bounds inbound-metadata work after ordinary %s with append and replacement starts",
+  (prefix) => {
+    const body = "The operator reads the next line. ".repeat(128) + "Done.";
+    for (const replace of [false, true]) {
+      inbound.mockClear();
+      const stream = createAssistantVisibleStreamText();
+      if (replace) {
+        stream.replace(prefix);
+      } else {
+        appendChunks(stream, prefix, 1);
+      }
+      appendChunks(stream, body, 4);
+      expect(stream.text).toBe(prefix + body);
+      expect(characters(inbound.mock.calls)).toBeLessThan((prefix.length + body.length) * 2);
+    }
+  },
+);
+
+it.each([
+  "[Mon 2026-10-24 12:34 UTC] Visible answer",
+  `${MESSAGE_TOOL_DELIVERY_HINTS[0]}\nVisible answer`,
+  `[Mon 2026-10-24 12:34 ${"long timezone ".repeat(16)}] Visible answer`,
+  "[docs](https://example.com)\nContext: ordinary prose",
+  "\n\tContext: \t\r\n<active_memory_plugin>\nPrivate context\n</active_memory_plugin>\n\nVisible answer",
+  'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"id":"synthetic"}\n```\n\nVisible answer',
+])("preserves canonical inbound filtering across every split: %s", (source) => {
+  const inboundFilter = userFacingTextFilters(false, true).find(
+    (filter) => filter.transform === inboundMetadata.stripInboundMetadata,
+  );
+  if (!inboundFilter) {
+    throw new Error("Missing inbound metadata stage in the shipping text pipeline.");
+  }
+  const stream = createTextProjection([inboundFilter]);
+  for (const initial of ["", source.slice(0, 7)]) {
+    stream.replace(initial);
+    let prefix = initial;
+    for (const char of source.slice(initial.length)) {
+      const previous = stream.text;
+      prefix += char;
+      const result = stream.append(char);
+      const expected = inboundMetadata.stripInboundMetadata(prefix);
+      expect(result.text, JSON.stringify(prefix)).toBe(expected);
+      expect(result.delta === null ? result.text : previous + result.delta).toBe(expected);
+    }
+  }
+  stream.replace("");
+  expect(stream.append(source).text).toBe(inboundMetadata.stripInboundMetadata(source));
+  stream.replace("[ordinary] Context: literal");
+  expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
 });
