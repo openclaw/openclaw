@@ -21,33 +21,6 @@ const lifecycleScripts = {
   "pnpm-package-preinstall": "scripts/preinstall-package-manager-warning.mjs",
   "pnpm-package-postinstall": "scripts/postinstall-bundled-plugins.mjs",
 };
-const expectPathMissing = (file: string) =>
-  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-const expectText = (root: string, name = "") =>
-  expect(fs.readFile(path.join(root, name), "utf8")).resolves;
-function stagedPnpmPaths(argv: string[], globalRoot: string) {
-  const option = (name: string) =>
-    argv.find((arg) => arg.startsWith(`--config.${name}=`))?.split("=")[1];
-  const projectRoot = option("global-dir");
-  return {
-    projectRoot,
-    binDir: option("global-bin-dir"),
-    globalRoot: projectRoot ? path.join(projectRoot, "v11") : globalRoot,
-  };
-}
-const createPnpmRunner =
-  (globalRoot: string, binDir: string): CommandRunner =>
-  async (argv) => {
-    if (argv[0] !== "pnpm" || (argv[1] !== "root" && argv[1] !== "bin")) {
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    }
-    const stage = stagedPnpmPaths(argv, globalRoot);
-    return {
-      code: 0,
-      stderr: "",
-      stdout: argv[1] === "root" ? stage.globalRoot : (stage.binDir ?? binDir),
-    };
-  };
 
 function runPnpmUpdate(
   globalRoot: string,

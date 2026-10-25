@@ -154,7 +154,9 @@ it.each(["auto", "off"] as const)(
       },
     );
     await withNativeCopying(mode, () =>
-      expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(/snapshot hash mismatch/),
+      expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+        /snapshot hash mismatch/,
+      ),
     );
     expect(copied).toBe(true);
     expect(fs.readFileSync(file)).toEqual(malformed);

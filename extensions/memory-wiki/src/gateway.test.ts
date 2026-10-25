@@ -235,7 +235,8 @@ describe("memory-wiki gateway methods", () => {
   );
 
   it("keeps only the Obsidian executable probe outside vault resolution", async () => {
-    const { run, resolveConfig, registerGatewayMethod } = await createGateway("wiki.obsidian.status");
+    const { run, resolveConfig, registerGatewayMethod } =
+      await createGateway("wiki.obsidian.status");
 
     await run({ agentId: "marketing" });
 
