@@ -62,6 +62,36 @@ function fixture(usageStats?: AuthProfileStore["usageStats"]) {
   return { store: loadStore(agentDir), agentDir };
 }
 
+it("does not overwrite fresher credentials with a stale runtime snapshot", async () => {
+  const auth = fixture();
+  saveStore(
+    { ...auth.store, profiles: { [profileId]: apiKey("anthropic", "sk-fresh") } },
+    auth.agentDir,
+    saveOptions,
+  );
+  expect(auth.store.profiles[profileId]).toMatchObject({ key: "sk-default" });
+  await markFailure({ ...auth, profileId, reason: "rate_limit", retryAfterMs: 60_000 });
+  clearRuntimeAuthProfileStoreSnapshots();
+  const reloaded = loadStore(auth.agentDir);
+  expect(reloaded.profiles[profileId]).toMatchObject({ type: "api_key", key: "sk-fresh" });
+  expect(reloaded.usageStats?.[profileId]?.cooldownUntil).toEqual(expect.any(Number));
+});
+
+it("records inline-key billing backoff without creating an auth profile", async () => {
+  const auth = fixture();
+  const startedAt = Date.now();
+  await markInlineFailure({ ...auth, provider: "anthropic", reason: "billing" });
+  const usageId = inlineUsageId("anthropic");
+  const stats = auth.store.usageStats?.[usageId];
+  expect(auth.store.profiles[usageId]).toBeUndefined();
+  expect(stats?.disabledReason).toBe("billing");
+  expect(loadStore(auth.agentDir).usageStats?.[usageId]?.disabledReason).toBe("billing");
+  assert(stats?.lastFailureAt !== undefined);
+  expect(stats.lastFailureAt).toBeGreaterThanOrEqual(startedAt);
+  expect(stats.lastFailureAt).toBeLessThanOrEqual(Date.now());
+  expect(stats.disabledUntil).toBe(stats.lastFailureAt + 10 * 60_000);
+});
+
 it("resets stale billing backoff and preserves its deadline on retry", async () => {
   const now = Date.now();
   const auth = fixture({
@@ -92,6 +122,20 @@ describe("provider-driven rate-limit cooldowns", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     return loadStore(agentDir);
   };
+
+  it("cools a rate-limited model down for exactly the provider's retry window", async () => {
+    const auth = fixture();
+    const before = Date.now();
+    const retryAfterMs = 36 * hour;
+    await markFailure({ ...auth, profileId, reason: "rate_limit", modelId: model, retryAfterMs });
+    const after = Date.now();
+    const stats = reload(auth.agentDir).usageStats?.[profileId];
+    expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: model });
+    expect(stats?.cooldownUntil).toBeGreaterThanOrEqual(before + retryAfterMs);
+    expect(stats?.cooldownUntil).toBeLessThanOrEqual(after + retryAfterMs);
+    expect(stats?.failureCounts).toBeUndefined();
+    expect(stats?.errorCount).toBeUndefined();
+  });
 
   it("leaves the profile usable when concurrent rate limits carry no provider timing", async () => {
     const auth = fixture();
@@ -184,8 +228,7 @@ it("does not persist direct overload failures for self-managed providers", async
 
 it("keeps subscription blocks and inline-key billing on self-managed providers", async () => {
   const auth = fixture();
-  const startedAt = Date.now();
-  const until = startedAt + 60_000;
+  const until = Date.now() + 60_000;
   await withManagedProvider(async () => {
     await blockUntil({ ...auth, profileId: "local:default", blockedUntil: until, source: "wham" });
     await markInlineFailure({ ...auth, provider: "local", reason: "billing" });
@@ -195,13 +238,5 @@ it("keeps subscription blocks and inline-key billing on self-managed providers",
     blockedUntil: until,
     blockedReason: "subscription_limit",
   });
-  const usageId = inlineUsageId("local");
-  const stats = persisted.usageStats?.[usageId];
-  expect(auth.store.profiles[usageId]).toBeUndefined();
-  expect(auth.store.usageStats?.[usageId]?.disabledReason).toBe("billing");
-  expect(stats?.disabledReason).toBe("billing");
-  assert(stats?.lastFailureAt !== undefined);
-  expect(stats.lastFailureAt).toBeGreaterThanOrEqual(startedAt);
-  expect(stats.lastFailureAt).toBeLessThanOrEqual(Date.now());
-  expect(stats.disabledUntil).toBe(stats.lastFailureAt + 10 * 60_000);
+  expect(persisted.usageStats?.[inlineUsageId("local")]?.disabledReason).toBe("billing");
 });

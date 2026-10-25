@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -18,73 +17,58 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-type Completion = Parameters<typeof completeInitialSessionTurn>[0];
-function completionFixture(instantKey?: string, navigate = () => Promise.resolve()) {
-  const { context } = createDraftFixture();
-  if (instantKey) {
-    Object.defineProperty(context, "router", {
-      value: { getState: () => ({ location: undefined }), subscribe: () => () => {}, navigate },
-    });
-  }
-  const instant = instantKey
-    ? new InstantThreadHandoff(
-        context,
-        instantKey,
-        "main",
-        {
-          data: createNewSessionRouteData(),
-          page: document.createElement("div"),
-          release: vi.fn(),
-          synchronizeGateway: vi.fn(),
-        },
-        null,
-      )
-    : undefined;
-  const navigation = new StartedSessionNavigation();
-  const options = {
-    context,
-    client: context.gateway.snapshot.client!,
-    agentId: "main",
-    instant,
-    navigation,
-    isCurrent: () => true,
-    clearDraft: vi.fn(async () => {}),
-    completeInBackground: () => false,
-    finishNavigation: vi.fn(),
-    turn: { text: "private incognito first turn", attachments: [], createdAt: 1 },
-  };
-  return {
-    ...options,
-    complete: (
-      initialRun: Completion["result"]["initialRun"],
-      overrides: Partial<Completion> = {},
-    ) =>
-      completeInitialSessionTurn({
-        ...options,
-        result: { key: instantKey ?? "agent:main:dashboard:rejected", initialRun },
-        ...overrides,
-      }),
-  };
-}
-
 describe("first-turn publication", () => {
   it("retires an accepted draft before a slow preview route is ready", async () => {
-    const ready = createDeferred();
+    const { context } = createDraftFixture();
+    let ready!: () => void;
+    Object.defineProperty(context, "router", {
+      value: {
+        getState: () => ({ location: undefined }),
+        subscribe: () => () => {},
+        navigate: () =>
+          new Promise<void>((resolve) => {
+            ready = resolve;
+          }),
+      },
+    });
     const key = "agent:main:accepted-before-preview";
-    const { context, client, clearDraft, navigation, complete, instant } = completionFixture(
+    const instant = new InstantThreadHandoff(
+      context,
       key,
-      () => ready.promise,
+      "main",
+      {
+        data: createNewSessionRouteData(),
+        page: document.createElement("div"),
+        release: vi.fn(),
+        synchronizeGateway: vi.fn(),
+      },
+      null,
     );
+    const client = context.gateway.snapshot.client!;
+    const clearDraft = vi.fn(async () => {});
+    const navigation = new StartedSessionNavigation();
     vi.spyOn(navigation, "navigate").mockResolvedValue();
-    const completion = complete({ status: "started", runId: "accepted-run" });
+    const completion = completeInitialSessionTurn({
+      context,
+      client,
+      agentId: "main",
+      result: { key, initialRun: { status: "started", runId: "accepted-run" } },
+      turn: { text: "Accepted prompt", attachments: [], createdAt: 1 },
+      instant,
+      navigation,
+      isCurrent: () => true,
+      clearDraft,
+      completeInBackground: () => false,
+      finishNavigation: vi.fn(),
+    });
     try {
       // Acceptance, not lazy route readiness or storage completion, consumes input.
       expect(clearDraft).toHaveBeenCalledOnce();
       expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
     } finally {
-      ready.resolve();
+      ready();
       await completion;
-      instant!.dispose();
+      instant.dispose();
     }
   });
 
@@ -96,28 +80,64 @@ describe("first-turn publication", () => {
   ] as const)(
     "rechecks $change authority before publishing a $status turn",
     async ({ status, change }) => {
+      const { context } = createDraftFixture();
+      Object.defineProperties(context, {
+        router: {
+          value: {
+            getState: () => ({ location: undefined }),
+            subscribe: () => () => {},
+            navigate: () => Promise.resolve(),
+          },
+        },
+      });
+      Object.defineProperty(context.gateway, "subscribe", { value: () => () => {} });
       const key = "agent:main:dashboard:incognito-private";
-      const { context, instant, client, clearDraft, navigation, complete } = completionFixture(key);
+      const instant = new InstantThreadHandoff(
+        context,
+        key,
+        "main",
+        {
+          data: createNewSessionRouteData(),
+          page: document.createElement("div"),
+          release: vi.fn(),
+          synchronizeGateway: vi.fn(),
+        },
+        null,
+      );
       try {
         // Settle preview readiness, then invalidate ownership in the microtask
         // between checking readiness and publishing the first-turn result.
-        await instant!.waitForReady();
-        expect(instant!.isCurrent()).toBe(true);
+        await instant.waitForReady();
+        expect(instant.isCurrent()).toBe(true);
+        const client = context.gateway.snapshot.client;
         const auth = context.gateway.snapshot.hello?.auth;
         if (!client || !auth) {
           throw new Error("fixture requires authenticated client");
         }
+        const clearDraft = vi.fn(async () => {});
         const retainRejected = vi.spyOn(rejected, "retainRejectedInitialTurn");
+        const navigation = new StartedSessionNavigation();
         const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
-        const onAccepted = vi.fn();
-        const onRejectedPrompt = change === "unchanged" ? undefined : vi.fn();
         let current = true;
-        const completion = complete(
-          status === "started"
-            ? { status, runId: "private-run" }
-            : { status, error: "synthetic denial" },
-          { isCurrent: () => current, onAccepted, onRejectedPrompt },
-        );
+        const completion = completeInitialSessionTurn({
+          context,
+          client,
+          agentId: "main",
+          result: {
+            key,
+            initialRun:
+              status === "started"
+                ? { status, runId: "private-run" }
+                : { status, error: "synthetic denial" },
+          },
+          turn: { text: "private incognito first turn", attachments: [], createdAt: 1 },
+          instant,
+          navigation,
+          isCurrent: () => current,
+          clearDraft,
+          completeInBackground: () => false,
+          finishNavigation: vi.fn(),
+        });
         queueMicrotask(() => {
           if (change === "scope") {
             auth.recoveryScope = "replacement-principal";
@@ -143,8 +163,6 @@ describe("first-turn publication", () => {
           expect(navigate).not.toHaveBeenCalled();
           expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
           expect(retainRejected).not.toHaveBeenCalled();
-          expect(onAccepted).not.toHaveBeenCalled();
-          expect(onRejectedPrompt).not.toHaveBeenCalled();
           expect(JSON.stringify(localStorage)).not.toContain("private incognito first turn");
           if (status === "started") {
             expect(clearDraft).toHaveBeenCalledWith(true, undefined);
@@ -153,39 +171,67 @@ describe("first-turn publication", () => {
           }
         }
       } finally {
-        instant!.dispose();
+        instant.dispose();
       }
     },
   );
 });
 
 describe("retained launcher rejection", () => {
-  it("retains independent attachment ownership for a launcher rejection", async () => {
-    const { clearDraft, complete } = completionFixture();
-    const attachment = registerChatAttachmentPayload({
-      attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
-      dataUrl: "data:image/png;base64,aW1hZ2U=",
-      file: new File(["image"], "image.png", { type: "image/png" }),
-    });
-    const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
-    const onRejectedPrompt = vi.fn();
-    onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
-    const error = "Rejected image";
-    await complete(
-      { status: "rejected", error },
-      {
-        turn: { text: "", attachments: [attachment], createdAt: 1 },
+  it.each([true, false])(
+    "publishes launcher rejection only for its current owner (%s)",
+    async (current) => {
+      const { context } = createDraftFixture();
+      const client = context.gateway.snapshot.client!;
+      const attachment = current
+        ? registerChatAttachmentPayload({
+            attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
+            dataUrl: "data:image/png;base64,aW1hZ2U=",
+            file: new File(["image"], "image.png", { type: "image/png" }),
+          })
+        : undefined;
+      const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
+      const navigation = new StartedSessionNavigation();
+      const navigate = current ? undefined : vi.spyOn(navigation, "navigate").mockResolvedValue();
+      const clearDraft = vi.fn(async () => {});
+      const onRejectedPrompt = vi.fn();
+      const onAccepted = vi.fn();
+      onTestFinished(() => releaseChatAttachmentPayloads(attachment ? [attachment] : []));
+      const error = current ? "Rejected image" : "First turn denied";
+      await completeInitialSessionTurn({
+        context,
+        client,
+        agentId: "main",
+        result: { key: "agent:main:dashboard:rejected", initialRun: { status: "rejected", error } },
+        turn: {
+          text: current ? "" : "Keep this prompt visible",
+          attachments: attachment ? [attachment] : [],
+          createdAt: 1,
+        },
+        instant: undefined,
+        navigation,
+        isCurrent: () => current,
+        clearDraft,
         completeInBackground: () => true,
+        finishNavigation: vi.fn(),
         onRejectedPrompt,
-      },
-    );
-    expect(clearDraft).not.toHaveBeenCalled();
-    const destination = retain.mock.calls[0]![0].attachments;
-    expect(destination).toHaveLength(1);
-    expect(destination[0]!.id).not.toBe(attachment.id);
-    expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
-    releaseChatAttachmentPayloads([attachment]);
-    expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
-    expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith(error);
-  });
+        onAccepted: current ? undefined : onAccepted,
+      });
+      expect(clearDraft).not.toHaveBeenCalled();
+      if (attachment) {
+        const destination = retain.mock.calls[0]![0].attachments;
+        expect(destination).toHaveLength(1);
+        expect(destination[0]!.id).not.toBe(attachment.id);
+        expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
+        releaseChatAttachmentPayloads([attachment]);
+        expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
+        expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith(error);
+      } else {
+        expect(navigate).not.toHaveBeenCalled();
+        expect(retain).not.toHaveBeenCalled();
+        expect(onAccepted).not.toHaveBeenCalled();
+        expect(onRejectedPrompt).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

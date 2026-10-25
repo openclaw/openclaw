@@ -26,7 +26,9 @@ it("requires command binding only for negotiated Gateway control", () => {
   expectTypeOf<Legacy & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
 });
 
-function connectLifecycle(lifecycle: RealtimeVoiceSessionLifecycle) {
+function connectLifecycle(
+  lifecycle: RealtimeVoiceSessionLifecycle,
+): RealtimeVoiceSessionConnection {
   let connection: RealtimeVoiceSessionConnection | undefined;
   void lifecycle.connect(async (current) => {
     connection = current;
@@ -86,17 +88,25 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     expect(lifecycle.ready(replacement)).toBe(true);
   });
 
-  it.each(["cancel", "failure"] as const)("keeps %s authoritative and notifies once", (kind) => {
-    const connection = connectLifecycle(lifecycle);
-    const outcome = kind === "cancel" ? "completed" : "error";
-    expect(kind === "cancel" ? lifecycle.cancel() : lifecycle.failure(connection)).toBe(true);
-    expect(connection.signal.aborted).toBe(true);
-    expect(lifecycle.acceptsEvents(connection)).toBe(false);
-    expect(lifecycle.cancel()).toBe(false);
-    expect(lifecycle.failure(connection)).toBe(false);
-    expect(lifecycle.terminalOutcome(connection)).toBe(outcome);
-    expect(lifecycle.close(connection, kind === "cancel" ? "error" : "completed")).toBe(outcome);
-    expect(lifecycle.close(connection, outcome)).toBeUndefined();
+  it("keeps terminal outcomes authoritative and notifies once", () => {
+    const canceled = new RealtimeVoiceSessionLifecycle("Test");
+    const canceledConnection = connectLifecycle(canceled);
+
+    expect(canceled.cancel()).toBe(true);
+    expect(canceledConnection.signal.aborted).toBe(true);
+    expect(canceled.acceptsEvents(canceledConnection)).toBe(false);
+    expect(canceled.cancel()).toBe(false);
+    expect(canceled.failure(canceledConnection)).toBe(false);
+    expect(canceled.terminalOutcome(canceledConnection)).toBe("completed");
+    expect(canceled.close(canceledConnection, "error")).toBe("completed");
+    expect(canceled.close(canceledConnection, "completed")).toBeUndefined();
+
+    const failed = new RealtimeVoiceSessionLifecycle("Test");
+    const failedConnection = connectLifecycle(failed);
+    expect(failed.failure(failedConnection)).toBe(true);
+    expect(failed.cancel()).toBe(false);
+    expect(failed.close(failedConnection, "completed")).toBe("error");
+    expect(failed.close(failedConnection, "error")).toBeUndefined();
   });
 
   it("coalesces connects and lets cancellation immediately transfer ownership", async () => {
@@ -107,17 +117,22 @@ describe("RealtimeVoiceSessionLifecycle", () => {
       });
       return setup.promise;
     });
-    const secondStarted = vi.fn(async (_connection: RealtimeVoiceSessionConnection) => {});
+    const secondStarted = vi.fn();
     const first = lifecycle.connect(firstStarted);
-    const coalesced = lifecycle.connect(secondStarted);
+    const coalesced = lifecycle.connect(async () => {
+      secondStarted();
+    });
 
     expect(coalesced).toBe(first);
     expect(firstStarted).toHaveBeenCalledOnce();
     expect(secondStarted).not.toHaveBeenCalled();
     expect(lifecycle.cancel()).toBe(true);
 
-    await lifecycle.connect(secondStarted);
-    expect(secondStarted.mock.calls[0]?.[0]).not.toBe(firstStarted.mock.calls[0]?.[0]);
+    const replacement = lifecycle.connect(async (connection) => {
+      expect(connection).not.toBe(firstStarted.mock.calls[0]?.[0]);
+      secondStarted();
+    });
+    await replacement;
     await expect(first).rejects.toThrow("Test realtime voice session canceled");
     expect(secondStarted).toHaveBeenCalledOnce();
   });
@@ -227,18 +242,25 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 });
 
-it("releases audio queue byte budget when audio is consumed or cleared", () => {
-  const queue = createRealtimeVoiceAudioQueue("reject-newest");
-  const first = Buffer.alloc(512 * 1024, 0x01);
-  const second = Buffer.alloc(512 * 1024, 0x02);
+describe("createRealtimeVoiceAudioQueue", () => {
+  it("releases byte budget as queued audio is consumed", () => {
+    const queue = createRealtimeVoiceAudioQueue("reject-newest");
+    const first = Buffer.alloc(512 * 1024, 0x01);
+    const second = Buffer.alloc(512 * 1024, 0x02);
 
-  queue.enqueue(first);
-  queue.enqueue(second);
-  expect(queue.dequeue()).toEqual(first);
-  expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
-  expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
-  expect(queue.enqueue(Buffer.alloc(1024 * 1024, 0x04))).toBe(true);
-  queue.clear();
-  expect(queue.enqueue(Buffer.from([0x05]))).toBe(true);
-  expect(queue.drain()).toEqual([Buffer.from([0x05])]);
+    expect(queue.enqueue(first)).toBe(true);
+    expect(queue.enqueue(second)).toBe(true);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
+    expect(queue.dequeue()).toEqual(first);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
+    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+  });
+
+  it("resets audio queue accounting on clear", () => {
+    const queue = createRealtimeVoiceAudioQueue("drop-oldest");
+    expect(queue.enqueue(Buffer.alloc(1024 * 1024, 0x04))).toBe(true);
+    queue.clear();
+    expect(queue.enqueue(Buffer.from([0x05]))).toBe(true);
+    expect(queue.drain()).toEqual([Buffer.from([0x05])]);
+  });
 });
