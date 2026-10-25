@@ -128,7 +128,7 @@ JSON.parse = function (text, reviver) {
   if (active && typeof text === "string" && text.startsWith('{"type":"response.')) {
     parsedEvents++;
   }
-  return parse(text, reviver);
+  return Reflect.apply(parse, JSON, [text, reviver]);
 };
 let gcMs = 0;
 let gcCount = 0;
