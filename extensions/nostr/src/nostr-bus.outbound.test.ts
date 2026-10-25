@@ -241,20 +241,6 @@ describe("Nostr outbound relay failover", () => {
     },
   );
 
-  it("accepts a real positive OK even when its reason starts with connection failure", async () => {
-    const first = await relay({ reason: PREFIX_ACK_REASON });
-    const second = await relay();
-    const bus = await startBus([first.url, second.url]);
-
-    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
-
-    expect(first.events).toHaveLength(1);
-    expect(first.acknowledgements).toEqual([["OK", id, true, PREFIX_ACK_REASON]]);
-    expect(second.events).toEqual([]);
-    expect(first.events[0]).toMatchObject({ id, kind: 4, tags: [["p", RECIPIENT_PUBKEY]] });
-    expectPlaintext(first, bus.publicKey, "hello");
-  });
-
   it("preserves real failures when every relay rejects", async () => {
     const first = await relay({ rejectUpgrade: true });
     const second = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
@@ -271,9 +257,9 @@ describe("Nostr outbound relay failover", () => {
     ]);
   });
 
-  it("prefers the last successful relay after falling back", async () => {
+  it("accepts a positive OK regardless of reason and prefers that relay on the next send", async () => {
     const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
-    const second = await relay();
+    const second = await relay({ reason: PREFIX_ACK_REASON });
     const bus = await startBus([first.url, second.url]);
 
     await bus.sendDm(RECIPIENT_PUBKEY, "initial fallback");
@@ -281,7 +267,12 @@ describe("Nostr outbound relay failover", () => {
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
-    expect(second.events[1]!.id).toBe(nextId);
+    expect(second.acknowledgements.at(-1)).toEqual(["OK", nextId, true, PREFIX_ACK_REASON]);
+    expect(second.events[1]).toMatchObject({
+      id: nextId,
+      kind: 4,
+      tags: [["p", RECIPIENT_PUBKEY]],
+    });
     expectPlaintext(second, bus.publicKey, "preferred relay", 1);
   });
 
