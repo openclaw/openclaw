@@ -14,7 +14,12 @@ import {
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
-import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
+import {
+  createTeamScaleHistoryFixture,
+  createTeamScaleHistoryResponse,
+  installTeamScaleChatPaneAvatar,
+  type FixtureAsset,
+} from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
   createTeamScaleSessionInventory,
@@ -39,13 +44,6 @@ const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type FixtureAsset = {
-  body: string | Buffer;
-  contentType: string;
-  status?: number;
-  delayMs?: number;
-  headers?: Record<string, string>;
-};
 type FixtureOptions = {
   baseUrl?: string;
   now?: number;
@@ -63,6 +61,7 @@ type FixtureOptions = {
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  chatPaneOneStep?: boolean;
   offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
@@ -76,9 +75,11 @@ type FixtureOptions = {
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const counts = {
     ...TEAM_SCALE_COUNTS,
-    transcriptMessages:
-      options.transcriptMessages ??
-      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
+    transcriptMessages: options.chatPaneOneStep
+      ? 25
+      : (options.transcriptMessages ??
+        (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages)),
+    inlineWidgets: options.chatPaneOneStep ? 0 : TEAM_SCALE_COUNTS.inlineWidgets,
   };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
@@ -102,6 +103,9 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
+  const assistantAvatar = options.chatPaneOneStep
+    ? installTeamScaleChatPaneAvatar(agents, assets)
+    : undefined;
   const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
     createTeamScaleSessionInventory({
       now,
@@ -170,26 +174,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     inlineWidgets: counts.inlineWidgets,
     now,
     largeSnapshot: options.largeSnapshot,
+    chatPaneOneStep: options.chatPaneOneStep,
     attachments: duplicateReads?.attachments,
   });
   const configuredHistory =
-    options.largeSnapshot || options.historyStateReceipt
-      ? {
-          messages: historyMessages,
-          sessionId: pinnedRows[0]!.sessionId,
-          sessionInfo: pinnedRows[0]!,
-          hasMore: false,
-          totalMessages: counts.transcriptMessages,
-          metadata: { commands: [], models: [] },
-          ...(options.historyStateReceipt
-            ? {
-                stateRevision: {
-                  sessionInfo: "fixture-session-v1",
-                  commands: "fixture-commands-v1",
-                },
-              }
-            : {}),
-        }
+    options.largeSnapshot || options.historyStateReceipt || options.chatPaneOneStep
+      ? createTeamScaleHistoryResponse(historyMessages, pinnedRows[0]!, counts.transcriptMessages, {
+          historyStateReceipt: options.historyStateReceipt,
+          chatPaneOneStep: options.chatPaneOneStep,
+        })
       : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
@@ -413,7 +406,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
             agentId: agent.id,
             name: agent.name,
             emoji: agent.identity?.emoji,
-            avatar: "",
+            avatar: agent.id === "main" ? (assistantAvatar ?? "") : "",
           },
         })),
       },
