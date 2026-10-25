@@ -52,7 +52,7 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                                                            |
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
 | Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
-| Native Windows managed service                    | Partially qualified                     | Installation, readiness, turns and stop cleanup exercised; clean shutdown remains unqualified. [Evidence](#native-windows-qualification).                                                                                      |
+| Native Windows managed service                    | Partially qualified                     | Installation, readiness, turns and stop cleanup exercised; graceful shutdown needs the separate owner fix. [Evidence](#native-windows-qualification).                                                                          |
 | Native Windows managed package update             | Blocked                                 | Previous-main update failed before replacement; published PostgreSQL state upgrade is not yet applicable. [Evidence](#native-windows-qualification).                                                                           |
 | Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
@@ -136,12 +136,21 @@ embedding calls before the search probes; those probes separately embedded their
 queries. Its stop released workers and PostgreSQL backends, but a
 supervisor child exited with code 1 and no completed graceful-stop record was
 observed. Uninstall removed the registered service while preserving all six
-canonical PostgreSQL digests. Clean shutdown remains unqualified.
+canonical PostgreSQL digests. Those main builds do not qualify clean shutdown.
+The separate patched build `8f8721740bdb` completed graceful shutdown with no
+remaining worker processes or role backends; the owner fix and its evidence are
+tracked in [PR #183632](https://github.com/openclaw/openclaw/pull/183632).
 
 The managed package update from `2f95e977c77d` to `5abc0c66e293` failed before
 replacement: an 8.3 temporary-directory alias caused the local managed-update
 journal to contend with its own lock. The existing Gateway remained healthy.
 The owner fix is tracked in [PR #183622](https://github.com/openclaw/openclaw/pull/183622).
+With that fix, a managed rollback attempt reached candidate admission but refused
+heartbeat inspection with `no such table: cron_jobs`: that check opened the
+SQLite anchor instead of the configured PostgreSQL store. The installed Gateway
+remained healthy; neither managed activation nor rollback completed. That
+candidate-admission fix is tracked in
+[PR #183645](https://github.com/openclaw/openclaw/pull/183645).
 Manual package replacement followed the documented
 [recovery procedure](/install/updating/rollback-and-recovery), but is not a
 successful `openclaw update` qualification.
@@ -152,7 +161,9 @@ No published PostgreSQL state/agent upgrade baseline was available in the
 selects SQLite for state and agent stores (PostgreSQL is enabled only for
 Workboard). Published stable → current with PostgreSQL state is therefore not
 yet applicable. The two tested main builds also lack the requested state 33 /
-agent 35 target, so this run does not qualify those migrations.
+agent 35 target, so this run does not qualify those migrations. Commands, timings,
+source pins and remaining gates are recorded in
+[PR #183634](https://github.com/openclaw/openclaw/pull/183634).
 
 Native Windows does not yet support SQLite ↔ PostgreSQL database port, including
 dry-run, resume, and rollback. The command refuses before creating recovery
