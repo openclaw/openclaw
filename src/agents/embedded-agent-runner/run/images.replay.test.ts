@@ -60,61 +60,18 @@ const layout = (slots: MediaImageLayout["slots"], suppressedFactIndexes: number[
 afterEach(() => vi.restoreAllMocks());
 
 describe("structured prompt media replay", () => {
-  it.each([
-    {
-      name: "attributes a suppressed-plus-inline sanitization failure to the inline fact",
-      params: {
-        media: suppressedInlineImageFacts(),
-        existingImages: [image("%%%")],
-        imageOrder: ["inline"],
-      },
-      expected: { loadedCount: 0, failedMediaCount: 1, images: [], imageFactIndexes: [] },
-    },
-    {
-      name: "retries an offloaded fact even when an unrelated explicit image exists",
-      params: {
-        media: mediaAt("missing.png"),
-        mediaImageLayout: layout([{ kind: "offloaded", factIndex: 0 }]),
-        existingImages: [image()],
-        existingImageFactIndexes: [null],
-        workspaceOnly: true,
-      },
-      expected: { failedMediaCount: 1, images: [image()], imageFactIndexes: [null] },
-    },
-    {
-      name: "uses an unowned block for an inline slot when exact provenance is unavailable",
-      params: {
-        media: [{ kind: "document" }, { kind: "image" }, { kind: "image" }],
-        mediaImageLayout: layout([
-          { kind: "inline", factIndex: 1 },
-          { kind: "offloaded", factIndex: 2 },
-        ]),
-        existingImages: [image(), image(png(0, 255).toString("base64"))],
-        existingImageFactIndexes: [null, 2],
-      },
-      expected: {
-        failedMediaCount: 0,
-        images: [image(), image(png(0, 255).toString("base64"))],
-        imageFactIndexes: [null, 2],
-      },
-    },
-    {
-      name: "reports a missing unsuppressed inline layout slot",
-      params: {
-        media: [{ kind: "image" }],
-        mediaImageLayout: layout([{ kind: "inline", factIndex: 0 }]),
-      },
-      expected: { failedMediaCount: 1, images: [] },
-    },
-  ] satisfies { name: string; params: Partial<LoadOptions>; expected: object }[])(
-    "$name",
-    async ({ params, expected }) => {
-      const result = await loadImages(params);
-      for (const [field, value] of Object.entries(expected)) {
-        expect(result).toHaveProperty(field, value);
-      }
-    },
-  );
+  it.each`
+    name                                                                               | params                                                                                                                                                                                                                                                                               | expected
+    ${"attributes a suppressed-plus-inline sanitization failure to the inline fact"}   | ${{ media: suppressedInlineImageFacts(), existingImages: [image("%%%")], imageOrder: ["inline"] }}                                                                                                                                                                                   | ${{ loadedCount: 0, failedMediaCount: 1, images: [], imageFactIndexes: [] }}
+    ${"retries an offloaded fact even when an unrelated explicit image exists"}        | ${{ media: mediaAt("missing.png"), mediaImageLayout: layout([{ kind: "offloaded", factIndex: 0 }]), existingImages: [image()], existingImageFactIndexes: [null], workspaceOnly: true }}                                                                                              | ${{ failedMediaCount: 1, images: [image()], imageFactIndexes: [null] }}
+    ${"uses an unowned block for an inline slot when exact provenance is unavailable"} | ${{ media: [{ kind: "document" }, { kind: "image" }, { kind: "image" }], mediaImageLayout: layout([{ kind: "inline", factIndex: 1 }, { kind: "offloaded", factIndex: 2 }]), existingImages: [image(), image(png(0, 255).toString("base64"))], existingImageFactIndexes: [null, 2] }} | ${{ failedMediaCount: 0, images: [image(), image(png(0, 255).toString("base64"))], imageFactIndexes: [null, 2] }}
+    ${"reports a missing unsuppressed inline layout slot"}                             | ${{ media: [{ kind: "image" }], mediaImageLayout: layout([{ kind: "inline", factIndex: 0 }]) }}                                                                                                                                                                                      | ${{ failedMediaCount: 1, images: [] }}
+  `("$name", async ({ params, expected }: { params: Partial<LoadOptions>; expected: object }) => {
+    const result = await loadImages(params);
+    for (const [field, value] of Object.entries(expected)) {
+      expect(result).toHaveProperty(field, value);
+    }
+  });
   it("preserves shipped carrier metadata through provider media materialization", async () => {
     const imagePath = await writeImage(workspaceDir, "attachment.png", png(0, 0, 255));
     const message: UserMessage = attachRuntimePromptMediaFacts(

@@ -67,15 +67,6 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     contextTokensSource: "resolved-v1",
   };
 
-  it.each([
-    { name: "engaged", codeModeEngaged: true, expected: true },
-    { name: "not engaged", codeModeEngaged: false, expected: false },
-    { name: "unreported (harness route)", codeModeEngaged: undefined, expected: false },
-  ])("stamps codeModeEngaged when $name", async ({ codeModeEngaged, expected }) => {
-    const prepared = await prepareStats({ attempt: { codeModeEngaged } });
-    expect(prepared.agentMeta.codeModeEngaged).toBe(expected);
-  });
-
   it.each`
     name               | input                                                                                                                                                                  | expected
     ${"runtime"}       | ${{ attempt: { contextTokens: 1_000_000, contextTokensSource: "runtime" }, outerContextTokenMeta: { contextTokens: 272_000 } }}                                        | ${{ contextTokens: 1_000_000, contextTokensSource: "runtime" }}
@@ -92,45 +83,32 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     },
   );
 
-  it("reports the terminal physical attempt's redacted credential source", async () => {
-    const prepared = await prepareStats({
-      attempt: {
-        modelAttempt: {
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          credentialSource: {
-            kind: "direct",
-            evidence: "environment",
-            authorization: "declared",
-          },
-        },
-      },
-    });
-
-    expect(prepared.agentMeta.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "environment",
-      authorization: "declared",
-    });
-  });
-
-  it("stamps assistantTurns from the run accumulator and omits zero", async () => {
-    const counted = await prepareStats({ assistantTurns: 3 });
-    expect(counted.agentMeta.assistantTurns).toBe(3);
-
-    const empty = await prepareStats({ assistantTurns: 0 });
-    expect(empty.agentMeta).not.toHaveProperty("assistantTurns");
-  });
-
-  it("stamps run-accumulated bridge call counts and omits them when absent", async () => {
-    const withBridge = await prepareStats({
-      bridgeCalls: { search: 2, describe: 1, call: 5 },
-    });
-    expect(withBridge.agentMeta.bridgeCalls).toEqual({ search: 2, describe: 1, call: 5 });
-
-    const withoutBridge = await prepareStats({});
-    expect(withoutBridge.agentMeta).not.toHaveProperty("bridgeCalls");
-  });
+  it.each`
+    name                     | input                                                                                                                                                                     | expected                                                                                          | absent
+    ${"engaged counters"}    | ${{ attempt: { codeModeEngaged: true }, assistantTurns: 3, bridgeCalls: { search: 2, describe: 1, call: 5 } }}                                                            | ${{ codeModeEngaged: true, assistantTurns: 3, bridgeCalls: { search: 2, describe: 1, call: 5 } }} | ${[]}
+    ${"disabled code mode"}  | ${{ attempt: { codeModeEngaged: false } }}                                                                                                                                | ${{ codeModeEngaged: false }}                                                                     | ${[]}
+    ${"unreported counters"} | ${{ assistantTurns: 0 }}                                                                                                                                                  | ${{ codeModeEngaged: false }}                                                                     | ${["assistantTurns", "bridgeCalls"]}
+    ${"credential source"}   | ${{ attempt: { modelAttempt: { provider: "openai", model: "gpt-5.6-luna", credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" } } } }} | ${{ credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" } }}   | ${[]}
+  `(
+    "$name",
+    async ({
+      input,
+      expected,
+      absent,
+    }: {
+      input: TerminalStatsInput;
+      expected: object;
+      absent: string[];
+    }) => {
+      const { agentMeta } = await prepareStats(input);
+      for (const [field, value] of Object.entries(expected)) {
+        expect(agentMeta).toHaveProperty(field, value);
+      }
+      for (const field of absent) {
+        expect(agentMeta).not.toHaveProperty(field);
+      }
+    },
+  );
 
   it("computes costUsd from accumulated usage including cache pricing", async () => {
     const prepared = await prepareStats({
@@ -166,35 +144,13 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     },
   );
 
-  it("omits tiered aggregate cost when an observed call has no price", async () => {
-    const prepared = await prepareStats({
-      config: modelConfig({
-        cost: {
-          ...cost,
-          tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }],
-        },
-      }),
-      attempts: [
-        { input: 150_000, output: 100, cost: { total: 0.125 } },
-        { input: 150_000, output: 100 },
-      ],
-    });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the model has no cost data", async () => {
-    const prepared = await prepareStats({
-      provider: "no-cost-provider",
-      model: "uncosted-model",
-      config: COST_CONFIG,
-      usage: { input: 1_000_000, output: 500_000, total: 1_500_000 },
-    });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the run reported no usage", async () => {
-    const prepared = await prepareStats({ config: COST_CONFIG });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  it.each`
+    name                               | input
+    ${"partially priced tiered calls"} | ${{ config: modelConfig({ cost: { ...cost, tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }] } }), attempts: [{ input: 150_000, output: 100, cost: { total: 0.125 } }, { input: 150_000, output: 100 }] }}
+    ${"unpriced model"}                | ${{ provider: "no-cost-provider", model: "uncosted-model", config: COST_CONFIG, usage: { input: 1_000_000, output: 500_000, total: 1_500_000 } }}
+    ${"no usage"}                      | ${{ config: COST_CONFIG }}
+  `("omits costUsd for $name", async ({ input }: { input: TerminalStatsInput }) => {
+    expect((await prepareStats(input)).agentMeta).not.toHaveProperty("costUsd");
   });
 
   it("keeps response identity in the terminal receipt without replacing the run model", async () => {
