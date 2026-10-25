@@ -477,10 +477,14 @@ export function runCronSchedulerInWorker(
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
+      // A cron slot can be missed without a restart or clock jump (for example a
+      // persisted nextRunAtMs left in the future past a due slot). Recover it on the
+      // normal tick too instead of waiting for the next startup catch-up.
+      const allowCronMissedRunByLastRun = snapshot.config.cronConfig?.skipMissedJobs !== true;
       candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
-          isRunnableJob({ job, nowMs, activeInProcess: false }),
+          isRunnableJob({ job, nowMs, allowCronMissedRunByLastRun, activeInProcess: false }),
       );
     }
     const ownerless = candidates.filter(
