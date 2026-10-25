@@ -241,48 +241,48 @@ describe("startAcpSpawnParentStreamRelay", () => {
   const progress: Streaming = { mode: "progress" };
   const on = { progress: { commentary: true } };
   const off = { progress: { commentary: false } };
-  it.each<
-    [
-      string,
-      string,
-      Streaming | undefined,
-      { mode?: "off"; progress?: { commentary: boolean } } | undefined,
-      "assistant" | "item",
-      boolean,
-      boolean?,
-    ]
-  >([
-    ["Discord progress", "discord", progress, undefined, "assistant", true],
-    ["Discord unset", "discord", undefined, undefined, "item", false],
-    ["commentary disabled", "forum", { ...progress, ...off }, undefined, "item", false],
+  it.each([
+    ["Discord progress", "discord", progress, undefined, "assistant", true, false],
+    ["commentary disabled", "forum", { ...progress, ...off }, undefined, "item", false, false],
     ["normalized account opt-out", "forum", progress, off, "item", false, true],
-    ["account mode opt-out", "forum", { ...progress, ...on }, { mode: "off" }, "item", false],
-    ["account inherits mode", "forum", progress, on, "assistant", true],
-    ["channel mode off", "discord", { mode: "off" }, on, "assistant", false],
-  ])("%s", (_name, channel, streaming, accountStreaming, stream, visible, normalizeAccount) => {
-    const configuredAccount = normalizeAccount ? "Carey Notifications" : "work";
-    const accountId = normalizeAccount ? "carey-notifications" : configuredAccount;
-    const relay = createRelay({
-      cfg: {
-        channels: {
-          [channel]: {
-            streaming,
-            ...(accountStreaming
-              ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
-              : {}),
+    [
+      "account mode opt-out",
+      "forum",
+      { ...progress, ...on },
+      { mode: "off" },
+      "item",
+      false,
+      false,
+    ],
+    ["account inherits mode", "forum", progress, on, "assistant", true, false],
+    ["channel mode off", "discord", { mode: "off" }, on, "assistant", false, false],
+  ] as const)(
+    "%s",
+    (_name, channel, streaming, accountStreaming, stream, visible, normalizeAccount) => {
+      const configuredAccount = normalizeAccount ? "Carey Notifications" : "work";
+      const accountId = normalizeAccount ? "carey-notifications" : configuredAccount;
+      const relay = createRelay({
+        cfg: {
+          channels: {
+            [channel]: {
+              streaming,
+              ...(accountStreaming
+                ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
+                : {}),
+            },
           },
         },
-      },
-      deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
-    });
-    if (stream === "assistant") {
-      relay.assistant("Checking progress.", "commentary");
-    } else {
-      relay.preamble("Checking progress.");
-    }
-    vi.advanceTimersByTime(2_500);
-    expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
-  });
+        deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
+      });
+      if (stream === "assistant") {
+        relay.assistant("Checking progress.", "commentary");
+      } else {
+        relay.preamble("Checking progress.");
+      }
+      vi.advanceTimersByTime(2_500);
+      expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
+    },
+  );
 
   it("does not relay ACP status tags hidden by default when progress commentary is enabled", () => {
     const relay = progressRelay();

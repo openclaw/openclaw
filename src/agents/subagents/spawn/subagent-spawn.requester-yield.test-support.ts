@@ -21,24 +21,21 @@ import {
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { admitEmbeddedRun, recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
-import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import {
+  visibleResult,
+  type BoundaryHarness,
+  type WaitForEmbeddedRun,
+} from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
   type createSpawnBoundaryParent,
   type createSpawnOperatorSource,
-  type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 export function registerYieldedRequesterBatchCase(
-  options: Pick<
-    NativePluginSpawnTestOptions,
-    | "createBoundGateway"
-    | "closeBoundGateway"
-    | "waitForEmbeddedRun"
-    | "runEmbeddedAgent"
-    | "throwBoundFailures"
-  > & {
+  options: BoundaryHarness & {
+    waitForEmbeddedRun: WaitForEmbeddedRun;
     createBoundParent: () => Promise<BoundParent>;
     createGuestParent: (audit?: boolean) => Promise<{
       bound: BoundParent;

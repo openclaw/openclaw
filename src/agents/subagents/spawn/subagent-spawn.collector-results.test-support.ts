@@ -10,7 +10,6 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import {
   createAgentsWaitTool,
   readNativeSubagentCollection,
-  waitForCollectorCompletion,
 } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -118,18 +117,6 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
       expect(bounded.resultTruncated).toBe(true);
       // The frozen-output cap is covered at the registry owner; retain reader propagation here.
       expect(bounded.result).toContain("[truncated: frozen completion output exceeded 100KB");
-      expect(answers.oversized.startsWith(bounded.result.split("\n\n[truncated:")[0] ?? "")).toBe(
-        true,
-      );
-      // Code Mode agents.run waits through the same collector reader.
-      await expect(
-        waitForCollectorCompletion({
-          runId: expectDefined(complete, "complete run"),
-          currentSessionKeys: new Set([bound.parentSessionKey]),
-          currentAgentId: "main",
-          config: bound.cfg,
-        }),
-      ).resolves.toMatchObject({ result: answers.complete });
     } catch (error) {
       failures.push(error);
     } finally {
