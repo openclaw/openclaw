@@ -665,10 +665,8 @@ async function createFixture(submissionStore?: CodexNativeSubagentSubmissionStor
     hasObservationBacking: (parentThreadId, childThreadId) =>
       connected && parentThreadId === "parent-thread" && childThreadId === "child-thread",
   });
-  let resolveHistory!: (value: ReturnType<typeof threadRead>) => void;
-  const historyGate = new Promise<ReturnType<typeof threadRead>>((resolve) => {
-    resolveHistory = resolve;
-  });
+  const { promise: historyGate, resolve: resolveHistory } =
+    Promise.withResolvers<ReturnType<typeof threadRead>>();
   client.setThreadReadFactory("child-thread", () => historyGate);
   let history = threadRead({ turnId: "turn-b", result: "B result" });
   history.thread.turns!.unshift(

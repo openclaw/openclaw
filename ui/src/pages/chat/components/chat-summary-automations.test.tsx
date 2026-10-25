@@ -691,7 +691,6 @@ it("shares pending reads, retained results, and failed refresh recovery between 
                   people: "People",
                   taskProgress: "Task progress",
                   subagents: "Subagents",
-                  processes: "Processes",
                   environment: "Environment",
                   context: "Context",
                   pullRequests: "Pull requests",

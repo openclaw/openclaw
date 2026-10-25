@@ -103,10 +103,7 @@ describe("OpenCode stream adapter", () => {
     const restoredContent = callContent("web_search", restoredArguments);
     let producerPartial: AssistantMessage | undefined;
     let producerTerminal: AssistantMessage | undefined;
-    let releaseTerminal = () => {};
-    const allowTerminal = new Promise<void>((resolve) => {
-      releaseTerminal = resolve;
-    });
+    const { promise: allowTerminal, resolve: releaseTerminal } = Promise.withResolvers<void>();
     const baseStreamFn: StreamFn = async (model, _context, options) => {
       capturedPayload = await capturePayload(model, options);
       const stream = createAssistantMessageEventStream();

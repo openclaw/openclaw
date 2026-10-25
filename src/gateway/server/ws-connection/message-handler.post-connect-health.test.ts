@@ -44,6 +44,7 @@ import {
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
 import * as wsLog from "../../ws-log.js";
+import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -102,18 +103,7 @@ const {
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   commitPresenceMock: vi.fn(),
-  buildGatewaySnapshotMock: vi.fn(() => ({
-    presence: [],
-    health: {},
-    stateVersion: { presence: 1, health: 1 },
-    uptimeMs: 1,
-    sessionDefaults: {
-      defaultAgentId: "main",
-      mainKey: "main",
-      mainSessionKey: "main",
-      scope: "per-sender",
-    },
-  })),
+  buildGatewaySnapshotMock: vi.fn(() => createGatewaySnapshotFixture()),
   getHealthCacheMock: vi.fn(() => null),
   getHealthVersionMock: vi.fn(() => 1),
   loadConfigMock: vi.fn(() => ({

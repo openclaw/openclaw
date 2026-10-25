@@ -985,12 +985,24 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      const sealedAnchorEdge = {
-        importerPath: `dist/${relay}.${extension}`,
-        importedPath: `dist/${anchor}.mjs`,
-      };
       if (worker) {
-        expect(imports).toContainEqual(sealedAnchorEdge);
+        if (process.platform !== "win32") {
+          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+            (resolve) => {
+              execFile(
+                testNodeExecPath,
+                [
+                  path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+                  path.join(root, "dist", `${relay}.${extension}`),
+                ],
+                { timeout: 15_000 },
+                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+              );
+            },
+          );
+          expect(result.error, result.stderr).toBeNull();
+          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
+        }
       } else {
         // Each launch boots both helpers; shared chunks pull unrelated runtime
         // exports into startup before the durable worker gate can open.

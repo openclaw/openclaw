@@ -3,14 +3,13 @@ import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult, ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
-import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 
 export type ChatBranchesQueryState =
@@ -87,14 +86,9 @@ export type InitialChatSnapshotHydration = {
   sessionKey: string;
   connected: boolean;
   promise: Promise<void>;
-  wait?: Promise<boolean>;
-  complete?: () => void;
-  cancel?: () => void;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
-// Bound the initial data read so an unavailable cache cannot stall history requests.
-const INITIAL_CHAT_SNAPSHOT_WAIT_MS = 2_000;
 
 export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   let requests = chatHistoryPaneRequests.get(owner);
@@ -147,9 +141,7 @@ export function isChatHistoryRetrying(state: ChatState): boolean {
 
 export function retireInitialChatSnapshot(state: ChatState): void {
   const requests = chatHistoryRequests(state);
-  const hydration = requests.initialSnapshotHydration;
   delete requests.initialSnapshotHydration;
-  hydration?.cancel?.();
 }
 
 export function synchronizeInitialChatSnapshotConnection(state: ChatState): void {
@@ -162,36 +154,6 @@ export function synchronizeInitialChatSnapshotConnection(state: ChatState): void
   } else if (hydration.connected) {
     retireInitialChatSnapshot(state);
   }
-}
-
-export function waitForInitialChatSnapshot(state: ChatHistoryHost): Promise<boolean> | undefined {
-  const requests = chatHistoryRequests(state);
-  const hydration = requests.initialSnapshotHydration;
-  if (!hydration) {
-    return undefined;
-  }
-  if (!areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)) {
-    retireInitialChatSnapshot(state);
-    return undefined;
-  }
-  if (hydration.wait) {
-    return hydration.wait;
-  }
-  hydration.wait = new Promise<boolean>((resolve) => {
-    const finish = (current: boolean) => {
-      clearTimeout(timeout);
-      if (requests.initialSnapshotHydration === hydration) {
-        delete requests.initialSnapshotHydration;
-      }
-      resolve(current);
-    };
-    const timeout = setTimeout(() => finish(true), INITIAL_CHAT_SNAPSHOT_WAIT_MS);
-    const complete = () => finish(true);
-    hydration.complete = complete;
-    hydration.cancel = () => finish(false);
-    void hydration.promise.then(complete, complete);
-  });
-  return hydration.wait;
 }
 
 function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {

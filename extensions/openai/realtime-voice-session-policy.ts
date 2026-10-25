@@ -202,6 +202,7 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw.model),
+    inputTranscriptionModel: normalizeOptionalString(raw.inputTranscriptionModel),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
     voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),
     temperature: asFiniteNumber(raw.temperature),
@@ -383,8 +384,10 @@ export function buildOpenAIRealtimeTurnDetectionConfig(params: {
 export function buildOpenAIRealtimeGaSessionPolicy(params: {
   audioFormat?: RealtimeVoiceAudioFormat;
   autoRespondToAudio?: boolean;
+  azure?: boolean;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  inputTranscriptionModel?: string;
   language?: string;
   model: string;
   noiseReduction: { type: "near_field" } | null;
@@ -408,12 +411,14 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
         format,
         noise_reduction: params.noiseReduction,
         transcription: {
-          model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+          model:
+            params.inputTranscriptionModel ??
+            (params.azure ? "whisper-1" : OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL),
           ...(params.language ? { language: params.language } : {}),
         },
         turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
           autoRespondToAudio: params.autoRespondToAudio,
-          includeInterruptResponse: true,
+          includeInterruptResponse: !params.azure,
           interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
           prefixPaddingMs: params.prefixPaddingMs,
           silenceDurationMs: params.silenceDurationMs,

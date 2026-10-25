@@ -46,6 +46,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
 
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -97,17 +98,11 @@ describe("session lifecycle state", () => {
     updatedAt: 1_000,
     startedAt: 1_000,
     lifecycleRunId: "goal-run",
-    goal: {
-      schemaVersion: 1,
-      id: "goal-1",
-      objective: "Finish the work",
-      status: "active",
+    goal: createSessionGoalFixture("goal-1", "Finish the work", {
       createdAt: 1_000,
       updatedAt: 1_000,
-      tokenStart: 0,
       tokensUsed: 12,
-      continuationTurns: 0,
-    },
+    }),
   };
   const goalFailure: LifecycleEvent = {
     sessionId: "goal-session",

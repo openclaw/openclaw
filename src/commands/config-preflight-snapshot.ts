@@ -142,7 +142,7 @@ async function readConfigPreflightSnapshot(
           return {
             snapshot:
               params.purpose === "doctor" || !result.snapshot.valid
-                ? addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
+                ? await addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
                 : result.snapshot,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           };
@@ -157,7 +157,7 @@ async function readConfigPreflightSnapshot(
         return {
           snapshot:
             params.purpose === "doctor" || !snapshot.valid
-              ? addDoctorLegacyIssues(snapshot)
+              ? await addDoctorLegacyIssues(snapshot)
               : snapshot,
         };
       },

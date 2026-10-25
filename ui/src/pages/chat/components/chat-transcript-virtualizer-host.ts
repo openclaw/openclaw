@@ -750,7 +750,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       return;
     }
     this.syncViewportGeometry();
-    if (this.presentation.measureRows() || this.initialRange.extend(this.scrollElement)) {
+    const measured = this.presentation.measureRows();
+    if (this.initialRange.extend(this.scrollElement) || measured) {
       this.invalidate();
       return;
     }

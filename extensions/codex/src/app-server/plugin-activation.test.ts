@@ -175,9 +175,7 @@ describe("Codex plugin activation", () => {
       appCacheKey: "runtime",
       request: async (method) => {
         if (method === "plugin/list") {
-          return pluginList([
-            pluginSummary("google-calendar", { installed: false, enabled: false }),
-          ]);
+          return pluginList([pluginSummary("google-calendar")]);
         }
         if (method === "plugin/install") {
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
@@ -206,8 +204,6 @@ describe("Codex plugin activation", () => {
     const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
       name: "google-calendar",
       remotePluginId: "plugin_connector_google_calendar",
-      installed: false,
-      enabled: false,
     });
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
@@ -267,10 +263,6 @@ describe("Codex plugin activation", () => {
       const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
         name: "google-calendar",
         remotePluginId: "plugin_connector_google_calendar",
-        installed: false,
-        enabled: false,
-        availability: "AVAILABLE",
-        installPolicy: "AVAILABLE",
       });
       const result = await ensureCodexPluginActivation({
         identity: identity("google-calendar"),
@@ -317,10 +309,6 @@ describe("Codex plugin activation", () => {
       const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
         name: "google-calendar",
         remotePluginId: "plugin_connector_google_calendar",
-        installed: false,
-        enabled: false,
-        availability: "AVAILABLE",
-        installPolicy: "AVAILABLE",
       });
 
       await expect(
@@ -348,8 +336,6 @@ describe("Codex plugin activation", () => {
     const summary = pluginSummary("google-calendar@openai-curated-remote", {
       name: "google-calendar",
       remotePluginId: "plugin_connector_google_calendar",
-      installed: false,
-      enabled: false,
       ...policy,
     });
 
@@ -379,23 +365,14 @@ describe("Codex plugin activation", () => {
       request: async (method) => {
         calls.push(method);
         if (method === "plugin/list") {
-          return {
-            ...pluginList([]),
-            marketplaces: [
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [
-                  pluginSummary("google-calendar@openai-curated-remote", {
-                    name: "google-calendar",
-                    installed: false,
-                    enabled: false,
-                  }),
-                ],
-              },
+          return pluginList(
+            [
+              pluginSummary("google-calendar@openai-curated-remote", {
+                name: "google-calendar",
+              }),
             ],
-          } satisfies v2.PluginListResponse;
+            { name: "openai-curated-remote", path: null },
+          ) satisfies v2.PluginListResponse;
         }
         throw new Error(`unexpected request ${method}`);
       },

@@ -25,6 +25,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
   DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
   withDoctorSqliteMaintenanceLock,
@@ -443,6 +444,30 @@ describe("doctor SQLite maintenance lock", () => {
       await fs.symlink(targetPath, sidecarPath);
       await expectPathRefused(fixture, sidecarPath, /symbolic-link path/);
       await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("owned target\n");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps mutation roots when observations include a narrower root",
+    async () => {
+      const root = tempDirs.make("openclaw-doctor-observation-root-");
+      const physical = path.join(root, "physical");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(physical);
+      await fs.writeFile(path.join(physical, "selected.sqlite"), "selected");
+      await fs.writeFile(path.join(physical, "held.sqlite"), "held");
+      await fs.symlink(physical, alias, "dir");
+      const selected = path.join(alias, "selected.sqlite");
+      const held = path.join(alias, "held.sqlite");
+
+      expect(() =>
+        assertDoctorSqliteMaintenancePathsNotAliased("session SQLite import", [selected], [root], {
+          paths: [held, selected],
+          ownershipRoots: [alias, root],
+        }),
+      ).toThrow(`symbolic-link path component: ${alias}`);
+      await expect(fs.readFile(selected, "utf8")).resolves.toBe("selected");
+      await expect(fs.readFile(held, "utf8")).resolves.toBe("held");
     },
   );
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   useInstallFixture,
+  withAdvancingInstallClock,
   chromeProductRoots,
   installStableChromeExtension,
   stableChromeExtensionDir,
@@ -101,15 +102,8 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
       return statsWithUid(info, rootOwned ? 0 : userUid);
     });
     try {
-      let now = 0;
       const status = await value.install({
-        deps: {
-          ...value.deps,
-          now: () => now,
-          sleep: async (ms) => {
-            now += ms;
-          },
-        },
+        deps: withAdvancingInstallClock(value.deps),
       });
 
       expect(status.installedCopy).toMatchObject({ present: true, owned: true });

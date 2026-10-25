@@ -131,6 +131,50 @@ describe("session catalog entry snapshots", () => {
     expect(host.sessions[0]?.color).toBe(expected);
   });
 
+  it("allocates only the requested wrapper shape while retaining captured entries", async () => {
+    const key = "agent:main:lazy";
+    setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
+    const cfg = {};
+    const capture = () =>
+      createSessionCatalogRequestEntrySnapshot({ cfg, fallbackAgentId: "main", projection });
+    using freeze = vi.spyOn(Object, "freeze");
+    const wrappers = () =>
+      freeze.mock.calls
+        .map(([value]) => value)
+        .filter(
+          (value) =>
+            value && typeof value === "object" && "sessionKey" in value && "entry" in value,
+        );
+    const first = capture();
+    first.freeze();
+    const catalog = first.sessionEntries.entriesForCatalog!();
+    expect(first.entryForSession(key)?.label).toBe("Before");
+    expect(wrappers()).toHaveLength(1);
+    const second = capture();
+    second.freeze();
+    expect(second.sessionEntries.entriesForCatalog!()).toBe(catalog);
+    expect(wrappers()).toHaveLength(1);
+
+    await Promise.resolve();
+    setEntries([{ sessionKey: key, entry: { label: "After" } }]);
+    const entries = first.sessionEntries.entriesForAgent("MAIN");
+    expect(entries).toEqual([
+      { sessionKey: key, entry: expect.objectContaining({ label: "Before" }) },
+    ]);
+    expect(second.sessionEntries.entriesForAgent("main")).toBe(entries);
+    expect(wrappers()).toHaveLength(2);
+    expect(Object.keys(entries[0]!)).toEqual(["sessionKey", "entry"]);
+    expect(Object.keys(catalog[0]!)).toEqual(["sessionKey", "entry", "agentId"]);
+    for (const value of [entries, entries[0], catalog, catalog[0]]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
+    expect(first.sessionEntries.entriesForAgent("unknown")).toEqual([]);
+    const current = capture();
+    current.freeze();
+    expect(current.entryForSession(key)?.label).toBe("After");
+    expect(current.sessionEntries.revision).not.toBe(first.sessionEntries.revision);
+  });
+
   it("reuses planning revisions until entries or configuration change", async () => {
     const key = "agent:main:alpha-adopted";
     setEntries([{ sessionKey: key, entry: { label: "Before" } }]);

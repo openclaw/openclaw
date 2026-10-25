@@ -1,13 +1,16 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
+import type { MarkdownContent } from "../lib/markdown-content.ts";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
-  | string
+  | MarkdownContent
   | {
       messageKey: string;
       source: string;
-      parts: readonly [string, string] | (() => readonly [string, string]);
+      parts:
+        | readonly [MarkdownContent, MarkdownContent]
+        | (() => readonly [MarkdownContent, MarkdownContent]);
       deferFormatting?: boolean;
     };
 
@@ -43,6 +46,7 @@ export function createMarkdownRef(
       const preview = Boolean(
         reconciler &&
         typeof content !== "string" &&
+        !("fragment" in content) &&
         content.deferFormatting &&
         !value.media &&
         timer !== undefined &&
@@ -50,7 +54,7 @@ export function createMarkdownRef(
       );
       // Formatting stays in the tracked phase: late code highlighting must still invalidate it.
       const parts =
-        reconciler && !preview && typeof content !== "string"
+        reconciler && !preview && typeof content !== "string" && !("fragment" in content)
           ? typeof content.parts === "function"
             ? content.parts()
             : content.parts
@@ -63,18 +67,23 @@ export function createMarkdownRef(
       }
       reconciler.setConnected(value.connected ?? true);
       const content = value.content;
-      if (preview && typeof content !== "string") {
+      if (preview && typeof content !== "string" && !("fragment" in content)) {
         reconciler.preview(content.source);
         pendingPreview = true;
         return;
       }
       cancel();
-      if (typeof content === "string") {
+      if (typeof content === "string" || "fragment" in content) {
         reconciler.updateHtml(content, value.media, value.incremental);
       } else {
         reconciler.update(content.messageKey, content.source, parts!, value.media);
       }
-      if (typeof content !== "string" && content.deferFormatting && !value.media) {
+      if (
+        typeof content !== "string" &&
+        !("fragment" in content) &&
+        content.deferFormatting &&
+        !value.media
+      ) {
         // Text stays immediate; a burst shares one bounded formatting window.
         timer = setTimeout(() => {
           timer = undefined;

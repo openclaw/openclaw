@@ -98,7 +98,7 @@ it.each(["p2p", "group"] as const)(
     );
     expect(ctx).toMatchObject({
       content:
-        '/model <at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">$& &lt;Bob&gt;</at>thanks <at user_id="all">all</at>',
+        '<at user_id="ou_bot">Bot</at> /model <at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">$& &lt;Bob&gt;</at>thanks <at user_id="all">all</at>',
       mentionedBot: true,
     });
     expect(ctx.mentionTargets).toEqual([

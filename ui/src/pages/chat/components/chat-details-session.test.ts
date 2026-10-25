@@ -12,6 +12,7 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
@@ -741,11 +742,7 @@ it.each([false, true])(
     );
     onTestFinished(() => {
       view.unmount();
-      if (animate) {
-        Object.defineProperty(Element.prototype, "animate", animate);
-      } else {
-        Reflect.deleteProperty(Element.prototype, "animate");
-      }
+      restorePropertyDescriptor(Element.prototype, "animate", animate);
     });
     const row = () =>
       [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>

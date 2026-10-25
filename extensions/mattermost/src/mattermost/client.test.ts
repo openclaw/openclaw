@@ -2,6 +2,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../../test-support/effect-preparation.test-support.js";
 
 let prepareRequest: (() => Promise<void>) | undefined;
 const fetchFixture = vi.hoisted((): { current: typeof fetch } => ({
@@ -129,12 +130,7 @@ describe("Mattermost request boundary", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
-          preparing.promise,
-          dispatched.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-        ]);
+        await waitForEffectPreparation(preparing.promise, dispatched.promise);
         expect(fetchImpl).not.toHaveBeenCalled();
         if (retired) {
           caller.abort(failure);

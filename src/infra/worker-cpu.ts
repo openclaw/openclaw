@@ -369,21 +369,25 @@ function trackWorker(worker: WorkerCpuHandle): void {
     };
   }
   let pending = false;
+  // Reuse reactions instead of allocating an async frame for every sample.
+  const finishCpuUsage = (usage: NodeJS.CpuUsage | undefined) => {
+    pending = false;
+    return usage;
+  };
+  const failCpuUsage = () => finishCpuUsage(undefined);
   const source: WorkerSource = {
     script: "other",
-    async cpuUsage() {
+    cpuUsage() {
       // Worker.cpuUsage cannot cancel an interrupt blocked in native work. Keep
       // at most one outstanding request even across sampler resets/restarts.
       if (pending) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       pending = true;
       try {
-        return await worker.cpuUsage();
+        return worker.cpuUsage().then(finishCpuUsage, failCpuUsage);
       } catch {
-        return undefined;
-      } finally {
-        pending = false;
+        return Promise.resolve(failCpuUsage());
       }
     },
   };

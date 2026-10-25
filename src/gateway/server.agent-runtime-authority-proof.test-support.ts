@@ -9,6 +9,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { createMessageReceiptFromOutboundResults } from "../channels/message/receipt.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -170,15 +171,12 @@ export function installAgentAuthorityProofFixture() {
       const anthropic: ModelProviderConfig = {
         baseUrl: "https://anthropic.example.test/v1",
         models: [
-          {
-            id: "claude-opus-4-6",
+          modelDefinition("claude-opus-4-6", {
             name: "Proof image fixture",
             input: ["text", "image"],
             reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 128_000,
-            maxTokens: 8_192,
-          },
+          }),
         ],
       };
       await config.writeConfigFile({ models: { providers: { anthropic } } });

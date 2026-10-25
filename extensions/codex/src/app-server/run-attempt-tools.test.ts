@@ -4,7 +4,8 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic-tool-catalog.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonObject } from "./protocol.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
+import type { JsonObject } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
@@ -46,16 +47,6 @@ function createCodexToolBridgeForTest(
     signal: new AbortController().signal,
     directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools),
   });
-}
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
 }
 
 describe("Codex direct tool loading", () => {

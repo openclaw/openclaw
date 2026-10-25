@@ -6,6 +6,16 @@ const zeroCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const emptyUsage: Usage = { ...zeroCounts, totalTokens: 0, cost: { ...zeroCounts, total: 0 } };
 const textContent = (text: string): [{ type: "text"; text: string }] => [{ type: "text", text }];
 
+export function createLargeTrajectoryUsage() {
+  return {
+    input: 384_954,
+    output: 5_624,
+    cacheRead: 333_824,
+    reasoningTokens: 2_038,
+    total: 724_402,
+  };
+}
+
 export function userMessage(content: string): Message {
   return { role: "user", content, timestamp: 1 };
 }

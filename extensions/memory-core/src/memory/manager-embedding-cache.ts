@@ -211,7 +211,8 @@ function deleteOldestMemoryEmbeddingCacheRows(
       const keys = ["provider", "model", "provider_key", "hash"] as const;
       const oldest = rows
         .select(keys)
-        .orderBy("updated_at", "asc")
+        // Generated PostgreSQL index keys are ASC NULLS FIRST; matching lets this stop at the limit.
+        .orderBy("updated_at", (order) => order.asc().nullsFirst())
         .orderBy("provider", "asc")
         .orderBy("model", "asc")
         .orderBy("provider_key", "asc")

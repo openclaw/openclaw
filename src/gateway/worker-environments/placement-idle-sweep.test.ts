@@ -100,14 +100,6 @@ describe("worker placement idle suspension", () => {
     return { harness, idleSweep, profile, info, warn, isPlacementOperationInFlight };
   }
 
-  function claimWorkerTurn(claimId = "busy-worker-claim") {
-    const active = placements.get(REQUEST.sessionId);
-    if (active?.state !== "active") {
-      throw new Error("expected an active worker placement");
-    }
-    return placements.claimTurn(makeClaimInput(active, claimId, `run-${claimId}`));
-  }
-
   it("reports suspension only when enabled", async () => {
     const changed = vi.fn();
     const unsubscribe = sessionChanges.subscribe(changed);
@@ -237,10 +229,12 @@ describe("worker placement idle suspension", () => {
 
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
     const { harness, idleSweep } = await createIdleFixture();
-    await harness.service.dispatch(REQUEST);
+    const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
-    const claim = await claimWorkerTurn("recent-turn");
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "recent-turn", "run-recent-turn"),
+    );
     nowMs += 5_000;
     await placements.releaseTurn(claim);
 
@@ -334,7 +328,9 @@ describe("worker placement idle suspension", () => {
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
-        await claimWorkerTurn();
+        await placements.claimTurn(
+          makeClaimInput(active, "busy-worker-claim", "run-busy-worker-claim"),
+        );
       } else if (kind === "local-claim" || kind === "pending-result") {
         const claim = await placements.claimTurn(
           makeClaimInput(active, "busy-local-claim", "busy-local-run"),
@@ -451,7 +447,13 @@ describe("worker placement idle suspension", () => {
         await reclaimStarted.promise;
 
         if (change === "activity") {
-          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
+          const claim = await placements.claimTurn(
+            makeClaimInput(
+              active,
+              "turn-during-idle-reclaim-wait",
+              "run-turn-during-idle-reclaim-wait",
+            ),
+          );
           nowMs += 1_000;
           await placements.releaseTurn(claim);
         } else {

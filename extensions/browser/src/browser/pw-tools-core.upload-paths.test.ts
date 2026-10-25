@@ -1,6 +1,6 @@
-import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fileChooserPage } from "./pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -44,49 +44,6 @@ function nativeAbortError(signal: AbortSignal) {
   });
 }
 
-function createAtomicFileChooserPageMocks() {
-  const fileChooser = {
-    setFiles: vi.fn<
-      (paths: string[], options: { timeout?: number; signal: AbortSignal }) => Promise<void>
-    >(async () => {}),
-  };
-  const events = new EventEmitter();
-  const waitForEvent = vi.fn(
-    async (_event: string, { signal }: { signal: AbortSignal }) =>
-      await new Promise<typeof fileChooser>((resolve, reject) => {
-        const cleanup = () => {
-          events.off("filechooser", onChooser);
-          signal.removeEventListener("abort", onAbort);
-        };
-        const onChooser = (chooser: typeof fileChooser) => {
-          cleanup();
-          resolve(chooser);
-        };
-        const onAbort = () => {
-          cleanup();
-          reject(nativeAbortError(signal));
-        };
-        events.once("filechooser", onChooser);
-        signal.addEventListener("abort", onAbort, { once: true });
-        if (signal.aborted) {
-          onAbort();
-        }
-      }),
-  );
-  const press = vi.fn(async () => {});
-  const currentPage = { waitForEvent, keyboard: { press } };
-  setPwToolsCoreCurrentPage(currentPage);
-  return {
-    currentPage,
-    emitChooser: (observed = fileChooser) => {
-      events.emit("filechooser", observed);
-    },
-    fileChooser,
-    listenerCount: () => events.listenerCount("filechooser"),
-    press,
-  };
-}
-
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
 
 describe("armFileUploadViaPlaywright upload path validation", () => {
@@ -100,7 +57,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("checks authority after upload page preparation", async () => {
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     sessionMocks.getPageForTargetId.mockImplementationOnce(async () => {
@@ -144,7 +102,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("keeps an accepted passive upload arm alive after its requesting invocation ends", async () => {
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     const invocation = new AbortController();
     const assertCurrent = vi.fn(async () => invocation.signal.throwIfAborted());
     try {
@@ -163,7 +122,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("dismisses its acquired chooser when authority is revoked during atomic payload preparation", async () => {
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     pathMocks.resolveStrictExistingUploadPaths.mockImplementationOnce(
@@ -213,7 +173,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
       ok: false,
       error: "Invalid path: upload target changed",
     });
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     interactionMocks.clickViaPlaywright.mockImplementation(async () => page.emitChooser());
 
     await expect(
@@ -231,7 +192,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   it("bounds file assignment by the same request deadline", async () => {
     vi.useFakeTimers();
     try {
-      const page = createAtomicFileChooserPageMocks();
+      const page = fileChooserPage();
+      setPwToolsCoreCurrentPage(page.currentPage);
       page.fileChooser.setFiles.mockImplementation(
         async (_paths, options) =>
           await new Promise<void>((_resolve, reject) => {
@@ -263,7 +225,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("preserves the cleanup tail when a queued owner aborts", async () => {
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     let firstSignal: AbortSignal | undefined;
     let finishCancellation!: () => void;
     page.fileChooser.setFiles
@@ -315,7 +278,8 @@ describe("armFileUploadViaPlaywright upload path validation", () => {
   });
 
   it("waits for a superseded click to settle before arming the next chooser", async () => {
-    const page = createAtomicFileChooserPageMocks();
+    const page = fileChooserPage();
+    setPwToolsCoreCurrentPage(page.currentPage);
     let finishFirstClick!: () => void;
     interactionMocks.clickViaPlaywright
       .mockImplementationOnce(

@@ -45,6 +45,7 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
@@ -142,11 +143,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "users.self requires an authenticated user"),
-      );
+      respondError(respond, ErrorCodes.FORBIDDEN, "users.self requires an authenticated user");
       return;
     }
     try {
@@ -239,31 +236,25 @@ export const usersHandlers: GatewayRequestHandlers = {
           return;
         }
         if (result.error.code === "profile-key-limit") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
-              {
-                details: {
-                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-                  limit: result.error.limit,
-                  currentCount: result.error.currentCount,
-                },
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+            {
+              details: {
+                code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                limit: result.error.limit,
+                currentCount: result.error.currentCount,
               },
-            ),
+            },
           );
           return;
         }
         const key = "key" in result.error ? ` for ${result.error.key}` : "";
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid users.prefs.set entry${key}: ${result.error.code}`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `invalid users.prefs.set entry${key}: ${result.error.code}`,
         );
         return;
       }
@@ -280,7 +271,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const email = params.email.trim();
     if (!email) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "email must not be empty"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "email must not be empty");
       return;
     }
     const targetProfileId = params.targetProfileId;
@@ -364,7 +355,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     };
     const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
     if (!isConfiguredRole()) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, unknownRoleMessage));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, unknownRoleMessage);
       return;
     }
     try {
@@ -394,11 +385,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const avatarBase64 = params.avatarBase64.trim();
     if (!isValidBase64(avatarBase64)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "avatarBase64 must be base64"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "avatarBase64 must be base64");
       return;
     }
     const bytes = Buffer.from(avatarBase64, "base64");
@@ -412,7 +399,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       });
       assertCurrent();
       if (!result.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, result.error.code);
         return;
       }
       const { profile, display } = result.value;

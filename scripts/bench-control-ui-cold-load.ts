@@ -318,9 +318,6 @@ if (values["streaming-reply"] && values["live-events"]) {
 if (values["streaming-allocations"] && !values["streaming-reply"]) {
   throw new Error("streaming-allocations requires streaming-reply");
 }
-if (values["warm-reload"] && !values["probe-dir"]) {
-  throw new Error("warm-reload requires probe-dir with LoAF/mutation and RPC census init scripts");
-}
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
 }

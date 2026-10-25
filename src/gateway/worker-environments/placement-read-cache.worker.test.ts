@@ -292,8 +292,13 @@ describe("worker placement read cache", () => {
     unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
     expect(changed.placements).toEqual([remote]);
+    const callerSnapshot = changed.placements;
+    callerSnapshot[0]!.sessionKey = "caller-change";
+    callerSnapshot.length = 0;
+    expect(changed.placements).toEqual([remote]);
     changed.assertCurrent();
     changed.release();
+    expect(() => changed.placements).toThrow();
     expect(
       reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
     ).toHaveLength(1);

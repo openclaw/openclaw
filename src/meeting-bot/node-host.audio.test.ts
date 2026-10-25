@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const childProcessMocks = vi.hoisted(() => ({
@@ -325,6 +326,37 @@ describe("meeting node host audio output", () => {
     const pulled = await rpc(bridge, "pullAudio");
     assert.deepStrictEqual(Buffer.from(pulled.base64 as string, "base64"), expected);
     await rpc(bridge, "stop");
+  });
+
+  it("does not retain unrelated pool slabs while captured audio awaits a pull", async () => {
+    const bridge = await startAudioBridge();
+    const churn = "x".repeat(Buffer.poolSize / 2 - 8);
+    const mark = () => {
+      Buffer.from(churn);
+      Buffer.from(churn);
+      Buffer.from(churn);
+      const before = Buffer.from("marker");
+      const audio = Buffer.alloc(960, 7);
+      bridge.inputStdout.emit("data", audio);
+      audio.fill(0);
+      const after = Buffer.from("marker");
+      return [new WeakRef(before.buffer), new WeakRef(after.buffer)];
+    };
+    const references = Array.from({ length: 8 }, mark).flat();
+    Buffer.from(churn);
+    Buffer.from(churn);
+    Buffer.from(churn);
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    try {
+      expect(control.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
+      const pulled = await rpc(bridge, "pullAudio");
+      expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.alloc(960, 7));
+    } finally {
+      await rpc(bridge, "stop");
+    }
   });
 
   it("delivers terminal close to an outstanding pull and then deletes the session", async () => {

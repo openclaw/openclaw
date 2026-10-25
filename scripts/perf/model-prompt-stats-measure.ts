@@ -100,10 +100,11 @@ if (values.lifecycle) {
         suppressPluginHooks: true,
       },
       options: undefined,
-      createObserver: (capturePromptStats: boolean) =>
+      createObserver: (capturePromptStats: boolean, captureByteStats: boolean) =>
         createModelObserver({
           streamContext,
           capturePromptStats,
+          captureByteStats,
           suppressPluginHooks: true,
         }),
     });

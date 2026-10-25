@@ -133,10 +133,7 @@ describe("Feishu comment event reply delivery", () => {
   });
 
   it("sends final comment text without waiting for typing cleanup", async () => {
-    let resolveCleanup: (() => void) | undefined;
-    const cleanupPromise = new Promise<void>((resolve) => {
-      resolveCleanup = resolve;
-    });
+    const { promise: cleanupPromise, resolve: resolveCleanup } = Promise.withResolvers<void>();
     const cleanup = vi.fn(() => cleanupPromise);
     createCommentTypingReactionLifecycleMock.mockReturnValue({
       start: vi.fn(async () => {}),

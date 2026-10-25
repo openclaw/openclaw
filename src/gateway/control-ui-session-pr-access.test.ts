@@ -721,6 +721,24 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = source === "repository" ? await f.seedRepository() : undefined;
       await f.subscribe();
+      const read = createControlUiSessionPrRead({
+        client: f.client,
+        sessionKey,
+        getRuntimeConfig: f.context.getRuntimeConfig,
+        getSessionRowProjection: () => getSessionRowProjection(f.context),
+        isCurrentClient: () => !f.client.invalidated,
+      })!;
+      const target = await read();
+      expect(target).toBeDefined();
+      const sorts = vi.spyOn(Array.prototype, "sort");
+      try {
+        for (let index = 0; index < 3; index++) {
+          target!.assertCurrent!();
+        }
+        expect(sorts).not.toHaveBeenCalled();
+      } finally {
+        sorts.mockRestore();
+      }
       const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
         for (let index = 1; index < 20; index++) {
@@ -748,13 +766,6 @@ it.each(["local", "repository"] as const)(
       }
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
-        const read = createControlUiSessionPrRead({
-          client: f.client,
-          sessionKey,
-          getRuntimeConfig: f.context.getRuntimeConfig,
-          getSessionRowProjection: () => getSessionRowProjection(f.context),
-          isCurrentClient: () => !f.client.invalidated,
-        })!;
         expect((await read())?.source).toMatchObject({ repo: "publication" });
         // Read before background preparation can replace the invalidated repository facts.
         const notifiedRead = vi.fn(read);

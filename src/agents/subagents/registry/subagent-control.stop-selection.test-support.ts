@@ -7,6 +7,7 @@ import {
 } from "../../../../test/helpers/promise.js";
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
+import { createAcpTestBindingRegistry } from "../../../auto-reply/reply/test-fixtures/acp-runtime.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -24,10 +25,6 @@ import {
 } from "../../../plugins/runtime.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import {
   createSubagentRunRecord,
@@ -99,18 +96,7 @@ function holdConversationLookup(failure?: Error) {
   const entered = createDeferred();
   const released = createDeferred();
   const registry = captureActivePluginRegistrySnapshot();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "stop-lookup",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "stop-lookup" }),
-          conversationBindings: { supportsCurrentConversationBinding: true },
-        },
-      },
-    ]),
-  );
+  setActivePluginRegistry(createAcpTestBindingRegistry("stop-lookup"));
   const service = getSessionBindingService();
   const resolve = service.resolveByConversationAsync.bind(service);
   const lookup = vi

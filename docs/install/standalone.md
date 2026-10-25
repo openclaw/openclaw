@@ -311,8 +311,16 @@ selected plugin workers. The standalone builder requires every declared output
 before compiling; a filename ending in `.worker.js` does not
 declare an entry. Doctor database inspection, database discovery and backup,
 update helpers, workspace leases, certificate warmup, directory watching, hashing,
-and the shutdown watchdog use explicit module entries. Fixed eval workers are no longer extracted
-from strings during standalone packaging.
+the shutdown watchdog, update gates, retired-worktree cleanup, and file-transfer
+directory listing and archive helpers use explicit module entries. Fixed eval
+workers are no longer extracted from strings during standalone packaging.
+
+Update canaries distinguish worker targets from CLI entry paths so the compiled
+executable dispatches each worker to its declared entry. Retained update runtimes
+keep those entries available until recovery and cleanup have completed. The
+managed update handoff script is also a declared file entry: the manifest owns
+its staging filename and source binding, while the update owner retains writing
+and cleanup.
 
 The sealed single-file update-recovery helper uses its existing in-process hashing
 fallback so its recorded recovery artifact remains self-contained. Normal

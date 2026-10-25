@@ -5,6 +5,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import {
   catalogHost,
   catalogProvider as provider,
@@ -44,7 +45,7 @@ it("keeps a host failure during a pending retry and clears it after host success
     .mockResolvedValueOnce([host]);
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
   const config = {};
-  const client = { connId: "host-retry-owner" };
+  const client = { connId: "host-retry-owner", connect: gatewayConnect([]) };
   await call("sessions.catalog.list", {}, config, client);
   const waiting = await call("sessions.catalog.list", {}, config, client);
   expect(waiting.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toEqual({
@@ -73,7 +74,7 @@ it("keeps a cached failure during retry and clears it after the next successful 
     .mockResolvedValue([]);
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
   const config = {};
-  const client = { connId: "refresh-owner" };
+  const client = { connId: "refresh-owner", connect: gatewayConnect([]) };
   await call("sessions.catalog.list", {}, config, client);
   try {
     const failed = await call("sessions.catalog.list", {}, config, client);
@@ -115,7 +116,7 @@ it("never falls back to a previously authorized page for a fresh-list provider",
     },
   ];
   const config = {};
-  const client = { connId: "fresh-list-owner" };
+  const client = { connId: "fresh-list-owner", connect: gatewayConnect([]) };
   const initial = await call("sessions.catalog.list", {}, config, client);
   expectCatalog(initial, { requiresFreshList: true, hosts: [host] });
   try {
@@ -196,7 +197,7 @@ it("reuses pending discovery and preserves authoritative host withdrawals in fal
     .mockRejectedValue(Object.assign(new Error("node did not respond"), { code: "TIMEOUT" }));
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
   const config = {};
-  const client = { connId: "owner" };
+  const client = { connId: "owner", connect: gatewayConnect([]) };
   const query = { allowPartialResults: true, progressId: "withdrawal" };
   const context = { broadcastToConnIds: vi.fn() };
   await call("sessions.catalog.list", query, config, client, context);
@@ -274,13 +275,13 @@ it.each(["caller", "query", "config", "registration", "gateway", "archive"] as c
     const fixture = provider("fixture", { list, archive: async () => ({ ok: true }) });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: fixture }];
     let config = {};
-    let client = { connId: "first" };
+    let client = { connId: "first", connect: gatewayConnect([]) };
     let gateway = new AbortController();
     await call("sessions.catalog.list", {}, config, client, {
       requestEntryLifetime: { signal: gateway.signal },
     });
     if (change === "caller") {
-      client = { connId: "second" };
+      client = { connId: "second", connect: gatewayConnect([]) };
     }
     if (change === "config") {
       config = {};

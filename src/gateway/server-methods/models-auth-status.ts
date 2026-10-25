@@ -6,7 +6,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
-  errorShape,
   validateModelsAuthSetApiKeyParams,
   type ModelsAuthSetApiKeyResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -51,7 +50,7 @@ import type {
   ModelAuthStatusResult,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -187,19 +186,15 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     let assertCurrent: (() => void) | undefined;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId must be a non-empty string"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "expectedOwnerId must be a non-empty string",
         );
         return;
       }
       if (!hasGatewayAdminScope(client)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin"),
-        );
+        respondError(respond, ErrorCodes.FORBIDDEN, "missing scope: operator.admin");
         return;
       }
       try {
@@ -248,22 +243,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authLogout": async ({ params, respond, context }) => {
     const provider = readProviderParam(params);
     if (!provider) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "provider is required");
       return;
     }
     const selection = readLogoutProfileSelection(params);
     if (!selection.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, selection.message);
       return;
     }
     if (
       (params.credentialType !== undefined && params.credentialType !== "api_key") ||
       (params.credentialType !== undefined && selection.profileIds !== undefined)
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Choose either API keys or specific profiles"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Choose either API keys or specific profiles",
       );
       return;
     }
@@ -289,10 +284,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         selection.profileIds &&
         selection.profileIds.some((profileId) => !availableProfiles.includes(profileId))
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "profileIds contain unavailable auth profiles"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "profileIds contain unavailable auth profiles",
         );
         return;
       }

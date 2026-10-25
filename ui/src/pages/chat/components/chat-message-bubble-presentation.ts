@@ -62,6 +62,7 @@ export type MessageMediaOptions = Pick<
   | "resourceBasePath"
   | "assistantAttachmentAuthToken"
   | "mediaOwner"
+  | "mediaReadAllowed"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "resolveArtifactDownload"
@@ -122,6 +123,7 @@ export function createMessageMediaOptions(
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     mediaOwner: opts.mediaOwner,
+    mediaReadAllowed: opts.mediaReadAllowed,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,

@@ -4,7 +4,7 @@ import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-te
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import transcriptCorpus from "./markdown-transcript-corpus.json" with { type: "json" };
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownDomParts } from "./markdown.ts";
 
 type SecurityCase = { name: string; source: string; options?: MarkdownRenderOptions };
 
@@ -118,6 +118,49 @@ const streamingCases: SecurityCase[] = [
   },
 ];
 
+const directDomCases: SecurityCase[] = [
+  {
+    name: "Markdown title with XML mutation probes",
+    source: '[label](https://example.com "--!> ]> </script> </textarea>")',
+  },
+  {
+    name: "fence language with XML comment close",
+    source: "```x--!>\nconst value = '<img src=x onerror=alert(1)>';\n```",
+  },
+  {
+    name: "decoded NUL in a host-local file attribute",
+    source: "[file](/Users/example/a%00b.txt)",
+    options: { fileLinks: true },
+  },
+  {
+    name: "decoded CR in a host-local file attribute",
+    source: "[file](/Users/example/a%0Db.txt)",
+    options: { fileLinks: true },
+  },
+  {
+    name: "decoded CRLF in a host-local file attribute",
+    source: "[file](/Users/example/a%0D%0Ab.txt)",
+    options: { fileLinks: true },
+  },
+  {
+    name: "decoded CR in a generated GitHub link label",
+    source: "https://github.com/example/repo/blob/main/a%0Db.ts",
+  },
+  {
+    name: "decoded CRLF in a generated GitHub link label",
+    source: "https://github.com/example/repo/blob/main/a%0D%0Ab.ts",
+  },
+  {
+    name: "nested tight list after an inline closing token",
+    source: "- **strong**\n  - [incomplete",
+  },
+  {
+    name: "generated favicon beside a hostile Markdown title",
+    source: '[site](https://example.com/path?q=one&next=two "--!> </script>")',
+    options: { linkFavicons: true },
+  },
+];
+
 function splitSchedules(source: string): { name: string; ends: number[] }[] {
   const boundaries = new Set([source.length]);
   // Include both sides of syntax tokens, especially the on|error and java|script
@@ -187,7 +230,9 @@ function serializedContent(root: HTMLElement): string {
   const walker = document.createTreeWalker(copy, NodeFilter.SHOW_COMMENT);
   const markers: Node[] = [];
   for (let marker = walker.nextNode(); marker; marker = walker.nextNode()) {
-    markers.push(marker);
+    if (marker.nodeValue === "") {
+      markers.push(marker);
+    }
   }
   for (const marker of markers) {
     marker.parentNode?.removeChild(marker);
@@ -207,6 +252,7 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
   const corpusCases = transcriptCorpus as readonly SecurityCase[];
   const cases: SecurityCase[] = [
     ...corpusCases,
+    ...directDomCases,
     ...[...domPurifyCases, ...streamingCases].flatMap((sample) =>
       [false, true].map((progressBars) => ({
         name: `${sample.name} / progress=${progressBars}`,
@@ -223,6 +269,24 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
     const expected = serializedContent(reference);
     expect(unsafeDom(reference)).toEqual([]);
 
+    const staticContainer = document.body.appendChild(document.createElement("div"));
+    const staticReconciler = new MarkdownDomReconciler(staticContainer, () => () => {});
+    try {
+      const settled = prepareMessageMarkdown(
+        sample.source,
+        `security:${sample.name}:static`,
+        { role: "assistant", isStreaming: false },
+        sample.options ?? {},
+      );
+      expect(settled.parts().every((part) => typeof part === "string")).toBe(true);
+      staticReconciler.update(settled.messageKey, settled.source, settled.parts());
+      expect(unsafeDom(staticContainer), `${sample.name}, static`).toEqual([]);
+      expect(serializedContent(staticContainer), `${sample.name}, static`).toBe(expected);
+    } finally {
+      staticReconciler.dispose();
+      staticContainer.remove();
+    }
+
     for (const schedule of splitSchedules(sample.source)) {
       const key = `security:${sample.name}:${schedule.name}`;
       const container = document.body.appendChild(document.createElement("div"));
@@ -236,7 +300,7 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
             reconciler.preview(source);
             expect(unsafeDom(container), `${key}, plain preview ${end}`).toEqual([]);
           }
-          reconciler.update(key, source, toStreamingMarkdownParts(source, sample.options, key));
+          reconciler.update(key, source, toStreamingMarkdownDomParts(source, sample.options, key));
           expect(unsafeDom(container), `${key}, offset ${end}`).toEqual([]);
         }
         // Completion changes repair/highlighting semantics. Use the real chat

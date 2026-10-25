@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPayloads,
   makePayloadAssistant as makeAssistant,
+  makePayloadToolAssistant,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
@@ -85,18 +86,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
 
   it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "exec",
-            arguments: { command: "echo hi" },
-          },
-        ],
-      }),
+      lastAssistant: makePayloadToolAssistant("exec", { command: "echo hi" }),
       lastToolError: { toolName: "exec", error: "Command exited with code 1" },
       verboseLevel: "on",
     });
@@ -110,17 +100,9 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("does not add tool error fallback when assistant text exists after tool calls", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Checked the page and recovered with final answer."],
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "browser",
-            arguments: { action: "search", query: "openclaw docs" },
-          },
-        ],
+      lastAssistant: makePayloadToolAssistant("browser", {
+        action: "search",
+        query: "openclaw docs",
       }),
       currentAssistant: makeStoppedAssistant("Checked the page and recovered with final answer."),
       lastToolError: { toolName: "browser", error: "connection timeout" },

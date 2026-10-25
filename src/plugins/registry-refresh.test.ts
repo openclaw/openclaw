@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import * as leaseWorkerStorage from "../state/openclaw-state-lease-worker-storage.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
@@ -12,7 +14,10 @@ import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
+} from "./plugin-lifecycle-lease.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
@@ -69,6 +74,79 @@ function expectInstalled(rootDir: string, env?: NodeJS.ProcessEnv) {
 }
 
 describe("plugin registry refresh config ownership", () => {
+  it("verifies worker custody only at admission, publication, and settlement", async () => {
+    await withOpenClawTestState(
+      { label: "registry-refresh-worker-verifications" },
+      async (state) => {
+        await seedDisabledState(state);
+        const create = leaseWorkerStorage.createOpenClawStateLeaseWorkerStorage;
+        const verify = vi.fn();
+        vi.spyOn(leaseWorkerStorage, "createOpenClawStateLeaseWorkerStorage").mockImplementation(
+          (...args) => {
+            const storage = create(...args);
+            const verifyOwned = storage.verify.bind(storage);
+            vi.spyOn(storage, "verify").mockImplementation((...verifyArgs) => {
+              verify();
+              return verifyOwned(...verifyArgs);
+            });
+            return storage;
+          },
+        );
+        const warn = vi.fn();
+
+        await withPluginLifecycleLeaseAsync({ env: state.env, processBound: true }, (lease) =>
+          refresh({ lease, logger: { warn } }),
+        );
+
+        expect(verify).toHaveBeenCalledTimes(3);
+        expect(readPersistedInstalledPluginIndexSync({ env: state.env })?.refreshReason).toBe(
+          "source-changed",
+        );
+        expect(warn).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("refuses worker registry publication when custody expires during config preparation", async () => {
+    await withOpenClawTestState({ label: "registry-refresh-worker-expiry" }, async (state) => {
+      const before = await seedDisabledState(state);
+      const create = configIO.createConfigIO;
+      vi.spyOn(configIO, "createConfigIO").mockImplementation((options) => {
+        const io = create(options);
+        return {
+          ...io,
+          readConfigFileSnapshot: async () => {
+            const snapshot = await io.readConfigFileSnapshot();
+            runOpenClawStateWriteTransaction(
+              ({ db }) => {
+                db.prepare("UPDATE state_leases SET expires_at = 0 WHERE scope = ?").run(
+                  "core:plugin-lifecycle",
+                );
+              },
+              { env: state.env },
+            );
+            return snapshot;
+          },
+        };
+      });
+      const warn = vi.fn();
+
+      await expect(
+        withPluginLifecycleLeaseAsync({ env: state.env, processBound: true }, (lease) =>
+          refreshPluginRegistryAfterConfigMutation({
+            reason: "source-changed",
+            lease,
+            logger: { warn },
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+
+      expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
+      expect(warn).not.toHaveBeenCalled();
+      expect(runtimeCache.clear).not.toHaveBeenCalled();
+    });
+  });
+
   it("invalidates runtime discovery when committed config refresh cannot acquire custody", async () => {
     await withOpenClawTestState(
       { label: "registry-refresh-acquisition-failure" },

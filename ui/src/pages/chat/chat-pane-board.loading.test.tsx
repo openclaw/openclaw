@@ -85,8 +85,8 @@ function createGatewayBoardPane(sessionKey: string) {
 
 describe("chat pane board loading states", () => {
   it.each([false, true])(
-    "keeps board restoration independent of deferred rows (%s)",
-    async (deferRows) => {
+    "paints saved rows before connect while board restoration waits (route pending: %s)",
+    async (routePending) => {
       vi.stubGlobal("indexedDB", new IDBFactory());
       const sessionKey = "agent:main:dispatch-cached-board";
       const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
@@ -103,7 +103,7 @@ describe("chat pane board loading states", () => {
       });
       pane.context.gateway.snapshot.phase = "connecting";
       Reflect.set(pane, "sessionKey", sessionKey);
-      Reflect.set(pane, "deferSnapshotRows", deferRows);
+      Reflect.set(pane, "routeResolutionPending", routePending);
       const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
       pane.sessionSnapshotStore = store;
       const messages = [{ role: "assistant", content: "Retained conversation" }];
@@ -120,13 +120,16 @@ describe("chat pane board loading states", () => {
         pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
         const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
         await expectDefined(reading.mock.results[0], "snapshot read").value;
-        expect(pane.state.chatMessages).toEqual(deferRows ? [] : messages);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(pane.state.chatMessages).toEqual(messages);
         expect(provider.hasLoadedSnapshot).toBe(false);
         vi.useFakeTimers();
         dispatch.resolve();
         await dispatch.promise;
         expect(provider.hasLoadedSnapshot).toBe(true);
-        expect(pane.state.chatMessages).toEqual(deferRows ? [] : messages);
+        expect(pane.state.chatMessages).toEqual(messages);
         await vi.runAllTimersAsync();
         await hydration.promise;
         expect(pane.state.chatMessages).toEqual(messages);

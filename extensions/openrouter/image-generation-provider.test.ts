@@ -166,10 +166,13 @@ describe("openrouter image generation provider", () => {
 
     const result = await generateImage({
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
+      aspectRatio: "16:9",
+      resolution: "2K",
     });
 
     const request = postRequest();
     expect(request.url).toBe("https://openrouter.ai/api/v1/images");
+    expect(request.body).toMatchObject({ aspect_ratio: "16:9", resolution: "2K" });
     expect((request.body as Record<string, unknown>).input_references).toEqual([
       {
         type: "image_url",
@@ -235,6 +238,8 @@ describe("openrouter image generation provider", () => {
         choices: [
           { message: { content: `done data:image/png;base64,${png}` } },
           { message: { content: [{ b64_json: raw }] } },
+          { message: { content: [{ inlineData: { data: raw, mimeType: "image/webp" } }] } },
+          { message: { content: [{ inline_data: { data: raw, mime_type: "image/jpeg" } }] } },
         ],
       }),
     );
@@ -244,6 +249,14 @@ describe("openrouter image generation provider", () => {
     expect(result.images.map((image) => image.buffer.toString())).toEqual([
       "png-inline",
       "raw-inline",
+      "raw-inline",
+      "raw-inline",
+    ]);
+    expect(result.images.map((image) => image.mimeType)).toEqual([
+      "image/png",
+      "image/png",
+      "image/webp",
+      "image/jpeg",
     ]);
   });
 

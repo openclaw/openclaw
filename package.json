@@ -555,6 +555,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/runtime-profile": {
+      "types": "./dist/plugin-sdk/runtime-profile.d.ts",
+      "default": "./dist/plugin-sdk/runtime-profile.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
@@ -661,6 +665,10 @@
     },
     "./plugin-sdk/json-schema-runtime": {
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
+    },
+    "./plugin-sdk/json-schema-validator": {
+      "types": "./dist/plugin-sdk/json-schema-validator.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-validator.js"
     },
     "./plugin-sdk/json-unsafe-integers": {
       "default": "./dist/plugin-sdk/json-unsafe-integers.js"
@@ -1976,6 +1984,8 @@
     "lint:ui:styles": "stylelint --config config/stylelint.config.mjs \"ui/src/**/*.css\" \"ui/public/themes/*.css\"",
     "lint:web-fetch-provider-boundaries": "node --import ./scripts/tsx.mjs scripts/check-web-fetch-provider-boundaries.mts",
     "lint:webhook:no-low-level-body-read": "node --import ./scripts/tsx.mjs scripts/check-webhook-auth-body-order.mts",
+    "lobster:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts",
+    "lobster:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-lobster-schema-validators.mts --check",
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "/bin/bash scripts/package-mac-app.sh",
     "mac:restart": "/bin/bash scripts/restart-mac.sh",
@@ -2345,7 +2355,7 @@
     "update:compat:check": "node scripts/update-compat-inventory.mts --check",
     "static:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts",
     "static:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts --check",
-    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check",
+    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check && pnpm lobster:validators:check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
@@ -2455,6 +2465,7 @@
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
     "acpx": "0.19.6",
+    "ajv": "8.20.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",
