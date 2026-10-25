@@ -32,21 +32,8 @@ afterEach(() => {
   vi.resetModules();
 });
 
-async function acquireGateway(prefix: string) {
-  const root = tempDirs.make(prefix);
-  const gateway = await acquireGatewayLock({
-    allowInTests: true,
-    env: { OPENCLAW_STATE_DIR: root },
-    timeoutMs: 0,
-  });
-  if (!gateway) {
-    throw new Error("Expected Gateway custody");
-  }
-  return { root, gateway };
-}
-
-function lockFixture(prefix: string, projection = false) {
-  const root = tempDirs.make(prefix);
+function lockFixture(projection = false) {
+  const root = tempDirs.make("openclaw-owner-heartbeat-");
   const rootPath = path.join(root, "root.lock");
   const projectionPath = path.join(root, "projection.lock");
   const locks = {
@@ -132,12 +119,21 @@ async function observeGateway(
   legacy = false,
 ) {
   const observation = observeHeartbeatWorkers(fault, legacy);
-  const acquired = await acquireGateway("openclaw-owner-heartbeat-");
+  const root = tempDirs.make("openclaw-owner-heartbeat-");
+  const gateway = await acquireGatewayLock({
+    allowInTests: true,
+    env: { OPENCLAW_STATE_DIR: root },
+    timeoutMs: 0,
+  });
+  if (!gateway) {
+    throw new Error("Expected Gateway custody");
+  }
   return {
     ...observation,
-    ...acquired,
+    root,
+    gateway,
     async [Symbol.asyncDispose]() {
-      await acquired.gateway.release();
+      await gateway.release();
       await observation[Symbol.asyncDispose]();
     },
   };
@@ -151,7 +147,7 @@ it.each([false, true])("keeps custody across worker clock origins (legacy=%s)", 
 });
 
 it("keeps the selected heartbeat generation alive through native retirement", async () => {
-  const { root, rootPath: lockPath } = lockFixture("openclaw-owner-generation-");
+  const { root, rootPath: lockPath } = lockFixture();
   await using observation = observeHeartbeatWorkers();
   const { workers, ready } = observation;
   let heartbeat: ReturnType<typeof startGatewayStateOwnerHeartbeat> | undefined;
@@ -233,7 +229,6 @@ async function startRuntime(
       }
       return messages;
     },
-    stop,
     [Symbol.asyncDispose]: stop,
   };
 }
@@ -266,7 +261,7 @@ it.each(["reparented", "unchanged ppid"])(
 it.each([65_000, -5_000])(
   "renews unchanged worker custody after a heartbeat age of %s ms",
   async (age) => {
-    const { rootPath, locks } = lockFixture("openclaw-owner-gap-");
+    const { rootPath, locks } = lockFixture();
     vi.useFakeTimers();
     await using runtime = await startRuntime(locks, {
       clock: "epoch",
@@ -344,7 +339,7 @@ it.each([
 );
 
 it("bounds persistent EIO renewal failures without losing healthy custody", async () => {
-  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-io-");
+  const { rootPath, locks } = lockFixture();
   vi.spyOn(fs, "futimesSync").mockImplementation(() => {
     throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
   });
@@ -355,7 +350,6 @@ it("bounds persistent EIO renewal failures without losing healthy custody", asyn
     expect(vi.getTimerCount()).toBe(1);
     vi.advanceTimersByTime(1);
     const events = runtime.readEvents();
-    expect(events).toContain(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
     expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
     expect(events.at(-1)).toBe(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
     expect(vi.getTimerCount()).toBe(0);
@@ -364,7 +358,7 @@ it("bounds persistent EIO renewal failures without losing healthy custody", asyn
 });
 
 it("keeps the failure deadline ahead of mtime expiry after a slow successful touch", async () => {
-  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-slow-");
+  const { rootPath, locks } = lockFixture();
   const touch = fs.futimesSync;
   let first = true;
   vi.spyOn(fs, "futimesSync").mockImplementation((lockPath, atime, mtime) => {
@@ -385,7 +379,7 @@ it("keeps the failure deadline ahead of mtime expiry after a slow successful tou
 });
 
 it("renews physical custody when the wall clock moves behind the last heartbeat", async () => {
-  const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-clock-");
+  const { rootPath, locks } = lockFixture();
   await using runtime = await startRuntime(locks);
   vi.setSystemTime(Date.now() - 120_000);
   vi.advanceTimersByTime(15_000);
@@ -396,10 +390,7 @@ it("renews physical custody when the wall clock moves behind the last heartbeat"
 });
 
 it("bounds shared custody by the oldest mtime after clock rollback between locks", async () => {
-  const { rootPath, projectionPath, locks } = lockFixture(
-    "openclaw-owner-heartbeat-between-locks-",
-    true,
-  );
+  const { rootPath, projectionPath, locks } = lockFixture(true);
   const rootInode = fs.statSync(rootPath).ino;
   const touch = fs.futimesSync;
   let shiftClock = false;
@@ -424,10 +415,7 @@ it("bounds shared custody by the oldest mtime after clock rollback between locks
 });
 
 it("never publishes renewed custody after a partial failure across clock rollback", async () => {
-  const { rootPath, projectionPath, locks } = lockFixture(
-    "openclaw-owner-heartbeat-captured-clock-",
-    true,
-  );
+  const { rootPath, projectionPath, locks } = lockFixture(true);
   await using runtime = await startRuntime(locks);
   const initialBeat = Atomics.load(runtime.lastBeat, 0);
   const projectionInode = fs.statSync(projectionPath).ino;
@@ -570,10 +558,7 @@ it("never renews a successor after suspension between verification and the times
 });
 
 it("keeps renewing the root when a projection disappears during its heartbeat", async () => {
-  const { rootPath, projectionPath, locks } = lockFixture(
-    "openclaw-owner-heartbeat-release-",
-    true,
-  );
+  const { rootPath, projectionPath, locks } = lockFixture(true);
   const touch = fs.futimesSync;
   vi.spyOn(fs, "futimesSync").mockImplementation((fd, atime, mtime) => {
     if (fs.existsSync(projectionPath) && fs.fstatSync(fd).ino === fs.statSync(projectionPath).ino) {

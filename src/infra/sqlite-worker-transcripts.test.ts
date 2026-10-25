@@ -180,19 +180,13 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
       return database;
     },
   });
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-  const close = vi.spyOn(DatabaseSync.prototype, "close");
-  DatabaseSync.prototype.prepare = observe(prepare);
-  DatabaseSync.prototype.exec = observe(exec);
-  DatabaseSync.prototype.close = observe(close);
-  const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-    vi.spyOn(StatementSync.prototype, method),
-  );
-  const calls = [prepare, exec, close, ...statements];
+  const sql = observeMainThreadSql({ includeClose: true });
+  DatabaseSync.prototype.prepare = observe(DatabaseSync.prototype.prepare);
+  DatabaseSync.prototype.exec = observe(DatabaseSync.prototype.exec);
+  DatabaseSync.prototype.close = observe(DatabaseSync.prototype.close);
   try {
     await operation();
-    for (const statement of statements) {
+    for (const statement of sql.calls.slice(3)) {
       for (const receiver of statement.mock.contexts) {
         expect(
           receiver instanceof StatementSync && prepared.has(receiver),
@@ -208,9 +202,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
     }
   } finally {
     sqlite.DatabaseSync = originalConstructor;
-    for (const call of calls) {
-      call.mockRestore();
-    }
+    sql.restore();
   }
 }
 

@@ -65,6 +65,17 @@ async function rehearsalScratch(root: string) {
   return (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-"));
 }
 
+function registerCleanup(
+  action: () => Promise<void>,
+  onFinished: (fn: () => Promise<void>) => void,
+) {
+  let pending: Promise<void> | undefined;
+  const cleanup = () => (pending ??= action());
+  cleanupFixture = cleanup;
+  onFinished(cleanup);
+  return cleanup;
+}
+
 // Receipts and command settlement travel independently. The fixture publishes the
 // complete marker before it can reply, so that record decides a settlement race.
 async function fixtureEventBeforeSettlement(
@@ -201,19 +212,15 @@ it.for([undefined, 600_000])(
       (sizes) => ({ sizes }),
       (error: unknown) => ({ error }),
     );
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        try {
-          await fs.writeFile(release, "continue");
-        } finally {
-          // A failed release must still cancel and join the blocked stat worker.
-          controller.abort();
-          await operation;
-        }
-      })());
-    cleanupFixture = cleanup;
-    onTestFinished(cleanup);
+    const cleanup = registerCleanup(async () => {
+      try {
+        await fs.writeFile(release, "continue");
+      } finally {
+        // A failed release must still cancel and join the blocked stat worker.
+        controller.abort();
+        await operation;
+      }
+    }, onTestFinished);
     try {
       await withinTest(
         fixtureEventBeforeSettlement(ready, readyReceipt.promise, operation),
@@ -267,34 +274,24 @@ it.for([undefined, 600_000])(
 );
 
 it.for([
-  { name: "large database", bytes: 2 * 1024 ** 3, elapsedMs: 800_000, completes: true },
-  {
-    name: "growing scratch",
-    bytes: 4096,
-    discoveredBytes: 2 * 1024 ** 3,
-    elapsedMs: 800_000,
-    completes: false,
-  },
-  { name: "stalled worker", bytes: 4096, elapsedMs: 400_000, completes: false },
-  {
-    name: "caller allowance",
-    bytes: 4096,
-    elapsedMs: 400_000,
-    completes: true,
-    timeoutMs: 600_000,
-  },
-  { name: "configured cache", bytes: 4096, elapsedMs: 0, completes: true, configuredCache: true },
-  {
-    name: "large diagnostic output",
-    bytes: 4096,
-    elapsedMs: 0,
-    completes: true,
-    diagnosticBytes: 40_000,
-  },
+  { name: "large database", bytes: 2 * 1024 ** 3, elapsedMs: 800_000 },
+  { name: "growing scratch", discoveredBytes: 2 * 1024 ** 3, elapsedMs: 800_000, completes: false },
+  { name: "stalled worker", elapsedMs: 400_000, completes: false },
+  { name: "caller allowance", elapsedMs: 400_000, timeoutMs: 600_000 },
+  { name: "configured cache", configuredCache: true },
+  { name: "large diagnostic output", diagnosticBytes: 40_000 },
 ])(
   "budgets schema inspection for $name",
   async (
-    { bytes, discoveredBytes, elapsedMs, completes, configuredCache, timeoutMs, diagnosticBytes },
+    {
+      bytes = 4096,
+      discoveredBytes,
+      elapsedMs = 0,
+      completes = true,
+      configuredCache,
+      timeoutMs,
+      diagnosticBytes,
+    },
     { signal, onTestFinished },
   ) => {
     const root = tempDirs.make("openclaw-state-budget-");
@@ -356,23 +353,19 @@ it.for([
       (versions) => ({ versions }),
       (error: unknown) => ({ error }),
     );
-    let cleanupPromise: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPromise ??= (async () => {
-        try {
-          await fs.writeFile(release, "done");
-        } catch (error) {
-          controller.abort(error);
-          throw error;
-        } finally {
-          if (signal.aborted) {
-            controller.abort(signal.reason);
-          }
-          await result;
+    const cleanup = registerCleanup(async () => {
+      try {
+        await fs.writeFile(release, "done");
+      } catch (error) {
+        controller.abort(error);
+        throw error;
+      } finally {
+        if (signal.aborted) {
+          controller.abort(signal.reason);
         }
-      })());
-    cleanupFixture = cleanup;
-    onTestFinished(cleanup);
+        await result;
+      }
+    }, onTestFinished);
     try {
       if (elapsedMs > 0) {
         await withinTest(

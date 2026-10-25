@@ -88,19 +88,18 @@ describe("maintenance table integrity", () => {
     const { database, count } = fixture;
     const check = () => assertSqliteTableIntegrity(database, "items", "items");
     await withMaintenanceCheck("quick", () => {
-      database.exec("BEGIN");
-      check();
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(1);
-      database.exec("INSERT INTO items VALUES (1)");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(2);
-      database.exec("CREATE INDEX idx_items ON items(value)");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(3);
-      database.exec("ROLLBACK");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(4);
+      const mutations = [
+        "BEGIN",
+        "INSERT INTO items VALUES (1)",
+        "CREATE INDEX idx_items ON items(value)",
+        "ROLLBACK",
+      ];
+      for (const [index, mutation] of mutations.entries()) {
+        database.exec(mutation);
+        check();
+        check();
+        expect(count("PRAGMA integrity_check('items');"), mutation).toBe(index + 1);
+      }
       expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
     });
   });
