@@ -199,9 +199,16 @@ function redactValue(
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
-      ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
+      ? typeof value === "string"
+        ? ([path, wildcardPath].find(
+            (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
+          ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+        : [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
-    if (candidate) {
+    if (
+      candidate &&
+      (typeof value !== "string" || context.hints?.[candidate]?.sensitive === true)
+    ) {
       result[key] = value;
       if (typeof value === "string") {
         if (!isConcreteSensitiveString(value)) {
@@ -603,14 +610,17 @@ function restoreRedactedValue(
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
-      ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
+      ? typeof value === "string"
+        ? ([path, wildcardPath].find(
+            (entry) => context.lookup?.has(entry) && context.hints?.[entry]?.sensitive === true,
+          ) ?? [path, wildcardPath].find((entry) => context.lookup?.has(entry)))
+        : [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
     const hintPaths = [path, wildcardPath];
     // Match redaction: explicit false disables name guessing, not URL credential protection.
     const canRestore =
-      (candidate
-        ? context.hints?.[candidate]?.sensitive === true
-        : !isExplicitlyNonSensitivePath(context.hints, hintPaths) && isSensitivePath(path)) ||
+      (candidate && context.hints?.[candidate]?.sensitive === true) ||
+      (!isExplicitlyNonSensitivePath(context.hints, hintPaths) && isSensitivePath(path)) ||
       hasSensitiveUrlHintPath(context.hints, hintPaths) ||
       isSensitiveUrlConfigPath(path);
     if (value === REDACTED_SENTINEL && canRestore) {
