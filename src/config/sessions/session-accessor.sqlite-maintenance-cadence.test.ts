@@ -47,6 +47,8 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const key = (index: number) => `agent:main:cadence-${index}`;
+const readEntry = (storePath: string, index = 0) =>
+  loadSessionEntry({ storePath, sessionKey: key(index) });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -65,6 +67,17 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
   }, options);
   return { database, options, storePath };
 }
+
+const agePolicy = (
+  pruneAfterMs: number,
+  overrides: Partial<ResolvedSessionMaintenanceConfig> = {},
+): ResolvedSessionMaintenanceConfig => ({
+  ...resolveMaintenanceConfigFromInput(),
+  pruneAfterMs,
+  archiveDashboardAfterMs: null,
+  preserveRecentMs: null,
+  ...overrides,
+});
 
 it("bounds expired-session SQL per maintenance request and drains the same archived set", async () => {
   const { database, options, storePath } = createStore(500, Date.now() - 90 * DAY_MS);
@@ -138,13 +151,7 @@ it("pins age eligibility across pages and immediately revisits the next due boun
   const operation = await createPlanningOperation(options, {
     maxAgeEntries: 64,
     maxCapEntries: 64,
-    maintenance: {
-      ...resolveMaintenanceConfigFromInput(),
-      pruneAfterMs: 1_000,
-      archiveDashboardAfterMs: null,
-      preserveRecentMs: null,
-      maxEntries: 1_000,
-    },
+    maintenance: agePolicy(1_000, { maxEntries: 1_000 }),
   });
   const pass = () => {
     const result = reclaimSessionMaintenanceInTransaction(operation, {});
@@ -162,12 +169,12 @@ it("pins age eligibility across pages and immediately revisits the next due boun
   expect(last.value).toMatchObject({ archived: 0, entryRemovals: [] });
   expect(last.value.ageContinuation).toBeUndefined();
   expect(last.nextAt).toBe(now + 2);
-  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archivedAt).toBeUndefined();
+  expect(readEntry(storePath, 64)?.archivedAt).toBeUndefined();
 
   delete operation.input.ageContinuation;
   const next = pass();
   expect(next.value.archivedEntries).toEqual([{ sessionKey: key(64), sessionId: "cadence-64" }]);
-  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archiveReason).toBe("age-retention");
+  expect(readEntry(storePath, 64)?.archiveReason).toBe("age-retention");
 });
 
 async function createPlanningOperation(
@@ -282,7 +289,7 @@ it.each(["participant", "owner"] as const)(
         writeMetadata(storePath, kind, sequence);
         await renameEntry(storePath, 0, `renamed-${sequence}`);
       }
-      expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+      expect(readEntry(storePath)).toMatchObject({
         label: "renamed-3",
       });
       if (kind === "participant") {
@@ -297,7 +304,7 @@ it.each(["participant", "owner"] as const)(
           ],
         );
       } else {
-        expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.owner).toEqual({
+        expect(readEntry(storePath)?.owner).toEqual({
           actor: { type: "agent", id: "worker-3" },
           assignedBy: { type: "agent", id: "main" },
           assignedAt: 3,
@@ -315,13 +322,7 @@ it.each(["participant", "owner"] as const)(
 it("reports a maintenance deadline without an unused revision snapshot", () => {
   const now = Date.now();
   const { database, options } = createStore(1, now);
-  const maintenance: ResolvedSessionMaintenanceConfig = {
-    ...resolveMaintenanceConfigFromInput(),
-    mode: "enforce",
-    pruneAfterMs: DAY_MS,
-    archiveDashboardAfterMs: null,
-    preserveRecentMs: null,
-  };
+  const maintenance = agePolicy(DAY_MS, { mode: "enforce" });
   runOpenClawAgentWriteTransaction(
     (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
     options,
@@ -439,7 +440,7 @@ it.each(["foreign backdate", "managed backdate", "shorter age policy"] as const)
         }
         vi.setSystemTime(now + 30 * 60 * 1_000 + 1);
       } else {
-        expect(loadSessionEntry({ storePath, sessionKey: key(1) })?.archivedAt).toBeUndefined();
+        expect(readEntry(storePath, 1)?.archivedAt).toBeUndefined();
         vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue({
           ...resolveMaintenanceConfigFromInput(),
           pruneAfterMs: DAY_MS,
@@ -448,7 +449,7 @@ it.each(["foreign backdate", "managed backdate", "shorter age policy"] as const)
       }
       await renameEntry(storePath, 0, "reconsider after invalidation");
     }
-    expect(loadSessionEntry({ storePath, sessionKey: key(1) })).toMatchObject({
+    expect(readEntry(storePath, 1)).toMatchObject({
       archiveReason: "age-retention",
     });
   },
@@ -459,21 +460,16 @@ it("keeps an age boundary due when it passes between planning and recording the 
   const { storePath } = createStore(1, now);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(now);
-  vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue({
-    ...resolveMaintenanceConfigFromInput(),
-    pruneAfterMs: 1_000,
-    archiveDashboardAfterMs: null,
-    preserveRecentMs: null,
-  });
+  vi.spyOn(maintenanceRuntime, "resolveMaintenanceConfig").mockReturnValue(agePolicy(1_000));
   const record = ageFacts.recordSessionEntryMaintenanceAgeFact;
   vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact").mockImplementationOnce((...args) => {
     vi.setSystemTime(now + 1_001);
     return record(...args);
   });
   await renameEntry(storePath, 0, "boundary passed during planning");
-  expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+  expect(readEntry(storePath)?.archivedAt).toBeUndefined();
   await renameEntry(storePath, 0, "reconsider the elapsed boundary");
-  expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+  expect(readEntry(storePath)).toMatchObject({
     archiveReason: "age-retention",
   });
 });
@@ -496,9 +492,9 @@ it("does not retain an age fact from a rolled-back archive", async () => {
       throw new Error("roll back archive");
     }, options),
   ).toThrow("roll back archive");
-  expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+  expect(readEntry(storePath)?.archivedAt).toBeUndefined();
   expect(runOpenClawAgentWriteTransaction(maintain, options).archived).toBe(1);
-  expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+  expect(readEntry(storePath)).toMatchObject({
     archiveReason: "age-retention",
   });
 });
@@ -507,7 +503,7 @@ it("reconsiders a session unarchived without changing its timestamp", async () =
   const { storePath } = createStore(1, Date.now() - 31 * DAY_MS);
   await renameEntry(storePath, 0, "archive old session");
   await renameEntry(storePath, 0, "warm archived-only facts");
-  const archivedEntry = loadSessionEntry({ storePath, sessionKey: key(0) });
+  const archivedEntry = readEntry(storePath);
   expect(archivedEntry?.archivedAt).toEqual(expect.any(Number));
   const ageReads = vi.spyOn(candidates, "readSessionMaintenanceAgeCandidates");
   await replaceEntryInDatabase(storePath, 0, (entry) => ({
@@ -516,7 +512,7 @@ it("reconsiders a session unarchived without changing its timestamp", async () =
     archiveReason: undefined,
   }));
   expect(ageReads).toHaveBeenCalledTimes(1);
-  expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+  expect(readEntry(storePath)).toMatchObject({
     updatedAt: archivedEntry?.updatedAt,
     archivedAt: expect.any(Number),
     archiveReason: "age-retention",
@@ -533,54 +529,36 @@ it.each([
 ] as const)("keeps exact next maintenance deadlines for %s", (scenario) => {
   const { options } = createStore(0);
   const now = Date.now();
-  const maintenance: ResolvedSessionMaintenanceConfig = {
-    ...resolveMaintenanceConfigFromInput(),
-    pruneAfterMs: 30 * DAY_MS,
-    archiveDashboardAfterMs: null,
-    preserveRecentMs: null,
-  };
+  const maintenance: ResolvedSessionMaintenanceConfig = agePolicy(30 * DAY_MS);
   const result = runOpenClawAgentWriteTransaction((database) => {
-    writeSessionEntry(database, "agent:main:main", {
-      sessionId: "protected-primary",
-      updatedAt: now - 100 * DAY_MS,
-    });
+    const seed = (
+      sessionKey: string,
+      sessionId: string,
+      daysAgo: number,
+      fields: Partial<SessionEntry> = {},
+      alias = false,
+    ) =>
+      writeSessionEntry(
+        database,
+        sessionKey,
+        { sessionId, updatedAt: now - daysAgo * DAY_MS, ...fields },
+        alias ? { allowStoredAliases: true, canonicalPreviousEntry: null } : undefined,
+      );
+    seed("agent:main:main", "protected-primary", 100);
     if (scenario === "shared dashboards") {
       maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
-      writeSessionEntry(database, "agent:main:dashboard:first", {
-        sessionId: "first-dashboard",
-        updatedAt: now - 8 * DAY_MS,
-        lastActivityAt: now,
-      });
-      writeSessionEntry(database, "agent:zeta:dashboard:second", {
-        sessionId: "second-dashboard",
-        updatedAt: now - 8 * DAY_MS,
+      seed("agent:main:dashboard:first", "first-dashboard", 8, { lastActivityAt: now });
+      seed("agent:zeta:dashboard:second", "second-dashboard", 8, {
         lastInteractionAt: now - DAY_MS,
       });
     } else if (scenario === "pending dashboard alias") {
       maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
-      writeSessionEntry(
-        database,
-        "AGENT:MAIN:DASHBOARD:ALIAS",
-        { sessionId: "pending-dashboard", updatedAt: now - 8 * DAY_MS, lastActivityAt: now },
-        { allowStoredAliases: true, canonicalPreviousEntry: null },
-      );
+      seed("AGENT:MAIN:DASHBOARD:ALIAS", "pending-dashboard", 8, { lastActivityAt: now }, true);
     } else if (scenario === "pending namespace prefixes") {
       maintenance.archiveDashboardAfterMs = 7 * DAY_MS;
-      writeSessionEntry(database, "agent:main:dashboard:certified", {
-        sessionId: "certified-dashboard",
-        updatedAt: now - 8 * DAY_MS,
-        lastActivityAt: now,
-      });
+      seed("agent:main:dashboard:certified", "certified-dashboard", 8, { lastActivityAt: now });
       for (const [index, storedKey] of ["agent:", "agent:foo"].entries()) {
-        writeSessionEntry(
-          database,
-          storedKey,
-          {
-            sessionId: `pending-prefix-${index}`,
-            updatedAt: now,
-          },
-          { allowStoredAliases: true, canonicalPreviousEntry: null },
-        );
+        seed(storedKey, `pending-prefix-${index}`, 0, {}, true);
       }
     } else if (scenario === "recent activity") {
       maintenance.pruneAfterMs = 60 * DAY_MS;
@@ -592,19 +570,12 @@ it.each([
         "sessionStartedAt",
       ] as const;
       for (const [index, field] of fields.entries()) {
-        writeSessionEntry(database, key(index), {
-          sessionId: `activity-${index}`,
-          updatedAt: now - 31 * DAY_MS,
-          [field]: now - index * DAY_MS,
-        });
+        seed(key(index), `activity-${index}`, 31, { [field]: now - index * DAY_MS });
       }
     } else {
       maintenance.preserveRecentMs = scenario === "expired recent activity" ? 7 * DAY_MS : null;
       maintenance.pruneAfterMs = scenario === "disabled ages" ? 0 : 30 * DAY_MS;
-      writeSessionEntry(database, key(0), {
-        sessionId: "ordinary",
-        updatedAt: now - 8 * DAY_MS,
-      });
+      seed(key(0), "ordinary", 8);
     }
     ageFacts.recordSessionEntryMaintenanceAgeFact(database, maintenance, now);
     return {
@@ -708,9 +679,9 @@ it.each([
         kind: "maintenance-plan-stale",
       });
       if (entryChanged) {
-        expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.label).toBe("newer");
+        expect(readEntry(storePath)?.label).toBe("newer");
       }
-      expect(loadSessionEntry({ storePath, sessionKey: key(0) })?.archivedAt).toBeUndefined();
+      expect(readEntry(storePath)?.archivedAt).toBeUndefined();
     } finally {
       prepared.release();
       writer?.close();
@@ -722,7 +693,7 @@ it.each([
           kind: "maintenance-plan",
           value: { archived: 1 },
         });
-        expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
+        expect(readEntry(storePath)).toMatchObject({
           label: "newer",
           archiveReason: "age-retention",
         });

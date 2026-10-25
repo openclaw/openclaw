@@ -56,6 +56,17 @@ function assistant(id: string, parent: string | null, content = id) {
   return transcriptMessage(id, parent, { role: "assistant", content });
 }
 
+function toolResult(id: string, parent: string, call: string, text: string, second: number) {
+  return transcriptMessage(id, parent, {
+    role: "toolResult",
+    toolCallId: call,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: Date.UTC(2026, 7, 15, 0, 0, second),
+  });
+}
+
 function storedMessage(
   id: string,
   parentId: string | null,
@@ -140,11 +151,7 @@ async function seedImportedTranscript(scope: Scope, events: unknown[]) {
 }
 
 function readHistory(scope: Scope) {
-  return tailPage(scope, {
-    maxBytes: 1024 * 1024,
-    maxMessages: 100,
-    offset: 0,
-  });
+  return tailPage(scope, { maxBytes: 1024 * 1024, maxMessages: 100, offset: 0 });
 }
 
 function observePayloadAcquisition(
@@ -409,9 +416,7 @@ it("keeps reset history closed across compaction with a warm history cache", asy
 
   appendUser("before-reset user");
   manager.appendMessage(
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "before-reset assistant" }],
-    }),
+    makeAgentAssistantMessage({ content: [{ type: "text", text: "before-reset assistant" }] }),
   );
   manager.appendResetBoundary("new");
   const freshUserId = appendUser("fresh user");
@@ -465,22 +470,8 @@ it("counts paired reset tool results without counting discarded orphan results",
     user("discarded-old", null, `discarded ${"x".repeat(12_000)}`),
     user("kept-user", "discarded-old", "kept question"),
     transcriptMessage("kept-assistant", "kept-user", assistantMessage),
-    transcriptMessage("kept-result", "kept-assistant", {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-    }),
-    transcriptMessage("discarded-orphan", "kept-result", {
-      role: "toolResult",
-      toolCallId: "orphan-call",
-      toolName: "read",
-      content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-    }),
+    toolResult("kept-result", "kept-assistant", "call-1", `paired ${"p".repeat(3_000)}`, 1),
+    toolResult("discarded-orphan", "kept-result", "orphan-call", `orphan ${"o".repeat(20_000)}`, 2),
   ]);
   await appendTranscriptEvent(scope, reset("reset-boundary", "discarded-orphan", "kept-user"));
   await persist(scope, [user("post-reset", "reset-boundary", "fresh turn")]);
@@ -645,9 +636,7 @@ it.for(["json", "sql", "consumer"] as const)(
       }
     }
     expect(database.db.isTransaction).toBe(false);
-    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-      busy: 0,
-    });
+    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({ busy: 0 });
     expect(recentEvents(scope, 3)).toHaveLength(3);
     await appendTranscriptEvent(scope, { type: "custom", id: "after", parentId: "newest" });
     expect(recentEvents(scope, 1)).toMatchObject([{ id: "after" }]);
