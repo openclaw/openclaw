@@ -51,26 +51,9 @@ export function registerThreadPolicyRefreshTests({
     const requests: RpcRequest[] = [];
     const wire = await createLeasedLifecycleWireClient(
       agentDir,
-      async (request) => {
+      (request) => {
         requests.push(request);
-        const result = await respond(request, response);
-        if (result !== undefined) {
-          return result;
-        }
-        switch (request.method) {
-          case "thread/resume":
-            return response;
-          case "thread/inject_items":
-            return {};
-          case "thread/unsubscribe":
-            return { status: "unsubscribed" };
-          case "config/read":
-            return { config: {}, origins: {}, layers: [] };
-          case "configRequirements/read":
-            return { requirements: null };
-          default:
-            throw new Error(`unexpected method: ${request.method}`);
-        }
+        return respond(request, response);
       },
       transport,
     );
@@ -95,6 +78,15 @@ export function registerThreadPolicyRefreshTests({
   function close(wire: ReturnType<typeof createClientHarness>) {
     releaseLeasedSharedCodexAppServerClient(wire.client);
     wire.client.close();
+  }
+  function configResult(method: string) {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    throw new Error(`unexpected method: ${method}`);
   }
   const configReads = ["config/read", "configRequirements/read"];
   it.each(
@@ -163,6 +155,10 @@ export function registerThreadPolicyRefreshTests({
               return {
                 status: nativeStatus === "notLoaded" && !closing ? "notLoaded" : "unsubscribed",
               };
+            case "thread/inject_items":
+              return {};
+            default:
+              return configResult(request.method);
           }
         },
       );
@@ -287,6 +283,9 @@ export function registerThreadPolicyRefreshTests({
           if (request.method === "thread/read") {
             return { thread: { ...response.thread, status: { type: "notLoaded" } } };
           }
+          if (request.method === "thread/resume") {
+            return response;
+          }
           if (request.method === "thread/inject_items") {
             if (fault === "retirement failure") {
               throw new CodexAppServerRpcError(
@@ -294,7 +293,12 @@ export function registerThreadPolicyRefreshTests({
                 "thread/inject_items",
               );
             }
+            return {};
           }
+          if (request.method === "thread/unsubscribe") {
+            return { status: "unsubscribed" };
+          }
+          return configResult(request.method);
         },
         transport,
       );
@@ -375,6 +379,10 @@ export function registerThreadPolicyRefreshTests({
             subscribed = false;
             return { status: "unsubscribed" };
           }
+          if (request.method === "thread/inject_items") {
+            return {};
+          }
+          return configResult(request.method);
         },
         transport,
       );

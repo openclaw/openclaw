@@ -195,10 +195,12 @@ it("publishes include input and final write hashes", async () => {
   });
 });
 
-it.each([false, true])(
-  "publishes inspection warnings after config disposal (refused=%s)",
-  async (refused) => {
+it.each(["warnings", "refused", "partial", "all", "unreadable"] as const)(
+  "publishes current warnings (%s)",
+  async (outcome) => {
     await withResult(async (_state, resultPath) => {
+      const refused = outcome === "refused";
+      const inspecting = refused || outcome === "warnings";
       const refusalFact = {
         check: "plugin-doctor-post-session-state",
         code: "blocked-by-session-repair-failure",
@@ -221,83 +223,90 @@ it.each([false, true])(
         requirement: "update-validation-budget",
         message: "Run openclaw doctor after activation.",
       };
-      mocks.stateMigrationReceipts.push(
-        migrationReceipt("preflight cleanup", "warning"),
-        migrationReceipt("skipped audit recovery", "skipped"),
-        ...Array.from({ length: refused ? 0 : 30 }, (_, index) =>
-          migrationReceipt(`prior migration ${index}`, "warning"),
-        ),
-      );
-      mocks.runContributions.mockImplementation(async (ctx) => {
-        expect(mocks.disposeConfig).not.toHaveBeenCalled();
-        ctx.updateWarnings = [inspectionWarning];
-        ctx.updateBudget = {
-          agentCount: 480,
-          inspectionDeadlineMs: Date.now(),
-          phase: "activation",
-          source: "activation-policy",
-          deferred: new Map([[finding.checkId, finding]]),
-        };
-        ctx.configResult.stateMigrationStepReceipts?.push(deferred);
-        if (refused) {
-          throw refusal;
+      const plugins = ["acpx", "codex"].map((pluginId) => ({
+        pluginId,
+        reason: "The installed plugin has not confirmed its saved data and settings.",
+        command: "openclaw doctor --fix",
+      }));
+      if (inspecting) {
+        mocks.stateMigrationReceipts.push(
+          migrationReceipt("preflight cleanup", "warning"),
+          migrationReceipt("skipped audit recovery", "skipped"),
+          ...Array.from({ length: refused ? 0 : 30 }, (_, index) =>
+            migrationReceipt(`prior migration ${index}`, "warning"),
+          ),
+        );
+        mocks.runContributions.mockImplementation(async (ctx) => {
+          expect(mocks.disposeConfig).not.toHaveBeenCalled();
+          ctx.updateWarnings = [inspectionWarning];
+          ctx.updateBudget = {
+            agentCount: 480,
+            inspectionDeadlineMs: Date.now(),
+            phase: "activation",
+            source: "activation-policy",
+            deferred: new Map([[finding.checkId, finding]]),
+          };
+          ctx.configResult.stateMigrationStepReceipts?.push(deferred);
+          if (refused) {
+            throw refusal;
+          }
+        });
+      } else {
+        for (const plugin of plugins) {
+          mocks.stateMigrationReceipts.push(
+            migrationReceipt(`plugin:${plugin.pluginId}`, "deferred", {
+              source: [{ kind: "owner", id: plugin.pluginId }],
+              target: [{ kind: "owner", id: plugin.pluginId }],
+              requiredness: "conditional",
+              warnings: [formatDeferredPluginMigration(plugin)],
+            }),
+          );
         }
-      });
+        if (outcome === "unreadable") {
+          mocks.pendingPluginMigrations.mockRejectedValue(
+            new Error("migration ledger unavailable"),
+          );
+        } else {
+          mocks.pendingPluginMigrations.mockResolvedValue(
+            outcome === "all" ? [] : plugins.slice(1),
+          );
+        }
+      }
       const runtime = createRuntime();
-      runtime.exit.mockImplementation((code: number) => {
-        throw new ExitError(code);
-      });
+      if (inspecting) {
+        runtime.exit.mockImplementation((code: number) => {
+          throw new ExitError(code);
+        });
+      }
 
       if (refused) {
         await expect(runDoctorHealthFlow(runtime, { nonInteractive: true })).rejects.toBe(refusal);
       } else {
         await runDoctorHealthFlow(runtime, { nonInteractive: true });
       }
-      expect(mocks.disposeConfig).toHaveBeenCalledOnce();
+      if (inspecting) {
+        expect(mocks.disposeConfig).toHaveBeenCalledOnce();
+      }
       const result = await consumeUpdatePostInstallDoctorResult(resultPath);
       expect(result?.status).toBe(refused ? "error" : "ok");
-      expect(result?.warnings).toHaveLength(refused ? 2 : 32);
-      expect(result?.warnings).toContain(inspectionWarning);
+      if (inspecting) {
+        expect(result?.warnings).toHaveLength(refused ? 2 : 32);
+        expect(result?.warnings).toContain(inspectionWarning);
+      } else {
+        const pending =
+          outcome === "unreadable" ? plugins : outcome === "all" ? [] : plugins.slice(1);
+        expect(result?.warnings ?? []).toEqual(
+          pending.map((plugin) => formatDeferredPluginMigration(plugin)),
+        );
+      }
       if (refused) {
         expect(refusal.message).toContain(refusalWarning);
         expect(result?.failureFacts).toEqual([refusalFact]);
         expect(result?.warnings).toContain(refusalWarning);
         expect(mocks.runContributions.mock.calls[0]?.[0].updateWarnings).toContain(refusalWarning);
-      } else {
+      } else if (inspecting) {
         expect(result?.warnings).toContain("preflight cleanup: run openclaw doctor --fix");
       }
-    });
-  },
-);
-
-it.each(["partial", "all", "unreadable"] as const)(
-  "publishes current plugin warnings (%s)",
-  async (outcome) => {
-    await withResult(async (_state, resultPath) => {
-      const plugins = ["acpx", "codex"].map((pluginId) => ({
-        pluginId,
-        reason: "The installed plugin has not confirmed its saved data and settings.",
-        command: "openclaw doctor --fix",
-      }));
-      mocks.stateMigrationReceipts = plugins.map((plugin) =>
-        migrationReceipt(`plugin:${plugin.pluginId}`, "deferred", {
-          source: [{ kind: "owner", id: plugin.pluginId }],
-          target: [{ kind: "owner", id: plugin.pluginId }],
-          requiredness: "conditional",
-          warnings: [formatDeferredPluginMigration(plugin)],
-        }),
-      );
-      const pending =
-        outcome === "unreadable" ? plugins : outcome === "all" ? [] : plugins.slice(1);
-      if (outcome === "unreadable") {
-        mocks.pendingPluginMigrations.mockRejectedValue(new Error("migration ledger unavailable"));
-      } else {
-        mocks.pendingPluginMigrations.mockResolvedValue(pending);
-      }
-      await runDoctor();
-      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-      expect(result?.status).toBe("ok");
-      expect(result?.warnings ?? []).toEqual(pending.map(formatDeferredPluginMigration));
     });
   },
 );

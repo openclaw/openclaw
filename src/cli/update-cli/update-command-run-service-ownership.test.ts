@@ -48,6 +48,7 @@ import {
 } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-service-plan.js";
+import * as servicePlan from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -216,6 +217,10 @@ it.each([
       }
       expect(snapshot()).toEqual(before);
     } else {
+      expect(await servicePlan.resolveManagedServicePackageUpdatePlan({ root })).toEqual({
+        rootRedirect: null,
+        serviceUnitTarget: "no service entrypoint found",
+      });
       await expectAdmitted(false);
       expect(fs.existsSync(serviceState)).toBe(false);
 
@@ -230,17 +235,20 @@ it.each([
         kind: "unavailable",
         message: expect.stringContaining("Gateway service inspection is unavailable"),
       });
-      expect(inspected).toMatchObject({
-        blockMessage: undefined,
-        serviceMutationAllowed: false,
-        stopped: false,
-        serviceEnv: undefined,
-        serviceDefinitionEnv: undefined,
-        serviceNodeRunner: undefined,
-      });
+      expect([
+        inspected.blockMessage,
+        inspected.serviceMutationAllowed,
+        inspected.stopped,
+        inspected.serviceEnv,
+        inspected.serviceDefinitionEnv,
+        inspected.serviceNodeRunner,
+      ]).toEqual([undefined, false, false, undefined, undefined, undefined]);
       const advisory = inspected.serviceMutationSkipMessage;
+      expect(advisory).toContain("automatic service restart was skipped");
       expect(advisory).toContain("openclaw --profile caller gateway stop");
       expect(advisory).toContain("openclaw --profile caller update repair");
+      expect(advisory).toContain("recorded service definition was left unchanged");
+      expect(advisory).toContain("openclaw gateway status --deep");
       const facts = collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict);
       expect(facts).toEqual([
         expect.objectContaining({
@@ -268,6 +276,8 @@ it.each([
     }
     if (scenario === "root-probe-error") {
       expect(bus).not.toHaveBeenCalled();
+    } else {
+      expect(bus).toHaveBeenCalled();
     }
     expect(bus.mock.calls.every(([, args]) => !args.includes("LoadUnit"))).toBe(true);
   },
@@ -337,6 +347,9 @@ it.each([
     });
     vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(native);
     if (outcome === "conflict" || outcome === "masked") {
+      await expect(prepareUpdateCommand({ dryRun: true })).rejects.toBeInstanceOf(
+        servicePlan.GatewayServiceUpdateOwnershipError,
+      );
       const temporaryRoot = path.join(home, "reports");
       await fs.promises.mkdir(temporaryRoot);
       vi.spyOn(os, "tmpdir").mockReturnValue(temporaryRoot);
@@ -347,11 +360,13 @@ it.each([
       );
       expect(exit).toBeInstanceOf(ExitError);
       expect(exit).toMatchObject({ code: 1 });
-      expect(output).toHaveBeenCalledOnce();
-      expect(output.mock.lastCall?.[0]).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-      });
+      expect(output).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          status: "error",
+          reason: "managed-service-preflight",
+          reportPath: expect.any(String),
+        }),
+      );
       const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
       expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
       if (outcome === "masked") {

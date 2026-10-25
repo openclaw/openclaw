@@ -424,16 +424,45 @@ it.each(["process.env", "config", "runtime"] as const)(
   },
 );
 
+it("does not borrow another environment's Gateway graph through config identity", async () => {
+  const { root } = createCliFixture();
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { workspace: path.join(root, "workspace") } },
+    plugins: { allow: ["environment-cli"], entries: { "environment-cli": { enabled: true } } },
+  };
+  const environments = ["gateway", "cli"].map((label) => {
+    const stateDir = path.join(root, label);
+    writePlugin({
+      dir: path.join(stateDir, "extensions", "environment-cli"),
+      id: "environment-cli",
+      filename: "index.cjs",
+      registration: `api.registerCli(() => {}, { descriptors: [{ name: "prepared", description: ${JSON.stringify(label)}, hasSubcommands: false }] });`,
+    });
+    return { HOME: root, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+  });
+  const gateway = resolvePluginRuntimeLoadContext({ config: cfg, env: environments[0] });
+  expect(gateway.metadataSnapshot).toBeDefined();
+  const gatewayScope = { config: cfg, env: environments[0], workspaceDir: gateway.workspaceDir };
+  setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, gatewayScope);
+  expect(
+    await loadPluginCliDescriptors({
+      cfg,
+      env: environments[1],
+      session: createPluginCliLoadSession(),
+      primaryCommand: "prepared",
+    }),
+  ).toMatchObject([{ description: "cli" }]);
+  expect(getCurrentPluginMetadataSnapshot(gatewayScope)).toBe(gateway.metadataSnapshot);
+});
+
 it.each([false, true])("reuses discovery through registration (legacy=%s)", async (legacy) => {
   const { root, env } = createCliFixture();
   const actionPath = path.join(root, "action.txt");
-  const markerPath = path.join(root, "register-runs.log");
   const plugin = writePlugin({
     dir: path.join(root, "plugin"),
     id: "invocation-cli",
     filename: "index.cjs",
-    registration: `    require("node:fs").appendFileSync(${JSON.stringify(markerPath)}, "register\\n");
-    api.registerCli(({ program }) => program.command("prepared").action(() => require("node:fs").writeFileSync(${JSON.stringify(actionPath)}, api.registrationMode + ":" + api.pluginConfig.label)), {
+    registration: `    api.registerCli(({ program }) => program.command("prepared").action(() => require("node:fs").writeFileSync(${JSON.stringify(actionPath)}, api.registrationMode + ":" + api.pluginConfig.label)), {
       descriptors: [{ name: "prepared", description: "Prepared command", hasSubcommands: false, machineOutput: () => true }],
     });`,
     configSchema: requiredLabel,
@@ -460,7 +489,6 @@ it.each([false, true])("reuses discovery through registration (legacy=%s)", asyn
   expect(commandNames(program)).toEqual(["prepared"]);
   await program.parseAsync(["prepared"], { from: "user" });
   expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:first");
-  expect(countRegisterRuns(markerPath)).toBe(1);
   const changedConfig = pluginConfig(plugin, { enabled: true, config: { label: "second" } });
   const changedProgram = await configuredProgram(changedConfig, env, options);
   await changedProgram.parseAsync(["prepared"], { from: "user" });
@@ -471,60 +499,46 @@ it.each([false, true])("reuses discovery through registration (legacy=%s)", asyn
   ).toEqual([]);
 });
 
-it.each(["workspace", "environment"] as const)("isolates %s scopes and policy", async (scope) => {
+it("isolates changed workspace and policy within an invocation", async () => {
   const { root, env } = createCliFixture();
+  const createWorkspace = (label: string) => {
+    const workspace = path.join(root, label);
+    writePlugin({
+      dir: path.join(workspace, ".openclaw", "extensions", "workspace-cli"),
+      id: "workspace-cli",
+      filename: "index.cjs",
+      registration: `          api.registerCli(({ program }) => program.command("prepared").description(${JSON.stringify(label)}), {
+            descriptors: [{ name: "prepared", description: ${JSON.stringify(label)}, hasSubcommands: false }],
+          });`,
+    });
+    return workspace;
+  };
+  const firstWorkspace = createWorkspace("first");
+  const secondWorkspace = createWorkspace("second");
   const config = (workspace: string, enabled = true): OpenClawConfig => ({
     agents: { defaults: { workspace } },
-    plugins: { allow: ["scoped-cli"], entries: { "scoped-cli": { enabled } } },
+    plugins: { allow: ["workspace-cli"], entries: { "workspace-cli": { enabled } } },
   });
-  const contexts = ["first", "second"].map((label) => {
-    const directory = path.join(root, label);
-    const workspace = scope === "workspace" ? directory : path.join(root, "workspace");
-    const scopedEnv = scope === "workspace" ? env : { ...env, OPENCLAW_STATE_DIR: directory };
-    writePlugin({
-      dir: path.join(
-        directory,
-        ...(scope === "workspace" ? [".openclaw"] : []),
-        "extensions",
-        "scoped-cli",
-      ),
-      id: "scoped-cli",
-      filename: "index.cjs",
-      registration: `api.registerCli(({ program }) => program.command("prepared").description(${JSON.stringify(label)}), {
-        descriptors: [{ name: "prepared", description: ${JSON.stringify(label)}, hasSubcommands: false }],
-      });`,
-    });
-    return { env: scopedEnv, cfg: config(workspace), workspace };
-  });
-  const first = contexts[0]!;
-  const second = contexts[1]!;
-  // Environment isolation must hold even when both callers share the exact config object.
-  if (scope === "environment") {
-    second.cfg = first.cfg;
-  }
-  const gateway = resolvePluginRuntimeLoadContext({ config: first.cfg, env: first.env });
-  const gatewayScope = { config: first.cfg, env: first.env, workspaceDir: gateway.workspaceDir };
-  expect(gateway.metadataSnapshot).toBeDefined();
-  setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, gatewayScope);
   const session = createPluginCliLoadSession();
-  const params = { ...second, session, primaryCommand: "prepared" };
-  expect(await loadPluginCliDescriptors({ ...params, ...first })).toMatchObject([
+  const scope = { env, session, primaryCommand: "prepared" };
+  expect(await loadPluginCliDescriptors({ ...scope, cfg: config(firstWorkspace) })).toMatchObject([
     { description: "first" },
   ]);
+  const cfg = config(secondWorkspace);
+  const params = { ...scope, cfg };
   expect(await loadPluginCliDescriptors(params)).toMatchObject([{ description: "second" }]);
-  expect(await resolvePluginCliRootOwnerIds(params)).toEqual(["scoped-cli"]);
-  const program = await configuredProgram(second.cfg, second.env, { primary: "prepared", session });
+  expect(await resolvePluginCliRootOwnerIds(params)).toEqual(["workspace-cli"]);
+  const program = await configuredProgram(cfg, env, { primary: "prepared", session });
   expect(program.commands.map((command) => command.description())).toEqual(["second"]);
-  expect(getCurrentPluginMetadataSnapshot(gatewayScope)).toBe(gateway.metadataSnapshot);
-  const disabled = config(second.workspace, false);
+  const disabled = config(secondWorkspace, false);
   expect(await loadPluginCliDescriptors({ ...params, cfg: disabled })).toEqual([]);
   expect(await resolvePluginCliRootOwnerIds({ ...params, cfg: disabled })).toEqual([]);
-  const disabledProgram = await configuredProgram(disabled, second.env, {
+  const disabledProgram = await configuredProgram(disabled, env, {
     primary: "prepared",
     session,
   });
   expect(disabledProgram.commands).toEqual([]);
-  expect(getCurrentPluginMetadataSnapshot(gatewayScope)).toBe(gateway.metadataSnapshot);
+  expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
 });
 
 it.each(["enabled", "disabled", "invalid"] as const)(
@@ -703,6 +717,18 @@ it.each([
     await instance?.dispose();
     await retirePluginCache(cache);
   }
+});
+
+it("runs a legacy external plugin register once across CLI bootstrap stages", async () => {
+  const { config, markerPath } = setupCountingCliPlugin();
+  const session = createPluginCliLoadSession();
+  onTestFinished(() => session.close());
+  const params = { cfg: config, env: process.env, primaryCommand: "counting-cli", session };
+  const ownerIds = await resolvePluginCliRootOwnerIds(params);
+  const descriptors = await loadPluginCliDescriptors(params);
+  expect(ownerIds).toEqual(["counting-cli"]);
+  expect(descriptors.map((entry) => entry.name)).toContain("counting-cli");
+  expect(countRegisterRuns(markerPath)).toBe(1);
 });
 
 it("keeps distinct load scopes on separate register passes", async () => {
