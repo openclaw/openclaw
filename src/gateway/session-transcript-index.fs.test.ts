@@ -86,19 +86,6 @@ test("keeps exact physical ranges across newline dialects and malformed UTF8", a
   expect(index.entries.map((entry) => entry.rawId)).toEqual(["first", "invalid", "", undefined]);
 });
 
-test("retains duplicate order and last by-ID selection", async () => {
-  const file = await fixture([message("same", "first"), message("same", "last")], "\r\n");
-  const { index, read } = await openIndex(file);
-  const records = await read();
-  expect(records.map((entry) => entry.record.message)).toMatchObject([
-    { content: "first" },
-    { content: "last" },
-  ]);
-  const last = await read([index.byId.get("same")!]);
-  expect(last[0]?.record.message).toMatchObject({ content: "last" });
-  expect(index.entries.find((entry) => entry.id === "same")?.seq).toBe(1);
-});
-
 test("keeps CRLF across chunk boundaries and physical duplicate-anchor cuts", async () => {
   const first = message("anchor", "x".repeat(65_535 - Buffer.byteLength(message("anchor", ""))));
   const activity = createNestedToolActivity({
@@ -123,9 +110,18 @@ test("keeps CRLF across chunk boundaries and physical duplicate-anchor cuts", as
     ],
     "\r\n",
   );
-  const { read } = await openIndex(file);
+  const { index, read } = await openIndex(file);
   const entries = await read();
   expect(entries).toHaveLength(4);
+  expect(entries.filter(({ id }) => id === "anchor").map(({ record }) => record.message)).toEqual([
+    JSON.parse(first).message,
+    { role: "user", content: "last anchor" },
+  ]);
+  expect((await read([index.byId.get("anchor")!]))[0]?.record.message).toEqual({
+    role: "user",
+    content: "last anchor",
+  });
+  expect(index.entries.find(({ id }) => id === "anchor")?.seq).toBe(1);
   expect(entries[1]?.record.message).toEqual(activity);
   expect(entries[1]?.transcriptPosition.activity).toBeUndefined();
   expect(entries[3]?.transcriptPosition.activity).toEqual({
