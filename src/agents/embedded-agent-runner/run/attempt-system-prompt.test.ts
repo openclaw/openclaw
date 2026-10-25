@@ -10,6 +10,7 @@ import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
+import { expectText } from "../../../test-utils/text-assertions.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -73,14 +74,6 @@ const tool = (name: string): AgentTool => ({
   parameters: Type.Object({}),
   execute: async () => ({ content: [], details: {} }),
 });
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
 
 async function preparePermissionPrompt({
   isRawModelRun = false,
