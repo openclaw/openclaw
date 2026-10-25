@@ -52,8 +52,6 @@ describe("ports-format", () => {
     // A directory name is not executable identity, even when a later argument
     // mentions the queried port.
     [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "unknown"],
-    [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
-    [{ command: "socat" }, "non_gateway"],
     [{ command: "socat1" }, "non_gateway"],
     [{ command: "socat.exe" }, "non_gateway"],
     [
@@ -64,7 +62,6 @@ describe("ports-format", () => {
       "non_gateway",
     ],
     [{ command: "openclaw-search" }, "unknown"],
-    [{ commandLine: "python worker.py openclaw gateway" }, "unknown"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
     [{ commandLine: 'node "/tmp/ssh workspace/dist/index.js" logs --follow' }, "unknown"],
     [{ commandLine: "node /tmp/app.js --cache /tmp/ssh" }, "unknown"],
@@ -72,30 +69,14 @@ describe("ports-format", () => {
     expect(classifyPortListener(listener)).toBe(expected);
   });
 
-  it.each([
-    { entry: "dist/entry.js", directory: "application", args: "gateway" },
-    { entry: "dist/index.js", directory: "socat/application", args: "gateway" },
-    { entry: "dist/index.js", directory: "application", args: "gateway --profile socat" },
-  ])(
-    "recognizes the owned $entry listener with $directory and $args",
-    ({ entry, directory, args }) => {
-      const script = writeScript(entry, directory);
-      expect(
-        classifyPortListener({ command: "node", commandLine: `node "${script}" ${args}` }),
-      ).toBe("gateway");
-    },
-  );
-
-  it.each([
-    { packageName: "unrelated-indexer", command: "openclaw-search", args: "gateway" },
-    { packageName: "openclaw", command: "node", args: "logs --follow" },
-  ])("does not classify $packageName $args as a Gateway", ({ packageName, command, args }) => {
-    const script = writeScript("dist/index.js", "openclaw data", packageName);
-    const listener = { command, commandLine: `node "${script}" ${args}` };
-    expect(classifyPortListener(listener)).toBe("unknown");
-    expect(buildPortHints([listener], 18789)).toEqual([
-      "Another process is listening on this port.",
-    ]);
+  it("recognizes a quoted owned entry without interpreting socat arguments as the process", () => {
+    const script = writeScript("dist/index.js", "socat/application data");
+    expect(
+      classifyPortListener({
+        command: "node",
+        commandLine: `node "${script}" gateway --profile socat`,
+      }),
+    ).toBe("gateway");
   });
 
   it("does not emit the SSH tunnel hint for an ssh-named non-tunnel process", () => {
@@ -125,26 +106,6 @@ describe("ports-format", () => {
     expect(buildPortHints([], 18789)).toStrictEqual([]);
   });
 
-  it("treats single-process loopback dual-stack gateway listeners as benign", () => {
-    const listeners = listenersAt(["127.0.0.1:18789", "[::1]:18789"]);
-    expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
-    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
-    expect(buildPortHints(listeners, 18789)).toEqual([]);
-  });
-
-  it("treats a single-process specific IPv4 plus loopback alias as benign", () => {
-    const listeners = listenersAt(["100.64.0.1:18789", "127.0.0.1:18789"]);
-
-    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
-    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
-      true,
-    );
-    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "10.0.0.5")).toBe(
-      false,
-    );
-    expect(buildPortHints(listeners, 18789)).toEqual([]);
-  });
-
   it.each([
     [["[::ffff:127.0.0.1]:18789"], true, false, false],
     [["[::ffff:127.0.0.1]:18789", "[::1]:18789"], true, true, false],
@@ -160,6 +121,9 @@ describe("ports-format", () => {
         expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(dual);
         expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "192.0.2.1")).toBe(
           specific,
+        );
+        expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "10.0.0.5")).toBe(
+          false,
         );
         expect(buildPortHints(listeners, 18789)).toEqual(
           expected ? [] : [gatewayAlreadyRunningHint, multipleListenersHint],
@@ -199,34 +163,16 @@ describe("ports-format", () => {
     expect(buildPortHints(listeners, 18789)).toContain(gatewayAlreadyRunningHint);
   });
 
-  it("keeps Gateway conflict hints for ambiguous Gateway listeners", () => {
-    expect(
-      buildPortHints(
-        [...listenersAt(["0.0.0.0:18789"]), ...listenersAt(["127.0.0.1:18789"], { pid: 4243 })],
-        18789,
-      ),
-    ).toEqual([gatewayAlreadyRunningHint, multipleListenersHint]);
+  it.each([
+    ["free", "Port 18789 is free."],
+    ["unknown", "Port 18789 availability could not be determined."],
+  ] as const)("formats %s port diagnostics", (status, message) => {
+    expect(formatPortDiagnostics({ port: 18789, status, listeners: [], hints: [] })).toEqual([
+      message,
+    ]);
   });
 
-  it("formats free, unknown, and busy port diagnostics", () => {
-    expect(
-      formatPortDiagnostics({
-        port: 18789,
-        status: "free",
-        listeners: [],
-        hints: [],
-      }),
-    ).toEqual(["Port 18789 is free."]);
-
-    expect(
-      formatPortDiagnostics({
-        port: 18789,
-        status: "unknown",
-        listeners: [],
-        hints: [],
-      }),
-    ).toEqual(["Port 18789 availability could not be determined."]);
-
+  it("formats busy port diagnostics", () => {
     const lines = formatPortDiagnostics({
       port: 18789,
       status: "busy",

@@ -15,15 +15,6 @@ const search = (options: ClawHubFetchOptions) =>
 const respond = (body: BodyInit | null, init?: ResponseInit) =>
   captureClawHubResponse(() => new Response(body, init));
 
-function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
-  const cancel = vi.fn();
-  const body = makeStallingStream([new TextEncoder().encode(firstChunk)], cancel);
-  return {
-    response: new Response(body, init),
-    cancel,
-  };
-}
-
 async function writeConfigFile(configPath: string, contents: string) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, contents, "utf8");
@@ -158,39 +149,30 @@ describe("clawhub client", () => {
     { status: 200, error: "ClawHub /api/v1/search response stalled after 5ms" },
     { status: 500, error: "ClawHub /api/v1/search failed (500): Server Error" },
   ])("times out and cancels stalled $status bodies", async ({ status, error }) => {
-    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
+    const cancellations: ReturnType<typeof vi.fn>[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      const stalled = createStalledBodyResponse(status === 200 ? '{"results":[' : "partial error", {
+      const cancel = vi.fn();
+      cancellations.push(cancel);
+      return new Response(makeStallingStream([new TextEncoder().encode("partial")], cancel), {
         headers: { "content-type": "text/plain", "retry-after": "0" },
         status,
         statusText: status === 500 ? "Server Error" : undefined,
       });
-      stalledResponses.push(stalled);
-      return stalled.response;
     });
     await expect(search({ timeoutMs: 5 })).rejects.toThrow(error);
-    for (const stalled of stalledResponses) {
-      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    for (const cancel of cancellations) {
+      expect(cancel).toHaveBeenCalledTimes(1);
     }
-    const finalResponse = stalledResponses.at(-1);
-    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(cancellations.at(-1)?.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized verification JSON and cancels the stream", async () => {
     const cancel = vi.fn();
     const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-    let emitted = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted >= 65 * 2) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        controller.enqueue(chunk);
-      },
+    const body = makeStallingStream(
+      Array.from({ length: 130 }, () => chunk),
       cancel,
-    });
+    );
     respond(body, { status: 200, headers: { "content-type": "application/json" } });
     const result = fetchClawHubSkillVerification({ slug: "weather" });
 
