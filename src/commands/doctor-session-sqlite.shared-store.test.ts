@@ -186,7 +186,7 @@ describe("Doctor canonical session SQLite targets", () => {
     expect(migrated).toEqual({
       changes: [],
       warnings: [
-        `Skipped agent database migration: Error: Participant migration cannot rebuild unknown indexes, views, or triggers; database: ${store.sqlitePath}`,
+        `Skipped agent database migration: Error: Participant migration cannot rebuild unknown indexes, views, or triggers. Database: ${store.sqlitePath}`,
       ],
       notices: [
         expect.stringContaining('rerun "openclaw doctor --fix" against the same state/config'),
