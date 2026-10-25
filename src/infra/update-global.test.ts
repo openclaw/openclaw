@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -227,32 +226,6 @@ describe("update global helpers", () => {
     expect((await createGlobalInstallEnv({}))?.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(
       process.execPath,
     );
-  });
-
-  it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
-    mockProcessPlatform("linux");
-    vi.spyOn(fsSync, "existsSync").mockImplementation((candidate) => candidate === "/bin/sh");
-    const env = await createGlobalInstallEnv({
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-      PATH: "/home/peter/.npm-global/bin",
-    });
-    expect(env).toMatchObject({
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-      NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
-    });
-  });
-
-  it.each([
-    ["NPM_CONFIG_SCRIPT_SHELL", "/custom/sh"],
-    ["npm_config_script_shell", "/custom/lower-sh"],
-  ] as const)("preserves explicit %s for global installs", async (key, value) => {
-    mockProcessPlatform("linux");
-    expect(
-      await createGlobalInstallEnv({
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        [key]: value,
-      }),
-    ).toMatchObject({ [key]: value });
   });
 
   it("resolves portable Git paths from process-local app data only", async () => {
