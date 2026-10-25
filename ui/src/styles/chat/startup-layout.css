@@ -381,6 +381,18 @@
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
+
+  .chat-icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .chat-details-toggle svg,
+  .chat-pane__workspace-chip svg,
+  .chat-pane__workspace-chip .workspace-icon {
+    width: var(--rail-header-action-glyph-size);
+    height: var(--rail-header-action-glyph-size);
+  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
@@ -411,11 +423,6 @@
   padding: 0;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle svg {
   stroke-width: 1.8;
 }
@@ -442,13 +449,6 @@
 .chat-pane__header:not(.chat-pane__header--mobile)
   .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
   background: var(--session-header-control-hover-bg, var(--bg-hover));
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle svg,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-chip svg,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-chip .workspace-icon {
-  width: var(--rail-header-action-glyph-size);
-  height: var(--rail-header-action-glyph-size);
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle[aria-expanded="true"] {

@@ -214,7 +214,7 @@
 }
 
 .sidebar-rail__create .sidebar-new-session > svg {
-  stroke-width: var(--sidebar-rail-action-stroke-width);
+  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
 .sidebar-rail .nav-item__text,
