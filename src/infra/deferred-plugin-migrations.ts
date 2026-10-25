@@ -197,6 +197,7 @@ function formatChangedObligationFields(
 ): string {
   const expectedById = new Map(expected.map((entry) => [entry.pluginId, entry]));
   const currentById = new Map(current.map((entry) => [entry.pluginId, entry]));
+  // SAFETY: the Zod object schema enumerates exactly the persisted migration keys used below.
   const fields = Object.keys(deferredPluginMigrationSchema.shape) as Array<
     keyof DeferredPluginMigration
   >;
