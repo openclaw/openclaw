@@ -144,6 +144,10 @@ reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
 terminal stops, not provider failures or requests to try another model. The
 existing run deadline and cost limits still apply.
 
+Fallback requests reuse the original user turn and its attachments exactly once.
+Fresh plugin context for the fallback model is added separately, preserving the
+user turn and the prompt prefix already sent to the primary model.
+
 ## Automatic cyber-policy escalation
 
 A structured OpenAI cyber-policy refusal can trigger one **Access configuration retry**:
