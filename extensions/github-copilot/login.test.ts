@@ -1,5 +1,6 @@
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 
 const mocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
@@ -151,21 +152,16 @@ describe("runGitHubCopilotDeviceFlow", () => {
     },
   );
   it("cancels the unread device token body before throwing on non-OK", async () => {
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "server_error" })));
-      },
-      cancel() {
-        canceled = true;
-      },
+    const tracked = cancelTrackedTextResponse(JSON.stringify({ error: "server_error" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
     });
-    mockPoll(new Response(body, { status: 401, headers: { "Content-Type": "application/json" } }));
+    mockPoll(tracked.response);
 
     await expect(runDeviceFlowAfterFirstPoll()).rejects.toThrow(
       "GitHub device token failed: HTTP 401",
     );
-    expect(canceled).toBe(true);
+    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("rejects a malformed access token response", async () => {
