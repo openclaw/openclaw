@@ -7,10 +7,6 @@ on:
         description: Build an unsigned macOS 27-only artifact; ordinary releases are unaffected
         type: boolean
         default: false
-      source_sha:
-        description: Full OpenClaw main commit to build
-        type: string
-        required: true
       toolchain_run_id:
         description: Successful main Actions run in this repository containing the compiler bundle
         type: string
@@ -46,8 +42,8 @@ jobs:
       contents: read
       actions: read
     env:
-      SOURCE_SHA: ${{ inputs.source_sha }}
-      GIT_COMMIT: ${{ inputs.source_sha }}
+      SOURCE_SHA: ${{ github.sha }}
+      GIT_COMMIT: ${{ github.sha }}
       MACOSX_DEPLOYMENT_TARGET: "27.0"
       OPENCLAW_MACOS_DEPLOYMENT_TARGET: "27.0"
       TOOLCHAIN_RUN_ID: ${{ inputs.toolchain_run_id }}
@@ -59,11 +55,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$TOOLCHAIN_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$TOOLCHAIN_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$TOOLCHAIN_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$MIN_MEMORY_GIB" =~ ^[1-9][0-9]{0,3}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$TOOLCHAIN_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$TOOLCHAIN_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$TOOLCHAIN_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          [[ "$MIN_MEMORY_GIB" =~ ^[1-9][0-9]{0,3}$ ]] || exit 1
           AOT_ROOT="$RUNNER_TEMP/openclaw-aot-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           {
             echo "AOT_ROOT=$AOT_ROOT"
@@ -73,25 +69,31 @@ jobs:
           } >> "$GITHUB_ENV"
           mkdir -p "$AOT_ROOT/evidence" "$AOT_ROOT/tmp"
 
-      - name: Checkout workflow-owned artifact helper
+      - name: Checkout dispatched main source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          path: .aot-tools
           persist-credentials: false
-          sparse-checkout: |
-            scripts/aot-artifact.py
-            test/scripts/test_aot_artifact.py
-          sparse-checkout-cone-mode: false
+
+      - name: Verify dispatched source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git status --porcelain > "$AOT_ROOT/evidence/source-status.txt"
+          test ! -s "$AOT_ROOT/evidence/source-status.txt"
+          build_timestamp="$(date -u -r "$(git show -s --format=%ct "$SOURCE_SHA")" '+%Y-%m-%dT%H:%M:%S.000Z')"
+          echo "OPENCLAW_BUILD_TIMESTAMP=$build_timestamp" >> "$GITHUB_ENV"
+          printf '%s\n' "$build_timestamp" > "$AOT_ROOT/evidence/build-timestamp.txt"
 
       - name: Check artifact helper boundaries
         env:
           TMPDIR: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/tmp
-        run: python3 .aot-tools/test/scripts/test_aot_artifact.py
+        run: python3 test/scripts/test_aot_artifact.py
 
       - name: Admit native host and storage
         run: |
-          cp .aot-tools/scripts/aot-artifact.py "$AOT_ROOT/helper.py"
+          cp scripts/aot-artifact.py "$AOT_ROOT/helper.py"
           python3 "$AOT_ROOT/helper.py" admit
 
       - name: Verify toolchain artifact provenance
@@ -116,26 +118,6 @@ jobs:
 
       - name: Verify and extract pinned standard compiler
         run: python3 "$AOT_ROOT/helper.py" extract
-
-      - name: Checkout exact application source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          filter: blob:none
-          persist-credentials: false
-
-      - name: Verify source identity and main ancestry
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          git status --porcelain > "$AOT_ROOT/evidence/source-status.txt"
-          test ! -s "$AOT_ROOT/evidence/source-status.txt"
-          build_timestamp="$(date -u -r "$(git show -s --format=%ct "$SOURCE_SHA")" '+%Y-%m-%dT%H:%M:%S.000Z')"
-          echo "OPENCLAW_BUILD_TIMESTAMP=$build_timestamp" >> "$GITHUB_ENV"
-          printf '%s\n' "$build_timestamp" > "$AOT_ROOT/evidence/build-timestamp.txt"
 
       - name: Setup pinned Node and repository package manager
         uses: ./.github/actions/setup-node-env
@@ -168,7 +150,7 @@ jobs:
       - name: Upload unsigned experimental artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: openclaw-aot-js-darwin-arm64-macos27-only-unsigned-${{ inputs.source_sha }}
+          name: openclaw-aot-js-darwin-arm64-macos27-only-unsigned-${{ github.sha }}
           path: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/openclaw-aot-js-darwin-arm64-macos27-only.tar.gz
           retention-days: 7
           if-no-files-found: error

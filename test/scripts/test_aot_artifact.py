@@ -19,6 +19,71 @@ aot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(aot)
 
 
+def workflow_block(name):
+    workflow = SCRIPT.parents[1] / ".github/workflows/aot-artifacts.yml"
+    lines = workflow.read_text().splitlines()
+    start = lines.index("      - name: " + name)
+    start = lines.index("        run: |", start) + 1
+    end = start
+    while end < len(lines) and (lines[end].startswith("          ") or not lines[end]):
+        end += 1
+    return "\n".join(line[10:] if line else "" for line in lines[start:end]) + "\n"
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS Bash and BSD date contract")
+class WorkflowAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.environment = {
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "Synthetic Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "Synthetic Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+            "GIT_AUTHOR_DATE": "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2026-01-01T00:00:00Z",
+            "RUNNER_TEMP": str(self.root), "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_ENV": str(self.root / "github-env"),
+        }
+        for args in (["init", "-q"], ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                     "commit", "--allow-empty", "-qm", "Synthetic fixture"]):
+            subprocess.run(["git", *args], cwd=self.repo, env=self.environment, check=True, capture_output=True)
+        self.head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo,
+            env=self.environment, text=True).strip()
+
+    def run_block(self, block, values, label):
+        output = self.root / label
+        (output / "evidence").mkdir(parents=True)
+        sentinel = output / "build-sentinel"
+        environment = {**self.environment, **values, "AOT_ROOT": str(output), "SENTINEL": str(sentinel)}
+        # Bash3.2 does not apply errexit to every failing compound command.
+        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+            block + '\nprintf reached > "$SENTINEL"\n'], cwd=self.repo, env=environment,
+            capture_output=True, text=True)
+        return result, sentinel
+
+    def test_only_matching_dispatched_source_reaches_build(self):
+        block = workflow_block("Verify dispatched source identity")
+        for label, sha in (("matching", self.head), ("mismatched", "0" * 40)):
+            with self.subTest(label=label):
+                result, sentinel = self.run_block(block, {"SOURCE_SHA": sha}, label)
+                self.assertEqual(result.returncode == 0, label == "matching", result.stderr)
+                self.assertEqual(sentinel.exists(), label == "matching")
+
+    def test_invalid_dispatch_metadata_stops_before_build(self):
+        block = workflow_block("Check dispatch inputs")
+        valid = {"SOURCE_SHA": self.head, "TOOLCHAIN_RUN_ID": "1", "TOOLCHAIN_ARTIFACT_ID": "2",
+            "TOOLCHAIN_BUNDLE_SHA256": "a" * 64, "MIN_MEMORY_GIB": "14"}
+        cases = [("valid", valid)] + [(key, {**valid, key: "invalid"}) for key in valid]
+        for label, values in cases:
+            with self.subTest(label=label):
+                result, sentinel = self.run_block(block, values, label)
+                self.assertEqual(result.returncode == 0, label == "valid", result.stderr)
+                self.assertEqual(sentinel.exists(), label == "valid")
+
+
 class CompilerBundleTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory()

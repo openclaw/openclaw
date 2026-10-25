@@ -10,7 +10,10 @@ GitHub Releases, or appcasts. A failed build produces no accepted AOT artifact;
 ordinary JIT releases continue independently. The workflow never silently builds
 JIT in place of AOT.
 
-Build preparation fixes `GIT_COMMIT` to the selected full SHA and
+The workflow builds the exact trusted `main` commit at dispatch (`github.sha`);
+there is no caller-selected source ref or second checkout. The main-only job
+condition and pinned checkout keep the helper and application on that same commit.
+Build preparation fixes `GIT_COMMIT` to that full SHA and
 `OPENCLAW_BUILD_TIMESTAMP` to that commit’s UTC committer time (`.000Z`), removing
 wall-clock drift in build metadata. This does not establish bit-reproducible
 compiler or executable output. Both
@@ -56,7 +59,7 @@ adjacent resources with their original relative layout, plus this exact
 
 Record the actual bundle SHA256 and Actions run/artifact IDs. Dispatch
 `aot-artifacts.yml` from `main` with `enable_aot=true`, those three identities,
-a full OpenClaw `source_sha` reachable from main, and `min_memory_gib` selected
+and `min_memory_gib` selected
 from measured JS build peak plus headroom. The experiment uses the existing
 `xcode-27-xlarge` tier; the repository documents the standard `xcode-27` runner as
 3 CPUs with 7 GB RAM. The larger label alone does not establish sufficient RAM
