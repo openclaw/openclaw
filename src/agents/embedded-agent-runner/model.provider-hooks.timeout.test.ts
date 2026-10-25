@@ -49,19 +49,15 @@ function createRebuildingRuntimeHooks(
   stage: RebuildingHookStage,
   requestTimeoutMs?: number,
 ): ProviderRuntimeHooks {
-  const hooks = createProviderRuntimeTestMock();
+  const hooks: ProviderRuntimeHooks = createProviderRuntimeTestMock();
   if (stage === "model") {
-    return {
-      ...hooks,
-      normalizeProviderResolvedModelWithPlugin: ({ context }) =>
-        rebuildProviderModel(context.model, requestTimeoutMs),
-    };
+    hooks.normalizeProviderResolvedModelWithPlugin = ({ context }) =>
+      rebuildProviderModel(context.model, requestTimeoutMs);
+  } else {
+    hooks.applyProviderResolvedTransportWithPlugin = ({ context }) =>
+      rebuildProviderModel(context.model, requestTimeoutMs);
   }
-  return {
-    ...hooks,
-    applyProviderResolvedTransportWithPlugin: ({ context }) =>
-      rebuildProviderModel(context.model, requestTimeoutMs),
-  };
+  return hooks;
 }
 
 async function resolveProviderModel(

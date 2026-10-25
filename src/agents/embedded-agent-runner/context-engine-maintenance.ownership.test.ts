@@ -8,14 +8,16 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
-import { createBackgroundMaintenanceEngine } from "./context-engine-maintenance.fixtures.test-support.js";
+import {
+  createBackgroundMaintenanceEngine,
+  createMaintenanceGate,
+} from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 
@@ -106,8 +108,13 @@ async function createTranscriptOwners(stateDir: string) {
   };
 }
 
-it("joins caller memory rewrite despite an explicit background request", async () => {
+it("joins caller memory rewrite without coalescing with or awaiting foreign durable work", async () => {
   await withTranscriptOwners(async (owner) => {
+    using foreign = createMaintenanceGate();
+    await owner.runMaintenance(() => foreign.run(() => unchanged), {
+      sessionManager: owner.durable,
+    });
+    await foreign.entered.promise;
     const manager = SessionManager.fromEntries(owner.memory.getPersistedEntries());
     const events: string[] = [];
     const maintain = vi.fn<Maintain>(async (params) => {
@@ -136,7 +143,6 @@ it("joins caller memory rewrite despite an explicit background request", async (
     expect.soft(events).not.toContain("returned");
     owner.release.resolve();
     const result = await run;
-    await Promise.all(owner.deferred);
     expect.soft(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
     expect
       .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
@@ -144,7 +150,7 @@ it("joins caller memory rewrite despite an explicit background request", async (
     expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
     expect.soft(owner.published).not.toHaveBeenCalled();
     expect.soft(await loadTranscriptEvents(owner.target)).toEqual(owner.durableBefore);
-    expect.soft(owner.deferred).toHaveLength(0);
+    expect.soft(owner.deferred).toHaveLength(1);
   });
 });
 
@@ -174,33 +180,6 @@ it.each([undefined, "background"] as const)(
     });
   },
 );
-
-it("does not coalesce or wait for foreign durable work despite an explicit background request", async ({
-  signal,
-}) => {
-  await withTranscriptOwners(async (owner) => {
-    const foreignStarted = createDeferredCore();
-    const foreignMaintain = vi.fn(async () => {
-      foreignStarted.resolve();
-      await owner.release.promise;
-      return unchanged;
-    });
-    await owner.runMaintenance(foreignMaintain, { sessionManager: owner.durable });
-    await racePromiseWithAbortSignal(
-      Promise.race([foreignStarted.promise, ...owner.deferred]),
-      signal,
-    );
-    expect(foreignMaintain).toHaveBeenCalledOnce();
-    const maintain = vi.fn(async () => unchanged);
-    const run = owner.runMaintenance(maintain, {
-      executionMode: "background",
-      sessionManager: owner.memory,
-    });
-    await expect(run).resolves.toMatchObject({ changed: false });
-    expect(maintain).toHaveBeenCalledOnce();
-    expect(owner.deferred).toHaveLength(1);
-  });
-});
 
 it("checks caller memory authority before rewriting after the awaited lock", async () => {
   await withTranscriptOwners(async (owner) => {
