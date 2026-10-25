@@ -31,7 +31,7 @@ Event intervals are not scheduler-admission times; repeated environment/prepare
 durations must not be summed into wall time.
 These receipts do not establish transform-cache hits.
 
-Ordinary Control UI E2E uses four browser shards with six workers each, retaining
+Ordinary Control UI E2E uses six browser shards with four workers each, retaining
 the previous aggregate ceiling of 24 workers across eight three-worker shards.
 This shares checkout, installation, fixture builds, and browser startup across
 more tests. Private source-server projects and runtime-budget cases remain
