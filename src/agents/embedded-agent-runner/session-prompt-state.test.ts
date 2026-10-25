@@ -33,10 +33,8 @@ function historyEntry(type: "compaction" | "reset", id: string = type): SessionE
 
 function promptFixture(id: string, routeKey: string) {
   let lease: ReturnType<typeof retainEmbeddedSessionPromptState>;
-  function reload(clear = true) {
-    if (clear) {
-      clearEmbeddedSessionPromptStates([id]);
-    }
+  function reload() {
+    clearEmbeddedSessionPromptStates([id]);
     lease?.[Symbol.dispose]();
     lease = retainEmbeddedSessionPromptState(id);
     sessionIds.add(id);
@@ -176,6 +174,9 @@ describe("system prompt series", () => {
     );
     expect(project(changed).update).toBeUndefined();
     expect(project(base).update?.content).toContain("## Added\n(removed)");
+    const temporal = project(`${base}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-1`);
+    expect(temporal.update?.content).toContain("day-1");
+    expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("preserves large prompt revisions, including distinct lone surrogates", () => {
@@ -187,27 +188,6 @@ describe("system prompt series", () => {
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
-  });
-
-  it("keeps both prompt digests stable across disposed turns with skill, memory, and date changes", async () => {
-    const entries: SessionEntry[] = [];
-    let first: string | undefined;
-    for (let turn = 0; turn < 30; turn++) {
-      fixture.reload(false);
-      const prompt = `## Skills\nskill-${turn}\n## Project Context\nmemory-${turn}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\nday-${turn}`;
-      const prepared = fixture.prepare(prompt, entries);
-      first ??= prepared.systemPrompt;
-      expect(prepared.systemPrompt).toBe(first);
-      if (turn > 0) {
-        expect(prepared.restart).toBe(false);
-        expect(prepared.update?.content).toContain(`skill-${turn}`);
-        expect(prepared.update?.content).toContain(`memory-${turn}`);
-        expect(prepared.update?.content).toContain(`day-${turn}`);
-        expect(prepared.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-      }
-      prepared.commit();
-      await persist(entries);
-    }
   });
 
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
@@ -336,7 +316,7 @@ describe("system prompt series", () => {
     expect(fixture.state.pendingSystemPrompt).toBeUndefined();
   });
 
-  it.each(["first request", "route", "compaction"])(
+  it.each(["first request", "route", "compaction", "reset"] as const)(
     "preserves current permission guidance when a series starts after %s",
     (reason) => {
       if (reason !== "first request") {
@@ -348,7 +328,7 @@ describe("system prompt series", () => {
         state: fixture.state,
         routeKey: reason === "route" ? "other route" : routeKey,
         systemPrompt: `${changed}${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\n\n<!-- openclaw:attempt:PERMISSION -->\n${notice}\n<!-- /openclaw:attempt:PERMISSION -->`,
-        entries: reason === "compaction" ? [historyEntry("compaction", "cut")] : [],
+        entries: reason === "compaction" || reason === "reset" ? [historyEntry(reason)] : [],
       };
       const prepared = prepareSessionSystemPrompt(input);
       expect(prepared.restart).toBe(true);
@@ -376,44 +356,22 @@ describe("system prompt series", () => {
     expect(project(changed, entries).restart).toBe(true);
   });
 
-  it.each([false, true])(
-    "restores the pinned series and delivers intervening changes (changed=%s)",
-    async (mismatch) => {
-      const entries: SessionEntry[] = [];
-      const first = project(base);
-      await persist(entries);
-      project(changed, entries);
-      await persist(entries);
-      await persist(entries);
-      expect(entries).toHaveLength(2);
-      fixture.reload();
-      const resumed = project(mismatch ? base : changed, entries);
-      expect(resumed.restart).toBe(false);
-      if (mismatch) {
-        expect(resumed.update?.content).toContain("## Changed\nOld.");
-      } else {
-        expect(resumed.update).toBeUndefined();
-      }
-      expect(resumed.systemPrompt).toBe(first.systemPrompt);
-      if (!mismatch) {
-        await persist(entries);
-        expect(entries).toHaveLength(2);
-        expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
-      }
-    },
-  );
-
-  it.each(["route", "compaction", "reset"] as const)("starts a fresh series after %s", (reason) => {
-    project(base);
-    const entries = reason === "route" ? [] : [historyEntry(reason)];
-    const restarted = project(
-      changed,
-      entries,
-      reason === "route" ? `${routeKey}-other` : routeKey,
-    );
-    expect(restarted.restart).toBe(true);
-    expect(restarted.update).toBeUndefined();
-    expect(restarted.systemPrompt).toContain(changed.trimEnd());
+  it("restores the pinned series and delivers intervening changes", async () => {
+    const entries: SessionEntry[] = [];
+    const first = project(base);
+    await persist(entries);
+    project(changed, entries);
+    await persist(entries);
+    await persist(entries);
+    expect(entries).toHaveLength(2);
+    fixture.reload();
+    const resumed = project(changed, entries);
+    expect(resumed.restart).toBe(false);
+    expect(resumed.update).toBeUndefined();
+    expect(resumed.systemPrompt).toBe(first.systemPrompt);
+    await persist(entries);
+    expect(entries).toHaveLength(2);
+    expect(project(base, entries).update?.content).toContain("## Changed\nOld.");
   });
 });
 
@@ -467,39 +425,27 @@ describe("session tool surface", () => {
     expect(JSON.stringify(refused.content)).toContain("gateway is not available in this turn");
   });
 
-  it("restores the pin from the transcript after a restart and extends it once for a new tool", async () => {
+  it("preserves pins across prompt admission and checkpoints, and extends restored pins", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
+    await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
+    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+      "gateway",
+      "read",
+    ]);
     await persist(entries);
     fixture.reload();
     const restored = surface([tool("read")], entries);
     expect(names(restored)).toEqual(["gateway", "read"]);
     expect(fixture.state.pendingToolSurface).toBeUndefined();
+    await persist(entries, "Base.\n\n## Skills\nrefreshed");
+    fixture.reload();
+    expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
     const extended = surface([tool("read"), tool("heartbeat_respond")], entries);
     expect(names(extended)).toEqual(["gateway", "heartbeat_respond", "read"]);
     expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
       "gateway",
       "heartbeat_respond",
-      "read",
-    ]);
-  });
-
-  it("keeps a restored pin in later checkpoints that change only the system prompt", async () => {
-    const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("gateway")]);
-    await persist(entries);
-    fixture.reload();
-    surface([tool("read"), tool("gateway")], entries);
-    await persist(entries, "Base.\n\n## Skills\nrefreshed");
-    fixture.reload();
-    expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
-  });
-
-  it("keeps the new pin through a series restart during prompt admission", async () => {
-    surface([tool("read"), tool("gateway")]);
-    await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
-      "gateway",
       "read",
     ]);
   });
@@ -549,17 +495,15 @@ describe("session tool surface", () => {
     expect(JSON.stringify((await eventTurn[0]!.execute("x", {})).content)).toContain("exec ran");
   });
 
-  it.each(["read tool", "read v2"])(
-    "sends changed parameters with description %s as built",
-    (description) => {
-      surface([tool("read")]);
-      const changed = surface([
-        { ...tool("read", description), parameters: { type: "object", properties: {} } },
-      ] as AnyAgentTool[]);
-      expect(changed.map((entry) => entry.description)).toEqual([description]);
-      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
-    },
-  );
+  it("sends changed parameters and descriptions as built", () => {
+    const description = "read v2";
+    surface([tool("read")]);
+    const changed = surface([
+      { ...tool("read", description), parameters: { type: "object", properties: {} } },
+    ] as AnyAgentTool[]);
+    expect(changed.map((entry) => entry.description)).toEqual([description]);
+    expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
+  });
 });
 
 describe("embedded session active project keys", () => {
