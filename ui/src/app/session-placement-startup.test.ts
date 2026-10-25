@@ -84,7 +84,10 @@ describe("application session placement startup", () => {
     sessionStorage.clear();
 
     startup.resumeRecovery();
-    const onSnapshot = expectDefined(vi.mocked(gateway.subscribe).mock.calls[0]?.[0]);
+    const onSnapshot = expectDefined(
+      vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+      "gateway snapshot subscription",
+    );
     onSnapshot(gateway.snapshot);
     expect(loader).not.toHaveBeenCalled();
     expect(startup.hasPendingTurn(key)).toBe(false);
@@ -132,7 +135,10 @@ describe("application session placement startup", () => {
             : input.recovery.target,
         }),
       ).toBe(true);
-      const onSnapshot = expectDefined(vi.mocked(gateway.subscribe).mock.calls[0]?.[0]);
+      const onSnapshot = expectDefined(
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+        "gateway snapshot subscription",
+      );
       onSnapshot(gateway.snapshot);
       onSnapshot(gateway.snapshot);
       expect(loader).toHaveBeenCalledOnce();

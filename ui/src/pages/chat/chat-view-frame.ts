@@ -281,7 +281,7 @@ export function createChatViewFrame(
     onCompanionSelection:
       props.canSend && !props.suggestionComposer && props.onCompanionStageAttachment
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) =>
@@ -295,7 +295,7 @@ export function createChatViewFrame(
     onAddToChat:
       props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
         ? (selection, anchorRect) =>
-            openSelectionComment(
+            void openSelectionComment(
               selection,
               anchorRect,
               (attachment) => {

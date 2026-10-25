@@ -465,7 +465,9 @@ it("keeps Users visible despite a cached legacy collapse preference", () => {
     onlineUsers: [{ id: "ada", name: "Ada", watchedSessions: [] }],
   });
   host.sessionData.presencePayload = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
-  const update = mountObservedHost(host, container, (host) => <AppSidebarOnline host={host} />);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.text(".sidebar-online__person-name")).toBe("Ada");
   host.releaseSidebarSnapshot();
   update();
@@ -480,7 +482,9 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
     ],
     onlineCounts: [["ada", { open: 2, running: 1 }]],
   });
-  const update = mountObservedHost(host, container, (host) => <AppSidebarOnline host={host} />);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.query(".sidebar-online__counts")).not.toBeNull();
   host.releaseSidebarSnapshot();
   host.sessionData.ownerCounts.error = "Synthetic count failure";

@@ -220,7 +220,11 @@ describe("comment actions outside the transcript", () => {
         detail: { action: "edit", id: attachment.id },
       }),
     );
-    const editor = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea")!;
+    const editor = await waitForSolid(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea");
+      expect(input).not.toBeNull();
+      return input!;
+    });
     expect(editor.value).toBe("In-progress edit");
     editor.value = "A draft that must survive";
 
