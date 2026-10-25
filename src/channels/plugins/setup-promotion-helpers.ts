@@ -120,9 +120,7 @@ export function resolveSingleAccountPromotion(params: {
     return { kind: "preserve-root" };
   }
   const channel = params.channel;
-  const hasNamedAccounts = Object.keys((channel.accounts as Record<string, unknown>) ?? {}).some(
-    Boolean,
-  );
+  const hasNamedAccounts = Object.keys(channel.accounts ?? {}).some(Boolean);
   const entries = Object.entries(channel)
     .filter(
       ([key, value]) =>
