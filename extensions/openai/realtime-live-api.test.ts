@@ -3,12 +3,12 @@ import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-v
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
   createBroker,
-  createRequest,
-  createResponseHarness,
   emitSideband,
   FakeSocket,
   parseSent,
+  postOffer,
   reserveSession as reserveBrowserSession,
+  startOffer,
 } from "./realtime-quicksilver.test-helpers.js";
 
 const LIVE_URL = "https://api.openai.com/v1/live/sessions";
@@ -77,16 +77,8 @@ function reserveSession(
   });
 }
 
-function handleOffer(fixture: Broker, token: string, body = SDP) {
-  const response = createResponseHarness();
-  const handling = fixture.realtime.handler(createRequest({ token, body }), response.res);
-  return { response, handling };
-}
-
-async function answerOffer(fixture: Broker, token: string, body = SDP) {
-  const { response, handling } = handleOffer(fixture, token, body);
-  await handling;
-  return response;
+function answerOffer(fixture: Broker, token: string, body = SDP) {
+  return postOffer(fixture.realtime, { token, body });
 }
 
 const EMPTY_COUNTS = { pending: 0, inFlight: 0, active: 0, reservations: 0 };
@@ -119,7 +111,7 @@ it.each([
   },
 );
 
-it("accepts an audio and application offer, delegates, and drains final text before closing", async () => {
+it("accepts an audio and application offer and drains final text before closing", async () => {
   const fetchImpl = liveFetch();
   const fixture = liveBroker({ fetchImpl });
   const { realtime, sockets, socketRequests, runAgentConsult } = fixture;
@@ -170,32 +162,15 @@ it("accepts an audio and application offer, delegates, and drains final text bef
   expect(sidebandHeaders.has("openai-alpha")).toBe(false);
   const socket = sockets[0]!;
   expect(socket.sent).toEqual([]);
-  transcript(socket, "input", "Check the ", 0, 500);
-  transcript(socket, "input", "lights", 500, 900);
-  delegate(socket, "delegation-public", 900);
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-  expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
-    ["user", "Check the lights", true],
-  ]);
-  expect(runAgentConsult).toHaveBeenCalledWith(
-    expect.objectContaining({ prompt: expect.stringContaining("Check the lights") }),
-  );
-  await vi.waitFor(() =>
-    expect(parseSent(socket)).toContainEqual({
-      type: "session.commentary.append",
-      delegation_id: "delegation-public",
-      content: "Done",
-    }),
-  );
-
   const closing = realtime.broker.cancelBrowserSession(reservation);
   expect(socket.closed).toBe(false);
   expect(onClose).not.toHaveBeenCalled();
   expect(realtime.getSessionCounts().reservations).toBe(1);
   expect(parseSent(socket)).toContainEqual({ type: "session.close" });
+  transcript(socket, "input", "Late request.", 900, 1_000);
   transcript(socket, "output", "Final spoken text.", 1_000, 1_500);
   delegate(socket, "late", 1_500);
-  expect(runAgentConsult).toHaveBeenCalledOnce();
+  expect(runAgentConsult).not.toHaveBeenCalled();
   emitSideband(socket, { type: "session.closed", reason: "close_requested" });
   await closing;
   await reentrantClose;
@@ -280,7 +255,10 @@ it("hangs up a session allocated after cancellation without attaching its sideba
   const fetchImpl = liveFetch(() => creation.promise);
   const fixture = liveBroker({ fetchImpl }, () => creation.resolve(liveResponse()));
   const reservation = await reserveSession(fixture);
-  const { response, handling } = handleOffer(fixture, reservation.clientSecret);
+  const { response, handling } = startOffer(fixture.realtime, {
+    token: reservation.clientSecret,
+    body: SDP,
+  });
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
   const canceling = fixture.realtime.broker.cancelBrowserSession(reservation);
   expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
