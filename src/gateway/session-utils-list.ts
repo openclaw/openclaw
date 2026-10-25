@@ -70,8 +70,7 @@ export function selectSessionEntries(
     params.retained &&
     !params.opts.includePeople &&
     !params.opts.involvingProfileId &&
-    !params.opts.includeOwnerSessionCounts &&
-    params.opts.activeMinutes === undefined;
+    !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     filteredResult = filterSessionPartitions({

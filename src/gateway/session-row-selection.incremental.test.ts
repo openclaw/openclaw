@@ -45,40 +45,55 @@ function row(index: number, fields: Partial<SessionEntry> = {}) {
   return selectionRow(record)!;
 }
 
-it("filters only the changed key and ignores unchanged selection publications", () => {
-  const selection = createSessionRowSelection(cfg, scope, false, () => context);
-  const rows = Array.from({ length: 1200 }, (_, index) => row(index));
-  for (const target of rows) {
-    selection.add(target);
-  }
-  const retained = new WeakMap<object, SessionListFilteredEntries>();
-  const entryFilter = vi.fn(() => true);
-  const read = () => {
-    const prepared = selection.read("updatedAt");
-    return selectSessionEntries({
-      ...prepared,
-      cfg,
-      getTarget: prepared.get,
-      getRowContext: () => context,
-      now: 10_000,
-      opts: { limit: 3, offset: 4 },
-      entryFilter,
-      retained,
-    });
-  };
-  expect(read().entries.map(([key]) => key)).toEqual(
-    [1195, 1194, 1193].map((index) => rows[index]!.key),
-  );
-  entryFilter.mockClear();
-  selection.add({ ...rows[1199]! });
-  read();
-  expect(entryFilter).not.toHaveBeenCalled();
-  selection.add(row(0, { updatedAt: 2000 }));
-  expect(read().entries.map(([key]) => key)).toEqual(
-    [1196, 1195, 1194].map((index) => rows[index]!.key),
-  );
-  expect(entryFilter).toHaveBeenCalledTimes(1);
-});
+it.each([undefined, 60])(
+  "bounds changed-key filtering and ignores unchanged publications (activeMinutes=%s)",
+  (activeMinutes) => {
+    const selection = createSessionRowSelection(cfg, scope, false, () => context);
+    const rows = Array.from({ length: 1200 }, (_, index) => row(index));
+    for (const target of rows) {
+      selection.add(target);
+    }
+    const retained = new WeakMap<object, SessionListFilteredEntries>();
+    const entryFilter = vi.fn(() => true);
+    const read = () => {
+      const prepared = selection.read("updatedAt");
+      return selectSessionEntries({
+        ...prepared,
+        cfg,
+        getTarget: prepared.get,
+        getRowContext: () => context,
+        now: 10_000,
+        opts: { limit: 3, offset: 4, activeMinutes },
+        entryFilter,
+        retained,
+      });
+    };
+    const first = read();
+    if (activeMinutes !== undefined) {
+      expect(first.activityExpiresAt).toBe(3_600_000);
+    }
+    expect(first.entries.map(([key]) => key)).toEqual(
+      [1195, 1194, 1193].map((index) => rows[index]!.key),
+    );
+    entryFilter.mockClear();
+    selection.add({ ...rows[1199]! });
+    read();
+    expect(entryFilter).not.toHaveBeenCalled();
+    selection.add(row(0, { updatedAt: 2000 }));
+    const changed = read();
+    if (activeMinutes !== undefined) {
+      expect(changed.activityExpiresAt).toBe(3_600_001);
+    }
+    expect(changed.entries.map(([key]) => key)).toEqual(
+      [1196, 1195, 1194].map((index) => rows[index]!.key),
+    );
+    if (activeMinutes === undefined) {
+      expect(entryFilter).toHaveBeenCalledTimes(1);
+    } else {
+      expect(entryFilter.mock.calls.length).toBeLessThan(64);
+    }
+  },
+);
 
 it("matches fresh selection across churn, archive toggles, filters, and page windows", () => {
   const modelFacts: ReturnType<SessionListModelFactsLookup> = {
