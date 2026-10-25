@@ -1,12 +1,18 @@
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import {
   readPendingCanonicalSessionValidationBatch,
   validateCanonicalSessionValidationBatch,
 } from "../config/sessions/session-canonical-validation.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import type { RetainedNativeWorker } from "../infra/worker-native-lifecycle.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema as assertSchema,
@@ -23,7 +29,6 @@ import {
   assertOpenClawMigrationWitnessPreserved as assertPreserved,
   captureOpenClawMigrationWitness as captureWitness,
 } from "./openclaw-migration-witness.js";
-import { expectVersion, refuseVersion, seedVersion } from "./schema-migration.test-support.js";
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
@@ -34,6 +39,22 @@ const pendingTable = "session_canonical_validation_pending";
 const trigger = (name: string, table: string, event = "UPDATE", body = "SELECT 1") =>
   `CREATE TRIGGER ${name} AFTER ${event} ON ${table} BEGIN ${body}; END`;
 const driftTrigger = trigger("unexpected_node_validation", "session_nodes");
+
+const readVersion = (db: DatabaseSync) => ({
+  user: db.prepare("PRAGMA user_version").get()?.user_version,
+  schema: db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
+    ?.schema_version,
+});
+
+function denyVersionPublication(db: DatabaseSync) {
+  db.setAuthorizer((action, name, value) =>
+    action === constants.SQLITE_PRAGMA &&
+    name === "user_version" &&
+    value === String(currentVersion)
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK,
+  );
+}
 
 type MigrationFixture = {
   db: DatabaseSync;
@@ -54,7 +75,9 @@ function withMigrationDatabase(
         db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
       }
       db.exec(version === 20 ? schema20 : OPENCLAW_AGENT_SCHEMA_V24_SQL);
-      seedVersion(db, version);
+      db.exec(`PRAGMA user_version = ${version};
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', 'agent', ${version}, 'main', 1, 1)`);
       const options = { agentId: "main", env: state.env, path: pathname };
       await run({
         db,
@@ -111,6 +134,142 @@ describe("canonical validation schema admission", () => {
     reason: "table-missing",
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
+  });
+  it("avoids comparison SQL in fresh workers while forwarding runtime facts and detecting schema drift", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const factKey = "openclaw.sqliteNativeRuntimeAdmission";
+      const originalFacts = getEnvironmentData(factKey);
+      const installFacts = (value?: Parameters<typeof setEnvironmentData>[1]) =>
+        setEnvironmentData(factKey, value);
+      let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
+      const source = captureRetainedNativeWorkerSource({
+        runtimeGeneration: {
+          resolve: (url) => url,
+          retain: (_owner, close) => {
+            closeSource = close;
+          },
+        },
+      });
+      const children: RetainedNativeWorker[] = [];
+      source.retain({}, async () => {
+        await Promise.all(children.map((child) => child.terminate()));
+      });
+      const pathname = state.path("worker-admission.sqlite");
+      const spawn = () => {
+        const worker = source.create(
+          `
+          const { parentPort, workerData } = require("node:worker_threads");
+          const { DatabaseSync, StatementSync } = require("node:sqlite");
+          const reads = [], executions = [];
+          for (const method of ["get", "all", "run", "iterate"]) {
+            const original = StatementSync.prototype[method];
+            StatementSync.prototype[method] = function(...args) {
+              reads.push(this.sourceSQL);
+              return Reflect.apply(original, this, args);
+            };
+          }
+          const originalExec = DatabaseSync.prototype.exec;
+          DatabaseSync.prototype.exec = function(sql) {
+            executions.push(sql);
+            return Reflect.apply(originalExec, this, [sql]);
+          };
+          let database, canonical;
+          parentPort.on("message", async (command) => {
+            if (command === "ping") {
+              parentPort.postMessage({ ready: true });
+              return;
+            }
+            reads.length = executions.length = 0;
+            let error;
+            try {
+              if (!database) {
+                const { register } = await import(workerData.loader);
+                register();
+                const native = await import(workerData.native);
+                canonical = await import(workerData.canonical);
+                database = native.openNodeSqliteDatabase(workerData.pathname, { readOnly: true });
+              }
+              canonical.assertCanonicalSessionValidationSchema(database);
+            } catch (caught) {
+              error = caught.message;
+            }
+            parentPort.postMessage({
+              error,
+              nativeProbes: reads.filter((sql) => /sqlite_(?:version|compileoption_used)\\(/u.test(sql)).length,
+              comparisonBootstraps: executions.filter((sql) => sql !== workerData.schemaSql && sql.includes("CREATE TABLE IF NOT EXISTS session_canonical_validation_pending")).length,
+              diagnosticBootstraps: executions.filter((sql) => sql === workerData.schemaSql).length,
+              catalogReads: reads.filter((sql) => sql.includes("FROM main.sqlite_schema")).length,
+            });
+          });
+        `,
+          {
+            eval: true,
+            execArgv: [],
+            workerData: {
+              pathname,
+              schemaSql: OPENCLAW_AGENT_SCHEMA_SQL,
+              loader: import.meta.resolve("tsx/esm/api"),
+              native: new URL("../infra/node-sqlite.ts", import.meta.url).href,
+              canonical: new URL("./openclaw-agent-canonical-validation-schema.ts", import.meta.url)
+                .href,
+            },
+          },
+        );
+        children.push(worker);
+        let pending: ReturnType<typeof createDeferredCore<unknown>>;
+        worker.on("message", (value) => pending.resolve(value));
+        worker.on("error", (error) => pending.reject(error));
+        return (command = "read") => {
+          pending = createDeferredCore<unknown>();
+          worker.postMessage(command, []);
+          return pending.promise;
+        };
+      };
+      let db: DatabaseSync | undefined;
+      try {
+        installFacts();
+        await spawn()("ping");
+        installFacts(originalFacts);
+        // Native runtime facts are ready; canonical admission has not run in the host.
+        db = openNodeSqliteDatabase(pathname);
+        db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        const read = spawn();
+        const admitted = await read();
+        db.exec(driftTrigger);
+        const drifted = await read();
+        db.exec("DROP TRIGGER unexpected_node_validation");
+        installFacts();
+        const absent = await spawn()();
+        expect(admitted).toMatchObject({
+          error: undefined,
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+          diagnosticBootstraps: 0,
+        });
+        assert(admitted && typeof admitted === "object" && "catalogReads" in admitted);
+        expect(admitted.catalogReads).toBeLessThanOrEqual(1);
+        expect(drifted).toMatchObject({
+          error: expect.stringMatching(/canonical validation schema is missing or drifted/u),
+          nativeProbes: 0,
+          comparisonBootstraps: 0,
+        });
+        assert(drifted && typeof drifted === "object" && "catalogReads" in drifted);
+        expect(drifted.catalogReads).toBeGreaterThan(0);
+        expect(absent).toMatchObject({
+          error: undefined,
+          comparisonBootstraps: 0,
+        });
+        assert(absent && typeof absent === "object" && "nativeProbes" in absent);
+        expect(absent.nativeProbes).toBeGreaterThan(0);
+      } finally {
+        db?.close();
+        installFacts(originalFacts);
+        const retire = await closeSource?.();
+        if (retire) {
+          await retire();
+        }
+      }
+    });
   });
   it("refuses a drifted canonical trigger at read-only open", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -184,13 +343,13 @@ it.each([false, true])(
         .all();
       await withMaintenance({ env }, async () => {
         if (rollback) {
-          refuseVersion(db, currentVersion);
+          denyVersionPublication(db);
           try {
             expect(migrate).toThrow(/authoriz/u);
           } finally {
             db.setAuthorizer(null);
           }
-          expectVersion(db, 20);
+          expect(readVersion(db)).toEqual({ user: 20, schema: 20 });
           expect(
             db.prepare(`SELECT name FROM sqlite_schema WHERE name = '${pendingTable}'`).get(),
           ).toBeUndefined();
@@ -210,7 +369,10 @@ it.each([false, true])(
           ),
       ).toEqual(before);
       expect(pendingKeys(db)).toEqual(rollback ? [key] : [key, sibling].toSorted());
-      expectVersion(db, currentVersion);
+      expect(readVersion(db)).toEqual({
+        user: currentVersion,
+        schema: currentVersion,
+      });
       assertSchema(db);
     });
   },
@@ -258,7 +420,7 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
         nodes: db.prepare(nodeRows).all(),
       };
       if (outcome === "rollback") {
-        refuseVersion(db, currentVersion);
+        denyVersionPublication(db);
       }
       await withMaintenance({ env }, async () => {
         if (outcome === "commit" || outcome === "missing-column") {
@@ -276,6 +438,21 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
         ]);
         expect(() => assertPreserved(original, { ...current, version: 2 })).toThrow();
         if (outcome === "commit") {
+          for (const mutation of [
+            "DELETE FROM transcript_events WHERE session_id = 'previous-target'",
+            "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'target'",
+            "DELETE FROM session_entry_snapshots",
+            "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = 'target'",
+            "UPDATE transcript_rewrite_watermarks SET generation = 'replacement-generation'",
+            "DROP VIEW retained_session_view",
+          ]) {
+            db.exec("SAVEPOINT lost_history");
+            db.exec(mutation);
+            expect(() => assertPreserved(original, captureWitness(db, witnessOwner))).toThrow(
+              /changed or lost/u,
+            );
+            db.exec("ROLLBACK TO lost_history; RELEASE lost_history");
+          }
           db.exec(
             `SAVEPOINT retired_trigger; ${trigger("session_nodes_entry_valid_after_insert", "session_nodes", "INSERT")}`,
           );
@@ -292,7 +469,10 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
         expect(pendingKeys(db)).toEqual([]);
         return;
       }
-      expectVersion(db, currentVersion);
+      expect(readVersion(db)).toEqual({
+        user: currentVersion,
+        schema: currentVersion,
+      });
       expect(
         db.prepare("SELECT canonical_ready FROM session_key_contract").get()?.canonical_ready,
       ).toBeNull();

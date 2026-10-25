@@ -63,6 +63,23 @@ function explainQueryPlan(
     .join("\n");
 }
 
+function planAssertions(db: EngineConnection) {
+  return (
+    sql: string,
+    params: readonly (number | string | null)[],
+    includes: string[],
+    excludes: string[] = [],
+  ) => {
+    const plan = explainQueryPlan(db, sql, params);
+    for (const text of includes) {
+      expect(plan).toContain(text);
+    }
+    for (const text of excludes) {
+      expect(plan).not.toContain(text);
+    }
+  };
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -251,6 +268,45 @@ describe("sqlite hot query plans", () => {
     }
   });
 
+  it("uses shared state indexes for list and queue queries", () => {
+    const { db } = stateDatabase();
+    const check = planAssertions(db);
+    check(
+      `SELECT job_id, name, updated_at FROM cron_jobs WHERE store_key = ?
+       ORDER BY sort_order ASC, updated_at ASC, job_id LIMIT 25`,
+      ["/state/cron/jobs.json"],
+      ["idx_cron_jobs_store_order"],
+    );
+    check(
+      `SELECT id, entry_json FROM delivery_queue_entries WHERE queue_name = ? AND status = ?
+       ORDER BY enqueued_at ASC, id LIMIT 50`,
+      ["outbound", "pending"],
+      ["idx_delivery_queue_pending"],
+    );
+    check(
+      `SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?
+       ORDER BY created_at ASC, entry_key LIMIT 50`,
+      ["telegram", "kv"],
+      ["idx_plugin_state_listing"],
+      ["USE TEMP B-TREE FOR ORDER BY"],
+    );
+    for (const namespace of [undefined, "kv"]) {
+      check(
+        `SELECT count(*) FROM plugin_state_entries
+         WHERE plugin_id = ? ${namespace ? "AND namespace = ?" : ""}
+           AND (expires_at IS NULL OR expires_at > ?)`,
+        namespace ? ["telegram", namespace, 1000] : ["telegram", 1000],
+        ["USING COVERING INDEX idx_plugin_state_listing"],
+      );
+    }
+    check(
+      `SELECT event_id, payload_json FROM channel_ingress_events
+       WHERE queue_name = ? AND status = ? ORDER BY received_at ASC, event_id LIMIT 50`,
+      ["ingress", "pending"],
+      ["idx_channel_ingress_pending"],
+    );
+  });
+
   it("keeps the reply-target delivery lookup on the partial reply index", () => {
     // A fresh store has no planner statistics, so the plan depends only on whether the partial index is usable.
     const database = agentDatabase();
@@ -273,5 +329,152 @@ describe("sqlite hot query plans", () => {
     const plan = explainQueryPlan(database.db, lookup.sql, lookup.params);
     expect(plan).toContain("idx_agent_conversation_deliveries_reply");
     expect(plan).not.toContain("SCAN delivery");
+  });
+
+  it("uses per-agent cache indexes for session metadata and expiry scans", () => {
+    const { db } = agentDatabase();
+    const check = planAssertions(db);
+    const noSort = ["USE TEMP B-TREE FOR ORDER BY"];
+    check(
+      "SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key ASC LIMIT 50",
+      ["session_entries"],
+      ["sqlite_autoindex_cache_entries_1"],
+    );
+    check(
+      `SELECT session_key FROM session_nodes WHERE current_session_id = ?
+       ORDER BY updated_at DESC, session_key ASC LIMIT 1`,
+      ["session-1"],
+      ["idx_agent_session_nodes_current_session_id"],
+    );
+    check(
+      `SELECT session_id, updated_at FROM session_windows WHERE session_key = ?
+       ORDER BY updated_at DESC, session_id ASC LIMIT 1`,
+      ["agent:worker-1:main"],
+      ["idx_agent_session_windows_session_key"],
+      ["SCAN session_windows", ...noSort],
+    );
+    check(
+      "DELETE FROM session_nodes WHERE session_key = ?",
+      ["agent:worker-1:main"],
+      ["idx_agent_session_windows_session_key"],
+    );
+    check(
+      "SELECT session_key, entry_json FROM session_nodes WHERE status = ?",
+      ["running"],
+      ["idx_agent_session_nodes_status"],
+    );
+    check(
+      "SELECT * FROM session_nodes WHERE archived_at IS NULL ORDER BY session_key",
+      [],
+      ["idx_agent_session_nodes_active"],
+    );
+    for (const activeOnly of [false, true]) {
+      check(
+        `SELECT entry_json FROM session_nodes WHERE entry_valid != ?${
+          activeOnly ? " AND archived_at IS NULL" : ""
+        }`,
+        [1],
+        ["idx_agent_session_nodes_entry_not_valid"],
+      );
+    }
+    check(
+      `SELECT te.event_json FROM transcript_events AS te
+       JOIN transcript_event_identities AS ti ON ti.session_id = te.session_id AND ti.seq = te.seq
+         WHERE te.session_id = ? AND ti.event_type = 'message'
+         ORDER BY ti.seq DESC LIMIT 1`,
+      ["session-1"],
+      ["USING COVERING INDEX idx_agent_transcript_event_sequence (session_id=? AND event_type=?)"],
+      noSort,
+    );
+    check(
+      `SELECT identity.message_idempotency_key, event.event_json
+         FROM transcript_event_identities AS identity
+         JOIN transcript_events AS event ON event.session_id = identity.session_id AND event.seq = identity.seq
+         WHERE identity.session_id = ?
+           AND identity.message_idempotency_key IN (?, ?)
+         ORDER BY identity.seq ASC`,
+      ["session-1", "prompt-key", "assistant-key"],
+      ["idx_agent_transcript_message_idempotency", "sqlite_autoindex_transcript_events_1"],
+      ["SCAN transcript_events"],
+    );
+    check(
+      "SELECT COUNT(seq) FROM transcript_event_identities WHERE session_id = ? AND event_type = ?",
+      ["session-1", "message"],
+      ["idx_agent_transcript_event_sequence"],
+    );
+    check(
+      "DELETE FROM transcript_events WHERE session_id = ? AND seq = ?",
+      ["session-1", 1],
+      ["idx_agent_transcript_event_identity_sequence"],
+    );
+    check(
+      "SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?",
+      ["session-1"],
+      ["sqlite_autoindex_transcript_rewrite_watermarks_1"],
+    );
+    check(
+      `SELECT seq, OCTET_LENGTH(event_json) + 1 AS serialized_bytes FROM transcript_events
+       WHERE session_id = ? AND seq > ? ORDER BY seq ASC LIMIT 1001`,
+      ["session-1", 90_000],
+      ["sqlite_autoindex_transcript_events_1"],
+      ["SCAN transcript_events", ...noSort],
+    );
+    check(
+      "SELECT seq FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+      ["session-1"],
+      ["sqlite_autoindex_transcript_events_1"],
+      ["SCAN transcript_events", ...noSort],
+    );
+    const historyIndexes = [
+      "idx_agent_transcript_active_messages",
+      "sqlite_autoindex_transcript_events_1",
+    ];
+    check(
+      `SELECT active.event_seq, event.event_json FROM session_transcript_active_events AS active
+         JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ?
+           AND active.message_position IS NOT NULL AND active.message_position >= ? AND active.message_position < ?
+         ORDER BY active.message_position ASC`,
+      ["session-1", 100, 125],
+      historyIndexes,
+      noSort,
+    );
+    check(
+      `SELECT active.event_seq, active.message_position, OCTET_LENGTH(event.event_json) + 1 AS serialized_bytes
+         FROM session_transcript_active_events AS active
+         JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq
+         WHERE active.session_id = ? AND active.message_position IS NOT NULL AND active.message_position >= ?
+         ORDER BY active.message_position ASC LIMIT 1001`,
+      ["session-1", 100],
+      historyIndexes,
+      noSort,
+    );
+    check(
+      `SELECT active.event_seq, active.message_position, event.event_json, parent_identity.event_id AS parent_id
+          FROM session_transcript_active_events AS active
+          JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq
+          LEFT JOIN session_transcript_active_events AS parent_active
+            ON parent_active.session_id = active.session_id
+           AND parent_active.active_position = active.active_position - 1
+          LEFT JOIN transcript_event_identities AS parent_identity
+            ON parent_identity.session_id = parent_active.session_id AND parent_identity.seq = parent_active.event_seq
+         WHERE active.session_id = ? AND active.message_position >= ? AND active.message_position < ?
+         ORDER BY active.message_position ASC`,
+      ["session-1", 100, 125],
+      [
+        ...historyIndexes,
+        "sqlite_autoindex_session_transcript_active_events_1",
+        "idx_agent_transcript_event_identity_sequence",
+      ],
+      noSort,
+    );
+    check(
+      `SELECT active.message_position FROM transcript_event_identities AS identity
+          JOIN session_transcript_active_events AS active
+            ON active.session_id = identity.session_id AND active.event_seq = identity.seq
+         WHERE identity.session_id = ? AND identity.event_id = ?`,
+      ["session-1", "message-1"],
+      ["sqlite_autoindex_transcript_event_identities_1", "idx_agent_transcript_active_event_seq"],
+    );
   });
 });

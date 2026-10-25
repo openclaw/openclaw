@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as fileDescriptor from "./file-descriptor.js";
@@ -217,7 +218,11 @@ it.each([false, true])(
           controlUi: { entry: "dist/control-ui/index.js" },
         }),
         [`${nestedBrowser}/dist/control-ui/index.js`]: "export {};\n",
-        "node_modules/native-addon/package.json": "{}",
+        "node_modules/native-addon/package.json": JSON.stringify({
+          name: "native-addon",
+          version: "1.0.0",
+          main: "addon.node",
+        }),
       }),
     );
     const payloads = [
@@ -252,7 +257,8 @@ it.each([false, true])(
     const rank = (file: string) =>
       file.endsWith(nestedManifest) ? 0 : file === outerManifest ? 1 : 2;
     f.plan.entries.sort((left, right) => rank(left.path) - rank(right.path));
-    await f.link();
+    const link = vi.spyOn(fs, "link");
+    const counts = await f.link();
     for (const base of [f.source, f.destination]) {
       const rootDir = path.join(base, relativePlugin);
       withPluginCache(createPluginCache(), () => {
@@ -265,7 +271,13 @@ it.each([false, true])(
           const preexistingHardlink =
             base === f.source && existingTwin && relativePath === "openclaw.plugin.json";
           expect(stat(path.join(rootDir, relativePath)).nlink).toBe(preexistingHardlink ? 2 : 1);
+          const file = readPluginCacheFile({ rootDir, relativePath, rejectHardlinks: true });
+          expect(file.ok).toBe(!preexistingHardlink);
           expect(fsSync.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(content);
+          if (relativePath === "node_modules/native-addon/package.json") {
+            const relative = path.join(relativePlugin, relativePath);
+            expect(inode(f.retained(relative))).not.toEqual(inode(f.original(relative)));
+          }
         }
       });
       expect(await assets(rootDir, controlUi)).toEqual(
@@ -280,15 +292,31 @@ it.each([false, true])(
         "index.js",
       ]);
     }
+    expect(counts).toEqual({ linked: payloads.length + 2, copied: files.size + 1 });
+    expect(link).toHaveBeenCalledTimes(payloads.length + 2);
     for (const relative of payloads) {
       const original = stat(f.original(path.join(relativePlugin, relative)));
       const retained = stat(f.retained(path.join(relativePlugin, relative)));
-      expect(retained).toMatchObject({ ino: original.ino, nlink: 2, size: original.size });
+      expect(retained.ino).toBe(original.ino);
+      expect(original.nlink).toBe(2);
+      expect(retained).toMatchObject({ nlink: 2, size: original.size });
     }
+    const sourcePlugin = path.join(f.source, relativePlugin);
+    await fs.link(
+      path.join(sourcePlugin, "openclaw.plugin.json"),
+      path.join(f.source, "foreign-manifest.json"),
+    );
+    expect(stat(path.join(sourcePlugin, "openclaw.plugin.json")).nlink).toBe(existingTwin ? 3 : 2);
+    expect(
+      withPluginCache(createPluginCache(), () => loadPluginManifest(sourcePlugin)),
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("unsafe plugin manifest path"),
+    });
   },
 );
 
-it.each(["native", "portable-copy", "fallback"] as const)(
+it.each(["native", "portable-copy", "fallback-first", "fallback-second"] as const)(
   "retains admitted files and modes through replacement using %s",
   async (mode) => {
     const portable = mode === "portable-copy";
@@ -314,7 +342,7 @@ it.each(["native", "portable-copy", "fallback"] as const)(
     beforeLink((source) => {
       if (portable || source === fallback) {
         throw Object.assign(new Error("hard link unavailable"), {
-          code: mode === "fallback" ? "EXDEV" : "EMLINK",
+          code: mode === "fallback-first" ? "EXDEV" : "EMLINK",
         });
       }
     });
@@ -330,7 +358,7 @@ it.each(["native", "portable-copy", "fallback"] as const)(
         ...sharedEntries,
         ...f.plan.entries.filter((entry) => !sharedEntries.includes(entry)),
       ];
-      fallback = sharedEntries[0]!.path;
+      fallback = sharedEntries[mode === "fallback-first" ? 0 : 1]!.path;
     }
     const counts = await (portable
       ? withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, f.link)

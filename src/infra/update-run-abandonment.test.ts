@@ -85,14 +85,26 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("leaves dead-driver history unchanged during legacy-only inspection", () => {
-  const run = create({ origin: { driver: exitedDriver() } });
-  vi.advanceTimersByTime(25 * 60 * 60_000);
-  expect(
-    reconcileUpdateRunsInNativeKernelForTest({ legacyOnly: true }, { ...options, readOnly: true }),
-  ).toEqual([]);
-  expect(read(run)).toEqual(run);
-});
+it.each(["young", "recovery", "live-driver", "legacy-only"] as const)(
+  "keeps protected %s history read-only",
+  (shape) => {
+    const run = create(shape === "legacy-only" ? { origin: { driver: exitedDriver() } } : {});
+    if (shape === "recovery") {
+      retain(run, "2026.9.2", "2026.9.3");
+    } else if (shape === "live-driver") {
+      adopt(run);
+    }
+    const before = read(run);
+    vi.advanceTimersByTime((shape === "young" ? 1 : 25) * 60 * 60_000);
+    expect(
+      reconcileUpdateRunsInNativeKernelForTest(
+        { legacyOnly: shape === "legacy-only" },
+        { ...options, readOnly: true },
+      ),
+    ).toEqual([]);
+    expect(read(run)).toEqual(before);
+  },
+);
 
 it.each([24 * 60 * 60_000, 24 * 60 * 60_000 + 1])(
   "expires untouched legacy admissions after 24h (age=%s)",

@@ -27,6 +27,7 @@ import {
   mockPublicationIdentity,
   optionsResult,
   publisher,
+  publisherIdentity,
   receipt,
   sessionId,
   sessionKey,
@@ -83,18 +84,6 @@ const commandResult = (token = "", code = 0) => ({
 });
 const accountResponse = (id = 7, login = "shared-bot") =>
   Response.json({ id, login, avatar_url: null });
-const publicationSnapshot = (captured = true) => ({
-  repository: captured ? "owner/repo" : null,
-  branch: "feature",
-  source_head_commit: captured ? "1".repeat(40) : null,
-  workspace_tree: captured ? "2".repeat(40) : null,
-});
-const prTarget = () => ({
-  params: { sessionKey, agentId: "main" },
-  identity: "pr-source",
-  readSource: { agentId: "main", path: "/fixture" },
-  source: { owner: "owner", repo: "repo", branch: "feature" },
-});
 function githubConnection(
   profileId: string,
   login: string,
@@ -122,10 +111,49 @@ const withPersonalReadFixture = (run: Parameters<typeof withReadFixture>[0]) =>
 it("reads cold personal options while writer dispatch is unavailable", async () => {
   await withPersonalReadFixture(async (fixture) => {
     fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
-    using _ = vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
+    const writer = vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
       throw new Error("Writer dispatch unavailable");
     });
-    const respond = await fixture.options();
+    try {
+      const respond = await fixture.options();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, optionsResult(disconnected));
+    } finally {
+      writer.mockRestore();
+    }
+  });
+});
+
+it("reads personal options and receipts while shared identity discovery is pending", async ({
+  signal,
+}) => {
+  await withPersonalReadFixture(async (fixture) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    vi.mocked(
+      publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+    ).mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return publisherIdentity();
+    });
+    const respond = vi.fn();
+    const request = fixture.options(respond, { idempotencyKey: "owned-unknown-attempt" });
+    try {
+      await withinTest(entered.promise, signal);
+      expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
+      expect(fixture.personalPending).toHaveBeenCalledOnce();
+      expect(fixture.latestShared).toHaveBeenCalledOnce();
+      expect(fixture.latestShared).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
+        "owned-unknown-attempt",
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await request;
+    }
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, optionsResult(disconnected));
   });
 });
@@ -151,44 +179,65 @@ it.each([
   },
 );
 
-it("serves stale options without waiting for native authentication", async ({ signal }) => {
-  useRealIdentity();
-  const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-  const nativeRefresh = createDeferredCore<ReturnType<typeof commandResult>>();
-  const entered = createDeferredCore();
-  vi.spyOn(globalThis, "fetch").mockResolvedValue(accountResponse());
-  mocks.runCommandBuffered
-    .mockReset()
-    .mockResolvedValueOnce(commandResult("synthetic-options-native-expired"))
-    .mockImplementation(() => {
-      entered.resolve();
-      return nativeRefresh.promise;
-    });
-  await withReadFixture(async (fixture) => {
-    await fixture.options();
-    now.mockReturnValue(61_001);
-    const request = fixture.options();
-    try {
-      await withinTest(entered.promise, signal);
-      const stale = await awaitGateBeforeSettlement(
-        request,
-        nativeRefresh.promise,
-        "Warm options waited for native authentication",
-      );
-      expectPartialReply(stale, {
-        stale: true,
-        shared: detectedPublisher,
-      });
-    } finally {
-      nativeRefresh.resolve(commandResult("", 1));
-      await request;
+it.for(["token", "native"] as const)(
+  "serves stale options while %s authentication refreshes without waiting",
+  async (source, { signal }) => {
+    useRealIdentity(source === "token" ? "synthetic-options-stale-token" : undefined);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const credentialRefresh = createDeferredCore<Response>();
+    const nativeRefresh = createDeferredCore<ReturnType<typeof commandResult>>();
+    const entered = createDeferredCore();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(accountResponse());
+    if (source === "token") {
+      fetchMock.mockResolvedValueOnce(accountResponse()).mockReturnValue(credentialRefresh.promise);
+    } else {
+      mocks.runCommandBuffered
+        .mockReset()
+        .mockResolvedValueOnce(commandResult("synthetic-options-native-expired"))
+        .mockImplementation(() => {
+          entered.resolve();
+          return nativeRefresh.promise;
+        });
     }
-    expectPartialReply(await fixture.options(), {
-      shared: null,
-      sharedUnavailableReason: "unavailable",
+    await withReadFixture(async (fixture) => {
+      await fixture.options();
+      now.mockReturnValue(61_001);
+      const request = fixture.options();
+      try {
+        if (source === "native") {
+          await withinTest(entered.promise, signal);
+        }
+        const stale =
+          source === "native"
+            ? await awaitGateBeforeSettlement(
+                request,
+                nativeRefresh.promise,
+                "Warm options waited for native authentication",
+              )
+            : await withinTest(request, signal);
+        expectPartialReply(stale, {
+          stale: true,
+          shared: detectedPublisher,
+        });
+        if (source === "token") {
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+          fixture.disconnect();
+          expect((await fixture.options()).mock.calls[0]?.[0]).toBe(false);
+        }
+      } finally {
+        credentialRefresh.resolve(accountResponse());
+        nativeRefresh.resolve(commandResult("", 1));
+        await request;
+      }
+      if (source === "native") {
+        expectPartialReply(await fixture.options(), {
+          shared: null,
+          sharedUnavailableReason: "unavailable",
+        });
+      }
     });
-  });
-});
+  },
+);
 
 it("marks only expired personal account facts stale through options revalidation", async ({
   signal,
@@ -245,7 +294,12 @@ it("marks only expired personal account facts stale through options revalidation
 
 it("retains a failed publication without a captured tree when PR discovery is unavailable", async () => {
   await withReadFixture(async (fixture) => {
-    const snapshot = publicationSnapshot(false);
+    const snapshot = {
+      repository: null,
+      branch: "feature",
+      source_head_commit: null,
+      workspace_tree: null,
+    };
     const failed = {
       result: {
         ...receipt.result,
@@ -255,7 +309,12 @@ it("retains a failed publication without a captured tree when PR discovery is un
       },
       confirmation: null,
     };
-    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => prTarget());
+    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => ({
+      params: { sessionKey, agentId: "main" },
+      identity: "pr-source",
+      readSource: { agentId: "main", path: "/fixture" },
+      source: { owner: "owner", repo: "repo", branch: "feature" },
+    }));
     fixture.pullRequests.read.mockRejectedValue(new Error("PR discovery is unavailable"));
     fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
       (await isSuperseded(snapshot)) ? null : failed,
@@ -269,8 +328,19 @@ it.each([false, true])(
   "reconciles published coverage with current read authority (revoked=%s)",
   async (revoked) => {
     await withReadFixture(async (fixture) => {
-      const snapshot = publicationSnapshot();
-      const target = { ...prTarget(), assertCurrent: vi.fn() };
+      const snapshot = {
+        repository: "owner/repo",
+        branch: "feature",
+        source_head_commit: "1".repeat(40),
+        workspace_tree: "2".repeat(40),
+      };
+      const target = {
+        params: { sessionKey, agentId: "main" },
+        identity: "pr-source",
+        readSource: { agentId: "main", path: "/fixture" },
+        source: { owner: "owner", repo: "repo", branch: "feature" },
+        assertCurrent: vi.fn(),
+      };
       vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => target);
       const prs = [
         {
@@ -288,9 +358,9 @@ it.each([false, true])(
         }
         return { pullRequests: prs, status: "ready", rateLimited: false };
       });
-      vi.spyOn(relevance, "isGitHubPublicationSuperseded").mockImplementation(
-        async (_snapshot, readPublished) => Boolean(await readPublished()),
-      );
+      const covered = vi
+        .spyOn(relevance, "isGitHubPublicationSuperseded")
+        .mockImplementation(async (_snapshot, readPublished) => Boolean(await readPublished()));
       fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
         (await isSuperseded(snapshot)) ? null : receipt,
       );
@@ -300,6 +370,12 @@ it.each([false, true])(
       } else {
         expectPartialReply(respond, { latestShared: null });
       }
+      expect(covered).toHaveBeenCalledWith(snapshot, expect.any(Function));
+      expect(fixture.pullRequests.read).toHaveBeenCalledWith(
+        target,
+        expect.any(Function),
+        "publication",
+      );
       expect(fixture.requestForSession).not.toHaveBeenCalled();
     });
   },
@@ -334,17 +410,9 @@ it.each(["refresh", "personal", "receipt"] as const)(
       }
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const respond = vi.fn();
-      const request = fixture.options(respond, { idempotencyKey: "owned-unknown-attempt" });
+      const request = fixture.options(respond);
       try {
         await awaitGateBeforeSettlement(entered.promise, request, "Held read did not start");
-        expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
-        expect(fixture.personalPending).toHaveBeenCalledOnce();
-        expect(fixture.latestShared).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
-          "owned-unknown-attempt",
-          expect.any(Function),
-          expect.any(Function),
-        );
         await vi.advanceTimersByTimeAsync(4_999);
         expect(respond).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
@@ -373,17 +441,23 @@ it.each(["refresh", "personal", "receipt"] as const)(
   },
 );
 
-it.each(["accepted", "unverified-profile"] as const)(
+it.each(["accepted", "missing", "scope", "connection", "unverified-profile"] as const)(
   "limits profileless receipt reads to authorized shared state (%s)",
   async (outcome) => {
     await withReadFixture(async (fixture) => {
-      if (outcome === "unverified-profile") {
+      if (outcome === "scope") {
+        fixture.client.connect.scopes = [];
+      } else if (outcome === "connection") {
+        fixture.disconnect();
+      } else if (outcome === "unverified-profile") {
         fixture.client.authenticatedUserProfile = {
           profileId: "unverified-publication-person",
           displayName: null,
           hasAvatar: false,
           updatedAt: 1,
         };
+      } else if (outcome === "missing") {
+        fixture.sharedStatus.mockResolvedValue(undefined);
       }
       const respond = await fixture.status();
       if (outcome === "accepted") {
@@ -398,7 +472,7 @@ it.each(["accepted", "unverified-profile"] as const)(
         ).not.toHaveBeenCalled();
       } else {
         expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-        expect(fixture.sharedStatus).not.toHaveBeenCalled();
+        expect(fixture.sharedStatus).toHaveBeenCalledTimes(outcome === "missing" ? 1 : 0);
       }
       expect(fixture.personalStatus).not.toHaveBeenCalled();
     });

@@ -21,14 +21,11 @@ import {
 } from "./composer.test-support.ts";
 
 function getComposerTextarea(composer: HTMLElement): HTMLTextAreaElement {
-  return composer.querySelector<HTMLTextAreaElement>("textarea")!;
-}
-
-function keyboardComposer(options: Parameters<typeof renderComposer>[0] = {}) {
-  const onInput = vi.fn();
-  const onSubmit = vi.fn();
-  const view = renderComposer({ onInput, onSubmit, ...options });
-  return { ...view, onInput, onSubmit, textarea: getComposerTextarea(view.composer) };
+  const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+  if (!textarea) {
+    throw new Error("Expected composer textarea");
+  }
+  return textarea;
 }
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
@@ -59,13 +56,10 @@ function typeDraft(textarea: HTMLTextAreaElement, value: string, settle = true) 
   }
 }
 
-const command = (name: string) => ({
+const skill = (name: string) => ({
   key: name,
   name,
   description: name,
-});
-const skill = (name: string) => ({
-  ...command(name),
   source: "skill" as const,
   skillModelVisible: true,
 });
@@ -125,18 +119,40 @@ describe("new-session submission preview", () => {
 });
 
 describe("new-session composer keyboard submission", () => {
-  it.each([
-    ["/", "slash", command("test-command")],
-    ["$", "skill", skill("release_notes")],
-  ] as const)("inserts the selected %s completion with Enter", (prefix, menuKind, entry) => {
-    replaceSlashCommands([entry, { ...command("local-command"), executeLocal: true }]);
-    const { composer, textarea, onInput, onSubmit } = keyboardComposer();
-    typeDraft(textarea, prefix);
-    const menu = composer.querySelector(`.${menuKind}-menu`)?.textContent;
-    expect(menu).toContain(menuKind === "slash" ? `/${entry.name}` : entry.name);
-    expect(menu).not.toContain("local-command");
+  it("opens slash commands and inserts the selected command with Enter", () => {
+    replaceSlashCommands([
+      {
+        key: "test-command",
+        name: "test-command",
+        description: "Test command.",
+      },
+      {
+        key: "local-command",
+        name: "local-command",
+        description: "Existing-session action.",
+        executeLocal: true,
+      },
+    ]);
+    const onSubmit = vi.fn();
+    let message = "";
+    const { composer } = renderComposer({
+      onInput: (next) => {
+        message = next;
+      },
+      onSubmit,
+    });
+    const textarea = getComposerTextarea(composer);
+
+    typeDraft(textarea, "/");
+
+    expect(composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent).toContain(
+      "/test-command",
+    );
+    expect(
+      composer.querySelector("#chat-new-session-slash-menu-listbox")?.textContent,
+    ).not.toContain("/local-command");
     enter(textarea);
-    expect(onInput).toHaveBeenLastCalledWith(`${prefix}${entry.name} `);
+    expect(message).toBe("/test-command ");
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -145,12 +161,17 @@ describe("new-session composer keyboard submission", () => {
     async (selection) => {
       replaceSlashCommands([
         {
-          ...command("mode"),
+          key: "mode",
+          name: "mode",
+          description: "Choose a mode.",
           args: "<mode>",
           argOptions: ["fast", "careful"],
         },
       ]);
-      const { composer, textarea, onInput, onSubmit } = keyboardComposer();
+      const onInput = vi.fn();
+      const onSubmit = vi.fn();
+      const { composer } = renderComposer({ onInput, onSubmit });
+      const textarea = getComposerTextarea(composer);
 
       typeDraft(textarea, "/mode", false);
       if (selection === "keyboard") {
@@ -195,6 +216,11 @@ describe("new-session composer keyboard submission", () => {
       const textarea = getComposerTextarea(composer);
       textarea.setSelectionRange(1, 1);
       textarea.dispatchEvent(new Event("select", { bubbles: true }));
+      expect(request).toHaveBeenCalledWith("commands.list", {
+        agentId: "writer",
+        includeArgs: true,
+        scope: "text",
+      });
       if (owner === "agent") {
         rerenderForAgent("reviewer");
       } else {
@@ -224,9 +250,29 @@ describe("new-session composer keyboard submission", () => {
     },
   );
 
+  it("opens skill mentions and inserts the selected skill with Enter", () => {
+    replaceSlashCommands([skill("release_notes")]);
+    let message = "";
+    const { composer } = renderComposer({
+      onInput: (next) => {
+        message = next;
+      },
+    });
+    const textarea = getComposerTextarea(composer);
+
+    typeDraft(textarea, "$");
+
+    expect(composer.querySelector(".skill-menu")?.textContent).toContain("release_notes");
+    enter(textarea);
+    expect(message).toBe("$release_notes ");
+  });
+
   it("closes a skill menu when a route change replaces the owned draft", () => {
     replaceSlashCommands([skill("release_notes")]);
-    const { composer, textarea, rerenderForDraftRoute, onSubmit } = keyboardComposer();
+    const onSubmit = vi.fn();
+    const { composer, rerenderForDraftRoute } = renderComposer({ onSubmit });
+
+    const textarea = getComposerTextarea(composer);
     typeDraft(textarea, "$");
     expect(composer.querySelector(".skill-menu")).not.toBeNull();
 
@@ -240,7 +286,13 @@ describe("new-session composer keyboard submission", () => {
 
   it("retargets inline slash completion when the caret moves without input", () => {
     replaceSlashCommands([skill("release_notes"), skill("office_hours")]);
-    const { composer, textarea, onInput } = keyboardComposer();
+    let message = "";
+    const { composer } = renderComposer({
+      onInput: (next) => {
+        message = next;
+      },
+    });
+    const textarea = getComposerTextarea(composer);
 
     typeDraft(textarea, "Use /release_ and /office_");
     expect(composer.querySelector(".slash-menu")?.textContent).toContain("/office_hours");
@@ -252,50 +304,58 @@ describe("new-session composer keyboard submission", () => {
     expect(composer.querySelector(".slash-menu")?.textContent).toContain("/release_notes");
     enter(textarea);
 
-    expect(onInput).toHaveBeenLastCalledWith("Use $release_notes and /office_");
+    expect(message).toBe("Use $release_notes and /office_");
   });
 
-  it.each([undefined, "Restoring your last session setup…"])(
-    "forwards blocked Enter only when the gate has a reason (%s)",
-    (submitDisabledReason) => {
-      const { textarea, onSubmit } = keyboardComposer({ canSubmit: false, submitDisabledReason });
-      const event = enter(textarea);
-      expect(event.defaultPrevented).toBe(Boolean(submitDisabledReason));
-      expect(onSubmit).toHaveBeenCalledTimes(submitDisabledReason ? 1 : 0);
-    },
-  );
+  it("keeps Enter native when submission is silently gated", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: false,
+      onSubmit,
+    });
+    const textarea = getComposerTextarea(composer);
+    const event = enter(textarea);
 
-  it.each([
-    ["Enter", false, false, false, false, false],
-    ["Ctrl+Enter", true, true, false, false, false],
-    ["Meta+Enter", true, false, true, false, false],
-    ["background Enter", false, false, true, true, false],
-    ["background modifier", true, true, false, true, false],
-    ["mobile background modifier", true, true, false, true, true],
-  ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background, mobile) => {
-    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
-    const onBackgroundSubmit = vi.fn();
-    const { composer, textarea, onSubmit } = keyboardComposer({
-      onBackgroundSubmit,
-      requiresModifier,
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
+    beforeEach(() => {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     });
-    const event = enter(textarea, {
-      ctrlKey,
-      metaKey,
-      shiftKey: background,
+    it.each([
+      ["Enter", false, false, false, false],
+      ["Ctrl+Enter in Enter mode", false, true, false, false],
+      ["Meta+Enter in Enter mode", false, false, true, false],
+      ["Ctrl+Enter in modifier mode", true, true, false, false],
+      ["Meta+Enter in modifier mode", true, false, true, false],
+      ["Meta+Shift+Enter in Enter mode", false, false, true, true],
+      ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
+    ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
+      const onSubmit = vi.fn();
+      const onBackgroundSubmit = vi.fn();
+      const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
+      const event = enter(getComposerTextarea(composer), {
+        ctrlKey,
+        metaKey,
+        shiftKey: background,
+      });
+      expect(event.defaultPrevented).toBe(!mobile);
+      expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
+      expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
+      if (mobile) {
+        composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
+        expect(onSubmit).toHaveBeenCalledOnce();
+        expect(onBackgroundSubmit).not.toHaveBeenCalled();
+      }
     });
-    expect(event.defaultPrevented).toBe(!mobile);
-    expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
-    expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
-    if (mobile) {
-      composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!.click();
-      expect(onSubmit).toHaveBeenCalledOnce();
-      expect(onBackgroundSubmit).not.toHaveBeenCalled();
-    }
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {
-    const { textarea, onSubmit } = keyboardComposer({ message: "日本語の入力" });
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ message: "日本語の入力", onSubmit });
+    const textarea = getComposerTextarea(composer);
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
     textarea.dispatchEvent(compositionEnd);
@@ -317,11 +377,27 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("keeps Start disabled and reports an attempted press to the owner", () => {
-    const onBlockedSubmit = vi.fn();
-    const { composer, onSubmit } = keyboardComposer({
+  it("forwards Enter to onSubmit while a reasoned gate blocks submission", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
       canSubmit: false,
       submitDisabledReason: "Restoring your last session setup…",
+      onSubmit,
+    });
+    const textarea = getComposerTextarea(composer);
+    const event = enter(textarea);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Start disabled and reports an attempted press to the owner", () => {
+    const onSubmit = vi.fn();
+    const onBlockedSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: false,
+      submitDisabledReason: "Restoring your last session setup…",
+      onSubmit,
       onBlockedSubmit,
     });
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
@@ -335,37 +411,45 @@ describe("new-session composer keyboard submission", () => {
   });
 
   it("previews dictation in a locked draft and reserves the primary slot for Send", () => {
-    const { composer, textarea, onSubmit } = keyboardComposer({
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
       message: "Existing draft",
       dictationActive: true,
       dictationPreview: "Existing draft spoken words",
       dictationStatus: <div class="agent-chat__dictation-status">Listening…</div>,
+      onSubmit,
     });
-    expect(textarea).toMatchObject({ value: "Existing draft spoken words", readOnly: true });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea?.value).toBe("Existing draft spoken words");
+    expect(textarea?.readOnly).toBe(true);
     expect(composer.querySelector(".agent-chat__dictation-status")?.textContent).toBe("Listening…");
     expect(composer.querySelector(".new-session-page__start-submit")).toBeNull();
-    enter(textarea);
+    textarea?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
 
 describe("new-session composer start control", () => {
-  it.each([false, true])("renders the plain Start control (submitting=%s)", (submitting) => {
-    const { composer } = renderComposer({ submitting });
+  it("keeps the plain Start button unchanged when the terminal action is hidden", () => {
+    const { composer } = renderComposer();
+
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
+    expect(composer.querySelector(".new-session-page__start-split")).toBeNull();
     expect(composer.querySelector("button[aria-label='Start in terminal']")).toBeNull();
-    const attachmentMenu = composer.querySelector(".agent-chat__attach-menu");
-    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
-    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
-    if (submitting) {
-      const start = composer.querySelector(".new-session-page__start-submit");
-      expect(start?.getAttribute("aria-busy")).toBe("true");
-      expect(start?.getAttribute("aria-label")).toBe("Starting…");
-    }
+  });
+
+  it("marks the Start button busy while the session is starting", () => {
+    const { composer } = renderComposer({ submitting: true });
+    const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
+
+    expect(start?.getAttribute("aria-busy")).toBe("true");
+    expect(start?.getAttribute("aria-label")).toBe("Starting…");
   });
 
   it.each(["button", "Enter"])("native terminal %s uses the sole primary submission", (action) => {
-    const { composer, textarea, onSubmit } = keyboardComposer({ nativeTerminal: true });
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ nativeTerminal: true, onSubmit });
     const button = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit")!;
     expect(button.getAttribute("aria-label")).toBe("Start in terminal");
     expect(composer.querySelectorAll(".chat-send-btn")).toHaveLength(1);
@@ -373,7 +457,9 @@ describe("new-session composer start control", () => {
     if (action === "button") {
       button.click();
     } else {
-      enter(textarea);
+      composer
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     }
     expect(onSubmit).toHaveBeenCalledOnce();
   });
@@ -421,30 +507,38 @@ describe("new-session composer sizing lifecycle", () => {
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const composerTextarea = createNewSessionComposerTextarea();
-    const first = renderComposer({ composerTextarea });
+    const onInput = vi.fn();
+    const first = renderComposer({ composerTextarea, onInput });
     document.body.append(first.container);
     const textarea = getComposerTextarea(first.composer);
-    const readHeight = vi.fn(() => 42);
+    let scrollHeightReads = 0;
     Object.defineProperty(textarea, "scrollHeight", {
       configurable: true,
-      get: readHeight,
+      get: () => {
+        scrollHeightReads += 1;
+        return 42;
+      },
     });
     await Promise.resolve();
-    expect(readHeight).toHaveBeenCalled();
+    const readsAfterAttach = scrollHeightReads;
 
     textarea.value = "typed";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    const readsAfterInput = readHeight.mock.calls.length;
+    expect(onInput).toHaveBeenCalledWith("typed");
+    const readsAfterInput = scrollHeightReads;
     first.rerenderWithMessage("typed");
     await Promise.resolve();
 
     expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(readHeight).toHaveBeenCalledTimes(readsAfterInput);
+    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(scrollHeightReads).toBe(readsAfterInput);
 
     first.rerenderWithMessage("restored programmatically");
     await Promise.resolve();
 
-    expect(readHeight.mock.calls.length).toBeGreaterThan(readsAfterInput);
+    expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
+    expect(readsAfterAttach).toBeGreaterThan(0);
     expect(resizeObserverConstructed).toHaveBeenCalledOnce();
     expect(disconnect).not.toHaveBeenCalled();
     composerTextarea.disconnect();
@@ -492,6 +586,14 @@ describe("new-session composer attachment drops", () => {
     expect((submitTooltip as HTMLElement & { content?: string })?.content).toBe(
       "This action requires operator.write access.",
     );
+  });
+
+  it("places the attachment menu in the composer footer", () => {
+    const { composer } = renderComposer();
+    const attachmentMenu = composer.querySelector<HTMLElement>(".agent-chat__attach-menu");
+
+    expect(attachmentMenu?.closest(".agent-chat__composer-footer")).not.toBeNull();
+    expect(attachmentMenu?.closest(".agent-chat__composer-input-row")).toBeNull();
   });
 
   it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
@@ -589,6 +691,7 @@ describe("new-session composer attachment drops", () => {
     { submitting: false, messageLocked: true },
   ])("ignores drops while the composer is disabled", (disabled) => {
     const { attachmentDraft, composer } = renderComposer(disabled);
+    const replace = vi.spyOn(attachmentDraft, "replace");
     const readAsDataUrl = vi.spyOn(FileReader.prototype, "readAsDataURL");
     const file = new File(["image"], "pic.png", { type: "image/png" });
 
@@ -597,6 +700,7 @@ describe("new-session composer attachment drops", () => {
 
     expect(composer.hasAttribute("data-attachment-drop-active")).toBe(false);
     expect(readAsDataUrl).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
 
     const textarea = getComposerTextarea(composer);
@@ -619,8 +723,6 @@ describe("new-session composer dictation insertion", () => {
   it("inserts at the captured caret rather than its later position", () => {
     const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
     composerTextarea.captureSelection();
-    expect(composerTextarea.previewTranscript("please")).toBe("ship please it");
-    expect(textarea.value).toBe("ship it");
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
     expect(textarea.value).toBe("ship please it");
@@ -662,6 +764,14 @@ describe("new-session composer dictation insertion", () => {
     composerTextarea.captureSelection();
     expect(composerTextarea.insertTranscript("please")).toBe("please ship it");
     expect(composerTextarea.insertTranscript("now")).toBe("please ship it now");
+  });
+
+  it("previews without consuming or mutating the captured draft", () => {
+    const { textarea, composerTextarea } = draft("ship it", "ship it", 4);
+    composerTextarea.captureSelection();
+    expect(composerTextarea.previewTranscript("please")).toBe("ship please it");
+    expect(textarea.value).toBe("ship it");
+    expect(composerTextarea.insertTranscript("please")).toBe("ship please it");
   });
 
   it("has nothing to insert into once the draft is gone", () => {

@@ -15,6 +15,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import {
   directSessionReq,
@@ -93,9 +94,14 @@ test("projects recap eligibility from current sharing authority, including cappe
   }
 });
 
-test.each(["global", "unknown"])(
-  "keeps the selected unscoped %s row's model and sharing owner",
-  async (sessionKey) => {
+test.each([
+  { sessionKey: "global", transcript: false },
+  { sessionKey: "unknown", transcript: false },
+  { sessionKey: "global", transcript: true },
+  { sessionKey: "unknown", transcript: true },
+])(
+  "keeps the selected unscoped $sessionKey row's owner (transcript=$transcript)",
+  async ({ sessionKey, transcript }) => {
     const ownerId = ensureProfileForEmail("aggregate-owner@example.test").id;
     const cfg: OpenClawConfig = {
       session: { scope: "global" },
@@ -131,7 +137,14 @@ test.each(["global", "unknown"])(
     const request = {
       includeGlobal: true,
       includeUnknown: true,
+      includeDerivedTitles: transcript,
+      includeLastMessage: transcript,
     };
+    if (transcript) {
+      const backfilled = observeSessionRowBackfill([sessionKey]);
+      await listSessions({ client, context, request });
+      await backfilled;
+    }
     const result = await listSessions({ client, context, request });
     expect.soft(result.sessions).toHaveLength(1);
     expect.soft(result.sessions[0]).toMatchObject({
@@ -140,6 +153,12 @@ test.each(["global", "unknown"])(
       agentId: "research",
       modelProvider: "openai",
       model: "gpt-5.5",
+      ...(transcript
+        ? {
+            derivedTitle: "Research transcript title",
+            lastMessagePreview: "Research latest message",
+          }
+        : {}),
       visibility: "draft",
       sharingRole: "owner",
     });

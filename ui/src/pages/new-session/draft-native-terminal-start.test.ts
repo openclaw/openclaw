@@ -32,7 +32,11 @@ function mountNativeTerminal(context: ApplicationContext) {
     forceReconnect: vi.fn(),
   });
   const panel = createTestTerminalPanel(nativeTerminalElement);
-  Object.assign(panel, { client, available: true, page: true, fullscreen: true, embedded: true });
+  panel.client = client;
+  panel.available = true;
+  panel.page = true;
+  panel.fullscreen = true;
+  panel.embedded = true;
   Object.assign(context, {
     replace: vi.fn((routeId, options) => {
       if (routeId === "terminal") {
@@ -87,55 +91,69 @@ function expectNativeStart(
 }
 
 describe("DraftSubmissionFlow native terminal", () => {
-  it("primary submission retains output and exit that precede the native start response", async () => {
-    const controller = createTerminalController();
-    const outputWritten = createDeferred();
-    controller.write.mockImplementation(() => outputWritten.resolve());
-    nativeTerminalController.mockResolvedValueOnce(controller);
-    const { context, flow, request } = createNativeFixture({
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      methods: ["sessions.create", "sessions.catalog.startTerminal", "terminal.open"],
-      request: async (method) => {
-        if (method === "sessions.catalog.startTerminal") {
-          terminal.emit("terminal.data", {
-            sessionId: "terminal-created",
-            seq: 23,
-            data: "Native CLI startup text",
-          });
-          terminal.emit("terminal.exit", {
-            sessionId: "terminal-created",
-            reason: "process_exit",
-            exitCode: 0,
-            signal: 1,
-          });
-          return terminalOpenResult("terminal-created");
-        }
-        if (method === "terminal.attach") {
-          throw new Error('unknown terminal session "terminal-created"');
-        }
-        return {};
-      },
-    });
-    const terminal = mountNativeTerminal(context);
-    flow.setMessage("start this task");
-    await flow.submit();
+  it.each([
+    { catalogId: "codex", exitCode: 0, signal: 1, exitLabel: "exited (signal 1)" },
+    { catalogId: "claude", exitCode: 1, signal: 0, exitLabel: "exited (1)" },
+  ])(
+    "primary submission retains $catalogId output and exit that precede the native start response",
+    async ({ catalogId, exitCode, signal, exitLabel }) => {
+      const controller = createTerminalController();
+      const outputWritten = createDeferred();
+      controller.write.mockImplementation(() => outputWritten.resolve());
+      nativeTerminalController.mockResolvedValueOnce(controller);
+      const { context, flow, request } = createNativeFixture({
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        methods: ["sessions.create", "sessions.catalog.startTerminal", "terminal.open"],
+        data: {
+          ...nativeData,
+          catalogId,
+          catalogLabel: catalogId,
+          terminalHosts: [{ hostId: "gateway:local", label: "Local CLI" }],
+        },
+        request: async (method) => {
+          if (method === "sessions.catalog.startTerminal") {
+            terminal.emit("terminal.data", {
+              sessionId: "terminal-created",
+              seq: 23,
+              data: "Native CLI startup text",
+            });
+            terminal.emit("terminal.exit", {
+              sessionId: "terminal-created",
+              reason: "process_exit",
+              exitCode,
+              signal,
+            });
+            return terminalOpenResult("terminal-created");
+          }
+          if (method === "terminal.attach") {
+            throw new Error('unknown terminal session "terminal-created"');
+          }
+          return {};
+        },
+      });
+      const terminal = mountNativeTerminal(context);
+      flow.setMessage("start this task");
+      await flow.submit();
 
-    await outputWritten.promise;
-    expect(controller.write).toHaveBeenCalledWith(
-      new TextEncoder().encode("Native CLI startup text"),
-    );
-    expectNativeStart(request, { initialMessage: "start this task" });
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
-    expect(flow.message).toBe("");
-    await terminal.panel.updateComplete;
-    expect(terminal.panel.textContent).toContain("exited (signal 1)");
-    expect(terminal.panel.textContent).not.toContain("Could not attach");
-    expect(request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBeNull();
-    expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();
-  });
+      await outputWritten.promise;
+      expect(controller.write).toHaveBeenCalledWith(
+        new TextEncoder().encode("Native CLI startup text"),
+      );
+      expectNativeStart(request, { catalogId, initialMessage: "start this task" });
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
+      expect(context.navigateAndWait).not.toHaveBeenCalled();
+      expect(flow.message).toBe("");
+      await terminal.panel.updateComplete;
+      expect(terminal.panel.textContent).toContain(exitLabel);
+      expect(terminal.panel.textContent).not.toContain("Could not attach");
+      expect(request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
+      expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBeNull();
+      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull();
+    },
+  );
 
-  it.each(["accepted", "rejected"] as const)(
+  it.each(["accepted", "rejected", "cancelled"] as const)(
     "keeps a native start pending until %s",
     async (outcome) => {
       const starting = createDeferred<ReturnType<typeof terminalOpenResult>>();
@@ -147,7 +165,7 @@ describe("DraftSubmissionFlow native terminal", () => {
         request: async (method) =>
           method === "sessions.catalog.startTerminal" ? starting.promise : {},
       });
-      mountNativeTerminal(context);
+      const { panel } = mountNativeTerminal(context);
       const message = outcome === "accepted" ? "" : "keep my prompt";
       flow.setMessage(message);
       const submitting = flow.submit();
@@ -157,6 +175,9 @@ describe("DraftSubmissionFlow native terminal", () => {
       if (outcome === "rejected") {
         starting.reject(new Error("Native CLI is unavailable"));
       } else {
+        if (outcome === "cancelled") {
+          flow.invalidate("gateway-changed");
+        }
         starting.resolve(terminalOpenResult("native-start"));
       }
       await Promise.all([submitting, duplicate]);
@@ -168,7 +189,12 @@ describe("DraftSubmissionFlow native terminal", () => {
       } else {
         expect(flow.message).toBe(message);
         expect(context.replace).not.toHaveBeenCalled();
-        expect(flow.error).toContain("Native CLI is unavailable");
+        if (outcome === "cancelled") {
+          expect(request).toHaveBeenCalledWith("terminal.close", { sessionId: "native-start" });
+        } else {
+          expect(flow.error).toContain("Native CLI is unavailable");
+          expect(panel.isConnected).toBe(false);
+        }
       }
     },
   );

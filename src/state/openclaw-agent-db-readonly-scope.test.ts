@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -80,19 +79,11 @@ async function closedDatabase() {
 
 function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[0]) {
   const result = retainOpenClawAgentDatabaseReadOnly(options);
-  assert(result.found, "Missing synthetic agent database");
+  expect(result.found).toBe(true);
+  if (!result.found) {
+    throw new Error("Missing synthetic agent database");
+  }
   return result;
-}
-
-function foundValue<T>(result: { found: true; value: T } | { found: false }): T {
-  assert(result.found, "Missing synthetic agent database");
-  return result.value;
-}
-
-function readValidation(owner: Parameters<typeof captureOpenClawAgentDatabaseReadValidation>[0]) {
-  const receipt = captureOpenClawAgentDatabaseReadValidation(owner);
-  assert(receipt, "Expected the owner's read validation");
-  return receipt.validation;
 }
 
 it.each([false, true])(
@@ -112,35 +103,39 @@ it.each([false, true])(
           .where("meta_key", "=", "primary");
         const prepare = vi.spyOn(admittedDb, "prepare");
         const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        using _ = { [Symbol.dispose]: () => observation.restore() };
-        writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
-        const stampValue = (db: EngineConnection) =>
-          executeSqliteQueryTakeFirstSync(db, query)?.updated_at;
-        const read = <T>(run: (db: EngineConnection) => T) =>
-          readAgentDb(({ db }) => runRead(db, () => run(db)), options, { snapshot });
-        const writeStamp = writer.prepare(
-          "UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'",
-        );
-        for (let stamp = 1; stamp <= 20; stamp++) {
-          writeStamp.run(stamp);
+        try {
+          writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
+          const stampValue = (db: EngineConnection) =>
+            executeSqliteQueryTakeFirstSync(db, query)?.updated_at;
+          const read = <T>(run: (db: EngineConnection) => T) =>
+            readAgentDb(({ db }) => runRead(db, () => run(db)), options, { snapshot });
+          const writeStamp = writer.prepare(
+            "UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'",
+          );
+          for (let stamp = 1; stamp <= 20; stamp++) {
+            writeStamp.run(stamp);
+            expect(
+              read((db) => {
+                expect(stampValue(db)).toBe(stamp);
+                writeStamp.run(stamp + 100);
+                return stampValue(db);
+              }),
+            ).toEqual({ found: true, value: snapshot ? stamp : stamp + 100 });
+            expect(read(stampValue)).toEqual({ found: true, value: stamp + 100 });
+          }
+          const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
+          expect(preparations.length).toBeLessThanOrEqual(2);
           expect(
-            read((db) => {
-              expect(stampValue(db)).toBe(stamp);
-              writeStamp.run(stamp + 100);
-              return stampValue(db);
-            }),
-          ).toEqual({ found: true, value: snapshot ? stamp : stamp + 100 });
-          expect(read(stampValue)).toEqual({ found: true, value: stamp + 100 });
-        }
-        const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
-        expect(preparations.length).toBeLessThanOrEqual(2);
-        expect(
-          observation.queries.filter((sql) =>
-            /sqlite_schema|sqlite_master|PRAGMA\s+(?:data_version|user_version|schema_version|integrity_check|foreign_key_check)|FROM main\.pragma_data_version\(\)|^SELECT role, schema_version, agent_id/iu.test(
-              sql,
+            observation.queries.filter((sql) =>
+              /sqlite_schema|sqlite_master|PRAGMA\s+(?:data_version|user_version|schema_version|integrity_check|foreign_key_check)|FROM main\.pragma_data_version\(\)|^SELECT role, schema_version, agent_id/iu.test(
+                sql,
+              ),
             ),
-          ),
-        ).toEqual([]);
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+          prepare.mockRestore();
+        }
       }, options);
     });
   },
@@ -150,39 +145,49 @@ it("keeps one connection while nested reads retain independent committed snapsho
   const { options, path } = await closedDatabase();
   const target = { agentId: "main", path };
   const scope = newScope();
-  using writer = nodeSqlite.openNodeSqliteDatabase(path);
+  const writer = new (requireNodeSqlite().DatabaseSync)(path);
+  let retained: EngineConnection | undefined;
   const query = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
-  const retained = scope.run(target, () => {
-    const first = foundValue(readAgentDb(({ db }) => db, options));
-    expect(first.isOpen).toBe(true);
-    readAgentDb(({ db }) => {
-      expect(db).toBe(first);
-      db.exec("BEGIN DEFERRED");
-      try {
-        const before = db.prepare(query).get();
-        writer
-          .prepare("UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'")
-          .run();
-        const committed = writer.prepare(query).get();
-        expect(committed).not.toEqual(before);
-        const nested = readAgentDb(({ db: inner }) => {
-          expect(inner).not.toBe(db);
-          return inner.prepare(query).get();
-        }, options);
-        expect(nested).toEqual({ found: true, value: committed });
-        expect(db.prepare(query).get()).toEqual(before);
-      } finally {
-        db.exec("ROLLBACK");
-      }
-    }, options);
-    expect(readAgentDb(({ db }) => db.prepare(query).get(), options)).toEqual({
-      found: true,
-      value: writer.prepare(query).get(),
+  try {
+    scope.run(target, () => {
+      const first = readAgentDb(({ db }) => {
+        retained = db;
+        return db.prepare(query).get();
+      }, options);
+      expect(first.found).toBe(true);
+      expect(retained?.isOpen).toBe(true);
+      readAgentDb(({ db }) => {
+        expect(db).toBe(retained);
+        db.exec("BEGIN DEFERRED");
+        try {
+          const before = db.prepare(query).get();
+          writer
+            .prepare(
+              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
+            )
+            .run();
+          const committed = writer.prepare(query).get();
+          expect(committed).not.toEqual(before);
+          const nested = readAgentDb(({ db: inner }) => {
+            expect(inner).not.toBe(db);
+            return inner.prepare(query).get();
+          }, options);
+          expect(nested).toEqual({ found: true, value: committed });
+          expect(db.prepare(query).get()).toEqual(before);
+        } finally {
+          db.exec("ROLLBACK");
+        }
+      }, options);
+      expect(readAgentDb(({ db }) => db.prepare(query).get(), options)).toEqual({
+        found: true,
+        value: writer.prepare(query).get(),
+      });
     });
-    return first;
-  });
+  } finally {
+    writer.close();
+  }
   scope.close();
-  expect(retained.isOpen).toBe(false);
+  expect(retained?.isOpen).toBe(false);
 });
 
 it.each(["successor", "omitted"] as const)(
@@ -191,7 +196,10 @@ it.each(["successor", "omitted"] as const)(
     const options = { agentId: "main", env: state.env };
     const owner = openAgentDb(options);
     const target = { agentId: owner.agentId, path: owner.path };
-    const initial = readValidation(owner);
+    const initial = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!initial) {
+      throw new Error("Expected the owner's initial read validation");
+    }
     const scope = newScope();
     const read = vi.fn((db: EngineConnection) => {
       expect(
@@ -201,37 +209,42 @@ it.each(["successor", "omitted"] as const)(
       });
       return db;
     });
-    const first = foundValue(
-      scope.run({ ...target, validation: initial }, () =>
-        scope.read(({ db }) => read(db), options),
-      ),
+    const first = scope.run({ ...target, validation: initial.validation }, () =>
+      scope.read(({ db }) => read(db), options),
     );
-    expect(first.isOpen).toBe(true);
-    expect(first).not.toBe(owner.db);
+    if (!first.found) {
+      throw new Error("Expected the admitted reader");
+    }
+    expect(first.value.isOpen).toBe(true);
+    expect(first.value).not.toBe(owner.db);
 
     invalidateOpenClawAgentDatabaseValidation(owner.path);
-    expect(Atomics.load(new Int32Array(initial.valid), 0)).toBe(0);
+    expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
     setOpenClawAgentDatabaseValidation(owner);
-    const successor = readValidation(owner);
+    const successor = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!successor) {
+      throw new Error("Expected the owner's successor read validation");
+    }
     const nextTarget = {
       ...target,
-      ...(nextReceipt === "successor" ? { validation: successor } : {}),
+      ...(nextReceipt === "successor" ? { validation: successor.validation } : {}),
     };
     read.mockClear();
-    const recovered = foundValue(
-      scope.run(nextTarget, () =>
-        scope.read(({ db }) => {
-          expect(first.isOpen).toBe(false);
-          expect(db).not.toBe(first);
-          return read(db);
-        }, options),
-      ),
+    const recovered = scope.run(nextTarget, () =>
+      scope.read(({ db }) => {
+        expect(first.value.isOpen).toBe(false);
+        expect(db === first.value).toBe(false);
+        return read(db);
+      }, options),
     );
+    if (!recovered.found) {
+      throw new Error("Expected a new admitted reader");
+    }
     expect(read).toHaveBeenCalledTimes(1);
-    expect(Atomics.load(new Int32Array(successor.valid), 0)).toBe(1);
-    expect(Atomics.load(new Int32Array(successor.canonicalReady), 0)).toBe(1);
+    expect(Atomics.load(new Int32Array(successor.validation.valid), 0)).toBe(1);
+    expect(Atomics.load(new Int32Array(successor.validation.canonicalReady), 0)).toBe(1);
     const reused = scope.run(nextTarget, () => scope.read(({ db }) => read(db), options));
-    expect(foundValue(reused)).toBe(recovered);
+    expect(reused.found && reused.value).toBe(recovered.value);
     expect(read).toHaveBeenCalledTimes(2);
   },
 );
@@ -244,7 +257,10 @@ it("reuses ordinary readers until idle expiry and reopens after lifecycle invali
   const opens = () => open.mock.calls.filter(([filename]) => filename === path).length;
 
   const first = read();
-  const firstDb = foundValue(first);
+  expect(first.found).toBe(true);
+  if (!first.found) {
+    throw new Error("Missing synthetic agent database");
+  }
   for (let index = 0; index < 20; index++) {
     expect(read()).toEqual(first);
   }
@@ -252,9 +268,9 @@ it("reuses ordinary readers until idle expiry and reopens after lifecycle invali
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
   expect(read()).toEqual(first);
   vi.advanceTimersByTime(1);
-  expect(firstDb.isOpen).toBe(true);
+  expect(first.value.isOpen).toBe(true);
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  expect(firstDb.isOpen).toBe(false);
+  expect(first.value.isOpen).toBe(false);
   const reopened = read();
   expect(opens()).toBe(2);
   closeAgentDb(path);
@@ -384,7 +400,13 @@ it("closes generic and explicit candidate-family readers without releasing unrel
     await closeAgentDbAsync(path);
   }
   const scope = newScope();
-  const read = (path: string) => foundValue(readAgentDb(({ db }) => db, options(path)));
+  const read = (path: string) => {
+    const result = readAgentDb(({ db }) => db, options(path));
+    if (!result.found) {
+      throw new Error("Missing synthetic reader database");
+    }
+    return result.value;
+  };
   const selected = read(family);
   const explicit = scope.run(options(sibling), () => read(sibling));
   const retained = read(unrelated);
@@ -447,9 +469,12 @@ it("loads canonical proof before fresh full selections without trusting a copied
     try {
       thread.isMainThread = false;
       retained.run(target, () => {
-        const opened = foundValue(readAgentDb((reader) => reader, target));
+        const opened = readAgentDb((reader) => reader, target);
+        if (!opened.found) {
+          throw new Error("Expected the seeded canonical database");
+        }
         const queries = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(opened.db),
+          requireNativeSqliteDatabase(opened.value.db),
           ["inventory"],
           (sql) =>
             sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,

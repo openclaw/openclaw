@@ -60,20 +60,6 @@ function clientProfile(profileId: string, displayName: string | null, updatedAt 
   return { profileId, displayName, hasAvatar: false, updatedAt };
 }
 
-function connect(client = createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI })) {
-  return { minProtocol: 1, maxProtocol: 1, client, scopes: ["operator.write"] };
-}
-
-function profileClient(profile: { id: string; displayName: string | null; updatedAt: number }) {
-  return clientProfile(profile.id, profile.displayName, profile.updatedAt);
-}
-
-const reportMedia = {
-  path: "uploads/report.pdf",
-  contentType: "application/pdf",
-  workspaceDir: "/workspace",
-};
-
 function requesterProfile(text: string) {
   const json = text.match(/```json\n([\s\S]*?)\n```/u)?.[1];
   return json
@@ -84,23 +70,33 @@ function requesterProfile(text: string) {
 
 describe("prepareChatSendUserTurn", () => {
   it.each([
-    { synthetic: false, verified: true },
-    { synthetic: true, verified: true },
-    { synthetic: false, verified: false },
-  ])("projects only the verified requester: %j", ({ synthetic, verified }) => {
+    { profileId: "profile-ada", synthetic: false, verified: true },
+    { profileId: "profile-ada", synthetic: true, verified: true },
+    { profileId: "profile-ada", synthetic: false, verified: false },
+  ])("projects only the verified requester: %j", ({ profileId, synthetic, verified }) => {
     const prepared = prepareTurn({
-      request: { clientInfo: uiClientInfo(GATEWAY_CLIENT_MODES.UI) },
+      inputText: "/status",
+      request: {
+        inboundMessage: "/status",
+        clientInfo: uiClientInfo(GATEWAY_CLIENT_MODES.UI),
+      },
+      attachments: { parsedMessage: "/status" },
       client: {
         authenticatedUserId: verified ? "ada@example.test" : undefined,
-        authenticatedUserProfile: clientProfile("profile-ada", "Ada"),
+        authenticatedUserProfile: clientProfile(profileId, "Ada"),
         internal: synthetic ? { syntheticClient: true } : undefined,
-        connect: connect(),
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
+          scopes: ["operator.write"],
+        },
       },
     });
     const ctx = finalizeInboundContext({ ...prepared.ctx });
     const prompt = buildInboundUserContextPrefix(ctx);
     if (verified && !synthetic) {
-      expect(requesterProfile(prompt)).toEqual({ id: "profile-ada", display_name: "Ada" });
+      expect(requesterProfile(prompt)).toEqual({ id: profileId, display_name: "Ada" });
     } else {
       expect(prompt).not.toContain("requester_profile");
     }
@@ -127,11 +123,22 @@ describe("prepareChatSendUserTurn", () => {
           },
           session: { agentId: "main", clientRunId: "accepted", sessionKey: "agent:main:original" },
           client: {
-            authenticatedUserProfile: kind.startsWith("profileless")
-              ? undefined
-              : profileClient(profile),
+            ...(!kind.startsWith("profileless")
+              ? {
+                  authenticatedUserProfile: clientProfile(
+                    profile.id,
+                    profile.displayName,
+                    profile.updatedAt,
+                  ),
+                }
+              : {}),
             internal: kind === "synthetic" ? { syntheticClient: true } : undefined,
-            connect: connect(clientInfo),
+            connect: {
+              minProtocol: 1,
+              maxProtocol: 1,
+              client: clientInfo,
+              scopes: ["operator.write"],
+            },
           },
           logGateway: createSubsystemLogger("test/participant"),
         });
@@ -208,7 +215,11 @@ describe("prepareChatSendUserTurn", () => {
           },
           client: {
             ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
-            authenticatedUserProfile: profileClient(profile),
+            authenticatedUserProfile: clientProfile(
+              profile.id,
+              profile.displayName,
+              profile.updatedAt,
+            ),
             connect: { scopes: ["operator.write"] },
           } as never,
         });
@@ -225,13 +236,17 @@ describe("prepareChatSendUserTurn", () => {
   );
 
   it.each([
-    ["status", "/status", false],
-    ["multiline skill", "/skill weather\n  first\n  second", false],
-    ["reset", "/reset\ninspect this", false],
-    ["suppressed status", "/status", true],
-  ] as const)(
-    "separates %s command input from attachment text while preserving turn facts",
-    async (_name, inboundMessage, suppressed) => {
+    { name: "status", inboundMessage: "/status", suppressed: false },
+    {
+      name: "multiline skill",
+      inboundMessage: "/skill weather\n  first\n  second",
+      suppressed: false,
+    },
+    { name: "reset", inboundMessage: "/reset\ninspect this", suppressed: false },
+    { name: "suppressed status", inboundMessage: "/status", suppressed: true },
+  ])(
+    "separates $name command input from attachment text while preserving turn facts",
+    async ({ inboundMessage, suppressed }) => {
       const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
       const prepared = prepareTurn({
         inputText: inboundMessage,
@@ -294,7 +309,13 @@ describe("prepareChatSendUserTurn", () => {
         suppressCommandInterpretation: true,
       },
       attachments: {
-        mediaPathOffloads: [reportMedia],
+        mediaPathOffloads: [
+          {
+            path: "uploads/report.pdf",
+            contentType: "application/pdf",
+            workspaceDir: "/workspace",
+          },
+        ],
       },
       client: {
         connId: "conn-1",
@@ -309,8 +330,22 @@ describe("prepareChatSendUserTurn", () => {
     });
 
     expect(prepared.ctx).toMatchObject({
+      CommandAuthorized: false,
+      CommandInterpretationSuppressed: true,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        body: "hello",
+      },
       ApprovalReviewerDeviceId: "device-1",
-      media: [reportMedia],
+      media: [
+        {
+          path: "uploads/report.pdf",
+          contentType: "application/pdf",
+          workspaceDir: "/workspace",
+        },
+      ],
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
       GatewayUiCommandTarget: { connId: "conn-1", profileId: "profile-ada" },
@@ -350,25 +385,32 @@ describe("prepareChatSendUserTurn", () => {
       CommandBody: "Approved inspect",
     });
     expect(prepared.replyOptionMedia).toEqual([
-      { path: "/media/inbound/image-1.png", url: mediaRef, contentType: "image/png" },
+      {
+        path: "/media/inbound/image-1.png",
+        url: mediaRef,
+        contentType: "image/png",
+      },
     ]);
     await expect(prepared.readInput()).resolves.toMatchObject({
       mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
     });
   });
 
-  it("assigns image slots from the complete mixed-media fact order", async () => {
+  it("persists video then image as claim-only facts with the image at fact index one", async () => {
     const prepared = prepareTurn({
       attachments: {
         imageOrder: ["offloaded"],
         offloadedRefs: [
-          imageRef("video.mp4", "/private/media/video.mp4", {
+          {
             mediaRef: "https://signed.example/video",
+            id: "video.mp4",
+            path: "/private/media/video.mp4",
+            sourceIndex: 0,
             kind: "video",
             mimeType: "video/mp4",
             label: "video.mp4",
             sizeBytes: 20,
-          }),
+          },
           imageRef("image.png", "/private/media/image.png", {
             mediaRef: "file:///private/image.png",
             sourceIndex: 1,
@@ -382,6 +424,19 @@ describe("prepareChatSendUserTurn", () => {
     expect(input.mediaImageLayout).toEqual({
       slots: [{ kind: "offloaded", factIndex: 1 }],
     });
+    const serialized = JSON.stringify(buildPersistedUserTurnMessage(input));
+    expect(serialized).toContain("media://inbound/video.mp4");
+    expect(serialized).toContain("media://inbound/image.png");
+    for (const privateValue of [
+      "/private/media",
+      "signed.example",
+      "file://",
+      "workspaceDir",
+      '"data"',
+      "base64",
+    ]) {
+      expect(serialized).not.toContain(privateValue);
+    }
   });
 
   it.each(["inline", "offloaded", "prestaged"] as const)(
@@ -428,21 +483,30 @@ describe("prepareChatSendUserTurn", () => {
           },
           attachments: {
             imageOrder: [inline ? "inline" : "offloaded"],
-            parsedImages: inline
-              ? [{ type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 }]
-              : [],
-            offloadedRefs: inline
-              ? []
-              : [imageRef(id, persistedPath, { label: fileName, sizeBytes })],
-            mediaPathOffloads: prestaged ? [staged] : [],
-            parsedMessage:
-              kind === "offloaded" ? `inspect\n[media attached: ${mediaRef}]` : "hello",
+            ...(inline
+              ? {
+                  parsedImages: [
+                    { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
+                  ],
+                }
+              : { offloadedRefs: [imageRef(id, persistedPath, { label: fileName, sizeBytes })] }),
+            ...(prestaged ? { mediaPathOffloads: [staged] } : {}),
+            ...(kind === "offloaded"
+              ? { parsedMessage: `inspect\n[media attached: ${mediaRef}]` }
+              : {}),
           },
         });
         const managedMedia = await prepared.pluginBoundMediaPromise;
         if (prestaged) {
           expect(managedMedia).toEqual([]);
-          expect(prepared.ctx.media).toEqual([staged]);
+          expect(prepared.ctx.media).toEqual([
+            {
+              path: "/tmp/1.png",
+              contentType: "image/png",
+              fileName: "attachment-1",
+              workspaceDir: "/tmp",
+            },
+          ]);
           return;
         }
         const expectedMedia = [
@@ -468,7 +532,10 @@ describe("prepareChatSendUserTurn", () => {
         if (inline) {
           applyChatSendManagedMedia(ctx, managedMedia, prepared.managedMediaApplyMode);
         }
-        expect(ctx.media).toEqual([...priorMedia, ...expectedMedia]);
+        expect(ctx.media).toEqual([
+          ...(inline ? [{ path: "uploads/report.pdf", workspaceDir: "/workspace" }] : []),
+          ...expectedMedia,
+        ]);
       } finally {
         persist?.mockRestore();
       }

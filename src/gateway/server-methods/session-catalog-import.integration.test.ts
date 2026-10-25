@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
@@ -45,7 +44,7 @@ import {
   createSessionMutationTestContext,
 } from "./sessions-mutations.owner.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let nextCatalog = 0;
@@ -112,16 +111,19 @@ async function createCatalog(restricted: boolean) {
     id: owner.authenticatedUserProfile!.profileId,
   });
   const entryRef = (sessionKey = key) => ({ agentId: "main", sessionKey });
+  const entry = () => loadSessionEntryReadOnly(entryRef());
   const updateNative = (update: Parameters<typeof upsertSessionEntryCore>[1]) =>
     upsertSessionEntryCore(entryRef(nativeKey), update);
-  if (restricted) {
-    await updateNative({
+  const seedNative = () =>
+    updateNative({
       sessionId: "native-source",
       updatedAt: 1,
       pluginOwnerId: "fixture",
       createdVia: "operator",
       createdActor: actor(),
     });
+  if (restricted) {
+    await seedNative();
   }
   const source: SessionCatalogTranscriptItem[] = [
     { id: "question", type: "userMessage", text: "Synthetic imported question" },
@@ -184,7 +186,9 @@ async function createCatalog(restricted: boolean) {
   } satisfies PreparedGatewayModelCatalogSnapshot;
   let readPreparedModelCatalog = async () => readyModelCatalogSnapshot;
   const loadPreparedModelCatalog = async () => readyModelCatalogSnapshot;
-  registerGatewayModelCatalogPrivateAccess(loadPreparedModelCatalog, {
+  const gatewayModelCatalogLoader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
+    loadPreparedModelCatalog;
+  registerGatewayModelCatalogPrivateAccess(gatewayModelCatalogLoader, {
     loadDeferred: loadPreparedModelCatalog,
     readPrepared: () => readPreparedModelCatalog(),
   });
@@ -193,7 +197,8 @@ async function createCatalog(restricted: boolean) {
       ...createSessionMutationTestContext(config),
       logGateway: createSubsystemLogger("test/catalog-import"),
       broadcast: vi.fn(),
-      loadGatewayModelCatalogSnapshot: loadPreparedModelCatalog,
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: gatewayModelCatalogLoader,
     },
     () => projection,
   );
@@ -238,35 +243,43 @@ async function createCatalog(restricted: boolean) {
         })
       : [];
   };
+  const transcript = () => transcriptFor(key);
+  const expectImport = async (created: boolean, importedItems = 2, totalItems = 2) => {
+    expect(await call()).toHaveBeenCalledWith(true, {
+      sessionKey: key,
+      importedItems,
+      totalItems,
+      complete: true,
+      created,
+    });
+  };
+  const precreate = async (owner = client) => {
+    const created = await sessionCreation.createGatewaySession({
+      cfg: config,
+      agentId: "main",
+      key,
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      creation: {
+        via: "operator",
+        actor: actor(owner),
+      },
+    });
+    expect(created.ok).toBe(true);
+    await projection.ensureMaterialized();
+    await projection.prepareMembership();
+  };
   return {
     actor,
-    entry: () => loadSessionEntryReadOnly(entryRef()),
+    entry,
     entryRef,
     updateNative,
-    async expectImport(created: boolean, importedItems = 2, totalItems = 2) {
-      expect(await call()).toHaveBeenCalledWith(true, {
-        sessionKey: key,
-        importedItems,
-        totalItems,
-        complete: true,
-        created,
-      });
-    },
+    expectImport,
     context,
     other,
-    async precreate(owner = client) {
-      const created = await sessionCreation.createGatewaySession({
-        cfg: config,
-        agentId: "main",
-        key,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        creation: { via: "operator", actor: actor(owner) },
-      });
-      expect(created.ok).toBe(true);
-      await projection.ensureMaterialized();
-      await projection.prepareMembership();
-    },
+    nativeKey,
+    seedNative,
+    precreate,
     config,
     client,
     source,
@@ -281,7 +294,7 @@ async function createCatalog(restricted: boolean) {
     setPreparedModelCatalogReader: (reader: () => Promise<typeof readyModelCatalogSnapshot>) => {
       readPreparedModelCatalog = reader;
     },
-    transcript: () => transcriptFor(key),
+    transcript,
     transcriptFor,
   };
 }
@@ -414,6 +427,15 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           },
         },
       ]);
+      await fixture.seedNative();
+      const continueSession = vi.fn(async () => ({ sessionKey: fixture.nativeKey }));
+      fixture.provider.continueSession = continueSession;
+      expect(await fixture.call("sessions.catalog.continue")).toHaveBeenCalledWith(true, {
+        sessionKey: fixture.nativeKey,
+      });
+      expect(continueSession).toHaveBeenCalledOnce();
+      expect(fixture.nativeKey).not.toBe(fixture.key);
+      expect(await fixture.transcript()).toHaveLength(4);
     }));
 
   it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", () =>
@@ -456,13 +478,14 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         sessionKey: expect.stringMatching(/^agent:main:/),
       });
       const response = retried.mock.calls.find(([ok]) => ok)?.[1];
-      assert(
-        response &&
-          typeof response === "object" &&
-          "sessionKey" in response &&
-          typeof response.sessionKey === "string",
-        "retry did not return a session key",
-      );
+      if (
+        !response ||
+        typeof response !== "object" ||
+        !("sessionKey" in response) ||
+        typeof response.sessionKey !== "string"
+      ) {
+        throw new Error("retry did not return a session key");
+      }
       const sessionKey = response.sessionKey;
       expect(sessionKeys()).toEqual([...before, sessionKey].toSorted());
       expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({

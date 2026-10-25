@@ -50,19 +50,18 @@ function runtimeParams(
   };
 }
 
-const privateLineage: Parameters<typeof withAgentRuntimeExecutionLineage>[1] = {
-  relation: "sessions_spawn",
-  requesterRef: "private-requester-ref",
-  controllerRef: "private-controller-ref",
-  depth: 2,
-  applicableGrantRefs: ["tool:sessions_spawn"],
-  localPolicyRefs: ["local-policy"],
-  runtimeAssuranceRefs: ["spawn-runtime:subagent"],
-  targetPolicyRefs: ["target-policy"],
-  externalNativeActions: "observable",
-};
 function withPrivateLineage(context: AgentRuntimeSessionSpawnContext) {
-  return withAgentRuntimeExecutionLineage(context, privateLineage);
+  return withAgentRuntimeExecutionLineage(context, {
+    relation: "sessions_spawn",
+    requesterRef: "private-requester-ref",
+    controllerRef: "private-controller-ref",
+    depth: 2,
+    applicableGrantRefs: ["tool:sessions_spawn"],
+    localPolicyRefs: ["local-policy"],
+    runtimeAssuranceRefs: ["spawn-runtime:subagent"],
+    targetPolicyRefs: ["target-policy"],
+    externalNativeActions: "observable",
+  });
 }
 
 function useTempHome(): string {
@@ -144,7 +143,7 @@ async function createIdentity(params: AgentRuntimeIdentityTokenParams) {
   return api.verify(await api.mint(params));
 }
 
-it("retains worker approval scope until first signed use", async () => {
+it("retains a worker approval scope through delayed first signed use", async () => {
   const run = operationalRun("worker-scope-signed");
   const lifetime = new AbortController();
   const original = claimAgentRunApprovalAuthority(run.delegatedAuthority, [lifetime.signal]);
@@ -168,16 +167,24 @@ it("retains worker approval scope until first signed use", async () => {
     new AbortController().signal,
   ]);
   const stale = await api.verify(token);
+  expect(stale).toBeDefined();
   expect(validateAgentRunDelegatedAuthority(stale!.delegatedAuthority)).toBe(false);
   expect(validateAgentRunDelegatedAuthority(run.delegatedAuthority)).toBe(true);
-  const current = await createIdentity({ ...params, approvalAuthority: replacement });
+  const current = await createIdentity({
+    ...params,
+    approvalAuthority: replacement,
+  });
+  expect(current).toBeDefined();
   expect(validateAgentRunDelegatedAuthority(current!.delegatedAuthority)).toBe(true);
   await expect(
-    api.direct({ ...params, approvalAuthority: run.delegatedAuthority }),
+    api.direct({
+      ...params,
+      approvalAuthority: run.delegatedAuthority,
+    }),
   ).rejects.toThrow("original claim approval authority");
 });
 
-it("revokes signed authority on release, replacement, and restart", async () => {
+it("rejects signed delegated authority after terminal, replacement, and restart boundaries", async () => {
   const approvalAuthority = await import("./agent-runtime-approval-authority.js");
   const validate = approvalAuthority.createAgentRuntimeApprovalAuthorityValidator();
   const valid = (identity: AgentRuntimeIdentity | undefined) =>
@@ -185,6 +192,7 @@ it("revokes signed authority on release, replacement, and restart", async () => 
   const first = operationalRun("run-lifecycle");
   const firstRun = first.operationalRunInstance;
   const copied = await createIdentity(runtimeParams({}, first));
+  expect(copied).toBeDefined();
   expect(valid(copied)).toBe(true);
   releaseAgentRunDelegatedAuthority(first.delegatedAuthority);
   expect(valid(copied)).toBe(false);
@@ -200,10 +208,13 @@ it("revokes signed authority on release, replacement, and restart", async () => 
   expect(valid(replacementIdentity)).toBe(false);
 });
 
-it("creates credential-free identities only for live runs and context", async () => {
+it("creates direct identities without credentials and rejects inactive runs or expired context", async () => {
   const run = operationalRun();
   const params = runtimeParams({}, run);
-  await expect(api.direct(params)).resolves.toMatchObject({ kind: "agentRuntime", ...params });
+  await expect(api.direct(params)).resolves.toMatchObject({
+    kind: "agentRuntime",
+    ...params,
+  });
   expect(readSocketToken()).toBeUndefined();
   await expect(
     api.direct({
@@ -215,20 +226,57 @@ it("creates credential-free identities only for live runs and context", async ()
   await expect(api.direct(params)).rejects.toThrow("requires active delegated run authority");
 });
 
+it("redeems signed execution lineage once for the active parent", async () => {
+  const lineage = await import("./agent-runtime-execution-lineage.js");
+  const run = operationalRun();
+  const parent = { ...runtimeParams({}, run), delegatedAuthority: run.delegatedAuthority };
+  const executionIdentity = createExecutionIdentityAdmissionToken("run-1");
+  const sessionSpawnContext = lineage.withAgentRuntimeExecutionLineage(
+    { inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] } },
+    {
+      relation: "sessions_spawn",
+      requesterRef: "requester",
+      controllerRef: "controller",
+      depth: 1,
+      applicableGrantRefs: [],
+      localPolicyRefs: [],
+      runtimeAssuranceRefs: [],
+      targetPolicyRefs: [],
+      externalNativeActions: "observable",
+    },
+  );
+  const handoff = lineage.createAgentRuntimeExecutionLineageHandoff({
+    ...parent,
+    executionIdentity,
+    sessionSpawnContext,
+  });
+  expect(handoff).toBeDefined();
+  const params = { ...parent, executionLineageHandoffId: handoff!.id };
+  const identity = await createIdentity(params);
+  expect(identity).toMatchObject({ executionIdentity, sessionSpawnContext });
+  expect(lineage.consumeAgentRuntimeExecutionLineage(identity!)).toBe(true);
+  expect(lineage.consumeAgentRuntimeExecutionLineage(identity!)).toBe(false);
+  await expect(createIdentity(params)).resolves.toBeUndefined();
+});
+
 it.each([false, true])(
-  "binds reloaded credentials to state dir (changed: %s)",
+  "binds reloaded signing credentials to their state directory (different: %s)",
   async (differentHome) => {
     vi.resetModules();
     const firstProcess = await importRuntimeTokenModule();
     const params = runtimeParams();
     const token = await firstProcess.mint(params);
+    const persistedToken = readSocketToken();
+    expect(persistedToken).toEqual(expect.any(String));
+    expect(persistedToken).not.toHaveLength(0);
     if (differentHome) {
       useTempHome();
     }
     vi.resetModules();
     const secondProcess = await importRuntimeTokenModule();
     if (differentHome) {
-      await secondProcess.mint(params);
+      const secondToken = await secondProcess.mint(params);
+      expect(secondToken).not.toBe(token);
       await expect(secondProcess.verify(token)).resolves.toBeUndefined();
     } else {
       await expect(secondProcess.verify(token)).resolves.toMatchObject({
@@ -239,7 +287,7 @@ it.each([false, true])(
   },
 );
 
-it("preserves signed plugin, route, UI, and cron capture", async () => {
+it("preserves the signed plugin owner, turn-source route, requesting UI, and cron capture", async () => {
   const params = runtimeParams();
   const identity = await createIdentity({
     ...params,
@@ -266,7 +314,7 @@ it("preserves signed plugin, route, UI, and cron capture", async () => {
   });
 });
 
-it("round-trips explicit local provenance, never channel-bound", async () => {
+it("round-trips explicit local turn provenance without inferring it from the session key", async () => {
   const params = runtimeParams({ sessionKey: "agent:main:main", turnSourceLocal: true });
   await expect(createIdentity(params)).resolves.toMatchObject({
     sessionKey: "agent:main:main",
@@ -295,7 +343,7 @@ it("preserves the signed payload structural acceptance boundary", async () => {
 });
 
 it.each(["run-1", "run-other"])(
-  "round-trips spawn policy from %s privately",
+  "round-trips spawn policy with execution identity from %s without private lineage",
   async (identityRunId) => {
     const parentExecutionIdentity = createExecutionIdentityAdmissionToken(identityRunId, {
       contextId: "parent-context",
@@ -339,10 +387,17 @@ it.each(["run-1", "run-other"])(
       expect(decodedPayload).not.toMatch(/private-(requester|controller)-ref/);
       const identity = await api.verify(token);
       expect(identity).toMatchObject({
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:main",
         operationalRunInstance: run.operationalRunInstance,
         sessionSpawnContext: {
           ...(inheritedPermissionMode ? { inheritedPermissionMode } : spawnFacts),
-          inheritedToolPolicy: { ...inheritedToolPolicy, allow: ["read", "sessions_spawn"] },
+          inheritedToolPolicy: {
+            version: 1,
+            allow: ["read", "sessions_spawn"],
+            deny: ["exec"],
+          },
         },
       });
       if (identityRunId === run.operationalRunInstance.runId) {
@@ -370,14 +425,19 @@ it("round-trips a short-lived cron self-management capability", async () => {
     agentId: "ops",
     sessionKey: "agent:ops:cron:job-1:run:run-1",
   });
-  const token = await api.mint({ ...params, cronSelfManagementJobId: " job-1 " });
+  const token = await api.mint({
+    ...params,
+    cronSelfManagementJobId: " job-1 ",
+  });
   await expect(api.verify(token, 60_999)).resolves.toMatchObject({
+    kind: "agentRuntime",
+    ...params,
     cronSelfManagementContext: { jobId: "job-1", expiresAtMs: 61_000 },
   });
   await expect(api.verify(token, 61_000)).resolves.toBeUndefined();
 });
 
-it("round-trips captured grants but rejects unqualified creators", async () => {
+it("round-trips captured-surface grants and rejects unqualified creator grants", async () => {
   const cronCreatorAuthorityGrant = { runId: "run-1", token: "opaque-grant" };
   const params = runtimeParams({ sessionKey: "agent:main:main" });
   const token = await api.mint({
@@ -401,7 +461,7 @@ it("round-trips captured grants but rejects unqualified creators", async () => {
   });
 });
 
-it("carries live native requester grants without tool capture", async () => {
+it("carries a signed live native requester grant without claiming complete tool capture", async () => {
   const grants = await import("./cron-creator-authority-grant.js");
   const run = operationalRun("run-native-requester");
   const requester = {
@@ -471,7 +531,7 @@ it.each([
   { expiresAtMs: 5000, verifyAtMs: 4000, expectedExpiry: 5000 },
   { expiresAtMs: Number.MAX_SAFE_INTEGER, verifyAtMs: 60_999, expectedExpiry: 61_000 },
 ])(
-  "bounds message action lifetime $expiresAtMs",
+  "bounds and expires a message action bearer with lifetime $expiresAtMs",
   async ({ expiresAtMs, verifyAtMs, expectedExpiry }) => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
     const messageActionContext =
@@ -498,35 +558,41 @@ it.each([
     const params = runtimeParams({ messageActionContext });
     const token = await api.mint(params);
     await expect(api.verify(token, verifyAtMs)).resolves.toMatchObject({
+      kind: "agentRuntime",
+      ...params,
       messageActionContext: { ...messageActionContext, expiresAtMs: expectedExpiry },
     });
     await expect(api.verify(token, expectedExpiry)).resolves.toBeUndefined();
   },
 );
 
-it.each([false, true])("queues verification and rechecks expiry (expires: %s)", async (expires) => {
-  const { updateExecApprovals } = await import("../infra/exec-approvals.js");
-  const params = runtimeParams();
-  const token = await api.mint({
-    ...params,
-    ...(expires ? { messageActionContext: { expiresAtMs: 5000 } } : {}),
-  });
-  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
-  const count = expires ? 1 : 8;
-  const write = updateExecApprovals({
-    update: { kind: "replace", file: readExecApprovalsSnapshot().file },
-  });
-  // Each queued read retains its expiry check while the approvals writer settles.
-  const verifications = Array.from({ length: count }, () => api.verify(token));
-  if (expires) {
-    nowSpy.mockReturnValue(5000);
-  }
-  await write;
-  const expected = expires
-    ? undefined
-    : expect.objectContaining({
-        kind: "agentRuntime",
-        delegatedAuthority: expect.objectContaining({ kind: "local" }),
-      });
-  expect(await Promise.all(verifications)).toEqual(Array.from({ length: count }, () => expected));
-});
+it.each([false, true])(
+  "queues token verification behind approvals updates and rechecks expiry (expires: %s)",
+  async (expires) => {
+    const { updateExecApprovals } = await import("../infra/exec-approvals.js");
+    const params = runtimeParams();
+    const token = await api.mint({
+      ...params,
+      ...(expires ? { messageActionContext: { expiresAtMs: 5000 } } : {}),
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
+    const count = expires ? 1 : 8;
+    const write = updateExecApprovals({
+      update: { kind: "replace", file: readExecApprovalsSnapshot().file },
+    });
+    // Each queued read retains its expiry check while the approvals writer settles.
+    const verifications = Array.from({ length: count }, () => api.verify(token));
+    if (expires) {
+      nowSpy.mockReturnValue(5000);
+    }
+    await write;
+    const expected = expires
+      ? undefined
+      : expect.objectContaining({
+          kind: "agentRuntime",
+          ...params,
+          delegatedAuthority: expect.objectContaining({ kind: "local" }),
+        });
+    expect(await Promise.all(verifications)).toEqual(Array.from({ length: count }, () => expected));
+  },
+);
