@@ -119,6 +119,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
       endedAt: entry.endedAt,
       spawnedBy: entry.spawnedBy,
       parentSessionKey: entry.parentSessionKey,
+      sidebarRoot: entry.sidebarRoot,
       createdActor: entry.createdActor,
       visibility: entry.visibility,
       incognito: entry.incognito,

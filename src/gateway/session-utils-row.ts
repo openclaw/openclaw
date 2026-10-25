@@ -39,7 +39,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { canContinueSessionProviderReview } from "../sessions/provider-review.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
@@ -714,7 +714,8 @@ export function presentSessionRow(
     ) {
       return [];
     }
-    if (childActive) {
+    const childStartsVisualTree = childEntry?.sidebarRoot === true && !isSubagentSessionKey(key);
+    if (childActive && !childStartsVisualTree) {
       row.hasActiveSubagentRun = true;
     }
     return [key];
