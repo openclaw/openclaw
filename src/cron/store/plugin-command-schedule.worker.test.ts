@@ -810,6 +810,42 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
   expect(jobIds(result.launches)).toEqual(["exit"]);
 });
 
+it("recovers a timed request without replaying active work or reconstructing a lost manual payload", async () => {
+  const { queue, request } = await scheduledQueue("recover", {
+    schedule: { kind: "at", at: new Date(now).toISOString() },
+  });
+  const requested = (await queue.request([request])).accepted[0]!;
+  expect((await queue.recover()).jobs[0]?.state.queuedAtMs).toBe(now);
+  const active = (await queue.drain()).launches[0]!;
+  expect(active.runReceipt.receiptId).toBe(requested.runReceipt.receiptId);
+  expect((await queue.recover()).interruptedRuns).toHaveLength(1);
+  expect((await queue.drain()).launches).toEqual([]);
+  const interrupted = (await queue.read()).jobs[0]!;
+  expect(interrupted).toMatchObject({
+    enabled: false,
+    state: { lastRunStatus: "error" },
+  });
+  expect(interrupted.state.runningAtMs).toBeUndefined();
+
+  const manualJob = job("legacy");
+  const legacy = await store("legacy", [manualJob]);
+  const manual = requestFor(manualJob, {
+    receiptId: "old-random-receipt-id",
+    mode: "force" as const,
+  });
+  await legacy.request([manual]);
+  const held = await legacy.drain();
+  expect(held).toEqual({ launches: [], preparing: [], skipped: [] });
+  expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBe(now);
+  await legacy.recover();
+  expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
+  expect((await legacy.drain()).launches).toEqual([]);
+  const history = await legacy.history();
+  expect(history.entries).toMatchObject([
+    { status: "skipped", error: "cron: queued request lost its launch context" },
+  ]);
+});
+
 it.each(["request", "cancellation"] as const)(
   "recovers a committed %s after losing its worker reply without replay",
   async (phase) => {

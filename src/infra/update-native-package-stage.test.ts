@@ -109,6 +109,8 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const liveCandidateRoot = join(project, relative(stage.projectRoot, candidateRoot));
         const candidateEntry = join(candidateRoot, "openclaw.mjs");
         const candidateStore = join(stage.projectRoot, relative(project, virtualStoreDir));
+        expect((await fs.lstat(candidateStore)).isSymbolicLink()).toBe(false);
+        expect(await fs.realpath(candidateStore)).toBe(candidateStore);
         expect(await output(process.execPath, [candidateEntry])).toBe("old");
         // An aged pnpm install prunes the old payload before installing its replacement.
         await fs.rm(join(candidateStore, "old"), { recursive: true });

@@ -136,7 +136,15 @@ it("publishes memory replacements after projection without exposing private fact
     await expect(write(false)).resolves.toMatchObject({ kind: "committed" });
     const scope = f.scope;
     expect(events.map(([phase]) => phase)).toEqual(["projection", "observer"]);
-    expect(events[0]![1]).toMatchObject({ ...scope, facts: { kind: "replacement" } });
+    expect(events[0]![1]).toEqual({
+      ...scope,
+      facts: {
+        kind: "replacement",
+        communicationBinding: JSON.stringify([entry.sessionId, ...Array(12).fill(null)]),
+        membership: [scope.sessionKey, null, [], {}, entry.sessionId],
+        lifecycleChanged: false,
+      },
+    });
     expect(events[1]![1]).toEqual(scope);
   } finally {
     stopObserver();

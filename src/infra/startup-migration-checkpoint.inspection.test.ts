@@ -128,10 +128,12 @@ it.each(["stale", "corrupt", "writer", "timeout"])("%s WAL interference", async 
       } else {
         expect(sleep).toHaveBeenCalledTimes(1);
       }
+      expect(checker).toHaveBeenCalledTimes(2);
       await expect(acquire()).rejects.toThrow("already running");
     }
     if (phase === "stale") {
       expect(interfered).toBe(true);
+      expect(checker).toHaveBeenCalledTimes(2);
     }
   } finally {
     checker.mockRestore();
