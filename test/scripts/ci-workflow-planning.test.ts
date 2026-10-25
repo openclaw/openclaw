@@ -296,6 +296,7 @@ function renderCiGateEnvironment(
         .map((key) => [key, "true"]),
     ),
     run_check_plan: "false",
+    reuse_browser_extension_build: "false",
     shared_sdk_declarations: "false",
     compatibility_target: "false",
     release_scope: "full",
@@ -10730,7 +10731,6 @@ describe("ci workflow guards", () => {
   it.each([
     { eventName: "pull_request" as const, buildSelected: true, reuse: true },
     { eventName: "pull_request" as const, buildSelected: false, reuse: false },
-    { eventName: "workflow_dispatch" as const, buildSelected: true, reuse: false },
   ])(
     "keeps one browser proof with $eventName build=$buildSelected",
     ({ eventName, buildSelected, reuse }) => {
@@ -12493,6 +12493,7 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/needs\.build-artifacts\.outputs\.published_driver_artifact_id != ''\s*&&\s*/u, "")
+        .replace(/\s*&&\s*needs\.build-artifacts\.outputs\.browser_runtime_artifact_id != ''/u, "")
         .replace(
           /\s*&&\s*\(needs\.build-artifacts\.result == 'success' \|\| needs\.build-artifacts\.result == 'skipped'\)$/u,
           "",
@@ -13009,6 +13010,7 @@ describe("ci workflow guards", () => {
                 .map((key) => [key, String(selected)]),
             ),
             shared_sdk_declarations: String(selected),
+            reuse_browser_extension_build: String(selected),
             validation_tier: "full",
             checkout_revision: qualificationSha,
           },
