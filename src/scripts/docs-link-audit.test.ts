@@ -347,11 +347,10 @@ it.each<AuditCliCase>([
     const fixtureRoot = tempDirs.make("docs-link-audit-cli-");
     const docsRoot = path.join(fixtureRoot, "docs");
     const clawHubRoot = path.join(fixtureRoot, "clawhub");
-    fs.mkdirSync(docsRoot);
     fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
-    fs.writeFileSync(
-      path.join(docsRoot, "docs.json"),
-      JSON.stringify({
+    writeFiles(fixtureRoot, {
+      ...files,
+      "docs/docs.json": {
         navigation: [{ pages: navigation }],
         redirects:
           redirects ??
@@ -362,13 +361,11 @@ it.each<AuditCliCase>([
                 { source: "/drops", destination: "/next" },
               ]
             : []),
-      }),
-    );
-    writeFiles(fixtureRoot, files);
-    if (anchors) {
-      fs.writeFileSync(path.join(docsRoot, "index.md"), "## Root\n\n[next](next#target)\n");
-      fs.writeFileSync(path.join(docsRoot, "next.md"), "## Target\n");
-    }
+      },
+      ...(anchors
+        ? { "docs/index.md": "## Root\n\n[next](next#target)\n", "docs/next.md": "## Target\n" }
+        : {}),
+    });
     const pageSource =
       anchors && !diagnostics ? ["---", "permalink: /unpublished", "---", ...source] : source;
     fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
@@ -407,15 +404,13 @@ describe("ClawHub routes mirrored from openclaw/clawhub", () => {
     options: { redirects?: Array<{ source: string; destination: string }>; root?: string } = {},
   ) => {
     const docsRoot = path.join(options.root ?? tempDirs.make("docs-clawhub-mirror-"), "docs");
-    fs.mkdirSync(docsRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(docsRoot, "docs.json"),
-      JSON.stringify({
+    writeFiles(docsRoot, {
+      "docs.json": {
         navigation: [{ group: "ClawHub", pages: ["clawhub/index", "clawhub/publishing"] }],
         redirects: options.redirects ?? [{ source: "/tools/clawhub", destination: "/clawhub" }],
-      }),
-    );
-    fs.writeFileSync(path.join(docsRoot, "page.md"), `## Page\n\n[hub](${link})\n`);
+      },
+      "page.md": `## Page\n\n[hub](${link})\n`,
+    });
     return docsRoot;
   };
 
@@ -487,9 +482,24 @@ describe("ClawHub routes mirrored from openclaw/clawhub", () => {
   });
 });
 
+function prepareExternal(source: string, projectedLinks: number, rootContent = "") {
+  const root = tempDirs.make("docs-external-link-");
+  const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md"];
+  writeFiles(root, {
+    "docs/providers/page.md": source,
+    ...Object.fromEntries(roots.map((file) => [file, rootContent])),
+  });
+  const output = path.join(root, ".audit");
+  expect(prepareExternalLinkAuditTree(root, output)).toEqual({ files: 4, projectedLinks });
+  for (const file of rootContent ? roots : []) {
+    expect(fs.readFileSync(path.join(output, file), "utf8")).toContain('href="https://root.test"');
+  }
+  const prepared = fs.readFileSync(path.join(output, "docs/providers/page.md"), "utf8").split("\n");
+  expect(prepared).toHaveLength(source.split("\n").length);
+  return prepared;
+}
+
 it("prepares every external-link input without exposing code literals", () => {
-  const fixtureRoot = tempDirs.make("docs-external-link-audit-");
-  const docsRoot = path.join(fixtureRoot, "docs");
   const source = [
     '<AccordionGroup>\n  <Accordion title="Reasoning">',
     "    [reasoning](https://docs.example.test/reasoning)",
@@ -515,28 +525,11 @@ it("prepares every external-link input without exposing code literals", () => {
     "`<PROVIDER>_API_KEY=...`",
     "",
   ].join("\n");
-  fs.mkdirSync(path.join(docsRoot, "providers"), { recursive: true });
-  fs.writeFileSync(path.join(docsRoot, "providers", "example.md"), source, "utf8");
-  for (const filename of ["README.md", "CONTRIBUTING.md", "SECURITY.md"]) {
-    fs.writeFileSync(
-      path.join(fixtureRoot, filename),
-      `<div>\n  [${filename}](https://root.test)\n</div>\n`,
-    );
-  }
-
-  const outputRoot = path.join(fixtureRoot, ".audit");
-  expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
-    files: 4,
-    projectedLinks: 14,
-  });
-  const prepared = fs.readFileSync(
-    path.join(outputRoot, "docs", "providers", "example.md"),
-    "utf8",
-  );
-  const preparedLines = prepared.split("\n");
-  expect(preparedLines).toHaveLength(source.split("\n").length);
+  const preparedLines = prepareExternal(source, 14, "<div>\n  [root](https://root.test)\n</div>\n");
+  const prepared = preparedLines.join("\n");
   expect(preparedLines[2]).toContain('href="https://docs.example.test/reasoning"');
-  for (const url of [
+  expect([...prepared.matchAll(/href="([^"]+)"/g)].map((match) => match[1])).toEqual([
+    "https://docs.example.test/reasoning",
     "https://docs.example.test/after-list-fence",
     "https://docs.example.test/after-literal-list-fence",
     "https://docs.example.test/component",
@@ -545,44 +538,19 @@ it("prepares every external-link input without exposing code literals", () => {
     "https://docs.example.test/after-indented-code",
     "https://docs.example.test/after-script",
     "https://docs.example.test/after-void",
-  ]) {
-    expect(prepared).toContain(`href="${url}"`);
-  }
-  expect(prepared).toContain('href="https://docs.example.test/reference-first?one=1&amp;two=2"');
-  expect(prepared).toContain('href="https://docs.example.test/image.png?one=1&amp;two=2"');
-  for (const url of [
-    "https://api.example.test/v1",
-    "https://code.example.test",
-    "https://code.example.test/list-fence",
-    "https://code.example.test/fenced-component",
-    "https://docs.example.test/reference-second",
-  ]) {
-    expect(prepared).not.toContain(url);
-  }
-  for (const filename of ["README.md", "CONTRIBUTING.md", "SECURITY.md"]) {
-    expect(fs.readFileSync(path.join(outputRoot, filename), "utf8")).toContain(
-      'href="https://root.test"',
-    );
-  }
+    "https://docs.example.test/reference-first?one=1&amp;two=2",
+    "https://docs.example.test/image.png?one=1&amp;two=2",
+  ]);
+  expect(prepared).not.toMatch(
+    /https:\/\/(?:api|code)\.example\.test|https:\/\/docs\.example\.test\/reference-second/,
+  );
 });
 
 it("falls back to tolerant parsing for legacy malformed MDX", () => {
-  const fixtureRoot = tempDirs.make("docs-external-link-fallback-");
-  fs.mkdirSync(path.join(fixtureRoot, "docs"), { recursive: true });
-  fs.writeFileSync(
-    path.join(fixtureRoot, "docs", "legacy.md"),
+  const prepared = prepareExternal(
     "<!doctype html>\n<pre>\n[hidden](https://hidden.example.test)\n</pre>\n<Note>\ntext <code>[inline hidden](https://same.example.test)</code> [inline real](https://same.example.test)\n[legacy](https://legacy.example.test)\n</Note>\n<Pre>\n[component](https://component.example.test)\n</Pre>\n[reference][legacy-ref]\n\n[legacy-ref]: https://reference.example.test\n<style><code>[style hidden](https://style.example.test)</code></style> [style real](https://style.example.test)\n```html\n<code>\n[fenced hidden](https://fenced-hidden.example.test)\n```\n<Note>\n[after fence](https://after-fence.example.test)\n</Note>\n",
+    6,
   );
-  for (const filename of ["README.md", "CONTRIBUTING.md", "SECURITY.md"]) {
-    fs.writeFileSync(path.join(fixtureRoot, filename), "");
-  }
-
-  const outputRoot = path.join(fixtureRoot, ".audit");
-  expect(prepareExternalLinkAuditTree(fixtureRoot, outputRoot)).toEqual({
-    files: 4,
-    projectedLinks: 6,
-  });
-  const prepared = fs.readFileSync(path.join(outputRoot, "docs", "legacy.md"), "utf8").split("\n");
   expect(prepared[6]).toContain('href="https://legacy.example.test"');
   expect(prepared[5]?.match(/https:\/\/same\.example\.test/g)).toHaveLength(1);
   expect(prepared[9]).toContain('href="https://component.example.test"');
