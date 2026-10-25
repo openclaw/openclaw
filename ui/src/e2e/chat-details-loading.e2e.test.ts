@@ -36,10 +36,11 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(".chat-details-desktop-section").first().waitFor();
       await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
-      const warm = await page.evaluate(persistColdLoadWarmState, {
+      const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey,
         sidebarView: "sessions",
-      });
+      };
+      const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(warm.messages).toBe(1);
 
       const module = await holdModuleResponse(
