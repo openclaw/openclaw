@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceGatewayControl } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, expect, it, vi } from "vitest";
@@ -117,9 +118,17 @@ it("targets the control delegation without consuming transcript context or cance
     },
   });
   delegate(controller, "task-A", "Original task");
-  expect(parseSent(socket)[0]).toMatchObject(
-    contextAppend(expect.stringContaining('Status: "I’ll check that request."')),
-  );
+  const receipt = expectDefined(parseSent(socket)[0], "launch acknowledgment");
+  expect(receipt).toMatchObject(contextAppend(expect.stringContaining("in your own words")));
+  const content = receipt.content as Array<{ text: string }>;
+  expect(content).toHaveLength(1);
+  expect(
+    Buffer.byteLength(expectDefined(content[0], "launch content").text, "utf8"),
+  ).toBeLessThanOrEqual(500);
+  const receiptText = JSON.stringify(receipt);
+  expect(receiptText).not.toContain("Status:");
+  expect(receiptText).toContain("may not be accepted yet");
+  expect(receiptText).toContain("avoid repeating recent acknowledgments");
   controller.handleEvent({ kind: "transcript-done", role: "user", text: "history only" });
   const beforeControl = socket.sent.length;
   delegate(controller, "control-C", "status");

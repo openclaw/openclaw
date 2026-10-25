@@ -376,7 +376,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     }
   });
 
-  it("uses unaccented full text with source filtering and the unchanged 0.7/0.3 hybrid merge", async () => {
+  it("uses unaccented full text with source filtering and calibrated 0.7/0.3 hybrid scores", async () => {
     const keyword = await regular.keyword(keywordQuery("cafe", { limit: 1 }));
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
@@ -396,7 +396,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.709706559, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.66, 6);
     expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
@@ -404,7 +404,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     ]);
   });
 
-  it("keeps a rare fallback hit ahead of vector neighbors with weak lexical evidence", async () => {
+  it("retains rare fallback hits without letting weak lexical evidence outrank vector neighbors", async () => {
     const fixture = admitted(() => createFixture(root, "rare-hybrid", connection!));
     try {
       admitted(() => {
@@ -426,7 +426,12 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
         mmr: { enabled: true, lambda: 0.7 },
         temporalDecay: { enabled: false, halfLifeDays: 30 },
       });
-      expect(merged[0]!.path).toBe("memory/rare-target.md");
+      expect(merged.map((row) => row.path)).toEqual([
+        "memory/vector-neighbor.md",
+        "memory/rare-target.md",
+      ]);
+      expect(merged[0]!.score).toBeCloseTo(0.07, 6);
+      expect(merged[1]!.score).toBeCloseTo(0.002, 6);
     } finally {
       admitted(() => fixture.close());
     }

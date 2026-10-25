@@ -122,6 +122,7 @@ it("shows a failed configuration read and retries only when requested", async ()
   Object.assign(context, { runtimeConfig });
   const page = await mount(context);
   const initialLoad = runtimeConfig.ensureLoaded();
+  await waitForSolid(() => expect(configRead).toHaveBeenCalledOnce());
   firstRead.reject(new Error("Configuration temporarily unavailable"));
   await initialLoad;
   flush();

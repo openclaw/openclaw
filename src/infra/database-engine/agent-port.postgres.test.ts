@@ -571,7 +571,15 @@ describe.skipIf(!connection)("agent database port", () => {
     );
     {
       using roundtrip = openNodeSqliteDatabase(path.join(directory, "roundtrip.sqlite"));
-      expect(await port(pg(namespace), sqlite(roundtrip), descriptor, storeId)).toEqual(copied);
+      const returned = await port(pg(namespace), sqlite(roundtrip), descriptor, storeId);
+      expect(returned.tables).toEqual({
+        ...copied.tables,
+        memory_index_chunks: { rows: 1, sha256: expect.any(String) },
+      });
+      expect(returned.allocations).toEqual({
+        ...copied.allocations,
+        "memory_index_chunks.chunk_rowid": { value: "1", called: true },
+      });
       expect(
         roundtrip.prepare("SELECT event_json, event_zstd FROM transcript_events").get(),
       ).toEqual({
@@ -591,7 +599,7 @@ describe.skipIf(!connection)("agent database port", () => {
         { session_id: "forgotten-session" },
       ]);
       expect(roundtrip.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
-        count: 0,
+        count: 1,
       });
       expect(
         roundtrip
@@ -749,8 +757,8 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ session_id: "forgotten-session" }]);
       expect(
         await rows(`SELECT count(*) AS count FROM "${restored.namespace}".memory_index_chunks`),
-      ).toEqual([{ count: "0" }]);
-      // Memory indexes are omitted by the port and rebuilt by their current admitted owner.
+      ).toEqual([{ count: "1" }]);
+      // Search accelerators are rebuilt by the owner; canonical chunk vectors survive the port.
       expect(
         await rows(
           `SELECT to_regclass('"${restored.namespace}".memory_index_chunks_vec') AS projection`,

@@ -30,6 +30,10 @@ import {
   createInternalDiagnosticMetadata,
   createDiagnosticValueForListeners,
 } from "./diagnostic-event-snapshot.js";
+import type {
+  DiagnosticModelCallTerminalFields,
+  DiagnosticModelCallUsage,
+} from "./diagnostic-model-call-types.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
   CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY,
@@ -614,15 +618,8 @@ type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.started";
 };
 
-type DiagnosticModelCallEndedEvent = DiagnosticModelCallBaseEvent & {
-  durationMs: number;
-  providerProcessingMs?: number;
-  providerWaitEstimateMs?: number;
-  requestPayloadBytes?: number;
-  responseStreamBytes?: number;
-  timeToFirstByteMs?: number;
-  usage?: DiagnosticModelCallUsage;
-};
+type DiagnosticModelCallEndedEvent = DiagnosticModelCallBaseEvent &
+  DiagnosticModelCallTerminalFields;
 
 type DiagnosticModelCallCompletedEvent = DiagnosticModelCallEndedEvent & {
   type: "model.call.completed";
@@ -655,18 +652,6 @@ type DiagnosticModelCallPromptStats = Readonly<{
   toolDefinitionsCount?: number;
   toolDefinitionsChars?: number;
   totalChars?: number;
-}>;
-
-type DiagnosticModelCallUsage = Readonly<{
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  cacheWrite1h?: number;
-  cacheWrite5m?: number;
-  reasoningTokens?: number;
-  promptTokens?: number;
-  total?: number;
 }>;
 
 type DiagnosticContextAssembledEvent = DiagnosticSessionEvent & {

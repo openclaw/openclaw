@@ -38,6 +38,7 @@ Omitting the option preserves prompt statistics for interested subscribers.
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`), optional `openclaw.agent`
+  - `gen_ai.response.model` on terminal request spans (completed and error) when the provider reported the model that actually served the request — e.g. routed OpenRouter presets, `openrouter/auto`, or alias models. `gen_ai.request.model` and `openclaw.model` keep the requested id; the response model is observed from the terminal message, omitted when absent, and never attached to aggregate usage or turn spans, used for OpenClaw pricing, or exported as a metric label (unbounded cardinality). `model.call.started` is emitted before the provider responds and never carries it.
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
