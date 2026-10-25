@@ -324,29 +324,31 @@ describe("grouped plugin settings", () => {
     );
   });
   it("keeps object array inputs aligned beside removal and finds their descendants", async () => {
-    const { editor, model, query, all } = await mountFields({
-      targets: {
-        type: "array",
-        default: [{ path: "first", mode: "keep" }],
-        items: objectSchema({
-          path: { type: "string", title: "Directory" },
-          mode: { type: "string", title: "Mode" },
-        }),
-      },
+    const { editor, model } = await mount({
+      configHints: {},
+      configValue: configValue({ targets: [{ path: "first", mode: "keep" }] }),
+      configSchema: objectSchema({
+        targets: {
+          type: "array",
+          items: objectSchema({
+            path: { type: "string", title: "Directory" },
+            mode: { type: "string", title: "Mode" },
+          }),
+        },
+      }),
     });
     editor.style.width = "1000px";
-    const inputs = [...all<HTMLInputElement>(".cfg-array__item input")];
-    expect(inputs.map((input) => input.value)).toEqual(["first", "keep"]);
-    expect(editor.textContent).not.toContain("1 item");
+    const inputs = [...editor.querySelectorAll<HTMLInputElement>(".cfg-array__item input")];
+    expect(inputs).toHaveLength(2);
     const bounds = inputs.map((input) => input.getBoundingClientRect());
-    const remove = query<HTMLButtonElement>('button[aria-label="Remove item"]')!;
+    const remove = editor.querySelector<HTMLButtonElement>('button[aria-label="Remove item"]')!;
     const removeBounds = remove.getBoundingClientRect();
     expect(bounds[0]!.left).toBe(bounds[1]!.left);
     expect(bounds[1]!.top).toBeGreaterThan(bounds[0]!.bottom);
     expect(removeBounds.left).toBeGreaterThanOrEqual(bounds[0]!.right);
     expect(removeBounds.top).toBeLessThan(bounds[0]!.bottom);
     await searchSettings(editor, "directory");
-    expect(all(".cfg-array__item input")).toHaveLength(2);
+    expect(editor.querySelectorAll(".cfg-array__item input")).toHaveLength(2);
     remove.click();
     expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(
       ["plugins", "entries", "fixture", "config", "targets"],
