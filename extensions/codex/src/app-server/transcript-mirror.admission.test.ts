@@ -33,6 +33,68 @@ registerCodexEventProjectorTestLifecycle();
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
+it("reports the durable admission and no persistence failure when native annotation is refused", async () => {
+  const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const base = await createParams();
+  const target = {
+    agentId: "main",
+    sessionId: base.sessionId,
+    sessionKey: "agent:main:annotation-refused",
+    storePath: path.join(base.workspaceDir, "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 1 } });
+  const onPersistenceError = vi.fn();
+  const recorder = createUserTurnTranscriptRecorder({
+    input: { text: "Check the monitor." },
+    target: { ...target, sessionEntry: undefined },
+    beforeMessageWrite: ({ message }) => message,
+    onPersistenceError,
+  });
+  await recorder.persistApproved();
+  const admitted = structuredClone(recorder.getPersistedMessage?.());
+  const before = await readSessionTranscriptEvents(target);
+  const onUserMessagePersisted = vi.fn();
+  const attempt = {
+    ...base,
+    ...target,
+    sessionTarget: target,
+    userTurnTranscriptRecorder: recorder,
+    onUserMessagePersisted,
+  };
+  const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const params = {
+    ...attempt,
+    hostCapabilities: {
+      ...host.hostCapabilities,
+      annotateCurrentUserTurn: vi.fn(async () => {
+        throw new Error("cannot replace an edited admission");
+      }),
+    },
+  };
+  try {
+    await mirrorPromptAtTurnStartBestEffort({
+      params,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      cwd: base.workspaceDir,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      notifyUserMessagePersisted: createCodexAppServerUserMessagePersistenceNotifier(params),
+      upstreamUserText: "Check the monitor.",
+    });
+    await recorder.waitForRuntimePersistence();
+
+    expect(params.hostCapabilities.annotateCurrentUserTurn).toHaveBeenCalledOnce();
+    expect(onPersistenceError).not.toHaveBeenCalled();
+    expect(onUserMessagePersisted).toHaveBeenCalledOnce();
+    expect(recorder.getPersistedMessage?.()).toEqual(admitted);
+    expect(await readSessionTranscriptEvents(target)).toEqual(before);
+  } finally {
+    host.closeHost();
+    host.closeAdmission();
+  }
+});
+
 it.each([
   ["monitor without source key", undefined, false, "available"],
   ["hidden subagent announcement", "announce:child:user", true, "available"],

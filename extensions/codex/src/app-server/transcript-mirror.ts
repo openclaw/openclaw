@@ -250,15 +250,28 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         ),
       });
       const annotate = params.params.hostCapabilities.annotateCurrentUserTurn;
+      let annotationFailed = false;
       if (annotate) {
         // Native turn acceptance supplies the identity. Annotate before taking the mirror lock:
         // the anchored writer owns that same queue and must never be nested under it.
-        await annotate({
-          mirrorIdentity: `${params.turnId}:prompt`,
-          upstreamUserText: params.upstreamUserText,
-          mirrorOrigin: "codex-app-server",
-          mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
-        });
+        try {
+          await annotate({
+            mirrorIdentity: `${params.turnId}:prompt`,
+            upstreamUserText: params.upstreamUserText,
+            mirrorOrigin: "codex-app-server",
+            mirrorSourceFingerprint: fingerprintCodexMirrorSourceMessage(userPromptMessage),
+          });
+        } catch (error) {
+          // Annotation only adds provenance to an admission that is already durable. A refused
+          // annotation must not be reported as a failed user-turn write, and must not hide
+          // that the admitted user turn was persisted.
+          embeddedAgentLog.warn("skipped codex app-server native prompt annotation", {
+            error: formatErrorMessage(error),
+            runId: params.params.runId,
+            sessionId: params.params.sessionId,
+          });
+          annotationFailed = true;
+        }
       }
       const recorder = params.params.userTurnTranscriptRecorder;
       const admission = recorder?.getAdmissionReceipt();
@@ -268,6 +281,11 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
           params.params.hostCapabilities.assertActive();
           params.notifyUserMessagePersisted({ anchor: admission, appended: false, message });
         }
+        return;
+      }
+      if (annotationFailed) {
+        // Without a host admission there is nothing durable to report; never fall back to the
+        // generic mirror writer for a prompt whose native annotation was refused.
         return;
       }
       const mirrorResult = await mirror({
