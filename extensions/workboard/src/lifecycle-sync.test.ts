@@ -309,7 +309,7 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("defers incognito failure until its session settles without exposing private content", async () => {
-    const sessionKey = "agent:main:incognito";
+    const sessionKey = "agent:main:dashboard:incognito-agent-end";
     const { card, read } = await runningCard(sessionKey);
     let active = true;
     const { request, readSessions } = sessionFixture(() => [

@@ -138,7 +138,8 @@ function interceptSpawn(
   const createOwner = cliProcess.createClaudeCliProcessOwner;
   vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockImplementation((...args) => {
     const owner = createOwner(...args);
-    vi.spyOn(owner, "spawn").mockImplementation(intercept(owner, owner.spawn));
+    const spawn = owner.spawn;
+    vi.spyOn(owner, "spawn").mockImplementation(intercept(owner, spawn));
     return owner;
   });
 }
