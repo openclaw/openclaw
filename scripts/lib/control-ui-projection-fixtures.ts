@@ -49,7 +49,8 @@ export async function prepareProjectionFixture(
       if (!descriptor.benchmarkOnly || !descriptor.entry) {
         throw new Error("Missing benchmark-only projection entry identity");
       }
-      await import(new URL(descriptor.entry, location.origin).href);
+      // Match the page's module URLs; origin-root aliases create a second module graph.
+      await import(new URL(descriptor.entry, document.baseURI).href);
       const fixture = window.openclawProjectionFixture;
       if (!fixture) {
         throw new Error("Projection benchmark entry did not install its fixture");
