@@ -721,14 +721,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         data: { phase, itemId, type },
       });
     }
-    if (item.role === "assistant" && extractRawResponseItemText(item)) {
+    const text = item.role === "assistant" ? extractRawResponseItemText(item) : undefined;
+    if (text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolSearchEvidenceProjection?.recordRawResponseItem(item);
     this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.
-    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
+    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds, text);
     await this.settlement.project("media_projection", () =>
       this.generatedMediaProjection.recordRaw(item),
     );
