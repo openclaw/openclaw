@@ -14,18 +14,17 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
+import { makeBootstrapWarn } from "../bootstrap-files.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
-import {
-  createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServer,
-  createTestMcpLoopbackServerConfig,
-} from "../cli-runner.test-helpers.js";
+import { createTestMcpLoopbackServer } from "../cli-runner.test-helpers.js";
 import { requireMcpConfigPath } from "../cli-runner/bundle-mcp.test-support.js";
-import "../cli-runner/prepare.runtime.js";
+import { getCliLiveSessionGeneration } from "../cli-runner/cli-live-session-registry.js";
 import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "../cli-runner/prepare.test-support.js";
+  mockCliMcpPreparation,
+  setRawCliBackendForPrepareTest,
+} from "../cli-runner/prepare-mcp.test-support.js";
+import "../cli-runner/prepare.runtime.js";
+import { resetCliRunnerPrepareTestDeps } from "../cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "../cli-runner/types.js";
 import { OpenClawStreamableHTTPClientTransport } from "../mcp-http-transport.js";
 import * as mcpTransport from "../mcp-transport.js";
@@ -43,7 +42,6 @@ describe("CLI attempt session MCP overrides", () => {
   let root: string;
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   const servers: Server[] = [];
-  let overlays: Array<Record<string, unknown>>;
 
   beforeAll(async () => {
     state = await createOpenClawTestState({ label: "cli-session-mcp" });
@@ -61,7 +59,6 @@ describe("CLI attempt session MCP overrides", () => {
   });
 
   beforeEach(async () => {
-    overlays = [];
     setActivePluginRegistry(createEmptyPluginRegistry());
     await bindSessionMcpRuntimeTestScheduler();
     // Exercise the real HTTP transport without sending requests outside the test process.
@@ -94,54 +91,28 @@ describe("CLI attempt session MCP overrides", () => {
         supportsParallelToolCalls: true,
       };
     });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          bundleMcp: true,
-          bundleMcpMode: "claude-config-file",
-          config: {
-            command: "claude",
-            args: ["--print"],
-            output: "text",
-            input: "arg",
-            sessionMode: "none",
-          },
-        },
-      ],
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "none",
+      },
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: async () => false,
-      resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-      getActiveMcpLoopbackRuntime: () => ({
-        port: 31783,
-        ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
-      }),
+    mockCliMcpPreparation({
+      makeBootstrapWarn,
+      getCliLiveSessionGeneration,
       ensureMcpLoopbackServer: createTestMcpLoopbackServer,
-      createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
-      mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
-      bindMcpLoopbackClientGrantAdmission: () => true,
-      revokeMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackPolicyTools: () => ({ agentId: "main", tools: [] }),
       resolveMcpLoopbackScopedTools: () => ({ agentId: "main", tools: [] }),
-      resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-      prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-      loadManifestModelCatalog: () => [],
     });
     executePreparedCliRun.mockReset();
-    executePreparedCliRun.mockImplementation(async (context: PreparedCliRunContext) => {
-      const args = context.preparedBackend.backend.args;
-      expect(args).toContain("--strict-mcp-config");
-      const overlay = JSON.parse(await fs.readFile(requireMcpConfigPath(args), "utf8")) as {
-        mcpServers: Record<string, unknown>;
-      };
-      overlays.push(overlay.mcpServers);
-      return { text: "done" };
-    });
   });
 
   it.each([
@@ -152,6 +123,21 @@ describe("CLI attempt session MCP overrides", () => {
   ])(
     "serializes global=$globalEnabled session=$sessionEnabled as enabled=$expectedEnabled",
     async ({ globalEnabled, sessionEnabled, expectedEnabled }) => {
+      executePreparedCliRun.mockImplementation(async (context: PreparedCliRunContext) => {
+        const args = context.preparedBackend.backend.args;
+        expect(args).toContain("--strict-mcp-config");
+        const { mcpServers }: { mcpServers: Record<string, unknown> } = JSON.parse(
+          await fs.readFile(requireMcpConfigPath(args), "utf8"),
+        );
+        expect(Object.hasOwn(mcpServers, "docs")).toBe(expectedEnabled);
+        if (expectedEnabled) {
+          expect(mcpServers.docs).toMatchObject({
+            type: "http",
+            url: "https://mcp.example.test/docs",
+          });
+        }
+        return { text: "done" };
+      });
       const sessionEntry = makeSessionEntry(
         "session-mcp",
         sessionEnabled !== undefined
@@ -192,14 +178,7 @@ describe("CLI attempt session MCP overrides", () => {
       try {
         const result = await runAgentAttempt(params);
         expect(result.payloads).toEqual([expect.objectContaining({ text: "done" })]);
-        expect(overlays).toHaveLength(1);
-        expect(Object.hasOwn(overlays[0]!, "docs")).toBe(expectedEnabled);
-        if (expectedEnabled) {
-          expect(overlays[0]!.docs).toMatchObject({
-            type: "http",
-            url: "https://mcp.example.test/docs",
-          });
-        }
+        expect(executePreparedCliRun).toHaveBeenCalledOnce();
       } finally {
         params.preparedRunAdmission?.close();
       }
