@@ -40,6 +40,22 @@ function keywordHit(id: string, textScore: number, details: Partial<KeywordHit> 
   return { ...hit(id), textScore, ...details };
 }
 
+const vectorOnly = { vectorWeight: 1, textWeight: 0 };
+const equallyWeighted = { vectorWeight: 1, textWeight: 1 };
+const expectPaths = (results: { path: string }[], ...names: string[]) =>
+  expect(results.map((entry) => entry.path)).toEqual(names.map((name) => `memory/${name}.md`));
+const exactKeyword = (id: string, textScore: number, name: string, pathScore = 0) =>
+  keywordHit(id, textScore, { path: `memory/${name}.md`, exactPathSpecificity: 2, pathScore });
+const exactVector = (id: string, vectorScore: number, name: string) =>
+  vectorHit(id, vectorScore, { path: `memory/${name}.md`, exactPathSpecificity: 2 });
+const select = (
+  merged: Awaited<ReturnType<typeof merge>>,
+  keyword: KeywordHit[],
+  vectorCandidates: VectorHit[],
+  maxResults = 2,
+  minScore = 0.35,
+) => selectHybridSearchResults({ merged, keyword, vectorCandidates, maxResults, minScore });
+
 describe("memory hybrid helpers", () => {
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
@@ -55,8 +71,6 @@ describe("memory hybrid helpers", () => {
 
     expect(strongest).toBeGreaterThan(middle);
     expect(middle).toBeGreaterThan(weakest);
-    expect(strongest).not.toBe(middle);
-    expect(middle).not.toBe(weakest);
   });
 
   it("bounds temporal exact-path tie scores to the identity and content bands", () => {
@@ -81,24 +95,8 @@ describe("memory hybrid helpers", () => {
       vector,
       keyword: [keyword],
     });
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/strict-first.md",
-      "memory/keyword-first.md",
-      "memory/strict-later.md",
-    ]);
-
-    const selected = selectHybridSearchResults({
-      merged,
-      keyword: [keyword],
-      vectorCandidates: vector,
-      maxResults: 2,
-      minScore: 0.35,
-    });
-
-    expect(selected.map((entry) => entry.path)).toEqual([
-      "memory/strict-first.md",
-      "memory/strict-later.md",
-    ]);
+    expectPaths(merged, "strict-first", "keyword-first", "strict-later");
+    expectPaths(select(merged, [keyword], vector), "strict-first", "strict-later");
   });
 
   it("keeps the relaxed keyword-backed fallback when no result is strict", () => {
@@ -144,19 +142,8 @@ describe("memory hybrid helpers", () => {
         mmr: { enabled, lambda: 0.7 },
         nowMs: Date.UTC(2026, 9, 10),
       });
-      const selected = selectHybridSearchResults({
-        merged,
-        keyword,
-        vectorCandidates: vector,
-        maxResults: 4,
-        minScore: 0.35,
-      });
-
-      expect(selected.map((entry) => entry.path)).toEqual([
-        "memory/records/2026-10-10-quartz.md",
-        "memory/evergreen.md",
-        oldPath,
-      ]);
+      const selected = select(merged, keyword, vector, 4);
+      expectPaths(selected, "records/2026-10-10-quartz", "evergreen", "records/2026-08-11-quartz");
       expect(selected[2]?.score).toBeCloseTo(0.2175);
       expect(selected[2]?.vectorScore).toBe(0.9);
       expect(selected[2]?.textScore).toBe(0.8);
@@ -177,44 +164,29 @@ describe("memory hybrid helpers", () => {
         keyword,
       });
 
-      const selected = selectHybridSearchResults({
-        merged,
-        keyword,
-        vectorCandidates,
-        maxResults: 2,
-        minScore: 0.35,
-      });
-
-      expect(selected.map((entry) => entry.path)).toEqual(expectedPaths);
+      expect(select(merged, keyword, vectorCandidates).map((entry) => entry.path)).toEqual(
+        expectedPaths,
+      );
     },
   );
 
   it("keeps null importance neutral and deterministically boosts important entries", async () => {
-    const baseEntry = vectorHit("neutral", 0.8, { path: "MEMORY.md", endLine: 1 });
-    const base = {
-      vectorWeight: 1,
-      textWeight: 0,
-      vector: [baseEntry],
-    };
-    const neutral = await merge(base);
-    const important = await merge({
-      ...base,
-      vector: [{ ...baseEntry, id: "important", importance: 10 }],
-    });
-    const low = await merge({
-      ...base,
-      vector: [{ ...baseEntry, id: "low", importance: 1 }],
-    });
-
-    expect(neutral[0]?.score).toBeCloseTo(0.8);
-    expect(important[0]?.score).toBeCloseTo(1);
-    expect(low[0]?.score).toBeCloseTo(0.64);
+    for (const [importance, expected] of [
+      [undefined, 0.8],
+      [10, 1],
+      [1, 0.64],
+    ] as const) {
+      const results = await merge({
+        ...vectorOnly,
+        vector: [vectorHit("entry", 0.8, { path: "MEMORY.md", endLine: 1, importance })],
+      });
+      expect(results[0]?.score).toBeCloseTo(expected);
+    }
   });
 
   it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 0,
+      ...vectorOnly,
       activeProjectKeys: ["github.com/openclaw/openclaw"],
       vector: [
         vectorHit("same", 0.8, {
@@ -251,8 +223,7 @@ describe("memory hybrid helpers", () => {
     },
   ])("keeps a diverse hit in the selected set $label", async ({ activeProjectKeys, expected }) => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 0,
+      ...vectorOnly,
       mmr: { enabled: true, lambda: 0.7 },
       activeProjectKeys,
       vector: [
@@ -313,59 +284,29 @@ describe("memory hybrid helpers", () => {
       ],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/2026-07-10.md",
-      "memory/2020-01-01.md",
-    ]);
+    expectPaths(merged, "2026-07-10", "2020-01-01");
     expect(merged.map((entry) => entry.score)).toEqual([1, 1]);
     expect(merged.every((entry) => entry.textScore === 0)).toBe(true);
   });
 
   it("ignores zero-weight and non-positive content when ordering exact hybrid hits", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 0,
-      vector: [vectorHit("vector", -1, { path: "memory/z/foo.md", exactPathSpecificity: 2 })],
-      keyword: [
-        keywordHit("body", 1, { path: "memory/y/foo.md", exactPathSpecificity: 2 }),
-        keywordHit("path", 0, { path: "memory/a/foo.md", pathScore: 1, exactPathSpecificity: 2 }),
-      ],
+      ...vectorOnly,
+      vector: [exactVector("vector", -1, "z/foo")],
+      keyword: [exactKeyword("body", 1, "y/foo"), exactKeyword("path", 0, "a/foo", 1)],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/a/foo.md",
-      "memory/y/foo.md",
-      "memory/z/foo.md",
-    ]);
+    expectPaths(merged, "a/foo", "y/foo", "z/foo");
   });
 
   it("uses net weighted content relevance for exact hybrid ordering", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 1,
-      vector: [
-        vectorHit("cancelled", -1, {
-          path: "memory/z/foo.md",
-          snippet: "negative vector",
-          exactPathSpecificity: 2,
-        }),
-      ],
-      keyword: [
-        keywordHit("cancelled", 0.5, {
-          path: "memory/z/foo.md",
-          snippet: "weak body",
-          exactPathSpecificity: 2,
-        }),
-        keywordHit("path", 0, {
-          path: "memory/a/foo.md",
-          snippet: "path only",
-          pathScore: 1,
-          exactPathSpecificity: 2,
-        }),
-      ],
+      ...equallyWeighted,
+      vector: [exactVector("cancelled", -1, "z/foo")],
+      keyword: [exactKeyword("cancelled", 0.5, "z/foo"), exactKeyword("path", 0, "a/foo", 1)],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual(["memory/a/foo.md", "memory/z/foo.md"]);
+    expectPaths(merged, "a/foo", "z/foo");
   });
 
   it("keeps the full content-backed exact group ahead of path-only hits through MMR", async () => {
@@ -393,17 +334,12 @@ describe("memory hybrid helpers", () => {
       ],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/z/foo.md",
-      "memory/y/foo.md",
-      "memory/a/foo.md",
-    ]);
+    expectPaths(merged, "z/foo", "y/foo", "a/foo");
   });
 
   it("keeps vector-only exact path candidates ahead of stronger semantic matches", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 1,
+      ...equallyWeighted,
       vector: [
         vectorHit("semantic", 0.99),
         vectorHit("exact-vector", 0.2, {
@@ -414,10 +350,7 @@ describe("memory hybrid helpers", () => {
       ],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/deep/README.md",
-      "memory/semantic.md",
-    ]);
+    expectPaths(merged, "deep/README", "semantic");
     expect(merged[0]?.score).toBe(1);
     expect(merged[0]?.vectorScore).toBe(0.2);
   });
@@ -434,24 +367,9 @@ describe("memory hybrid helpers", () => {
       ],
       keyword: [
         keywordHit("full", 0, { exactPathSpecificity: 3 }),
-        keywordHit("basename-weak", 0.1, {
-          path: "memory/a/foo.md",
-          snippet: "basename weak",
-          pathScore: 1,
-          exactPathSpecificity: 2,
-        }),
-        keywordHit("basename-path-only", 0, {
-          path: "memory/0/foo.md",
-          snippet: "basename path only",
-          pathScore: 1,
-          exactPathSpecificity: 2,
-        }),
-        keywordHit("basename-strong", 0.8, {
-          path: "memory/z/foo.md",
-          snippet: "basename strong",
-          pathScore: 0.01,
-          exactPathSpecificity: 2,
-        }),
+        exactKeyword("basename-weak", 0.1, "a/foo", 1),
+        exactKeyword("basename-path-only", 0, "0/foo", 1),
+        exactKeyword("basename-strong", 0.8, "z/foo", 0.01),
         keywordHit("stem", 1, { path: "memory/foo.md.bak", exactPathSpecificity: 1 }),
       ],
     });
@@ -468,8 +386,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps exact path identifiers ahead after decay, oversized weights, and MMR", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 1,
+      ...equallyWeighted,
       nowMs: Date.UTC(2026, 6, 11),
       temporalDecay: { enabled: true, halfLifeDays: 1 },
       mmr: { enabled: true, lambda: 0.5 },
@@ -484,10 +401,7 @@ describe("memory hybrid helpers", () => {
       ],
     });
 
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/2020-01-01.md",
-      "memory/semantic.md",
-    ]);
+    expectPaths(merged, "2020-01-01", "semantic");
     expect(merged[0]?.score).toBe(1);
     expect(merged[1]?.score).toBe(2);
   });
@@ -608,8 +522,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps vector-only text scoring when weights total two", async () => {
     const merged = await merge({
-      vectorWeight: 1,
-      textWeight: 1,
+      ...equallyWeighted,
       isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
       vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
     });

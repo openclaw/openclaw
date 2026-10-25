@@ -35,6 +35,31 @@ function select(table: string, columns: string, suffix = "") {
   return conn.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
 }
 const all = (sql: string, ...params: SQLInputValue[]) => conn.prepare(sql).all(...params);
+function recordSql(action: () => void) {
+  const executed: string[] = [];
+  const statements = observeHostDataSql((sql, preparingDatabase) => {
+    if (!preparingDatabase || /^SAVEPOINT\b/i.test(sql)) {
+      executed.push(sql);
+    }
+  });
+  try {
+    action();
+    return executed;
+  } finally {
+    statements.restore();
+  }
+}
+const chunkInserts = (queries: string[], vectors = false) =>
+  queries.filter((sql) =>
+    new RegExp(
+      `^insert into ["\x60]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance${vectors ? "|chunks_vec" : ""})["\x60]?\\s`,
+      "i",
+    ).test(sql),
+  ).length;
+const sourceInserts = (queries: string[]) =>
+  queries.filter((sql) => /^insert into "memory_index_sources"\s/i.test(sql)).length;
+const vectorDeletes = (queries: string[]) =>
+  queries.filter((sql) => /^DELETE FROM memory_index_chunks_vec\b/i.test(sql));
 const sourceTables = ["sources", "chunks", "chunks_fts", "paths_fts"];
 const metadataTables = ["chunk_recall_metadata", "chunk_provenance"];
 const derivedTables = [...metadataTables, "chunks_vec"];
@@ -100,21 +125,18 @@ function replacement(path: string, hash = "original", chunkCount = 1): Replaceme
   };
 }
 
-function write(value: Replacement) {
+function mutate<T>(action: (kernel: MemorySourceIndexKernel) => T): T {
   return runSqliteImmediateTransactionSync(conn, () =>
-    new MemorySourceIndexKernel(conn, store).replaceRows(value, replacementRows(value)),
+    action(new MemorySourceIndexKernel(conn, store)),
   );
 }
 const replacementRows = (value: Replacement) =>
   value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] }));
+const write = (value: Replacement) =>
+  mutate((kernel) => kernel.replaceRows(value, replacementRows(value)));
 function writeGroup(values: Replacement[]) {
-  return runSqliteImmediateTransactionSync(conn, () =>
-    new MemorySourceIndexKernel(conn, store).replaceGroup(
-      values.map((value) => ({
-        header: value,
-        rows: replacementRows(value),
-      })),
-    ),
+  return mutate((kernel) =>
+    kernel.replaceGroup(values.map((value) => ({ header: value, rows: replacementRows(value) }))),
   );
 }
 
@@ -130,8 +152,8 @@ function indexedSource(chunks: number, clean = true) {
 }
 
 function remove(pathname: string, expectedHash: string) {
-  return runSqliteImmediateTransactionSync(conn, () =>
-    new MemorySourceIndexKernel(conn, store).deleteIfCurrent({
+  return mutate((kernel) =>
+    kernel.deleteIfCurrent({
       path: pathname,
       source: "memory",
       expectedHash,
@@ -189,17 +211,7 @@ describe("memory source index native kernel", () => {
           [0, 1, 0],
         ],
       };
-      let executions = 0;
-      const statements = observeHostDataSql((sql, preparingDatabase) => {
-        if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
-          executions++;
-        }
-      });
-      try {
-        write(next);
-      } finally {
-        statements.restore();
-      }
+      const executions = vectorDeletes(recordSql(() => write(next))).length;
       // Explicit embeddings replace their vectors before stale IDs are removed.
       expect(executions).toBe(1 + Number(append) + (staleCount <= 32 ? staleCount : 1));
       const expected = [...expectedVectors(next), ...expectedVectors(sibling)].toSorted((a, b) =>
@@ -265,9 +277,7 @@ describe("memory source index native kernel", () => {
           ...(last && retainedLast ? { retained: true } : {}),
         };
       });
-      runSqliteImmediateTransactionSync(conn, () =>
-        new MemorySourceIndexKernel(conn, store).replaceRows({ ...value, now: 200 }, rows),
-      );
+      mutate((kernel) => kernel.replaceRows({ ...value, now: 200 }, rows));
       expect(
         conn
           .prepare(`SELECT c.text, hex(c.embedding) AS embedding, c.updated_at,
@@ -356,27 +366,16 @@ describe("memory source index native kernel", () => {
     { chunks: [64, 65], maxInserts: 8 },
     { chunks: [1, 128, 1], maxInserts: 12 },
   ])("publishes bounded chunk batches across sources ($chunks)", async ({ chunks, maxInserts }) => {
-    let inserts = 0;
-    const statements = observeHostDataSql((sql, preparingDatabase) => {
-      if (
-        !preparingDatabase &&
-        /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance|chunks_vec)["`]?\s/i.test(
-          sql,
-        )
-      ) {
-        inserts++;
-      }
-    });
-    try {
-      writeGroup(
-        chunks.map((count, index) => replacement(`memory/batched-${index}.md`, "batch", count)),
-      );
-
-      expect(inserts).toBeGreaterThan(0);
-      expect(inserts).toBeLessThanOrEqual(maxInserts);
-    } finally {
-      statements.restore();
-    }
+    const inserts = chunkInserts(
+      recordSql(() =>
+        writeGroup(
+          chunks.map((count, index) => replacement(`memory/batched-${index}.md`, "batch", count)),
+        ),
+      ),
+      true,
+    );
+    expect(inserts).toBeGreaterThan(0);
+    expect(inserts).toBeLessThanOrEqual(maxInserts);
     expectCounts(
       ["chunks", "chunks_fts", ...derivedTables],
       chunks.reduce((sum, count) => sum + count, 0),
@@ -406,34 +405,11 @@ describe("memory source index native kernel", () => {
           now: 200 + index,
         };
       });
-      let inserts = 0;
-      let sourceInserts = 0;
-      const savepoints: string[] = [];
-      const statements = observeHostDataSql((sql, preparingDatabase) => {
-        if (!preparingDatabase && /^insert into "memory_index_sources"\s/i.test(sql)) {
-          sourceInserts++;
-        }
-        if (/^SAVEPOINT\b/i.test(sql)) {
-          savepoints.push(sql);
-        }
-        if (
-          !preparingDatabase &&
-          /^insert into ["`]?memory_index_(?:chunks|chunk_recall_metadata|chunk_provenance)["`]?\s/i.test(
-            sql,
-          )
-        ) {
-          inserts++;
-        }
-      });
-      try {
-        writeGroup(values);
-      } finally {
-        statements.restore();
-      }
-      expect(inserts).toBe(Math.ceil(count / 128) * 3);
-      expect(sourceInserts).toBe(Math.ceil(count / 128));
+      const queries = recordSql(() => writeGroup(values));
+      expect(chunkInserts(queries)).toBe(Math.ceil(count / 128) * 3);
+      expect(sourceInserts(queries)).toBe(Math.ceil(count / 128));
       expect(select("sources", "COUNT(*) AS n").get()).toEqual({ n: count });
-      expect(savepoints).toEqual([]);
+      expect(queries.filter((sql) => /^SAVEPOINT\b/i.test(sql))).toEqual([]);
       expect(
         all(`SELECT c.path, c.source, c.model, c.text, c.updated_at,
                   r.importance, r.triggers, r.project_key,
@@ -481,18 +457,7 @@ describe("memory source index native kernel", () => {
     const first = replacement(`memory/${"界".repeat(12_000)}.md`, "first", 0);
     const second = replacement(`memory/${"語".repeat(12_000)}.md`, "second", 0);
     const last = { ...second, entry: { ...second.entry, hash: "last", size: 0 } };
-    let inserts = 0;
-    const statements = observeHostDataSql((sql, preparingDatabase) => {
-      if (!preparingDatabase && /^insert into "memory_index_sources"\s/i.test(sql)) {
-        inserts++;
-      }
-    });
-    try {
-      writeGroup([first, second, last]);
-    } finally {
-      statements.restore();
-    }
-    expect(inserts).toBe(2);
+    expect(sourceInserts(recordSql(() => writeGroup([first, second, last])))).toBe(2);
     expect(select("sources", "hash, size", "WHERE path = ?").get(second.entry.path)).toEqual({
       hash: "last",
       size: 0,
@@ -511,8 +476,8 @@ describe("memory source index native kernel", () => {
     const chunk = last.chunks[0];
     assert.ok(chunk);
     const sibling = replacement("memory/sibling.md", "sibling");
-    runSqliteImmediateTransactionSync(conn, () =>
-      new MemorySourceIndexKernel(conn, store).replaceGroup([
+    mutate((kernel) =>
+      kernel.replaceGroup([
         ...[first, sibling, last].map((value) => ({
           header: value,
           rows: value.chunks.map((row) => ({ chunk: row, embedding: [0, 1, 0] })),
@@ -562,8 +527,8 @@ describe("memory source index native kernel", () => {
     const temporary = replacement(initial.entry.path, "temporary").chunks[0];
     const survivor = replacement(initial.entry.path, "survivor").chunks[0];
     assert.ok(temporary && survivor);
-    runSqliteImmediateTransactionSync(conn, () =>
-      new MemorySourceIndexKernel(conn, store).replaceRows({ ...initial, delta: true }, [
+    mutate((kernel) =>
+      kernel.replaceRows({ ...initial, delta: true }, [
         { chunk: temporary, embedding: [1, 0, 0] },
         ...initial.chunks.map((chunk) => ({
           removedId: memoryChunkRowId(initial.source, initial.entry.path, chunk, initial.model),
@@ -709,7 +674,6 @@ describe("memory source index session delta", () => {
     origin: "owner" | "untrusted" = "owner",
   ) {
     assert.ok(value.source === "sessions");
-    const db = conn;
     const retained = value.chunks.filter((chunk) => retainedLines.includes(chunk.startLine));
     const written = value.chunks.filter((chunk) => !retainedLines.includes(chunk.startLine));
     const desiredIds = new Set(
@@ -719,7 +683,7 @@ describe("memory source index session delta", () => {
     );
     const { chunks: _chunks, embeddings: _embeddings, ...header } = value;
     const rows: MemorySourceIndexRow[] = [
-      ...readMemorySourceChunks(db, value.source, value.entry.path)
+      ...readMemorySourceChunks(conn, value.source, value.entry.path)
         .filter((row) => !desiredIds.has(row.id))
         .map((row) => ({ removedId: row.id })),
       ...retained.map((chunk) => ({
@@ -733,12 +697,7 @@ describe("memory source index session delta", () => {
       })),
       ...written.map((chunk) => ({ chunk, embedding: [1, 0, 0] })),
     ];
-    return runSqliteImmediateTransactionSync(db, () =>
-      new MemorySourceIndexKernel(db, store).replaceRows(
-        { ...header, delta: retained.length > 0 },
-        rows,
-      ),
-    );
+    return mutate((kernel) => kernel.replaceRows({ ...header, delta: retained.length > 0 }, rows));
   }
 
   const readChunks = () =>
@@ -750,22 +709,15 @@ describe("memory source index session delta", () => {
       write(session("v1", [1, 2, ...Array.from({ length: removedCount }, (_, i) => i + 7)]));
       const [first, second] = readChunks();
 
-      const vectorDeletes = new Set<string>();
-      const statements = observeHostDataSql((sql, preparingDatabase) => {
-        if (!preparingDatabase && /^DELETE FROM memory_index_chunks_vec\b/i.test(sql)) {
-          vectorDeletes.add(sql);
-        }
-      });
-      try {
-        // Known delta IDs must use point lookups even above the whole-source scan threshold.
-        writeDelta({ ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]);
-      } finally {
-        statements.restore();
-      }
+      // Known delta IDs must use point lookups even above the whole-source scan threshold.
+      const queries = recordSql(() =>
+        writeDelta({ ...session("v2", [1, 2, 5, 6]), now: 500 }, [1, 2]),
+      );
+      const deletes = new Set(vectorDeletes(queries));
 
       const pointLookup = queryPlan("DELETE FROM memory_index_chunks_vec WHERE id = ?", ["unused"]);
-      expect(vectorDeletes.size).toBeGreaterThan(0);
-      for (const sql of vectorDeletes) {
+      expect(deletes.size).toBeGreaterThan(0);
+      for (const sql of deletes) {
         expect(
           queryPlan(
             sql,
