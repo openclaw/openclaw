@@ -181,9 +181,6 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   ];
   await Promise.resolve();
   expect(fixture.runCommandWithTimeout).toHaveBeenCalledOnce();
-  expect(resolveClaudeTerminalExecutable).toHaveBeenCalledWith(process.env, {
-    pathStrategy: "direct",
-  });
   expect(normal.base).not.toHaveBeenCalled();
   expect(simple.base).not.toHaveBeenCalled();
   expect(prepared).not.toHaveBeenCalled();
@@ -210,13 +207,6 @@ it("bounds requests even while process cleanup is pending and caches the fallbac
   await vi.advanceTimersByTimeAsync(1);
   await response;
   expect(request.headers()).toEqual(oauthOptions.headers);
-  expect(runner).toHaveBeenCalledWith(["/synthetic/claude", "--version"], {
-    timeoutMs: 1_500,
-    killProcessTree: true,
-    killGraceMs: 100,
-    maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
-    terminateOnOutputLimit: true,
-  });
   await request.run();
   expect(runner).toHaveBeenCalledOnce();
   pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));

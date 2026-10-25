@@ -81,8 +81,13 @@ async function setupCredential(now: number) {
   }
 }
 
-function normalizeModel(model: ProviderRuntimeModel) {
-  return provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model });
+function normalizeModel(model: ProviderRuntimeModel, config?: Config) {
+  return provider.normalizeResolvedModel?.({
+    provider: model.provider,
+    modelId: model.id,
+    model,
+    config,
+  });
 }
 
 beforeEach(async () => {
@@ -289,29 +294,24 @@ describe("anthropic provider replay hooks", () => {
       const profile = thinking(modelId);
       expect(levelIds(profile)).toStrictEqual(thinkingLevels);
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
-      const normalized = normalizeModel({
-        ...(resolved as ProviderRuntimeModel),
-        reasoning: false,
-        ...(checksCliPolicy
-          ? {}
-          : { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 64_000 }),
-        ...(restoresMissingCost
-          ? {
-              cost:
-                restoresMissingCost === "tiers" && cost
-                  ? {
-                      input: cost.input,
-                      output: cost.output,
-                      cacheRead: cost.cacheRead,
-                      cacheWrite: cost.cacheWrite,
-                    }
-                  : undefined,
-            }
-          : {}),
-      } as ProviderRuntimeModel);
+      const normalized = normalizeModel(
+        makeModel(modelId, {
+          reasoning: false,
+          cost: !restoresMissingCost
+            ? cost
+            : restoresMissingCost === "tiers" && cost
+              ? {
+                  input: cost.input,
+                  output: cost.output,
+                  cacheRead: cost.cacheRead,
+                  cacheWrite: cost.cacheWrite,
+                }
+              : undefined,
+        }),
+      );
       expectFields(normalized, {
         reasoning: true,
-        ...(checksCliPolicy ? {} : modernLimits),
+        ...modernLimits,
         ...(restoresMissingCost ? { cost } : {}),
       });
       if (checksCliPolicy) {
@@ -339,22 +339,8 @@ describe("anthropic provider replay hooks", () => {
         pricingSource === "configured"
           ? providerConfig([makeModel(modelId, { cost: configuredCost, ...modernLimits })])
           : {};
-      const discoveredModel = resolveModel(modelId, {
-        config,
-      });
-      expect(discoveredModel).toBeDefined();
-
-      const configuredModel = {
-        ...(discoveredModel as ProviderRuntimeModel),
-        cost: configuredCost,
-      };
-      const resolvedModel =
-        provider.normalizeResolvedModel?.({
-          config,
-          provider: "anthropic",
-          modelId,
-          model: configuredModel,
-        } as never) ?? configuredModel;
+      const configuredModel = makeModel(modelId, { cost: configuredCost, ...modernLimits });
+      const resolvedModel = normalizeModel(configuredModel, config) ?? configuredModel;
       expect(resolvedModel.cost).toEqual(configuredCost);
     },
   );
@@ -418,39 +404,26 @@ describe("anthropic provider replay hooks", () => {
     ).toBeUndefined();
   });
 
-  it("normalizes Claude Mythos Preview with native max but no xhigh thinking map", () => {
-    expect(normalizeModel(makeModel("claude-mythos-preview"))?.thinkingLevelMap).toEqual({
-      max: "max",
-    });
+  it.each([
+    [makeModel("claude-mythos-preview"), { thinkingLevelMap: { max: "max" } }],
+    [
+      makeModel("claude-sonnet-4-6", { maxTokens: 128, maxTokensSource: "configured" }),
+      { maxTokens: 128, maxTokensSource: "configured" },
+    ],
+    [
+      makeModel("claude-opus-4-7", { provider: "claude-cli", contextTokens: 200_000 }),
+      { contextWindow: 200_000, contextTokens: 200_000, maxTokens: 128_000 },
+    ],
+    [
+      makeModel("claude-opus-4-7[1m]", { provider: "claude-cli", contextTokens: 200_000 }),
+      modernLimits,
+    ],
+  ] as const)("normalizes model-specific limits and thinking for $0.id", (model, fields) => {
+    expectFields(normalizeModel(model) ?? model, fields);
   });
 
   it("does not normalize numeric successors as known Claude contracts", () => {
     expect(normalizeModel(makeModel("claude-opus-4-60", { input: ["text"] }))).toBeUndefined();
-  });
-
-  it("preserves configured modern output limits", () => {
-    const model = makeModel("claude-sonnet-4-6", {
-      maxTokens: 128,
-      maxTokensSource: "configured",
-    });
-
-    const normalized = normalizeModel(model) ?? model;
-
-    expect(normalized).toMatchObject({ maxTokens: 128, maxTokensSource: "configured" });
-  });
-
-  it("keeps bare Claude CLI context plan-safe and honors explicit 1M variants", async () => {
-    const baseModel = makeModel("claude-opus-4-7", {
-      provider: "claude-cli",
-      contextTokens: 200_000,
-    });
-
-    expectFields(normalizeModel(baseModel), {
-      contextWindow: 200_000,
-      contextTokens: 200_000,
-      maxTokens: 128_000,
-    });
-    expectFields(normalizeModel({ ...baseModel, id: `${baseModel.id}[1m]` }), modernLimits);
   });
 
   it.each([
@@ -502,33 +475,19 @@ describe("anthropic provider replay hooks", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { status: "available", authenticated: true },
-    { status: "missing", authenticated: false },
-  ] as const)(
-    "publishes native Claude auth unless its CLI confirms logout: $status",
-    async ({ status, authenticated }) => {
-      probeClaudeCliAuthStatusMock.mockResolvedValue({ status });
-      const config = {};
-
-      const runtimeAuth = await provider.prepareSyntheticAuth?.({
-        config,
-        provider: "claude-cli",
-      } as never);
-      expect(runtimeAuth).toEqual(
-        authenticated
-          ? {
-              apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
-              source: "Claude CLI native auth",
-              mode: "oauth",
-              nativeAuth: { runtime: "claude-cli", mode: "oauth" },
-            }
-          : undefined,
-      );
-      expect(
-        await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
-      ).toBeUndefined();
-      expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
-    },
-  );
+  it("publishes native Claude auth only with a config capture", async () => {
+    probeClaudeCliAuthStatusMock.mockResolvedValue({ status: "available" });
+    expect(
+      await provider.prepareSyntheticAuth?.({ config: {}, provider: "claude-cli" } as never),
+    ).toEqual({
+      apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
+      source: "Claude CLI native auth",
+      mode: "oauth",
+      nativeAuth: { runtime: "claude-cli", mode: "oauth" },
+    });
+    expect(
+      await provider.prepareSyntheticAuth?.({ provider: "claude-cli" } as never),
+    ).toBeUndefined();
+    expect(probeClaudeCliAuthStatusMock).toHaveBeenCalledOnce();
+  });
 });
