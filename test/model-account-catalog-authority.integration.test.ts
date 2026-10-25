@@ -21,7 +21,7 @@ import {
 } from "../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "../src/gateway/server-methods/models.js";
 import { roleConfig } from "../src/gateway/server-methods/sessions-reactions.test-support.js";
-import { usersAuthConnectHandlers } from "../src/gateway/server-methods/users-auth-connect.js";
+import { usersHandlers as usersAuthConnectHandlers } from "../src/gateway/server-methods/users.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,

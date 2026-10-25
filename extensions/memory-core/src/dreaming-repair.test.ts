@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { auditDreamingArtifacts, repairDreamingArtifacts } from "./dreaming-repair.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
@@ -45,48 +45,11 @@ it("rejects relative workspace paths during audit and repair", async () => {
   }
 });
 
-it("clears sqlite session ingestion state when archiving session corpus", async () => {
-  const workspaceDir = await createTempWorkspace("dreaming-repair-test-");
-  const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-  await fs.mkdir(sessionCorpusDir, { recursive: true });
-  await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
-  await Promise.all(sessionNamespaces.map((namespace) => seedNamespace(workspaceDir, namespace)));
-
-  await expect(
-    auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
-  ).resolves.toBe(true);
-
-  const repair = await repairDreamingArtifacts({ workspaceDir });
-
-  expect(repair.archivedSessionCorpus).toBe(true);
-  for (const namespace of sessionNamespaces) {
-    await expect(readMemoryCoreWorkspaceEntries({ namespace, workspaceDir })).resolves.toEqual([]);
-  }
-  await expect(
-    auditDreamingArtifacts({ workspaceDir }).then((audit) => audit.sessionIngestionExists),
-  ).resolves.toBe(false);
-});
-
-it("does not report session ingestion from the SQLite daily namespace", async () => {
-  const workspaceDir = await createTempWorkspace("dreaming-repair-test-");
-  await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-  await seedNamespace(workspaceDir, DREAMING_DAILY_INGESTION_NAMESPACE);
-
-  const audit = await auditDreamingArtifacts({ workspaceDir });
-
-  expect(audit.sessionIngestionExists).toBe(false);
-});
-
 describe("archive recall cleanup", () => {
   const nowIso = "2026-10-14T00:00:00.000Z";
   const nowMs = Date.parse(nowIso);
   const corpusPath = "memory/.dreams/session-corpus/2026-10-12.txt";
   const livePaths = ["memory/2026-10-13.md", "memory/archive/2026-10-11.md"];
-
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(nowMs);
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -94,6 +57,8 @@ describe("archive recall cleanup", () => {
   });
 
   async function seedRecallSources() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(nowMs);
     const workspaceDir = await createTempWorkspace("archive-recall-");
     const results = [corpusPath, ...livePaths].map((sourcePath, index) => ({
       source: "memory" as const,
@@ -144,10 +109,23 @@ describe("archive recall cleanup", () => {
 
   it("prunes archived corpus recalls and phase signals while preserving existing sources", async () => {
     const { workspaceDir, expectState } = await seedRecallSources();
+    const expectIngestion = async (exists: boolean) => {
+      expect((await auditDreamingArtifacts({ workspaceDir })).sessionIngestionExists).toBe(exists);
+    };
+    await seedNamespace(workspaceDir, DREAMING_DAILY_INGESTION_NAMESPACE);
+    await expectIngestion(false);
+    await Promise.all(sessionNamespaces.map((namespace) => seedNamespace(workspaceDir, namespace)));
+    await expectIngestion(true);
 
     const repair = await repairDreamingArtifacts({ workspaceDir });
 
     expect(repair).toMatchObject({ archivedSessionCorpus: true, warnings: [] });
+    for (const namespace of sessionNamespaces) {
+      await expect(readMemoryCoreWorkspaceEntries({ namespace, workspaceDir })).resolves.toEqual(
+        [],
+      );
+    }
+    await expectIngestion(false);
     await expectState(true);
     await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
       changed: false,

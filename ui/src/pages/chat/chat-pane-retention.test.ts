@@ -1,7 +1,7 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
 import type { BoardProvider } from "../../lib/board/provider.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
@@ -38,13 +38,7 @@ describe("chat pane retained full messages", () => {
         sessionId: state.currentSessionId,
         lifecycleRevision: "revision-1",
       };
-      state.sessionsResult = {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [session],
-      };
+      state.sessionsResult = sessionListResult(1, [session]);
       context.gateway.snapshot.selfUser = { id: "alice", name: "Alice" };
       const load = createSidebarFullMessageLoader(state, context.gateway)!;
       const request = { sessionKey: "agent:main:example", messageId: "answer" };

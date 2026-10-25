@@ -2,6 +2,7 @@ import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
@@ -14,6 +15,7 @@ import {
   buttonByLabel,
   buttonByText,
   requireButton,
+  openCardMenu,
 } from "./view.test-support.ts";
 
 describe("WorkboardView", () => {
@@ -386,6 +388,79 @@ describe("WorkboardView", () => {
     expect(container.querySelector(".workboard-column--drop-target")).toBeNull();
   });
 
+  it("places variable-height card drops without measuring unrelated rows", async () => {
+    const request = vi.fn().mockResolvedValue({
+      card: createWorkboardCard({ id: "dragged", position: 1500 }),
+    });
+    const { state, container, renderView } = createWorkboardView({
+      canWrite: true,
+      client: { request },
+    });
+    state.viewMode = "board";
+    state.cards = ["first", "second", "dragged", "last"].map((id, index) =>
+      createWorkboardCard({ id, position: (index + 1) * 1000 }),
+    );
+    state.draggedCardId = "dragged";
+    renderView();
+    const column = expectDefined(container.querySelector(".workboard-column--todo"), "todo column");
+    const row = (id: string) =>
+      expectDefined(
+        column.querySelector<HTMLElement>(`.workboard-column__item[data-card-id="${id}"]`),
+        id,
+      );
+    const measurements = [
+      { id: "first", top: 0, height: 40 },
+      { id: "second", top: 52, height: 120 },
+      { id: "dragged", top: 184, height: 80 },
+      { id: "last", top: 276, height: 60 },
+    ].map(({ id, top, height }) =>
+      vi.spyOn(row(id), "getBoundingClientRect").mockReturnValue(new DOMRect(0, top, 240, height)),
+    );
+    const secondTitle = expectDefined(row("second").querySelector("h3"), "second title");
+    const hover = (target: Element, clientY: number, beforeId: string | null, reads: number) => {
+      measurements.forEach((measurement) => measurement.mockClear());
+      target.dispatchEvent(
+        new MouseEvent("dragover", { bubbles: true, cancelable: true, clientY }),
+      );
+      expect(state.dragBeforeCardId).toBe(beforeId);
+      expect(
+        measurements.reduce((count, measurement) => count + measurement.mock.calls.length, 0),
+      ).toBeLessThanOrEqual(reads);
+      renderView();
+      const marker = column.querySelector(
+        ".workboard-column__item--drop-before, .workboard-column__item--drop-after",
+      );
+      expect(marker?.getAttribute("data-card-id")).toBe(beforeId ?? "last");
+    };
+    hover(secondTitle, 111, "second", 1);
+    hover(secondTitle, 112, "last", 1);
+    hover(
+      expectDefined(column.querySelector(".workboard-column__cards"), "cards"),
+      45,
+      "second",
+      2,
+    );
+    hover(expectDefined(row("dragged").querySelector("h3"), "dragged title"), 190, "last", 0);
+    hover(row("first"), 19, "first", 1);
+    hover(row("last"), 306, null, 1);
+    measurements.forEach((measurement) => measurement.mockClear());
+    secondTitle.dispatchEvent(
+      new MouseEvent("drop", { bubbles: true, cancelable: true, clientY: 111 }),
+    );
+    expect(
+      measurements.reduce((count, measurement) => count + measurement.mock.calls.length, 0),
+    ).toBeLessThanOrEqual(1);
+    await waitForFast(() => {
+      expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+        id: "dragged",
+        status: "todo",
+        position: 1500,
+      });
+      expect(state.cards.find((card) => card.id === "dragged")?.position).toBe(1500);
+    });
+    expect(state.draggedCardId).toBeNull();
+  });
+
   it.each(["readiness", "permission"] as const)("hides card mutations without %s", (reason) => {
     const { host, state, container, renderView } = createWorkboardView(
       reason === "permission" ? { canWrite: false } : {},
@@ -402,7 +477,7 @@ describe("WorkboardView", () => {
       expect(buttonByText(container, "New card")).toBeNull();
       state.mutationReadiness = "ready";
       renderView();
-      expect(buttonByLabel(container, "Edit card")).not.toBeNull();
+      expect(buttonByLabel(openCardMenu(container), "Edit card")).not.toBeNull();
       expect(buttonByText(container, "New card")).not.toBeNull();
     } else {
       expect(buttonByLabel(container, "Delete card")).toBeNull();
@@ -449,13 +524,20 @@ describe("WorkboardView", () => {
     renderView();
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
     expect(second.getAttribute("aria-pressed")).toBe("true");
-    expectDefined(
-      second.querySelector<HTMLButtonElement>(".workboard-card__menu-trigger"),
-      ".workboard-card__menu-trigger",
-    ).click();
+    expect(second.querySelector(".workboard-card__action-menu-panel")).toBeNull();
+    const panel = openCardMenu(second);
+    const firstAction = requireButton(panel, "Edit card");
     expect(state.selectedCardIds).toEqual(new Set(["first", "second"]));
     expect(state.detailCardId).toBeNull();
-    requireButton(second, "Edit card").click();
+    panel.dispatchEvent(
+      Object.assign(new Event("beforetoggle"), { oldState: "open", newState: "closed" }),
+    );
+    flush();
+    expect(requireButton(panel, "Edit card")).toBe(firstAction);
+    expect(openCardMenu(first)).toBe(panel);
+    expect(openCardMenu(second)).toBe(panel);
+    expect(requireButton(panel, "Edit card")).toBe(firstAction);
+    firstAction.click();
     renderView();
     expect(state.draftOpen).toBe(true);
     expect(state.editingCardId).toBe("second");
@@ -482,13 +564,12 @@ describe("WorkboardView", () => {
     const childCard = [...container.querySelectorAll<HTMLElement>(".workboard-card")].find((card) =>
       card.textContent?.includes("Ship game shell"),
     );
-    const start = childCard?.querySelector<HTMLButtonElement>(".workboard-card__start");
+    const menu = openCardMenu(expectDefined(childCard, "dependent card"));
+    const start = menu.querySelector<HTMLButtonElement>(".workboard-card__start");
     expect(childCard?.textContent).toContain("1 blocked");
     expect(start?.disabled).toBe(false);
     expect(start?.getAttribute("aria-label")).toBe("Run default agent");
-    childCard
-      ?.querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(menu, "View details").click();
     renderView();
     const detail = container.querySelector(".workboard-detail");
     expect(detail?.textContent).toContain("Dependencies");
@@ -534,16 +615,15 @@ describe("WorkboardView", () => {
       ];
       if (restriction === "non-admin") {
         renderView();
+        const menu = openCardMenu(container);
         const startButtons = [
-          ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
+          ...menu.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
         ];
         expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start"]);
         expect(startButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
           "Run default agent",
         ]);
-        container
-          .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
-          ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        requireButton(menu, "View details").click();
       } else {
         state.detailCardId = "card-1";
       }
@@ -623,7 +703,9 @@ describe("WorkboardView", () => {
         .querySelector(".workboard-column--running")
         ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
     } else {
-      const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+      const moveSelect = openCardMenu(container).querySelector<HTMLSelectElement>(
+        ".workboard-card__move-select",
+      );
       expect(moveSelect).not.toBeNull();
       if (route === "select" || route === "busy") {
         if (route === "busy") {

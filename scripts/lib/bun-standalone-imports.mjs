@@ -46,12 +46,29 @@ export function rewriteStandaloneImports({
   const generatedTargets = new Set([...Object.values(moduleAliases), workerThreadsShim]);
   const resolverNames = ["openclaw-plugin-sdk-alias", "openclaw-plugin-source-capture"];
   const pluginResolvers = new Set(resolverNames.filter((name) => contents.includes(name)));
-  const staticString = (node) =>
-    node?.type === "Literal"
+  const unwrapExpression = (expression) => {
+    let node = expression;
+    while (
+      [
+        "TSAsExpression",
+        "TSSatisfiesExpression",
+        "TSNonNullExpression",
+        "TSTypeAssertion",
+        "ParenthesizedExpression",
+      ].includes(node?.type)
+    ) {
+      node = node.expression;
+    }
+    return node;
+  };
+  const staticString = (expression) => {
+    const node = unwrapExpression(expression);
+    return node?.type === "Literal"
       ? node.value
       : node?.type === "TemplateLiteral" && node.expressions.length === 0
         ? node.quasis[0].value.cooked
         : undefined;
+  };
   // Rewrite syntax nodes only: loaders also contain quoted "import.meta.url" source.
   const ast =
     pluginResolvers.size ||
@@ -151,7 +168,7 @@ export function rewriteStandaloneImports({
       (staticString(node.left.property) === "_resolveFilename" ||
         node.left.property.name === "_resolveFilename" ||
         nativeResolverKeys.has(node.left.property.name)) &&
-      ["ArrowFunctionExpression", "FunctionExpression"].includes(node.right.type)
+      ["ArrowFunctionExpression", "FunctionExpression"].includes(unwrapExpression(node.right).type)
     ) {
       // CJS aliases bypass Bun's public hook. Map the loader handoff while
       // admission and SDK discovery continue to use physical filenames.

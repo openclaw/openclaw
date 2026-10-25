@@ -107,7 +107,8 @@ export function classifyScheduledJob(
   if (lost.length > 0) {
     report.losses.push({ job: ref, fields: lost, ownerCheck: observation.ownerCheck });
   }
-  // Scheduled CLI runs carry no owner bit today, so only an owner context changes them.
+  // Scheduled CLI runs used to coerce the absent owner bit to false; an owner context now
+  // gives them the owner-only tools their embedded runs already had.
   if (observation.cliBackend && authority.owner) {
     report.runtimeOwner.push({ job: ref, cliBackend: observation.cliBackend });
   }
@@ -185,9 +186,9 @@ export function formatScheduledContextReport(report: ScheduledContextReport): st
       "  These keep their current behavior and do not use the conversation's board, memory or workspace. Recreate one from its conversation to bind it.",
     ),
     ...section(
-      `${pluralize(report.runtimeOwner.length, "automation")} ${report.runtimeOwner.length === 1 ? "runs" : "run"} on a CLI backend, where scheduled runs get no owner-only tools today while embedded runs do:`,
+      `${pluralize(report.runtimeOwner.length, "automation")} ${report.runtimeOwner.length === 1 ? "runs" : "run"} on a CLI backend, where scheduled runs now get the owner-only tools embedded runs already had:`,
       report.runtimeOwner.map((entry) => `- ${label(entry.job)}: ${entry.cliBackend}`),
-      "  Once both runtimes read the same scheduled-run authority, these runs get the owner-only tools they already have on embedded runs.",
+      "  Earlier versions gave these scheduled CLI runs no owner-only tools; both runtimes now read the same scheduled-run authority.",
     ),
     ...section(
       `${pluralize(report.missingChatType.length, "automation")} ${report.missingChatType.length === 1 ? "has" : "have"} a creating conversation with no stored chat type, so ${report.missingChatType.length === 1 ? "its" : "their"} runs get no conversation memory:`,

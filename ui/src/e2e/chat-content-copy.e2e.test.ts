@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   exactButton,
   polledAttribute,
@@ -115,6 +116,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
+      await scrollChatThreadToTop(page);
+      await waitForChatScrollIdle(page);
       const user = page.locator('.chat-bubble[data-entry-id="copy-user"]');
       const assistant = page.locator('.chat-bubble[data-entry-id="copy-assistant"]');
       const menu = page.locator(".chat-reply-context-menu");

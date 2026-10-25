@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
@@ -9,7 +10,6 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 
 const { append } = vi.hoisted(() => ({
@@ -82,12 +82,8 @@ describe("outbound delivery mirror writer fence", () => {
       agentId: "wolf",
       storePath: resolveSessionStorePathCore(undefined, { agentId: "wolf" }),
     };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const turn = withSessionTurn(target, async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const turnGate = createEnteredGate();
+    const turn = withSessionTurn(target, turnGate.wait);
     const work = new AsyncWorkScope();
     const appendSignals: Array<AbortSignal | undefined> = [];
     append.mockImplementation(async () => {
@@ -95,7 +91,7 @@ describe("outbound delivery mirror writer fence", () => {
       return { ok: true } as const;
     });
     try {
-      await withinTest(entered.promise, signal);
+      await withinTest(turnGate.entered, signal);
       const mirror = () => mirrorInto(RUNNING_SESSION_KEY, true);
       const independent = () =>
         runWithGatewayIndependentRootWorkAdmission(mirror, "direct-delivery");
@@ -106,14 +102,14 @@ describe("outbound delivery mirror writer fence", () => {
       await work.drain();
       expect(getActiveGatewayRootWorkHolders()).toEqual(["direct-delivery"]);
       expect(append).not.toHaveBeenCalled();
-      release.resolve();
+      turnGate.release();
       await withinTest(turn, signal);
       await vi.waitFor(() => expect(append).toHaveBeenCalledOnce());
       expect(appendSignals).toEqual([undefined]);
       expect(append.mock.calls[0]?.[0]).not.toHaveProperty("expectedWriterRunId");
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
-      release.resolve();
+      turnGate.release();
       await Promise.allSettled([turn]);
     }
   });

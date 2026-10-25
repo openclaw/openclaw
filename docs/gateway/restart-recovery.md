@@ -51,6 +51,11 @@ internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
 
+Automatic goal continuations retain that same authenticated operator source,
+including continuations after subagent announcements or requester-settle yields.
+If interrupted mid-tool, they resume through normal startup recovery under current
+permissions. The saved goal and its transcript do not grant authority on their own.
+
 An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently

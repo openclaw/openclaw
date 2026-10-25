@@ -318,6 +318,13 @@ optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
 identity, so edits and deletion update the corresponding FTS rows directly.
 
+On PostgreSQL, exact path matches use three B-tree indexes of bounded digests for
+normalized paths, basenames, and extensionless basenames. The original path
+predicate rechecks candidates, preserving search results and ranking while avoiding
+a full source scan for each keyword query. Agent schema 36 installs these indexes
+through Doctor; SQLite keeps its existing keyword search, including the broader
+scan used by Unicode fallback queries.
+
 Agent schema 23 converts existing JSON vectors locally, without contacting an
 embedding provider. It preserves chunk IDs, provenance, recall metadata, and
 cache identities. Malformed legacy vectors retain their searchable text and

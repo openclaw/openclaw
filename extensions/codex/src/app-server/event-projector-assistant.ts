@@ -18,7 +18,6 @@ import {
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
 import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
-import { extractRawResponseItemText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
@@ -263,14 +262,17 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
-  handleRawResponseItemCompleted(item: JsonObject, activeItemIds: ReadonlySet<string>): void {
-    const role = readString(item, "role");
+  handleRawResponseItemCompleted(
+    item: JsonObject,
+    activeItemIds: ReadonlySet<string>,
+    text: string | undefined,
+  ): void {
     const phase = readString(item, "phase");
     const rawItemId = readString(item, "id");
     const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
     const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
     const isPendingTerminalAssistantEcho =
-      role === "assistant" &&
+      item.role === "assistant" &&
       phase !== "commentary" &&
       pendingTerminalAssistantEchoItemId !== undefined &&
       (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
@@ -280,7 +282,7 @@ export class CodexAssistantProjection {
     if (!isPendingTerminalAssistantEcho) {
       this.markTerminalAssistantCandidateSupersededBy(rawItemId);
     }
-    if (role !== "assistant" || this.hasDeliveredFinalSourceReply?.()) {
+    if (item.role !== "assistant" || this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
@@ -292,7 +294,6 @@ export class CodexAssistantProjection {
       // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
-    const text = extractRawResponseItemText(item);
     if (
       text === undefined ||
       (!text &&
@@ -304,7 +305,6 @@ export class CodexAssistantProjection {
     }
     const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
     const isIdlessTerminalAssistantAfterCompletedWork =
-      candidateWasSupersededBeforeRaw &&
       rawItemId === undefined &&
       pendingTerminalAssistantEchoItemId === undefined &&
       activeItemIds.size === 0;

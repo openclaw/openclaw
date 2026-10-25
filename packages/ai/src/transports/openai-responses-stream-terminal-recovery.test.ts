@@ -442,3 +442,15 @@ it.each(["type", "call_id"])("rejects terminal output that changes its %s", asyn
   expect(result.content).toHaveLength(1);
   expect(result.events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
 });
+
+it.each([undefined, null, "standard", "daybreak_blue", "daybreak_red", "unknown"])(
+  "reports only the provider's terminal access program: %s",
+  async (program) => {
+    const terminal = completed("resp_access", []);
+    const result = await runFixture([
+      { ...terminal, response: { ...terminal.response, access_programs: { cyber: program } } },
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.responseAccessProgram).toBe(program === "unknown" ? undefined : program);
+  },
+);

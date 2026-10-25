@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { expectText } from "../test-utils/text-assertions.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
@@ -22,14 +23,6 @@ function expectSanitizedBoundaryMarkers(result: string) {
   expect(ids.end).toEqual(ids.start);
   expect(result).toContain("[[MARKER_SANITIZED]]");
   expect(result).toContain("[[END_MARKER_SANITIZED]]");
-}
-function expectText(result: string, included: string[], excluded: string[] = []) {
-  for (const text of included) {
-    expect(result).toContain(text);
-  }
-  for (const text of excluded) {
-    expect(result).not.toContain(text);
-  }
 }
 
 describe("external-content security", () => {
