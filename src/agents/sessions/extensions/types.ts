@@ -391,9 +391,6 @@ export interface ToolRenderContext<
   cwd: string;
   executionStarted: boolean;
   argsComplete: boolean;
-  /** Whether the tool result is partial/streaming. */
-  isPartial: boolean;
-  expanded: boolean;
   /** Whether inline images are currently shown in the TUI. */
   showImages: boolean;
   isError: boolean;
@@ -449,21 +446,6 @@ export interface ToolDefinition<
     ],
     Component
   >;
-}
-
-type AnyToolDefinition = ToolDefinition;
-
-/**
- * Preserve parameter inference for standalone tool definitions.
- *
- * Use this when assigning a tool to a variable or passing it through arrays such
- * as `customTools`, where contextual typing would otherwise widen params to
- * `unknown`.
- */
-export function defineTool<TParams extends TSchema, TDetails = unknown, TState = unknown>(
-  tool: ToolDefinition<TParams, TDetails, TState>,
-): ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition {
-  return tool as ToolDefinition<TParams, TDetails, TState> & AnyToolDefinition;
 }
 
 /** Fired after session_start to allow extensions to provide additional resource paths. */
@@ -743,81 +725,6 @@ export type ToolResultEvent =
   | FindToolResultEvent
   | LsToolResultEvent
   | CustomToolResultEvent;
-
-export function isBashToolResult(e: ToolResultEvent): e is BashToolResultEvent {
-  return e.toolName === "bash";
-}
-export function isReadToolResult(e: ToolResultEvent): e is ReadToolResultEvent {
-  return e.toolName === "read";
-}
-export function isEditToolResult(e: ToolResultEvent): e is EditToolResultEvent {
-  return e.toolName === "edit";
-}
-export function isWriteToolResult(e: ToolResultEvent): e is WriteToolResultEvent {
-  return e.toolName === "write";
-}
-export function isGrepToolResult(e: ToolResultEvent): e is GrepToolResultEvent {
-  return e.toolName === "grep";
-}
-export function isFindToolResult(e: ToolResultEvent): e is FindToolResultEvent {
-  return e.toolName === "find";
-}
-export function isLsToolResult(e: ToolResultEvent): e is LsToolResultEvent {
-  return e.toolName === "ls";
-}
-
-/**
- * Type guard for narrowing ToolCallEvent by tool name.
- *
- * Built-in tools narrow automatically (no type params needed):
- * ```ts
- * if (isToolCallEventType("bash", event)) {
- *   event.input.command;  // string
- * }
- * ```
- *
- * Custom tools require explicit type parameters:
- * ```ts
- * if (isToolCallEventType<"my_tool", MyToolInput>("my_tool", event)) {
- *   event.input.action;  // typed
- * }
- * ```
- *
- * Note: Direct narrowing via `event.toolName === "bash"` doesn't work because
- * CustomToolCallEvent.toolName is `string` which overlaps with all literals.
- */
-export function isToolCallEventType(
-  toolName: "bash",
-  event: ToolCallEvent,
-): event is BashToolCallEvent;
-export function isToolCallEventType(
-  toolName: "read",
-  event: ToolCallEvent,
-): event is ReadToolCallEvent;
-export function isToolCallEventType(
-  toolName: "edit",
-  event: ToolCallEvent,
-): event is EditToolCallEvent;
-export function isToolCallEventType(
-  toolName: "write",
-  event: ToolCallEvent,
-): event is WriteToolCallEvent;
-export function isToolCallEventType(
-  toolName: "grep",
-  event: ToolCallEvent,
-): event is GrepToolCallEvent;
-export function isToolCallEventType(
-  toolName: "find",
-  event: ToolCallEvent,
-): event is FindToolCallEvent;
-export function isToolCallEventType(toolName: "ls", event: ToolCallEvent): event is LsToolCallEvent;
-export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
-  toolName: TName,
-  event: ToolCallEvent,
-): event is ToolCallEvent & { toolName: TName; input: TInput };
-export function isToolCallEventType(toolName: string, event: ToolCallEvent): boolean {
-  return event.toolName === toolName;
-}
 
 export type ExtensionEvent =
   | ResourcesDiscoverEvent

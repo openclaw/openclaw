@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { Parser, Tree } from "web-tree-sitter";
 import { CommandExplanationWorkLimitError, explainShellCommand } from "./extract.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import { getBashParserForCommandExplanation } from "./tree-sitter-runtime.js";
 import type { CommandStep } from "./types.js";
 
 function expectRisk(risks: readonly unknown[], fields: Record<string, unknown>): void {
@@ -52,8 +53,46 @@ function expectCarrierWrapper(source: string) {
 }
 
 describe("command explainer tree-sitter runtime", () => {
+  it("bounds live native trees across concurrent wrapper explanations", async () => {
+    const liveTrees = new Set<Tree>();
+    let peakLiveTrees = 0;
+    // oxlint-disable typescript/unbound-method -- The spies invoke both native methods with their original receiver below.
+    const parse = Parser.prototype.parse;
+    const deleteTree = Tree.prototype.delete;
+    // oxlint-enable typescript/unbound-method
+    const parseSpy = vi.spyOn(Parser.prototype, "parse").mockImplementation(function (
+      this: Parser,
+      ...args
+    ) {
+      const tree = parse.apply(this, args);
+      if (tree) {
+        liveTrees.add(tree);
+        peakLiveTrees = Math.max(peakLiveTrees, liveTrees.size);
+      }
+      return tree;
+    });
+    const deleteSpy = vi.spyOn(Tree.prototype, "delete").mockImplementation(function (this: Tree) {
+      deleteTree.call(this);
+      liveTrees.delete(this);
+    });
+    try {
+      const explanations = await Promise.all(
+        Array.from({ length: 4 }, () => explainShellCommand(`bash -c 'sh -c "echo hello"'`)),
+      );
+      expect(explanations.every((explanation) => explanation.ok)).toBe(true);
+      expect(liveTrees.size).toBe(0);
+      // The outer command and two nested wrapper payloads share one native-memory lifetime.
+      expect(peakLiveTrees).toBeGreaterThan(0);
+      expect(peakLiveTrees).toBeLessThanOrEqual(3);
+    } finally {
+      parseSpy.mockRestore();
+      deleteSpy.mockRestore();
+    }
+  });
+
   it("rejects oversized parser input before parsing", async () => {
-    await expect(parseBashForCommandExplanation("x".repeat(128 * 1024 + 1))).rejects.toThrow(
+    const parse = await getBashParserForCommandExplanation();
+    expect(() => parse("x".repeat(128 * 1024 + 1))).toThrow(
       "Shell command is too large to explain",
     );
   });

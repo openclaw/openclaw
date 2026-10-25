@@ -118,6 +118,9 @@ function assignModelUsageAttrs(
     ["openclaw.model_call.usage.output_tokens", usage.output],
     ["openclaw.model_call.usage.cache_read_input_tokens", usage.cacheRead],
     ["openclaw.model_call.usage.cache_creation_input_tokens", usage.cacheWrite],
+    // Generic consumers add usage buckets, so TTL subsets stay OpenClaw-specific.
+    ["openclaw.model_call.usage.cache_creation_input_tokens_1h", usage.cacheWrite1h],
+    ["openclaw.model_call.usage.cache_creation_input_tokens_5m", usage.cacheWrite5m],
     ["openclaw.model_call.usage.reasoning_output_tokens", usage.reasoningTokens],
     ["openclaw.model_call.usage.prompt_tokens", promptTokens],
     ["openclaw.model_call.usage.total_tokens", usage.total],

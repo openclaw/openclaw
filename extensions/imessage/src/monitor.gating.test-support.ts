@@ -68,7 +68,7 @@ async function resolveDecision(params: {
     allowLegacyConversationAllowFromForGroup: params.allowLegacyConversationAllowFromForGroup,
     groupPolicy: params.groupPolicy ?? "open",
     dmPolicy: params.dmPolicy ?? "open",
-    storeAllowFrom: params.storeAllowFrom ?? [],
+    readStoreAllowFrom: async () => params.storeAllowFrom ?? [],
     historyLimit: 0,
     groupHistories: params.groupHistories ?? new Map(),
   });

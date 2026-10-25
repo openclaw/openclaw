@@ -69,13 +69,6 @@ export function addTelegramNativeQuoteCandidate(
   target[key] = candidate;
 }
 
-type TelegramReplyQuoteForSend = {
-  messageId?: number;
-  text?: string;
-  position?: number;
-  entities?: unknown[];
-};
-
 export function resolveReplyQuoteForSend(params: {
   replyToId?: number;
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
@@ -83,7 +76,7 @@ export function resolveReplyQuoteForSend(params: {
   replyQuoteText?: string;
   replyQuotePosition?: number;
   replyQuoteEntities?: unknown[];
-}): TelegramReplyQuoteForSend {
+}) {
   if (params.replyToId != null) {
     const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
     if (mapped?.text) {
