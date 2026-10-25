@@ -280,6 +280,9 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    sweepMaterializedRows() {
+      throw new Error("Residency maintenance requires a real session row projection");
+    },
     findUrlCandidates(selection, agentId) {
       return matching({ agentId })
         .filter((row) => {
