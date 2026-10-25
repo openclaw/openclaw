@@ -3,26 +3,28 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const primaryModel = "grok-4.6";
 const fallbackModel = "fallback-proof";
 const marker = "XAI_FALLBACK_REPLY";
+const prefix = "The answer is";
+const continuation = "The answer is 42.";
 const tokenGenerationError = "Internal error during token generation";
 const authError = `Incorrect API key provided. ${tokenGenerationError}`;
-const rejected403 = (reason: "billing" | "rate_limit", message: string) => ({
-  status: 403,
-  message: `${message}. ${tokenGenerationError}`,
-  reason,
-});
 const rejections = new Map<
   string,
   {
@@ -39,20 +41,70 @@ const rejections = new Map<
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
-  ["billing", rejected403("billing", "You have run out of credits")],
-  ["rate-limit", rejected403("rate_limit", "Rate limit exceeded")],
+  [
+    "billing",
+    {
+      status: 403,
+      message: `You have run out of credits. ${tokenGenerationError}`,
+      reason: "billing",
+    },
+  ],
+  [
+    "rate-limit",
+    {
+      status: 403,
+      message: `Rate limit exceeded. ${tokenGenerationError}`,
+      reason: "rate_limit",
+    },
+  ],
 ]);
-// Shared partial-output recovery is exercised by server.chat-recovered-output.test.ts.
-const scenarios = ["fallback", ...rejections.keys()] as const;
+const scenarios = [
+  "fallback",
+  "continuation",
+  "visible-fallback",
+  "no-fallback",
+  "exhausted",
+  ...rejections.keys(),
+] as const;
 type Scenario = (typeof scenarios)[number];
+const model = (id: string) => ({
+  id,
+  name: id,
+  api: "openai-responses",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 16_000,
+  maxTokens: 256,
+});
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+const responseMessage = (id: string, text: string) => ({
+  type: "message",
+  id,
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text, annotations: [] }],
+});
+
+function messageText(message: unknown): string {
+  if (!isRecord(message) || !Array.isArray(message.content)) {
+    return "";
+  }
+  return message.content
+    .flatMap((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("\n");
+}
 
 it(
   "chat.send preserves xAI rejection priority and recovers statusless failures",
   {
     timeout: 180_000,
   },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -84,6 +136,10 @@ it(
     }
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
+    const events: ChatEvent[] = [];
+    const displayFrames: ChatDisplayFrame[] = [];
+    const terminalEvents = new Map<string, (event: ChatEvent) => void>();
+    const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -116,8 +172,25 @@ it(
           }
           return;
         }
-        if (payload.model === primaryModel) {
-          response.writeHead(200, { "content-type": "text/event-stream" });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const writeEvent = (type: string, data: Record<string, unknown>) =>
+          response.write(encodeEvent({ type, ...data }));
+        const recovered = scenario === "continuation" && requests.length === 2;
+        if ((payload.model === primaryModel && !recovered) || scenario === "exhausted") {
+          const item = responseMessage(`failed-${requests.length}`, prefix);
+          if (scenario !== "fallback") {
+            writeEvent("response.output_item.added", {
+              output_index: 0,
+              item: { ...item, status: "in_progress", content: [] },
+            });
+            writeEvent("response.output_text.delta", {
+              output_index: 0,
+              item_id: item.id,
+              content_index: 0,
+              delta: prefix,
+            });
+            writeEvent("response.output_item.done", { output_index: 0, item });
+          }
           response.end(
             encodeEvent({
               type: "response.failed",
@@ -125,28 +198,40 @@ it(
                 id: `failure-${requests.length}`,
                 status: "failed",
                 error: { code: null, message: tokenGenerationError },
-                output: [],
+                output: scenario === "fallback" ? [] : [item],
                 usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
               },
             }),
           );
           return;
         }
-        writeOpenAiResponsesText(response, {
-          text: marker,
-          messageId: "fallback",
-          responseId: "fallback-response",
-        });
+        const message = responseMessage("fallback", recovered ? continuation : marker);
+        response.end(
+          [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...message, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", output_index: 0, item: message },
+            {
+              type: "response.completed",
+              response: {
+                id: "fallback-response",
+                status: "completed",
+                output: [message],
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+              },
+            },
+          ]
+            .map(encodeEvent)
+            .join(""),
+        );
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
       const baseUrl = await listenProvider(provider);
-      const providerConfig = (id: string) => {
-        const config = buildMockOpenAiResponsesProvider(baseUrl, id).config;
-        Object.assign(config.models[0], { contextWindow: 16_000, maxTokens: 256 });
-        return config;
-      };
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -162,7 +247,7 @@ it(
                 {
                   model: {
                     primary: `xai/${primaryModel}`,
-                    fallbacks: [`openai/${fallbackModel}`],
+                    fallbacks: name === "no-fallback" ? [] : [`openai/${fallbackModel}`],
                   },
                 },
               ]),
@@ -171,8 +256,18 @@ it(
           models: {
             mode: "replace",
             providers: {
-              xai: providerConfig(primaryModel),
-              openai: providerConfig(fallbackModel),
+              xai: {
+                baseUrl,
+                apiKey: "test",
+                api: "openai-responses",
+                models: [model(primaryModel)],
+              },
+              openai: {
+                baseUrl,
+                apiKey: "test",
+                api: "openai-responses",
+                models: [model(fallbackModel)],
+              },
             },
           },
           plugins: {
@@ -185,6 +280,26 @@ it(
         configPath,
         token: "xai-fallback-test",
         onEvent: (event) => {
+          if (event.event === "chat") {
+            const chatEvent = event.payload as ChatEvent;
+            events.push(chatEvent);
+            displayFrames.push({ event: "chat", payload: chatEvent });
+            terminalEvents.get(chatEvent.runId)?.(chatEvent);
+          }
+          if (event.event === "session.message") {
+            displayFrames.push({ event: "session.message", payload: event.payload });
+          }
+          if (
+            event.event === "session.message" &&
+            isRecord(event.payload) &&
+            typeof event.payload.sessionKey === "string" &&
+            isRecord(event.payload.message) &&
+            event.payload.message.role === "assistant"
+          ) {
+            const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
+            messages.push(event.payload.message);
+            publishedMessages.set(event.payload.sessionKey, messages);
+          }
           if (
             event.event === "agent" &&
             isRecord(event.payload) &&
@@ -195,18 +310,43 @@ it(
           }
         },
       });
+      const installed = getActivePluginRegistry()?.providers.find(
+        (entry) => entry.provider.id === "xai",
+      );
+      expect(installed?.pluginId).toBe("xai");
+      expect(typeof installed?.provider.classifyFailoverReason).toBe("function");
       for (const selected of scenarios) {
         scenario = selected;
         const check = (actual: unknown) => expect.soft(actual, scenario);
         requests = [];
         const rejection = rejections.get(scenario);
         const sessionKey = `agent:${scenario}:xai-fallback`;
+        await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         const started = await gateway.client.request<{ runId: string }>("chat.send", {
           sessionKey,
           message: "Reply with the marker.",
           deliver: false,
           idempotencyKey: `xai-${scenario}`,
         });
+        const terminalReceived = createDeferred();
+        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
+        const receiveTerminal = (event: ChatEvent) => {
+          if (
+            event.sessionKey === sessionKey &&
+            (expectsSuccess
+              ? event.state === "final" && event.stopReason === "stop"
+              : event.state === "error")
+          ) {
+            terminalReceived.resolve();
+          }
+        };
+        terminalEvents.set(started.runId, receiveTerminal);
+        // The expected terminal may arrive before chat.send acknowledges its run ID.
+        for (const event of events) {
+          if (event.runId === started.runId) {
+            receiveTerminal(event);
+          }
+        }
         const completed = await gateway.client.request<{
           status: string;
           error?: string;
@@ -220,28 +360,72 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
+        // Status-notice finals do not settle the transcript-gated successful reply.
+        await withinTest(terminalReceived.promise, signal);
+        terminalEvents.delete(started.runId);
+        const history = await gateway.client.request<{
+          messages: Array<{ role: string; content: unknown; stopReason?: string }>;
+        }>("chat.history", { sessionKey, limit: 20 });
+        const assistant = history.messages.findLast((message) => message.role === "assistant");
+        const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
           rejection && rejection.reason !== "rate_limit" ? 1 : 2,
         );
-        check(requests).toContain(fallbackModel);
-        check(completed).toMatchObject({ status: "ok", terminalReply: { text: marker } });
-        if (rejection) {
-          check(fallbackEvents).toContainEqual(
-            expect.objectContaining({
-              runId: started.runId,
-              data: expect.objectContaining({
-                attempts: expect.arrayContaining([
-                  expect.objectContaining({
-                    provider: "xai",
-                    model: primaryModel,
-                    reason: rejection.reason,
-                    ...(rejection.status === undefined ? {} : { status: rejection.status }),
-                  }),
-                ]),
+        const terminal = runEvents
+          .filter((event) => event.state === "final")
+          .filter((event) => event.stopReason === "stop");
+        if (rejection || ["fallback", "continuation", "visible-fallback"].includes(scenario)) {
+          const expected = scenario === "continuation" ? continuation : marker;
+          if (scenario === "continuation") {
+            check(requests).not.toContain(fallbackModel);
+          } else {
+            check(requests).toContain(fallbackModel);
+          }
+          check(completed.status).toBe("ok");
+          check(assistant?.stopReason).toBe("stop");
+          check(messageText(assistant)).toBe(expected);
+          check(completed.terminalReply?.text).toBe(expected);
+          check(terminal).toHaveLength(1);
+          check(messageText(terminal[0]?.message)).toBe(expected);
+          if (rejection) {
+            check(fallbackEvents).toContainEqual(
+              expect.objectContaining({
+                runId: started.runId,
+                data: expect.objectContaining({
+                  attempts: expect.arrayContaining([
+                    expect.objectContaining({
+                      provider: "xai",
+                      model: primaryModel,
+                      reason: rejection.reason,
+                      ...(rejection.status === undefined ? {} : { status: rejection.status }),
+                    }),
+                  ]),
+                }),
               }),
-            }),
+            );
+          }
+        } else {
+          check(completed.status).toBe("error");
+          check(messageText(assistant)).toBe(prefix);
+          check(messageText(publishedMessages.get(sessionKey)?.at(-1))).toBe(prefix);
+          const display = replayChatDisplay(displayFrames, sessionKey, started.runId);
+          check(display.chatRunId).toBeNull();
+          check(display.chatStream).toBeNull();
+          check(display.chatStreamSegments).toEqual([]);
+          check(
+            display.chatMessages
+              .filter(isRecord)
+              .filter((message) => message.role === "assistant")
+              .map(messageText),
+          ).toEqual(
+            history.messages.filter((message) => message.role === "assistant").map(messageText),
           );
+          if (scenario === "no-fallback") {
+            check(requests).not.toContain(fallbackModel);
+          } else {
+            check(requests).toContain(fallbackModel);
+          }
         }
       }
     } finally {

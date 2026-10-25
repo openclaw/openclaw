@@ -93,7 +93,7 @@ describe("prepared model runtime owner selection", () => {
   it("awaits cold metadata preparation before deriving runtime selections", async () => {
     const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
     const metadataStarted = createDeferred();
-    using _ = vi
+    using resolveMetadata = vi
       .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
       .mockImplementationOnce(() => {
         metadataStarted.resolve();
@@ -109,10 +109,14 @@ describe("prepared model runtime owner selection", () => {
       deriveRuntimePluginSelections,
     });
     await metadataStarted.promise;
+    expect(resolveMetadata).toHaveBeenCalledOnce();
     expect(deriveRuntimePluginSelections).not.toHaveBeenCalled();
     prepared.resolve(metadataSnapshot);
     await using lease = await pending;
-    expect(deriveRuntimePluginSelections).toHaveBeenCalledOnce();
+    expect(deriveRuntimePluginSelections).toHaveBeenCalledExactlyOnceWith({
+      config: input.config,
+      metadataSnapshot,
+    });
     expect(lease.snapshot.metadataSnapshot).toBe(metadataSnapshot);
   });
 
@@ -285,8 +289,14 @@ describe("prepared model runtime owner selection", () => {
   });
 
   it("keeps a committed gateway owner current when an admitted turn resumes on its older generation", async () => {
+    const defaults = {
+      model: "openai/gpt-5",
+      models: {
+        "openai/gpt-5": { params: { transport: "sse" as const, openaiWsWarmup: false } },
+      },
+    };
     const configFor = (responsePrefix: string) => ({
-      ...modelConfig("gpt-5"),
+      agents: { defaults },
       messages: { responsePrefix },
     });
     const previousConfig = configFor("previous");
@@ -631,6 +641,9 @@ describe("prepared model runtime snapshots", () => {
 
     await expect(publishGateway({}, { catalogMode: "static" })).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });
 
   it("does not announce an auth republication while a config replacement gate is pending", async () => {
@@ -738,6 +751,7 @@ describe("prepared model runtime snapshots", () => {
   it("preserves an authoritative workspace override across config refresh", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
+    const agentDir = fixture.state.agentDir("default");
     const input = agentInput(config, { workspaceDir: "/tmp/explicit-workspace" });
     await publishPreparedModelRuntimeSnapshot(
       { ...input, preserveWorkspaceDirOnRefresh: true },
@@ -748,5 +762,10 @@ describe("prepared model runtime snapshots", () => {
     const snapshot = await prepareModelRuntimeSnapshot(input);
 
     expect(snapshot.workspaceDir).toBe("/tmp/explicit-workspace");
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      agentDir,
+      expect.objectContaining({ workspaceDir: "/tmp/explicit-workspace" }),
+    );
   });
 });

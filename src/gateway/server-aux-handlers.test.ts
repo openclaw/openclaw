@@ -3,6 +3,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 
 const secretStoreMocks = vi.hoisted(() => ({ writeEntry: vi.fn() }));
 
+// mock-isolation: reload tests keep secret-store writes in test-owned doubles.
 vi.mock("../secrets/store/secret-store.js", () => {
   class SecretStoreValidationError extends Error {}
   return {

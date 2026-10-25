@@ -343,23 +343,38 @@ describe("Gateway RPC fixture session writes", () => {
 });
 
 describe("Gateway fixture config publication", () => {
-  test("reply preparation publishes fixture config before awaited work", async () => {
-    const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
-    const { getRuntimeConfig } = await import("../config/io.js");
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, worker: {} } };
-    const admission = prepareGatewayReplyRuntimeForTest({ force: true });
-    // Real maintenance/finalizer callbacks can read config while admission
-    // yields for imports or model preparation, before the RPC is sent.
-    const duringAdmission = actual.getRuntimeConfig();
-    await admission;
-    const expectedAgents = ["main", "worker"];
-    expect(listAgentIds(duringAdmission)).toEqual(expectedAgents);
-    expect(listAgentIds(actual.getRuntimeConfig())).toEqual(expectedAgents);
-    expect(getRuntimeConfig()).toEqual(actual.getRuntimeConfig());
-    const response = await listAgents();
-    expect(response.ok, JSON.stringify(response)).toBe(true);
-    expect(response.payload?.agents.map((agent) => agent.id)).toEqual(expectedAgents);
-  });
+  test.each(["reply preparation", "RPC session update"] as const)(
+    "%s shares the current fixture with real IO across awaited work",
+    async (boundary) => {
+      const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+      const { getRuntimeConfig } = await import("../config/io.js");
+      for (const agentId of ["worker", "reviewer", undefined]) {
+        testState.agentsConfig = agentId
+          ? { ownership: "explicit", entries: { main: {}, [agentId]: {} } }
+          : undefined;
+        testState.sessionConfig =
+          boundary === "RPC session update" ? { mainKey: agentId ?? "main" } : undefined;
+        const admission =
+          boundary === "reply preparation"
+            ? prepareGatewayReplyRuntimeForTest({ force: true })
+            : listAgents();
+        // Real maintenance/finalizer callbacks can read config while admission
+        // yields for imports or model preparation, before the RPC is sent.
+        const duringAdmission = actual.getRuntimeConfig();
+        await admission;
+        const expectedAgents = agentId ? ["main", agentId] : ["main"];
+        expect(listAgentIds(duringAdmission)).toEqual(expectedAgents);
+        if (boundary === "RPC session update") {
+          expect(duringAdmission.session?.mainKey).toBe(agentId ?? "main");
+        }
+        expect(listAgentIds(actual.getRuntimeConfig())).toEqual(expectedAgents);
+        expect(getRuntimeConfig()).toEqual(actual.getRuntimeConfig());
+        const response = await listAgents();
+        expect(response.ok, JSON.stringify(response)).toBe(true);
+        expect(response.payload?.agents.map((agent) => agent.id)).toEqual(expectedAgents);
+      }
+    },
+  );
 
   test("publishes agent-only edits and removals without overwriting authored config", async () => {
     const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
@@ -381,7 +396,6 @@ describe("Gateway fixture config publication", () => {
     const entries: NonNullable<AgentsConfig["entries"]> = { primary: { workspace }, secondary };
     testState.agentsConfig = { ownership: "explicit", entries };
     testState.agentConfig = { timeoutSeconds: 45 };
-    testState.sessionConfig = { mainKey: "fixture-main" };
 
     const expectPublished = async (
       expectedEntries: NonNullable<AgentsConfig["entries"]>,
@@ -393,7 +407,6 @@ describe("Gateway fixture config publication", () => {
         expect(realConfig.agents?.entries).toEqual(expectedEntries);
         expect(realConfig.agents?.defaults).toMatchObject({ userTimezone: "UTC", timeoutSeconds });
         expect(realConfig.session?.store).toBe(store);
-        expect(realConfig.session?.mainKey).toBe("fixture-main");
         expect(getMockedRuntimeConfig()).toEqual(realConfig);
         const response = await request;
         expect(response.ok, JSON.stringify(response)).toBe(true);

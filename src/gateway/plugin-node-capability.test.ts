@@ -73,13 +73,10 @@ function makeTokenClient(expiresAtMs = 1_500, key = "canvas") {
   });
 }
 
-const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
-const files = { surface: "files", scopeKey: "storage:files" };
-const scopedUrl = (token: string, host = "https://gateway.example") =>
-  `${host}/__openclaw__/cap/${token}`;
-
 describe("plugin node capability helpers", () => {
   test("publishes plugin surface replacement atomically while retaining unaffected credentials", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
     const removed = { surface: "retired", scopeKey: "drawing:retired" };
     const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
     prepareClientPluginNodeCapabilities({
@@ -104,6 +101,8 @@ describe("plugin node capability helpers", () => {
   });
 
   test("publishes newly enabled surfaces only within the client's admitted capabilities", () => {
+    const canvas = { surface: "canvas", scopeKey: "drawing:canvas" };
+    const files = { surface: "files", scopeKey: "storage:files" };
     const client = makeClient({ pluginSurfaceBaseUrl: "https://gateway.example" });
     const publish = prepareClientPluginNodeCapabilities({
       client,
@@ -131,40 +130,31 @@ describe("plugin node capability helpers", () => {
     expect(buildPluginNodeCapabilityScopedHostUrl("http://127.0.0.1:18789", " ")).toBeUndefined();
   });
 
-  test.each([
-    [
-      "token%20value",
-      "file.txt?download=1",
-      "token value",
-      "file.txt?download=1&oc_cap=token+value",
-    ],
-    ["current-token", "?oc_cap=stale-token", "current-token", "?oc_cap=current-token"],
-  ] as const)(
-    "normalizes scoped capability %s over any stale query",
-    (token, suffix, capability, rewritten) => {
-      expect(
-        normalizePluginNodeCapabilityScopedUrl(
-          `/__openclaw__/cap/${token}/__openclaw__/canvas/${suffix}`,
-        ),
-      ).toEqual({
-        pathname: `/__openclaw__/canvas/${suffix.split("?")[0]}`,
-        capability,
-        rewrittenUrl: `/__openclaw__/canvas/${rewritten}`,
-        scopedPath: true,
-        malformedScopedPath: false,
-      });
-    },
-  );
+  test("normalizes scoped urls and moves capability into the query string", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/token%20value/__openclaw__/canvas/file.txt?download=1",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/file.txt",
+      capability: "token value",
+      rewrittenUrl: "/__openclaw__/canvas/file.txt?download=1&oc_cap=token+value",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
+  });
 
   test("detects conflicting scoped host capabilities across rewritten hosts", () => {
     expect(
       pluginNodeCapabilityScopedHostUrlsConflict(
-        scopedUrl("token%20value", "http://127.0.0.1:18789"),
-        scopedUrl("token%20value", "https://gateway.example:7443"),
+        "http://127.0.0.1:18789/__openclaw__/cap/token%20value",
+        "https://gateway.example:7443/__openclaw__/cap/token%20value",
       ),
     ).toBe(false);
     expect(
-      pluginNodeCapabilityScopedHostUrlsConflict(scopedUrl("old-token"), scopedUrl("new-token")),
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "https://gateway.example/__openclaw__/cap/old-token",
+        "https://gateway.example/__openclaw__/cap/new-token",
+      ),
     ).toBe(true);
     expect(pluginNodeCapabilityScopedHostUrlsConflict("not-a-url", "also-not-a-url")).toBe(false);
   });
@@ -174,15 +164,92 @@ describe("plugin node capability helpers", () => {
       pluginNodeCapabilities: { canvas: { capability: "current-token", expiresAtMs: 1_500 } },
     });
     const surface = { surface: "canvas" };
-    const url = scopedUrl("current-token");
+    const url = "https://gateway.example/__openclaw__/cap/current-token";
     expect(authorizedUrl(client, surface, url, 1_000)).toBe(true);
     expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
-    expect(authorizedUrl(client, surface, scopedUrl("other-token"), 1_000)).toBe(false);
+    expect(
+      authorizedUrl(client, surface, "https://gateway.example/__openclaw__/cap/other-token", 1_000),
+    ).toBe(false);
     expect(authorizedUrl(client, surface, url, 1_500)).toBe(false);
     expect(authorizedUrl(makeClient(), surface, url, 1_000)).toBe(false);
     expect(
       authorizedUrl(client, { surface: "canvas", scopeKey: "other-plugin:canvas" }, url, 1_000),
     ).toBe(false);
+  });
+
+  test("treats the scoped path capability as authoritative over a stale query", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/current-token/__openclaw__/canvas/?oc_cap=stale-token",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/",
+      capability: "current-token",
+      rewrittenUrl: "/__openclaw__/canvas/?oc_cap=current-token",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
+  });
+
+  test("marks malformed scoped urls without authorizing a path capability", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl("/__openclaw__/cap/broken");
+    expect(normalized.scopedPath).toBe(true);
+    expect(normalized.malformedScopedPath).toBe(true);
+    expect(normalized.capability).toBeUndefined();
+    expect(normalized.rewrittenUrl).toBeUndefined();
+  });
+
+  test("marks malformed request targets without throwing", () => {
+    for (const rawUrl of ["//", "///", "//${jndi:ldap://example}.action"]) {
+      const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);
+      expect(normalized).toMatchObject({
+        pathname: "/",
+        scopedPath: false,
+        malformedScopedPath: true,
+      });
+      expect(normalized.capability).toBeUndefined();
+      expect(normalized.rewrittenUrl).toBeUndefined();
+    }
+  });
+
+  test("stores capabilities per plugin surface", () => {
+    const client = makeClient();
+    setClientPluginNodeCapability({
+      client,
+      surface: { surface: "canvas" },
+      capability: "canvas-token",
+      expiresAtMs: 100,
+    });
+    setClientPluginNodeCapability({
+      client,
+      surface: { surface: "files" },
+      capability: "files-token",
+      expiresAtMs: 200,
+    });
+    expect(client.pluginNodeCapabilities).toEqual({
+      canvas: { capability: "canvas-token", expiresAtMs: 100 },
+      files: { capability: "files-token", expiresAtMs: 200 },
+    });
+  });
+
+  test("stores capabilities per plugin-owned surface scope", () => {
+    const client = makeClient();
+    setClientPluginNodeCapability({
+      client,
+      surface: { surface: "canvas", scopeKey: "canvas-plugin:canvas" },
+      capability: "canvas-token",
+      expiresAtMs: 100,
+    });
+    setClientPluginNodeCapability({
+      client,
+      surface: { surface: "canvas", scopeKey: "other-plugin:canvas" },
+      capability: "other-token",
+      expiresAtMs: 200,
+    });
+
+    expect(client.pluginNodeCapabilities).toEqual({
+      "canvas\u0000canvas-plugin:canvas": { capability: "canvas-token", expiresAtMs: 100 },
+      "canvas\u0000other-plugin:canvas": { capability: "other-token", expiresAtMs: 200 },
+    });
   });
 
   test("indexes plugin capability surfaces with shortest ttl per surface", () => {
@@ -228,16 +295,26 @@ describe("plugin node capability helpers", () => {
     expect(client.pluginSurfaceUrls).toBeUndefined();
   });
 
-  test("preserves nodes across unrelated hosted-surface changes", () => {
+  test.each([
+    { node: "browser-only", caps: ["browser"], maxProtocol: PROTOCOL_VERSION },
+    { node: "without approved capabilities", caps: [], maxProtocol: PROTOCOL_VERSION },
+  ])("preserves $node nodes across unrelated hosted-surface changes", ({ caps, maxProtocol }) => {
     const close = vi.fn();
     const client = makeClient({
-      connect: { ...makeClient().connect, caps: ["browser"] },
+      connect: { ...makeClient().connect, minProtocol: maxProtocol, maxProtocol, caps },
     });
-    const surfaces = indexPluginNodeCapabilitySurfaces([files]);
-    expect(reconcileClientPluginNodeCapabilities(client, surfaces, close)).toBe(true);
-    expect(client.invalidated).toBeUndefined();
-    expect(close).not.toHaveBeenCalled();
-    expect(refresh(client, "files")).toBeUndefined();
+    for (const next of [
+      [{ surface: "files", scopeKey: "previous:files", ttlMs: 100 }],
+      [{ surface: "files", scopeKey: "current:files", ttlMs: 200 }],
+      [],
+    ]) {
+      const surfaces = indexPluginNodeCapabilitySurfaces(next);
+      expect(reconcileClientPluginNodeCapabilities(client, surfaces, close)).toBe(true);
+      expect(client.invalidated).toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+      expect(refresh(client, "files")).toBeUndefined();
+      client.pluginNodeCapabilitySurfaces = surfaces;
+    }
   });
 
   test("reconnects legacy nodes to recompute session protocol ceilings", () => {
@@ -285,8 +362,15 @@ describe("plugin node capability helpers", () => {
     const client = makeRefreshClient();
     const refreshed = refresh(client);
     expect(refreshed).toMatchObject({ surface: "canvas", expiresAtMs: 1_100 });
+    expect(refreshed?.capability).toBeTypeOf("string");
+    expect(refreshed?.capability).not.toBe("");
+    expect(refreshed?.scopedUrl).toContain("/__openclaw__/cap/");
     expect(refreshed?.scopedUrl).not.toContain("old-token/__openclaw__/cap/");
-    expect(authorizeCapability(client, undefined, refreshed?.capability)).toBe(true);
+    expect(client.pluginSurfaceUrls?.canvas).toBe(refreshed?.scopedUrl);
+    expect(client.pluginNodeCapabilities?.canvas).toEqual({
+      capability: refreshed?.capability,
+      expiresAtMs: 1_100,
+    });
   });
 
   test("does not refresh client plugin capabilities when the clock is invalid", () => {
@@ -307,37 +391,62 @@ describe("plugin node capability helpers", () => {
     expect(authorizeCapability(client, { surface: "files" })).toBe(false);
   });
 
-  test.each([
-    ["invalid clock", 1_500, Number.NaN],
-    ["invalid expiry", Number.POSITIVE_INFINITY, 1_000],
-  ] as const)("rejects %s without sliding expiry", (_name, expiresAtMs, now) => {
-    const client = makeTokenClient(expiresAtMs);
-    expect(authorizeCapability(client, undefined, undefined, now)).toBe(false);
-    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(expiresAtMs);
+  test("rejects invalidated clients without sliding capability expiry", () => {
+    const client = makeClient({
+      invalidated: true,
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: 1_500 },
+      },
+    });
+
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+      }),
+    ).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
   });
 
-  test("stores independent same-surface credentials and authorizes only their plugin scope", () => {
-    const client = makeClient();
-    const first = { surface: "canvas", scopeKey: "canvas-plugin:canvas", ttlMs: 100 };
-    const second = { surface: "canvas", scopeKey: "other-plugin:canvas", ttlMs: 100 };
-    setClientPluginNodeCapability({
-      client,
-      surface: first,
-      capability: "canvas-token",
-      expiresAtMs: 1500,
+  test("rejects plugin surface capabilities when the clock is invalid", () => {
+    const client = makeTokenClient();
+    expect(authorizeCapability(client, undefined, undefined, Number.NaN)).toBe(false);
+    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
+  });
+
+  test("rejects plugin surface capabilities with invalid stored expiries", () => {
+    const client = makeClient({
+      pluginNodeCapabilities: {
+        canvas: { capability: "canvas-token", expiresAtMs: Number.POSITIVE_INFINITY },
+      },
     });
-    setClientPluginNodeCapability({
-      client,
-      surface: second,
-      capability: "other-token",
-      expiresAtMs: 1500,
-    });
-    expect(authorizeCapability(client, second)).toBe(false);
-    expect(authorizeCapability(client, first)).toBe(true);
-    expect(authorizeCapability(client, second, "other-token")).toBe(true);
-    expect(client.pluginNodeCapabilities).toEqual({
-      "canvas\0canvas-plugin:canvas": { capability: "canvas-token", expiresAtMs: 1100 },
-      "canvas\0other-plugin:canvas": { capability: "other-token", expiresAtMs: 1100 },
-    });
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
+    expect(
+      hasAuthorizedPluginNodeCapability({
+        clients: new Set([client]),
+        surface: { surface: "canvas", ttlMs: 100 },
+        capability: "canvas-token",
+      }),
+    ).toBe(false);
+  });
+
+  test("does not authorize the same surface token for a different plugin scope", () => {
+    const client = makeTokenClient(1_500, "canvas\0canvas-plugin:canvas");
+    expect(
+      authorizeCapability(client, { surface: "canvas", scopeKey: "other-plugin:canvas" }),
+    ).toBe(false);
+    expect(
+      authorizeCapability(client, {
+        surface: "canvas",
+        scopeKey: "canvas-plugin:canvas",
+        ttlMs: 100,
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects expired capabilities", () => {
+    expect(authorizeCapability(makeTokenClient(999), { surface: "canvas" })).toBe(false);
   });
 });

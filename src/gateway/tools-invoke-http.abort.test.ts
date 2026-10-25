@@ -1,5 +1,5 @@
-import type { IncomingMessage } from "node:http";
-import { expectDefined } from "@openclaw/normalization-core";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -16,7 +16,6 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createTestGatewayHttpServer } from "./http-server.test-support.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -24,7 +23,13 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
-  authorize: vi.fn<typeof authorizeScopedGatewayHttpRequestOrReply>(),
+  authorize:
+    vi.fn<
+      (params: {
+        req: IncomingMessage;
+        res: ServerResponse;
+      }) => ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>
+    >(),
   beforeHook: vi.fn(async (args: { params: unknown; signal?: AbortSignal }) => ({
     blocked: false as const,
     params: args.params,
@@ -73,34 +78,58 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   };
 }
 
-function authorization(
-  requestAuth = authorizedRequest(),
-  cfg: OpenClawConfig = {},
-  operatorScopes: string[] = [],
-) {
-  return { cfg, requestAuth, operatorScopes };
-}
-
-let origin: string;
+let server: ReturnType<typeof createServer> | undefined;
+let serverPort = 0;
 let resolveGatewayContext: GatewayContextResolver | undefined;
-const server = createTestGatewayHttpServer(async (req, res) => {
-  const handled = await handleToolsInvokeHttpRequest(req, res, {
-    auth: { mode: "none", allowTailscale: false },
-    resolveGatewayContext,
-  });
-  lifecycle.handled();
-  return handled;
-});
+
 beforeAll(async () => {
-  origin = `http://127.0.0.1:${await server.listen()}`;
+  server = createServer((req, res) => {
+    void handleToolsInvokeHttpRequest(req, res, {
+      auth: { mode: "none", allowTailscale: false },
+      resolveGatewayContext,
+    })
+      .then(() => {
+        lifecycle.handled();
+      })
+      .catch((error: unknown) => {
+        if (!res.destroyed && !res.writableEnded) {
+          res.statusCode = 500;
+          res.end(String(error));
+        }
+      });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server?.once("error", reject);
+    server?.listen(0, "127.0.0.1", () => {
+      const address = server?.address() as AddressInfo | null;
+      serverPort = address?.port ?? 0;
+      resolve();
+    });
+  });
 });
-afterAll(() => server.close());
+
+afterAll(async () => {
+  const activeServer = server;
+  if (!activeServer) {
+    return;
+  }
+  activeServer.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    activeServer.close(() => resolve());
+  });
+  server = undefined;
+});
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
-  lifecycle.authorize.mockResolvedValue(authorization());
+  lifecycle.authorize.mockResolvedValue({
+    cfg: {},
+    requestAuth: authorizedRequest(),
+    operatorScopes: [],
+  });
   lifecycle.beforeHook.mockClear();
   lifecycle.handled.mockReset();
   lifecycle.execute.mockReset();
@@ -110,7 +139,7 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
-  return fetch(`${origin}/tools/invoke`, {
+  return fetch(`http://127.0.0.1:${serverPort}/tools/invoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ tool: "abort_probe", args: {} }),
@@ -118,33 +147,16 @@ function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
   });
 }
 
-async function disconnectDuring<T>(
-  started: Promise<T>,
-  release: () => void,
-  checkDisconnected: (value: T) => Promise<void>,
-) {
-  const controller = new AbortController();
-  const response = invokeAbortProbe(controller.signal);
-  try {
-    const value = await started;
-    controller.abort();
-    await expect(response).rejects.toThrow();
-    await checkDisconnected(value);
-  } finally {
-    release();
-    controller.abort();
-    await response.catch(() => undefined);
-  }
-}
-
 describe("POST /tools/invoke request cancellation", () => {
   it("rejects a tool when policy authority changes during its awaited hook", async () => {
     const hookStarted = createDeferred();
     const releaseHook = createDeferred();
     let current = true;
-    lifecycle.authorize.mockResolvedValueOnce(
-      authorization(authorizedRequest({ hasCurrentClientAuthority: () => current })),
-    );
+    lifecycle.authorize.mockResolvedValueOnce({
+      cfg: {},
+      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
+      operatorScopes: [],
+    });
     lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
       hookStarted.resolve();
       await releaseHook.promise;
@@ -182,20 +194,65 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("does not start a tool after the client disconnects during authorization", async () => {
-    const started = createDeferred<IncomingMessage>();
-    const released = createDeferred();
-    lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
-      started.resolve(req);
-      await released.promise;
-      return authorization();
+    let reportAuthorizationStarted: ((req: IncomingMessage) => void) | undefined;
+    let releaseAuthorization: (() => void) | undefined;
+    const authorizationStarted = new Promise<IncomingMessage>((resolve) => {
+      reportAuthorizationStarted = resolve;
+    });
+    const authorizationReleased = new Promise<void>((resolve) => {
+      releaseAuthorization = resolve;
     });
 
-    await disconnectDuring(started.promise, released.resolve, async (serverRequest) => {
+    lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
+      reportAuthorizationStarted?.(req);
+      await authorizationReleased;
+      return {
+        cfg: {},
+        requestAuth: authorizedRequest(),
+        operatorScopes: [],
+      };
+    });
+
+    const requestController = new AbortController();
+    const response = invokeAbortProbe(requestController.signal);
+
+    try {
+      const serverRequest = await authorizationStarted;
+      requestController.abort();
+      await expect(response).rejects.toThrow();
       await expect.poll(() => serverRequest.socket.destroyed).toBe(true);
-      released.resolve();
+
+      releaseAuthorization?.();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
       expect(lifecycle.execute).not.toHaveBeenCalled();
+    } finally {
+      releaseAuthorization?.();
+      requestController.abort();
+      await response.catch(() => undefined);
+    }
+  });
+
+  it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
+    const revoked = vi.fn();
+    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+      // Observe while the tool owns the signal: Node 24 composites retain weak
+      // sources until subscribed, so a later getter can lose an aborted source to GC.
+      signal?.addEventListener("abort", revoked, { once: true });
+      return { ok: true };
     });
+    const response = await invokeAbortProbe();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+    expect(lifecycle.execute).toHaveBeenCalledTimes(1);
+
+    const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
+    expect(toolSignal).toBeInstanceOf(AbortSignal);
+    expect(revoked).toHaveBeenCalledTimes(1);
+    expect(toolSignal?.aborted).toBe(true);
+    expect(lifecycle.beforeHook).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: toolSignal }),
+    );
   });
 
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
@@ -229,7 +286,7 @@ describe("POST /tools/invoke request cancellation", () => {
         scope: NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>;
         admitted: AdmittedRunContext;
       }[] = [];
-      lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
+      lifecycle.execute.mockImplementation(async () => {
         const scope = getPluginRuntimeGatewayRequestScope();
         const authority = scope?.client?.internal?.operatorRunAuthority;
         if (!scope?.signal || !scope.hasCurrentClientAuthority || !authority) {
@@ -238,9 +295,7 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(scope.context).toBe(context);
         expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
         expect(scope.hasCurrentClientAuthority()).toBe(true);
-        expect(signal).toBe(scope.signal);
-        // Subscribe while the tool owns the composite signal, before weak sources can be GC'd.
-        signal?.addEventListener("abort", requestEnded, { once: true });
+        scope.signal.addEventListener("abort", requestEnded, { once: true });
         const admission = prepareSystemAgentRunAdmission(
           cfg,
           `http-tool-child-${admissions.length}`,
@@ -276,7 +331,10 @@ describe("POST /tools/invoke request cancellation", () => {
           const response = await invokeAbortProbe();
           expect(response.status).toBe(200);
           await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-          const capture = expectDefined(captures.at(-1), "Tool did not admit its child");
+          const capture = captures.at(-1);
+          if (!capture) {
+            throw new Error("Tool did not admit its child");
+          }
           expect(capture.scope.signal?.aborted).toBe(true);
           expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
           const authority = readAdmittedRunOperatorAuthority(capture.admitted);
@@ -288,8 +346,10 @@ describe("POST /tools/invoke request cancellation", () => {
         }
 
         expect(requestEnded).toHaveBeenCalledTimes(2);
-        const original = expectDefined(captures[0], "Original child");
-        const replacement = expectDefined(captures[1], "Replacement child");
+        const [original, replacement] = captures;
+        if (!original || !replacement) {
+          throw new Error("Expected children admitted by both HTTP requests");
+        }
         const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
         const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
         expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
@@ -314,34 +374,72 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("aborts the running tool when its HTTP client disconnects", async () => {
-    const started = createDeferred<AbortSignal | undefined>();
-    const released = createDeferred();
+    let reportStarted: ((signal: AbortSignal | undefined) => void) | undefined;
+    let releaseExecution: (() => void) | undefined;
+    const executionStarted = new Promise<AbortSignal | undefined>((resolve) => {
+      reportStarted = resolve;
+    });
+
     lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
-      started.resolve(signal);
-      signal?.addEventListener("abort", () => released.resolve(), { once: true });
-      await released.promise;
+      reportStarted?.(signal);
+      await new Promise<void>((resolve) => {
+        releaseExecution = resolve;
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
       return { ok: true };
     });
-    await disconnectDuring(started.promise, released.resolve, async (toolSignal) => {
+
+    const requestController = new AbortController();
+    const response = invokeAbortProbe(requestController.signal);
+
+    try {
+      const toolSignal = await executionStarted;
       expect(toolSignal).toBeInstanceOf(AbortSignal);
+
+      requestController.abort();
+      await expect(response).rejects.toThrow();
       await expect.poll(() => toolSignal?.aborted).toBe(true);
-    });
+    } finally {
+      requestController.abort();
+      releaseExecution?.();
+      await response.catch(() => undefined);
+    }
   });
 
   it("does not start a tool after the client disconnects during its policy hook", async () => {
-    const started = createDeferred<AbortSignal | undefined>();
-    const released = createDeferred();
+    let reportHookStarted: ((signal: AbortSignal | undefined) => void) | undefined;
+    let releaseHook: (() => void) | undefined;
+    const hookStarted = new Promise<AbortSignal | undefined>((resolve) => {
+      reportHookStarted = resolve;
+    });
+    const hookReleased = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+
     lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
-      started.resolve(signal);
-      await released.promise;
+      reportHookStarted?.(signal);
+      await hookReleased;
       return { blocked: false as const, params };
     });
-    await disconnectDuring(started.promise, released.resolve, async (hookSignal) => {
+
+    const requestController = new AbortController();
+    const response = invokeAbortProbe(requestController.signal);
+
+    try {
+      const hookSignal = await hookStarted;
       expect(hookSignal).toBeInstanceOf(AbortSignal);
+
+      requestController.abort();
+      await expect(response).rejects.toThrow();
       await expect.poll(() => hookSignal?.aborted).toBe(true);
-      released.resolve();
+
+      releaseHook?.();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
       expect(lifecycle.execute).not.toHaveBeenCalled();
-    });
+    } finally {
+      releaseHook?.();
+      requestController.abort();
+      await response.catch(() => undefined);
+    }
   });
 });

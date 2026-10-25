@@ -169,7 +169,7 @@ describe("automatic config repair", () => {
     },
   );
 
-  it.each(["unavailable", "commit"])(
+  it.each(["deferred", "unavailable", "commit"])(
     "preserves plugin inputs during core repair (%s)",
     async (availability) => {
       await withDoctorConfigPreflightHome(async (home) => {

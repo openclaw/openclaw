@@ -323,10 +323,12 @@ async function openServiceDuplex(
   const stream = ctx.client!.internal!.nodeInvokeStream!;
   stream.onDispatchReady("preflight");
   // A non-mutating preflight has no receiver and must not open the channel.
-  const ready = vi.fn();
-  void opening.then(ready);
+  let ready = false;
+  void opening.then(() => {
+    ready = true;
+  });
   await setImmediate();
-  expect(ready).not.toHaveBeenCalled();
+  expect(ready).toBe(false);
   stream.onDispatchReady("upload");
   const endpoint = createNodeDuplexEndpoint({
     sendFrame: (frame) => stream.onProgress(JSON.stringify(frame)),
@@ -368,9 +370,12 @@ describe("service-owned node duplex", () => {
             ? Promise.resolve().then(() => channel.onMessage(vi.fn()))
             : channel.send(Uint8Array.of(1));
         await expect(setup).rejects.toMatchObject(pairingChanged);
-        expect(sendInvokeInput).toHaveBeenCalledTimes(operation === "concurrent send" ? 1 : 0);
+        expect(() => channel.onMessage(vi.fn())).toThrow(pairingChanged.message);
         if (operation === "concurrent send") {
+          expect(sendInvokeInput).toHaveBeenCalledOnce();
           await expect(channel.closed).rejects.toMatchObject(pairingChanged);
+        } else {
+          expect(sendInvokeInput).not.toHaveBeenCalled();
         }
       } finally {
         finish.resolve();
@@ -379,12 +384,19 @@ describe("service-owned node duplex", () => {
   );
 
   it.each([true, "optional"] as const)("supports %s duplex", async (duplex) => {
-    const { channel, endpoint, finish } = await openServiceDuplex({ duplex });
-    const received = vi.fn();
-    endpoint.onMessage(received);
-    const source = Uint8Array.of(7);
+    const { channel, endpoint, ctx, finish, sendInvokeInput } = await openServiceDuplex({ duplex });
+    const received: Uint8Array[] = [];
+    endpoint.onMessage((message) => {
+      received.push(message);
+    });
+    const source = Buffer.alloc(128 * 1024, 7);
     await channel.send(source);
-    expect(received).toHaveBeenCalledExactlyOnceWith(source);
+    expect(received.map((message) => Buffer.from(message))).toEqual([source]);
+    expect(sendInvokeInput).toHaveBeenCalledTimes(16);
+    expect(ctx.client?.internal).toMatchObject({
+      pluginRuntimeOwnerId: "files",
+      operatorRoleActor: { kind: "system" },
+    });
     finish.resolve();
     await expect(channel.closed).resolves.toEqual({ ok: true });
     await expect(channel.send(source)).rejects.toThrow(/closed/);

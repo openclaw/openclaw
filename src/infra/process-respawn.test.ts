@@ -1,3 +1,4 @@
+// Covers process respawn behavior across supervisors.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatWindowsTaskSupervisorChildArgument,
@@ -25,17 +26,20 @@ vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    { spawn: spawnMock },
+    {
+      spawn: (...args: unknown[]) => spawnMock(...args),
+    },
   );
 });
 vi.mock("./restart.js", () => ({
-  triggerOpenClawRestart: triggerOpenClawRestartMock,
+  triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
 vi.mock("../daemon/launchd-restart-handoff.js", () => ({
-  scheduleDetachedLaunchdRestartHandoff: scheduleLaunchdHandoffMock,
+  scheduleDetachedLaunchdRestartHandoff: (...args: unknown[]) =>
+    scheduleLaunchdHandoffMock(...args),
 }));
 vi.mock("./container-environment.js", () => ({
-  isContainerEnvironment: isContainerEnvironmentMock,
+  isContainerEnvironment: () => isContainerEnvironmentMock(),
 }));
 
 import {
@@ -53,18 +57,23 @@ afterEach(() => {
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
-  scheduleLaunchdHandoffMock
-    .mockReset()
-    .mockReturnValue({ ok: true, value: Promise.resolve(true) });
-  isContainerEnvironmentMock.mockReset().mockReturnValue(false);
+  scheduleLaunchdHandoffMock.mockReset();
+  scheduleLaunchdHandoffMock.mockReturnValue({
+    ok: true,
+    value: Promise.resolve(true),
+  });
+  isContainerEnvironmentMock.mockReset();
+  isContainerEnvironmentMock.mockReturnValue(false);
   vi.restoreAllMocks();
 });
 
-beforeEach(() => {
+function clearSupervisorHints() {
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
     deleteTestEnvValue(key);
   }
-});
+}
+
+beforeEach(clearSupervisorHints);
 
 function setupSupervisor(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = {}) {
   mockProcessPlatform(platform);

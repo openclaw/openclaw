@@ -707,6 +707,19 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
     await expectUnresolved(buildVote({}, {}, expiredPollGuid), false);
   });
+
+  it("stops resolving after the target is unregistered", async () => {
+    await bind();
+    await iMessageApprovalPollTargets.unregister({
+      accountId: "default",
+      conversation: { handle: HANDLE },
+      pollGuid: VOTE_POLL_GUID,
+      optionDecisions,
+    });
+
+    await resolveVote(buildVote());
+    expect(approvalGatewayMock.resolve).not.toHaveBeenCalled();
+  });
 });
 
 const identity = { accountId: "default", conversation: { handle: "+15551230000" } };

@@ -288,6 +288,11 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         ).toHaveLength(0);
         return;
       }
+      expect(style.getPropertyValue("--openclaw-modal-show-duration").trim()).toBe("200ms");
+      expect(style.getPropertyValue("--openclaw-modal-hide-duration").trim()).toBe("0ms");
+      expect(style.animationName).toBe("openclaw-drawer-in");
+      expect(style.animationDuration).toBe("0.2s");
+      expect(style.animationTimingFunction).toBe("cubic-bezier(0.32, 0.72, 0, 1)");
       const animation = dialog
         .getAnimations()
         .find(
@@ -305,8 +310,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
       animation!.currentTime = 200;
       expect(new DOMMatrixReadOnly(getComputedStyle(dialog).transform).m41).toBeCloseTo(0, 0);
       animation!.finish();
-      modal.hide();
-      expect(dialog.open).toBe(false);
     },
   );
 
@@ -726,5 +729,13 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     previewHost.remove();
     expect(dialog.open).toBe(false);
     expect(triggerRoot.activeElement).toBe(trigger);
+  });
+
+  it("leaves native chrome focused when there is no autofocus target or displaced field", async () => {
+    const { dialog } = await mountModal(container, "", false);
+    expect(document.activeElement).toBe(dialog);
+    expect(dialog.matches(":focus")).toBe(true);
+    expect(dialog.getAttribute("aria-label")).toBe("Edit details");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
   });
 });

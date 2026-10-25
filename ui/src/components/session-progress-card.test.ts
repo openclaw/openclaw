@@ -34,7 +34,7 @@ const runWindow = { startedAt: RUN_STARTED_MS, endedAt: RUN_ENDED_MS };
 const query = <T extends Element = HTMLElement>(
   root: ParentNode | null | undefined,
   selector: string,
-) => root?.querySelector<T>(selector);
+): T | null | undefined => root?.querySelector<T>(selector);
 const disclosure = (root: ParentNode) => root.querySelector("details")!;
 function expectElements(
   root: ParentNode | null | undefined,

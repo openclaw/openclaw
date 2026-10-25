@@ -3,7 +3,7 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
   buildGatewayConnectAuth,
@@ -27,6 +27,7 @@ import {
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import type { GatewayServer } from "./server-public.js";
@@ -97,6 +98,7 @@ function responseAuth(response: Connected): HelloOk["auth"] | undefined {
 
 type ConnectOptions = NonNullable<Parameters<typeof connectReq>[1]>;
 type Connected = Awaited<ReturnType<typeof connectReq>>;
+type IdentityRun<T = void> = (ws: WebSocket, connected: Connected) => Promise<T>;
 
 function identityConnections(port: number, server: GatewayServer) {
   const connectSocket = async (socket: Promise<WebSocket>, options: ConnectOptions) => {
@@ -169,21 +171,14 @@ function tailscaleEndpoint(server: Pick<GatewayServer, "getTailscaleIngressEndpo
 
 async function verifiedProfile(ws: WebSocket, connected: Connected) {
   expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-  return (await rpcPayload<UsersSelfResult>(ws, "users.self"))?.profile.id;
-}
-
-async function rpcPayload<T extends Record<string, unknown> = Record<string, unknown>>(
-  ws: WebSocket,
-  method: string,
-  params?: object,
-) {
-  const result = await rpcReq<T>(ws, method, params);
-  expect(result.ok, JSON.stringify(result.error)).toBe(true);
-  return result.payload;
+  const self = await rpcReq<UsersSelfResult>(ws, "users.self");
+  expect(self.ok, JSON.stringify(self.error)).toBe(true);
+  return self.payload?.profile.id;
 }
 
 async function expectPayload(ws: WebSocket, method: string, payload: unknown, params?: object) {
-  expect({ payload: await rpcPayload(ws, method, params) }).toMatchObject({ payload });
+  const result = await rpcReq(ws, method, params);
+  expect(result, JSON.stringify(result.error)).toMatchObject({ ok: true, payload });
 }
 
 async function expectWriteDenied(ws: WebSocket, key: string) {
@@ -213,6 +208,58 @@ function role(
   agents: "*" | string[] = "*",
 ) {
   return { sessions: { others }, agents, scopes };
+}
+
+const GITHUB_RATE_LIMITED_ERROR = {
+  code: "UNAVAILABLE",
+  message: expect.stringContaining("GitHub is rate limiting profile verification"),
+  retryAfterMs: expect.toSatisfy((ms: number) => ms > 60_000),
+};
+
+/** Stubs only api.github.com user lookups; `quotaExhausted` switches to GitHub's real 403. */
+function stubGitHubUserLookups(users: Record<string, { id: number; login: string }>) {
+  // Load the source plugin before opening sockets and starting handshake deadlines.
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+  const githubApiOrigin = gitHubPublicApi.GITHUB_API_ORIGIN;
+  const realFetch = globalThis.fetch;
+  const github = { requests: [] as string[], quotaExhausted: false };
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== githubApiOrigin) {
+      return await realFetch(input, init);
+    }
+    github.requests.push(url.pathname);
+    if (github.quotaExhausted) {
+      return new Response("{}", {
+        status: 403,
+        headers: {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(Math.ceil(Date.now() / 1_000) + 3_600),
+        },
+      });
+    }
+    const user = users[url.pathname.replace(/^\/users\//, "")];
+    return user ? Response.json(user) : Response.json({}, { status: 404 });
+  });
+  onTestFinished(() => fetchSpy.mockRestore());
+  return github;
+}
+
+/** Connects as `<login>@github` through the managed Tailscale Serve listener. */
+function gitHubTailscalePeople(
+  { tailscale }: ReturnType<typeof identityConnections>,
+  scopes = ["operator.read"],
+) {
+  return async <T>(login: string, run: IdentityRun<T>) => {
+    testTailscaleWhois.value = { login, name: login };
+    const { ws, connected } = await tailscale(login, { scopes });
+    try {
+      return await run(ws, connected);
+    } finally {
+      ws.close();
+    }
+  };
 }
 
 test("denies missing person access, retires grant or alias authority, and preserves staff", async () => {
@@ -270,6 +317,7 @@ test("denies missing person access, retires grant or alias authority, and preser
       });
       grant = new AbortController();
       const guest = await connect("visitor@example.com");
+      expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
       grant.abort(new Error("Grant expired"));
       expect(await waitForWsClose(guest.ws, 1_000)).toBe(true);
@@ -281,6 +329,7 @@ test("denies missing person access, retires grant or alias authority, and preser
       linkEmail("retained@example.com", person.id);
       const replacement = ensureProfileForEmail("replacement@example.com");
       const aliasGuest = await connect("visitor@example.com");
+      expect(aliasGuest.connected.ok).toBe(true);
       setDisplayName(person.id, "Updated visitor");
       linkEmail("added@example.com", person.id);
       expect((await rpcReq(aliasGuest.ws, "status")).ok).toBe(true);
@@ -346,21 +395,23 @@ test.each([
         });
         expect(adminConnected.ok).toBe(true);
         expect(responseAuth(adminConnected)?.deviceToken).toBeUndefined();
-        const registration = await rpcPayload<{ requestId: string }>(
+        const registration = await rpcReq<{ requestId: string }>(
           ws,
           "device.scopes.requestUpgrade",
           { scopes: UPGRADE_SCOPES },
         );
-        const requestId = registration?.requestId;
+        expect(registration.ok).toBe(true);
+        const requestId = registration.payload?.requestId;
+        expect(requestId).toBeTypeOf("string");
         expect((await rpcReq(admin, "device.pair.approve", { requestId })).ok).toBe(true);
-        const result = await rpcPayload<{ deviceToken: string }>(ws, "device.scopes.waitUpgrade", {
+        const result = await rpcReq<{ deviceToken: string }>(ws, "device.scopes.waitUpgrade", {
           requestId,
         });
         expect(result).toMatchObject({
-          status: "approved",
-          scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted(),
+          ok: true,
+          payload: { status: "approved", scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted() },
         });
-        expect(result?.deviceToken).toBeTypeOf("string");
+        expect(result.payload?.deviceToken).toBeTypeOf("string");
         expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       }
     } finally {
@@ -386,6 +437,7 @@ test("lets the shared-token owner manage accounts across device-token reconnects
         },
         { origin: BROWSER_ORIGIN },
       );
+      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
       await expectProfile(ws, GATEWAY_OWNER_PROFILE_ID);
       if (!reconnect) {
         deviceToken = (connected.payload as HelloOk).auth.deviceToken;
@@ -396,10 +448,11 @@ test("lets the shared-token owner manage accounts across device-token reconnects
           assertCurrent() {},
         }).authProfileId;
       }
-      await rpcPayload(ws, "users.unlinkAuthProfile", {
+      const cleared = await rpcReq(ws, "users.unlinkAuthProfile", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         provider: "anthropic",
       });
+      expect(cleared.ok, JSON.stringify(cleared.error)).toBe(true);
       await expectPayload(ws, "users.listModelAccounts", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         accounts: [{ authProfileId, provider: "anthropic", selected: false }],
@@ -464,7 +517,13 @@ test("adds a case-insensitive trusted-proxy email grant without changing pairing
       );
       expectScopes(connected, ["operator.write", "operator.admin"]);
       expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
-      await expectPayload(ws, "fs.listDir", { path: outsideWorkspace }, { path: outsideWorkspace });
+      const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
+        path: outsideWorkspace,
+      });
+      expect(browse, JSON.stringify(browse.error)).toMatchObject({
+        ok: true,
+        payload: { path: outsideWorkspace },
+      });
     });
   } finally {
     testState.agentConfig = undefined;
@@ -530,11 +589,104 @@ test.each<[string, string | undefined, boolean]>([
     const auth = buildGatewayConnectAuth(
       selectGatewayConnectAuth({ token, storedToken: cached.token, storedScopes: cached.scopes }),
     );
-    const { ws } = await tailscale(login, { ...options, ...auth, prePairDevice: false });
+    const { ws, connected } = await tailscale(login, { ...options, ...auth, prePairDevice: false });
+    expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
     await expectProfile(ws, usePerson ? profileId : GATEWAY_OWNER_PROFILE_ID);
     ws.close();
     expect(await waitForWsClose(ws, 1_000)).toBe(true);
   });
+});
+
+test("keeps a verified GitHub person signed in while anonymous GitHub quota is exhausted", async () => {
+  await configureTailscale();
+  const github = stubGitHubUserLookups({ ada: { id: 583231, login: "ada" } });
+
+  await withIdentityServer(async (connections) => {
+    const withPerson = gitHubTailscalePeople(connections);
+    const profileId = await withPerson("ada@github", verifiedProfile);
+
+    github.quotaExhausted = true;
+    await withPerson("ada@github", async (ws, connected) => {
+      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+      await expectProfile(ws, profileId);
+      expect((await rpcReq(ws, "sessions.list")).ok).toBe(true);
+    });
+    await withPerson("eve@github", async (ws, connected) => {
+      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+      for (const method of ["users.self", "sessions.list"]) {
+        const response = await rpcReq(ws, method);
+        expect(response.error, method).toMatchObject(GITHUB_RATE_LIMITED_ERROR);
+      }
+    });
+  });
+  expect(github.requests).toEqual(["/users/ada", "/users/ada"]);
+});
+
+test("refuses a reassigned GitHub login's former profile and role while GitHub is rate limiting", async () => {
+  await configureTailscale(
+    {},
+    {
+      default: "guest",
+      definitions: { guest: role(["operator.read"], "none", []), staff: role(READ_WRITE, "write") },
+    },
+  );
+  const users: Record<string, { id: number; login: string }> = {
+    ada: { id: 583231, login: "ada" },
+    grace: { id: 1001, login: "grace" },
+  };
+  const github = stubGitHubUserLookups(users);
+  const staffProfileIds: string[] = [];
+
+  await withIdentityServer(async (connections) => {
+    const withPerson = gitHubTailscalePeople(connections, READ_WRITE);
+    const profileOf = async (login: string) => {
+      const profileId = await withPerson(login, verifiedProfile);
+      if (!profileId) {
+        throw new Error(`expected a verified profile for ${login}`);
+      }
+      return profileId;
+    };
+    try {
+      const ada = await profileOf("ada@github");
+      const grace = await profileOf("grace@github");
+      for (const profileId of [ada, grace]) {
+        setUserProfileRole(profileId, "staff");
+        staffProfileIds.push(profileId);
+      }
+
+      users["ada-lovelace"] = { id: 583231, login: "ada-lovelace" };
+      expect(await profileOf("ada-lovelace@github")).toBe(ada);
+      users.grace = { id: 2002, login: "grace" };
+      const graceSuccessor = await profileOf("grace@github");
+      expect(graceSuccessor).not.toBe(grace);
+
+      github.quotaExhausted = true;
+      await withPerson("ada-lovelace@github", async (ws, connected) => {
+        expect(responseAuth(connected)?.scopes).toEqual(READ_WRITE);
+        await expectProfile(ws, ada);
+      });
+      // The renamed-away login is refused at admission, before hello, sessions, or role methods.
+      await withPerson("ada@github", async (ws, connected) => {
+        expect(connected).toMatchObject({ ok: false, error: GITHUB_RATE_LIMITED_ERROR });
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+      });
+      // The reassigned login reaches only its new account's guest profile, never the former one.
+      await withPerson("grace@github", async (ws, connected) => {
+        expect(responseAuth(connected)?.scopes).toEqual(["operator.read"]);
+        await expectProfile(ws, graceSuccessor);
+        await expectWriteDenied(ws, "agent:main:x");
+      });
+    } finally {
+      staffProfileIds.forEach(invalidateOperatorRolePolicy);
+    }
+  });
+  expect(github.requests).toEqual([
+    "/users/ada",
+    "/users/grace",
+    "/users/ada-lovelace",
+    "/users/grace",
+    "/users/ada-lovelace",
+  ]);
 });
 
 test("caps a broader reconnect before device scope-upgrade comparison", async () => {

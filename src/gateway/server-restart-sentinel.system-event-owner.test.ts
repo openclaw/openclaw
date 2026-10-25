@@ -68,6 +68,10 @@ const agentTurn = {
   message: "resume work",
   messageId: "resume-1",
 } as const;
+const cases = [
+  ["legacy system event", { kind: "systemEvent", sessionKey: "global", text: "resume work" }],
+  ["agent turn without a route", agentTurn],
+] satisfies Array<[string, QueuedSessionDeliveryPayload]>;
 
 let state: OpenClawTestState;
 let queueContext: ReturnType<typeof captureOpenClawStateWorkerContext>;
@@ -114,10 +118,14 @@ async function enqueueEntry(payload: QueuedSessionDeliveryPayload) {
   }
   return entry;
 }
-const drainEvent = (id: string) =>
+const drainEvent = (
+  id: string,
+  onSettled?: Parameters<typeof drainPendingSessionDelivery>[0]["onSettled"],
+) =>
   drainPendingSessionDelivery({
     id,
     queueContext,
+    onSettled,
     bypassBackoff: true,
     logLabel: "restart custody",
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -136,15 +144,20 @@ function expectResearchEvent(expectedTarget: object) {
   );
 }
 
-it(
-  "binds an agent turn without a route without rewriting its queued key",
-  withFixture(async () => {
+it.each(cases)(
+  "binds %s without rewriting its queued key",
+  withFixture(async (_name: string, payload: QueuedSessionDeliveryPayload) => {
     mockEventSession("research", "global");
-    const entry = await enqueueEntry({ ...agentTurn, deliveryContext });
+    const entry = await enqueueEntry({ ...payload, deliveryContext });
     const original = structuredClone(entry);
 
     await deliver(entry);
 
+    expect(mocks.captureSessionEventTarget).toHaveBeenCalledExactlyOnceWith(
+      "research",
+      "global",
+      expect.objectContaining({ env: queueContext.environment }),
+    );
     expectResearchEvent({ agentId: "research", sessionKey: "global" });
     expect(entry).toEqual(original);
   }),
@@ -192,7 +205,9 @@ it(
 it.each([
   ["completed", true, undefined],
   ["failed", true, undefined],
+  ["cancelled", true, undefined],
   ["failed", false, undefined],
+  ["failed", false, true],
   ["failed", false, false],
 ] as const)(
   "settles %s with adopted=%s and retryable=%s",
@@ -223,7 +238,8 @@ it.each([
       if (!started) {
         outcome.resolve(result);
       }
-      const drain = drainEvent(id);
+      const onSettled = vi.fn();
+      const drain = drainEvent(id, onSettled);
       try {
         if (started) {
           await awaitGateBeforeSettlement(
@@ -245,9 +261,12 @@ it.each([
         expect(entry?.deliveryStartedAt).toBeUndefined();
       }
       if (started) {
-        expect(getDeliveryQueueEntryStatus("session", id)).toBe(
-          status === "completed" ? "completed" : "failed",
+        expect(onSettled).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id }),
+          status === "completed" ? "recovered" : "moved-to-failed",
+          queueContext,
         );
+        expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
       }
     },
   ),
@@ -385,7 +404,12 @@ it(
     });
     let settled = false;
     queueContext = captureOpenClawStateWorkerContext();
-    const payload = createGeneratedMediaDeliveryEntry({
+    const {
+      id: _id,
+      enqueuedAt: _enqueuedAt,
+      retryCount: _retryCount,
+      ...payload
+    } = createGeneratedMediaDeliveryEntry({
       id: "unused",
       sessionKey,
       messageId: "image:media-completion:agent-loop",
