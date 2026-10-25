@@ -68,23 +68,21 @@ describe("SQLite session participants", () => {
         const database = openOpenClawAgentDatabase(scope);
         const reads = trackSqliteStatementExecutions(
           requireNativeSqliteDatabase(database.db),
-          ["capacity", "participant"],
-          (sql) => {
-            if (!sql.includes('"session_participants"')) {
-              return null;
-            }
-            return sql.startsWith('select count(*) as "count"') ? "capacity" : "participant";
-          },
+          ["capacity"],
+          (sql) =>
+            sql.startsWith('select count(*) as "count"') && sql.includes('"session_participants"')
+              ? "capacity"
+              : null,
         );
         try {
           expect(
             recordSessionParticipant(scope, { identity: remote("sender"), promptedAt: 10 }),
           ).toBe("inserted");
-          expect(reads.counts).toEqual({ capacity: 1, participant: 2 });
+          expect(reads.counts).toEqual({ capacity: 0 });
           expect(
             recordSessionParticipant(scope, { identity: remote("sender"), promptedAt: 20 }),
           ).toBe("updated");
-          expect(reads.counts).toEqual({ capacity: 1, participant: 4 });
+          expect(reads.counts).toEqual({ capacity: 0 });
         } finally {
           reads.restore();
         }
@@ -852,9 +850,24 @@ describe("SQLite session participants", () => {
           }),
         ).toBe("inserted");
       }
-      expect(
-        recordSessionParticipant(scope, { identity: remote("profile-0"), promptedAt: 10 }),
-      ).toBe("capped");
+      const beforeCap = loadSessionEntry(scope);
+      const cappedEvents: string[] = [];
+      const unsubscribe = onSessionLifecycleEvent((event) => {
+        if (event.sessionKey === scope.sessionKey) {
+          cappedEvents.push(event.reason);
+        }
+      });
+      try {
+        expect(
+          recordSessionParticipant(scope, { identity: remote("profile-0"), promptedAt: 10 }),
+        ).toBe("capped");
+        expect({ entry: loadSessionEntry(scope), events: cappedEvents }).toEqual({
+          entry: beforeCap,
+          events: [],
+        });
+      } finally {
+        unsubscribe();
+      }
       expect(
         recordSessionParticipant(scope, {
           identity: { type: "agent", id: "main" },
