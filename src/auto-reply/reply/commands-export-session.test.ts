@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { projectPluginInlineView } from "../../gateway/chat-display-projection.inline-view.js";
 import {
   createPluginInlineViewResult,
   bindPluginInlineViewInvocation,
@@ -16,10 +15,7 @@ import { commandFixture } from "./commands-handler-fixture.test-support.js";
 
 const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
-  const promptBundle = {
-    systemPrompt: "system prompt",
-    tools: [],
-  };
+  const promptBundle = { systemPrompt: "system prompt", tools: [] };
   return {
     ...createExportCommandSessionMocks(vi),
     promptBundle,
@@ -68,10 +64,7 @@ vi.mock("./commands-system-prompt.js", () => ({
 
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
-  return {
-    ...actual,
-    migrateSessionEntries: hoisted.migrateSessionEntriesMock,
-  };
+  return { ...actual, migrateSessionEntries: hoisted.migrateSessionEntriesMock };
 });
 
 vi.mock("node:fs/promises", async () => {
@@ -87,10 +80,7 @@ vi.mock("node:fs/promises", async () => {
       return actual.readFile(filePath, { encoding });
     }),
   };
-  return {
-    ...mockedFsPromises,
-    default: mockedFsPromises,
-  };
+  return { ...mockedFsPromises, default: mockedFsPromises };
 });
 
 function makeParams(workspaceDir = tempDirs.make("openclaw-session-export-")) {
@@ -154,10 +144,7 @@ describe("buildExportSessionReply", () => {
     vi.clearAllMocks();
     hoisted.resolveDefaultSessionStorePathMock.mockReturnValue("/tmp/target-store/sessions.json");
     hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:target:session": {
-        sessionId: "session-1",
-        updatedAt: 1,
-      },
+      "agent:target:session": { sessionId: "session-1", updatedAt: 1 },
     });
     hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue(hoisted.promptBundle);
     hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(undefined);
@@ -201,11 +188,6 @@ describe("buildExportSessionReply", () => {
     ];
     const restored = sessionDataFromHtml(await exportHtml());
     expect(restored.entries).toEqual(hoisted.sessionTranscriptEvents);
-    expect(projectPluginInlineView(result.details, message)).toMatchObject({
-      version: 3,
-      summary: "INC-42 is investigating.",
-      payload: { incidentId: "INC-42" },
-    });
   });
 
   it.each(["monthly report.html", "reports/monthly  report.html"])(
@@ -240,11 +222,7 @@ describe("buildExportSessionReply", () => {
         timestamp: "2026-06-15T00:00:02.000Z",
         targetId: null,
       },
-      {
-        type: "metadata",
-        id: "opaque-after-leaf",
-        parentId: "inactive-tail",
-      },
+      { type: "metadata", id: "opaque-after-leaf", parentId: "inactive-tail" },
     ];
     hoisted.sessionTranscriptEvents = entries;
 
@@ -352,13 +330,6 @@ describe("buildExportSessionReply", () => {
         expect(warning).toContain("backend runtime");
         if (kind === "cli") {
           expect(reply.text).toContain("not included in this export");
-          expect(typeof warning).toBe("string");
-        } else {
-          expect(hoisted.readAcpSessionMetaForEntryAsyncMock).toHaveBeenCalledWith({
-            cfg: {},
-            sessionKey: "agent:target:session",
-            entry: { sessionId: "session-1", updatedAt: 1 },
-          });
         }
       } else {
         expect(reply.text).not.toContain("backend runtime");

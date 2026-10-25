@@ -260,10 +260,7 @@ it("admits an explicit reset without reopening its restart tombstone", async () 
   const archivedAt = Date.now() - 1000;
   const storePath = store({ ...tombstoneEntry, archivedAt, status: "failed" });
   const admitted = owned(
-    await admitStored(storePath, {
-      resetTriggered: true,
-      allowRestartTombstoneReset: true,
-    }),
+    await admitStored(storePath, { resetTriggered: true, allowRestartTombstoneReset: true }),
   );
   expect(entry(storePath)).toMatchObject({
     sessionId,
@@ -406,10 +403,7 @@ it.each([false, true])(
     const release = await holdMutation(storePath, () =>
       replaceSessionEntry(
         { sessionKey, storePath },
-        {
-          sessionId: "reset-session",
-          updatedAt: 200,
-        },
+        { sessionId: "reset-session", updatedAt: 200 },
       ),
     );
     const admission = admit({ storePath, expectedSessionId: expected ? sessionId : undefined });

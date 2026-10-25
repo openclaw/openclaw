@@ -142,16 +142,10 @@ export async function withCommandPlugin(
     const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
     await fs.writeFile(
       pluginFile,
-      `module.exports = { id: ` +
-        JSON.stringify(pluginId) +
-        `, register(api) {
-        for (const command of ` +
-        JSON.stringify(commands) +
-        `) {
+      `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+        for (const command of ${JSON.stringify(commands)}) {
           api.registerCommand({ ...command, description: "Synthetic review command", acceptsArgs: true,
-            handler(ctx) { return globalThis[Symbol.for(` +
-        JSON.stringify(Symbol.keyFor(bridge)) +
-        `)](ctx); }
+            handler(ctx) { return globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})](ctx); }
           });
         }
       } };`,
