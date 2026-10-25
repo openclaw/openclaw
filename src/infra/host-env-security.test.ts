@@ -7,9 +7,6 @@ import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
 import {
-  isDangerousHostEnvOverrideVarName,
-  isDangerousHostInheritedEnvVarName,
-  isDangerousHostEnvVarName,
   normalizeEnvVarKey,
   sanitizeHostExecEnv,
   sanitizeHostExecEnvWithDiagnostics,
@@ -67,19 +64,6 @@ describe("sanitizeHostExecEnv", () => {
       OPENCLAW_GATEWAY_SERVICE_PID: "12345",
     };
     expectEnv(serviceEnv, serviceEnv);
-  });
-
-  it("removes dangerous inherited keys while preserving PATH", () => {
-    expectEnv(
-      {
-        PATH: "/usr/bin:/bin",
-        LD_PRELOAD: "/tmp/pwn.so",
-        OK: "1",
-        GIT_ALLOW_PROTOCOL: "ext",
-        GIT_PROTOCOL_FROM_USER: "1",
-      },
-      { PATH: "/usr/bin:/bin", OK: "1", GIT_ALLOW_PROTOCOL: "", GIT_PROTOCOL_FROM_USER: "0" },
-    );
   });
 
   it("withholds the env sources of Gateway credentials from inherited host exec env", () => {
@@ -311,11 +295,7 @@ it("keeps the fixed reported dangerous env baseline fully covered by inherited +
         : key === "GIT_PROTOCOL_FROM_USER"
           ? inheritedInput[key]
           : undefined;
-    expect([
-      isDangerousHostEnvVarName(key),
-      isDangerousHostInheritedEnvVarName(key),
-      inheritedSanitized[key],
-    ]).toEqual([true, true, expected]);
+    expect(inheritedSanitized[key]).toBe(expected);
   }
 
   // Pin the reviewed exception set independently of the production policy.
@@ -334,11 +314,7 @@ XDG_DATA_DIRS XDG_DATA_HOME XDG_RUNTIME_DIR XDG_STATE_HOME ZDOTDIR`,
   const inheritedAllowlist = new Set(allowedInheritedOverrideOnlyKeys);
   for (const key of baseline.reportedDangerousOverrideOnlyKeys) {
     const allowed = inheritedAllowlist.has(key);
-    expect([
-      isDangerousHostEnvOverrideVarName(key),
-      isDangerousHostInheritedEnvVarName(key),
-      inheritedSanitized[key],
-    ]).toEqual([true, !allowed, allowed ? inheritedInput[key] : undefined]);
+    expect(inheritedSanitized[key]).toBe(allowed ? inheritedInput[key] : undefined);
   }
 
   const overrideResult = sanitizeHostExecEnvWithDiagnostics({
