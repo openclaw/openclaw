@@ -10,7 +10,6 @@ import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-tra
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
-  type DiagnosticTraceContext,
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
@@ -19,11 +18,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test, vi } from "vitest";
 import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
-import {
-  type CapturedLogRecord,
-  type CapturedSpan,
-  startLocalOtlpReceiver,
-} from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   captureOtelDiagnostics,
@@ -363,32 +358,30 @@ test("exports cache-write TTL facts without duplicate generic usage", async () =
     await service.stop?.(ctx);
     const attrs = receiver.capturedSpans
       .filter((span) => span.name === "openclaw.model.call")
-      .map((span) => span.attributes);
-    expect(attrs).toHaveLength(3);
-    expect(attrs[0]).toMatchObject({
-      "openclaw.model_call.usage.cache_creation_input_tokens_1h": 400_000,
-      "openclaw.model_call.usage.cache_creation_input_tokens_5m": 600_000,
-    });
-    expect(attrs[1]).toMatchObject({
-      "openclaw.model_call.usage.cache_creation_input_tokens_1h": 0,
-      "openclaw.model_call.usage.cache_creation_input_tokens_5m": 0,
-    });
-    expect(attrs[2]).not.toHaveProperty("openclaw.model_call.usage.cache_creation_input_tokens_1h");
-    expect(attrs[2]).not.toHaveProperty("openclaw.model_call.usage.cache_creation_input_tokens_5m");
+      .map((span) =>
+        Object.fromEntries(
+          Object.entries(span.attributes).filter(([key]) => key.includes("cache_creation")),
+        ),
+      );
     // Langfuse's generic extractor retains every gen_ai.usage key, then prices
     // each bucket independently. Only the blended cache count belongs there.
-    expect(
-      attrs.map((attributes) =>
-        Object.fromEntries(
-          Object.entries(attributes).filter(
-            ([key]) => key.startsWith("gen_ai.usage.") && key.includes("cache_creation"),
-          ),
-        ),
-      ),
-    ).toEqual([
-      { "gen_ai.usage.cache_creation.input_tokens": 1_000_000 },
-      { "gen_ai.usage.cache_creation.input_tokens": 0 },
-      { "gen_ai.usage.cache_creation.input_tokens": 1_000_000 },
+    expect(attrs).toEqual([
+      {
+        "gen_ai.usage.cache_creation.input_tokens": 1_000_000,
+        "openclaw.model_call.usage.cache_creation_input_tokens": 1_000_000,
+        "openclaw.model_call.usage.cache_creation_input_tokens_1h": 400_000,
+        "openclaw.model_call.usage.cache_creation_input_tokens_5m": 600_000,
+      },
+      {
+        "gen_ai.usage.cache_creation.input_tokens": 0,
+        "openclaw.model_call.usage.cache_creation_input_tokens": 0,
+        "openclaw.model_call.usage.cache_creation_input_tokens_1h": 0,
+        "openclaw.model_call.usage.cache_creation_input_tokens_5m": 0,
+      },
+      {
+        "gen_ai.usage.cache_creation.input_tokens": 1_000_000,
+        "openclaw.model_call.usage.cache_creation_input_tokens": 1_000_000,
+      },
     ]);
   } finally {
     await service.stop?.(ctx);
@@ -629,98 +622,67 @@ test("rejects an empty TLS certificate before the SDK can silently downgrade tru
   }
 });
 
-const OWNERSHIP_ENV_KEYS = [
-  PRELOAD_ENV,
-  "OTEL_SDK_DISABLED",
-  "OTEL_EXPORTER_OTLP_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-  "OTEL_LOG_LEVEL",
-] as const;
-function releaseOtelGlobals() {
-  clearOtelGlobals();
-  for (const key of OWNERSHIP_ENV_KEYS) {
-    delete process.env[key];
-  }
-}
-
-function assertCorrelatedGeneration(
-  spans: CapturedSpan[],
-  logRecords: CapturedLogRecord[],
-  logTrace: DiagnosticTraceContext,
-): void {
-  const run = spans.find((span) => span.name === "openclaw.run");
-  const model = spans.find((span) => span.name === "openclaw.model.call");
-  const correlatedLog = logRecords.find(
-    (record) => record.traceId === logTrace.traceId && record.spanId === logTrace.spanId,
-  );
-  expect(run?.traceId).toBeTruthy();
-  expect(run?.spanId).toBeTruthy();
-  expect(model?.traceId).toBe(run?.traceId);
-  expect(model?.parentSpanId).toBe(run?.spanId);
-  expect(correlatedLog).toBeDefined();
-}
-
 test("flushes each private generation on restart and leaves global providers untouched", async () => {
-  const receiverA = startLocalOtlpReceiver();
-  const receiverB = startLocalOtlpReceiver();
-  const portA = await receiverA.listen();
-  const portB = await receiverB.listen();
-  releaseOtelGlobals();
-  const messages = captureOtelDiagnostics();
-  const hostDiagOwner = registeredOtelGlobals()?.diag;
-  process.env.OTEL_LOG_LEVEL = "debug";
-  const globalProviders = {
-    logs: registeredOtelLogs(),
-    metrics: registeredOtelGlobals()?.metrics,
-    trace: registeredOtelGlobals()?.trace,
-  };
-  function assertGeneration(receiver: typeof receiverA, logTrace: DiagnosticTraceContext) {
-    expect(new Set(receiver.capturedRequests.map((request) => request.signal))).toEqual(
-      new Set(["traces", "metrics", "logs"]),
+  const receivers = [startLocalOtlpReceiver(), startLocalOtlpReceiver()];
+  const contexts: ReturnType<typeof createOtelContext>[] = [];
+  for (const receiver of receivers) {
+    contexts.push(
+      createOtelContext(`http://127.0.0.1:${await receiver.listen()}`, {
+        traces: true,
+        metrics: true,
+        logs: true,
+        flushIntervalMs: 60_000,
+      }),
     );
-    expect(receiver.capturedMetrics.length).toBeGreaterThan(0);
-    assertCorrelatedGeneration(receiver.capturedSpans, receiver.capturedLogRecords, logTrace);
-    expect(registeredOtelGlobals()?.trace).toBe(globalProviders.trace);
-    expect(registeredOtelGlobals()?.metrics).toBe(globalProviders.metrics);
-    expect(registeredOtelLogs()).toBe(globalProviders.logs);
-    expect(registeredOtelGlobals()?.diag).toBe(hostDiagOwner);
   }
+  // The harness already clears exporter environment settings before each test.
+  releasePreloadedOtelGlobals();
+  const messages = captureOtelDiagnostics();
+  process.env.OTEL_LOG_LEVEL = "debug";
+  const globals = { ...registeredOtelGlobals() };
+  const logs = registeredOtelLogs();
   const service = createDiagnosticsOtelService();
-  const flags = { traces: true, metrics: true, logs: true, flushIntervalMs: 60_000 };
-  const ctxA = createOtelContext(`http://127.0.0.1:${portA}`, flags);
-  const ctxB = createOtelContext(`http://127.0.0.1:${portB}`, flags);
-
+  const requestCounts: number[] = [];
   try {
-    await service.start(ctxA);
-    const traceA = await emitRealSdkSignals("generation-a");
-    await service.stop?.(ctxA);
-    const aRequestsAfterStop = receiverA.capturedRequests.length;
-
-    assertGeneration(receiverA, traceA);
-
-    await emitRealSdkSignals("after-a-stop");
-    await sleep(50);
-    expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
-
-    await service.start(ctxB);
-    const traceB = await emitRealSdkSignals("generation-b");
-    await service.stop?.(ctxB);
-    const bRequestsAfterStop = receiverB.capturedRequests.length;
-
-    expect(receiverA.capturedRequests).toHaveLength(aRequestsAfterStop);
-    assertGeneration(receiverB, traceB);
-
-    await emitRealSdkSignals("after-b-stop");
-    await sleep(50);
-    expect(receiverB.capturedRequests).toHaveLength(bRequestsAfterStop);
+    for (const [index, ctx] of contexts.entries()) {
+      const receiver = receivers[index]!;
+      await service.start(ctx);
+      const logTrace = await emitRealSdkSignals(`generation-${index}`);
+      await service.stop?.(ctx);
+      requestCounts.push(receiver.capturedRequests.length);
+      expect(new Set(receiver.capturedRequests.map((request) => request.signal))).toEqual(
+        new Set(["traces", "metrics", "logs"]),
+      );
+      expect(receiver.capturedMetrics.length).toBeGreaterThan(0);
+      const run = receiver.capturedSpans.find((span) => span.name === "openclaw.run");
+      expect(run?.traceId).toBeTruthy();
+      expect(run?.spanId).toBeTruthy();
+      expect(
+        receiver.capturedSpans.find((span) => span.name === "openclaw.model.call"),
+      ).toMatchObject({ traceId: run?.traceId, parentSpanId: run?.spanId });
+      expect(
+        receiver.capturedLogRecords.find(
+          (record) => record.traceId === logTrace.traceId && record.spanId === logTrace.spanId,
+        ),
+      ).toBeDefined();
+      for (const key of ["trace", "metrics", "diag"] as const) {
+        expect(registeredOtelGlobals()?.[key]).toBe(globals[key]);
+      }
+      expect(registeredOtelLogs()).toBe(logs);
+      await emitRealSdkSignals(`after-${index}-stop`);
+      await sleep(50);
+      expect(receivers.slice(0, index + 1).map((item) => item.capturedRequests.length)).toEqual(
+        requestCounts,
+      );
+    }
     diag.warn("host diagnostic logger remains active");
     expect(messages).toContain("host diagnostic logger remains active");
   } finally {
-    await service.stop?.(ctxA);
-    await service.stop?.(ctxB);
-    await receiverA.close();
-    await receiverB.close();
+    for (const ctx of contexts) {
+      await service.stop?.(ctx);
+    }
+    for (const receiver of receivers) {
+      await receiver.close();
+    }
   }
 }, 30_000);
