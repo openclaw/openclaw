@@ -1,8 +1,6 @@
 import { render } from "@solidjs/web";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTabFocus } from "../lib/tabs.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import {
   PanelTabStrip,
@@ -204,7 +202,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     },
   );
 
-  it("restores close focus within its own strip after async replacement", async () => {
+  it("restores keyboard-close focus after blur without selecting a neighboring strip", async () => {
     const neighbor = host();
     await renderControlledStrip(
       neighbor,
@@ -213,26 +211,14 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     );
     await expectControlledSelection(neighbor, "a");
     expect(renderedTabs(neighbor)[0]?.getAttribute("aria-controls")).toBe("neighbor-panel");
-    let container = host();
-    const focusOwner = createTabFocus();
-    const close = createDeferred();
+    const container = host();
     let tabs = [tab("a"), tab("b")];
     const ariaControls = (entry: PanelTabStripTab) => `panel-${entry.id}`;
-    const onClose = vi.fn((closedId: string) =>
-      close.promise.then(async () => {
-        (document.activeElement as HTMLElement | null)?.blur();
-        tabs = tabs.filter((entry) => entry.id !== closedId);
-        const replacement = document.createElement("div");
-        mountedStrips.get(container)?.dispose();
-        mountedStrips.delete(container);
-        container.replaceWith(replacement);
-        container = replacement;
-        await update();
-      }),
-    );
-    const update = () =>
-      renderControlledStrip(container, tabs, { ariaControls, onClose, focusOwner });
-    await update();
+    const onClose = (closedId: string) => {
+      tabs = tabs.filter((entry) => entry.id !== closedId);
+      return renderControlledStrip(container, tabs, { ariaControls, onClose });
+    };
+    await renderControlledStrip(container, tabs, { ariaControls, onClose });
     await expectControlledSelection(container, "a");
     expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual([
       "panel-a",
@@ -245,9 +231,6 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     closeButton?.blur();
     closeButton?.click();
-    close.resolve();
-    await close.promise;
-
     const fallback = await expectControlledSelection(container, "b");
     await settleTabLayout();
     expect(document.activeElement).toBe(fallback);

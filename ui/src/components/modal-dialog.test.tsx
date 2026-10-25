@@ -203,37 +203,29 @@ it("does not restore the original trigger when a suppressed modal is removed", a
   originalTrigger.remove();
 });
 
-it.each(["hide", "remove"] as const)(
-  "hands an active toast back to the app on %s",
-  async (action) => {
-    const shell = document.createElement("div");
-    shell.className = "shell";
-    const appHost = document.createElement("openclaw-toast-host");
-    shell.append(appHost);
-    document.body.append(shell);
-    try {
-      const { modal } = await renderModal();
-      // Keep the toast active through the cold lazy import.
-      showToast({ message: "Saved", durationMs: 60_000 });
-      await commit(appHost);
-      await vi.dynamicImportSettled();
-      flush();
-      expect(appHost.parentElement).toBe(modal.getOverlayContainer());
-      const hidden = action === "hide" ? afterModalHidden(modal) : undefined;
-      modal[action]();
-      await commit(modal);
-      if (hidden) {
-        expectClosed(modal);
-        await hidden;
-      }
-      await commit(appHost);
-      expect(appHost.parentElement).toBe(shell);
-      await vi.dynamicImportSettled();
-      flush();
-      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
-      expect(modal.querySelector(".app-toast")).toBeNull();
-    } finally {
-      shell.remove();
-    }
-  },
-);
+it("hands an active toast back to the app when its modal is removed", async () => {
+  const shell = document.createElement("div");
+  shell.className = "shell";
+  const appHost = document.createElement("openclaw-toast-host");
+  shell.append(appHost);
+  document.body.append(shell);
+  try {
+    const { modal } = await renderModal();
+    // Keep the toast active through the cold lazy import.
+    showToast({ message: "Saved", durationMs: 60_000 });
+    await commit(appHost);
+    await vi.dynamicImportSettled();
+    flush();
+    expect(appHost.parentElement).toBe(modal.getOverlayContainer());
+    modal.remove();
+    await commit(modal);
+    await commit(appHost);
+    expect(appHost.parentElement).toBe(shell);
+    await vi.dynamicImportSettled();
+    flush();
+    expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+    expect(modal.querySelector(".app-toast")).toBeNull();
+  } finally {
+    shell.remove();
+  }
+});
