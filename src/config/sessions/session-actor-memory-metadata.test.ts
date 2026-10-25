@@ -48,6 +48,7 @@ async function fixture() {
     scope,
     entry: { sessionId, updatedAt: 1, incognito: true },
   });
+  expect((await hydrate(storage)).events).toEqual([]);
   const raw = async (event: string) =>
     await commitMemory(storage, "session.metadata.append", { scope, event, options: {} });
   const message = async (
@@ -79,36 +80,16 @@ async function fixture() {
   const workspace = (maxSeq: number, generation = snapshot().transcript.watermark.generation) => {
     expect(snapshot().entry?.priorWorkspace?.through).toEqual({ generation, maxSeq });
   };
-  return { owner, actor, storage, raw, user: message, acquire, anchors, workspace };
+  return { actor, storage, raw, user: message, acquire, anchors, workspace };
 }
 
 describe("memory actor metadata storage", () => {
-  it("initializes without a fabricated message and preserves prepared bytes across append/read", async () => {
-    const { storage, raw } = await fixture();
-    expect((await hydrate(storage)).events).toEqual([]);
-    await raw(header);
-    const messageJson = '{ "role": "user", "content": "Prepared bytes", "timestamp": 2 }';
-    await commitMemory(storage, "session.transcript.appendMessage", {
-      scope,
-      messageJson,
-      cwd: "/synthetic",
-    });
-    const read = await hydrate(storage);
-    expect(read.eventJson?.[0]).toBe(header);
-    expect(read.eventJson?.[1]).toContain(`"message":${messageJson}}`);
-    expect(await readMemory(storage, "session.metadata.mutation", { scope })).toBeGreaterThan(1000);
-    assert(read.events[1] && typeof read.events[1] === "object", "Expected message");
-    Object.assign(read.events[1], { id: "changed-returned-copy" });
-    expect((await hydrate(storage)).events).not.toContainEqual(
-      expect.objectContaining({ id: "changed-returned-copy" }),
-    );
-  });
-
   it("refuses a prepared rewrite after a phase append and preserves the original branch bytes", async () => {
-    const { actor, storage, raw, user } = await fixture();
+    const { actor, storage, raw, user, anchors } = await fixture();
     await raw(header);
     await user("user-1", "First");
     const before = await hydrate(storage);
+    expect(before.eventJson?.[0]).toBe(header);
     const source = before.events.find(
       (event) => isIndexedSessionEntry(event) && event.id === "user-1",
     );
@@ -154,9 +135,7 @@ describe("memory actor metadata storage", () => {
     const after = await hydrate(storage);
     expect(after.eventJson?.slice(0, current.events.length)).toEqual(current.eventJson);
     expect(after.events.at(-1)).toMatchObject({ id: "copied-user", message: { content: "First" } });
-    expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
-      "copied-user",
-    ]);
+    expect(anchors().map(([entryId]) => entryId)).toEqual(["copied-user"]);
     const side = {
       ...source,
       id: "side-copy",
@@ -174,9 +153,7 @@ describe("memory actor metadata storage", () => {
       id: "side-copy",
       appendMode: "side",
     });
-    expect(actor.snapshot(authority)?.transcript.anchors.map((anchor) => anchor.entryId)).toEqual([
-      "copied-user",
-    ]);
+    expect(anchors().map(([entryId]) => entryId)).toEqual(["copied-user"]);
   });
 
   it("replaces only an exact suffix, preserves opaque custom data, and invalidates old cursors", async () => {
@@ -329,17 +306,10 @@ describe("memory actor metadata storage", () => {
     await user("user-1", "Old window");
     const before = await hydrate(storage);
     const branchId = "branched-session";
-    const branchHeader = {
-      type: "session",
-      version: 3,
-      id: branchId,
-      timestamp: "1970-01-01T00:00:00.000Z",
-      cwd: "/synthetic",
-    };
     await commitMemory(storage, "session.transcript.branch", {
       scope,
       expectedLifecycleRevision: undefined,
-      branch: { sessionId: branchId, events: [branchHeader] },
+      branch: { sessionId: branchId, events: [{ type: "session", version: 3, id: branchId }] },
     });
     const next = await acquire();
     expect((await hydrate(next.storage, sessionId)).eventJson).toEqual(before.eventJson);

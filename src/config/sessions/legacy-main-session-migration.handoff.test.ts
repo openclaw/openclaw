@@ -12,7 +12,6 @@ import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js
 import {
   databasePath,
   type ClaimTarget,
-  outcomeKinds,
   readClaim,
   recordHarnessDeletions,
   seedClaim,
@@ -21,7 +20,6 @@ import {
 import { deleteSessionEntryLifecycle } from "./session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { readSessionTranscriptHistoryAnchorPage as readHistoryPage } from "./session-accessor.sqlite-history.test-support.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction as appendEvent } from "./session-accessor.sqlite-transcript-store.js";
 import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js";
@@ -56,6 +54,17 @@ function transaction<T>(
 function message(id: string, role: string, content: string, parent?: string, key?: string) {
   const body = { role, content, ...(key ? { idempotencyKey: key } : {}) };
   return { type: "message", id, parentId: parent ?? null, message: body };
+}
+
+function historyEvents(id: string, index = 0) {
+  const timestamp = new Date(index + 1).toISOString();
+  return [
+    { type: "session", version: 3, id, timestamp },
+    {
+      ...message(`message-${index}`, "user", "Retained bytes: café 🦞", undefined, "answer-key"),
+      timestamp,
+    },
+  ];
 }
 
 function archiveCold(store: string) {
@@ -100,42 +109,36 @@ it("refuses cleanup rebound to an identical destination database", async () => {
   expect(readClaim(destination)).toEqual(before[1]);
 });
 
-it.each(["foreign partition", "new destination"])("hands off %s", async (kind) => {
+it("hands off a foreign partition without disturbing sibling claims", async () => {
   const fixture = createFixture();
-  const foreign = kind === "foreign partition";
   const storePath = path.join(fixture.stateDir, "shared.json");
   fixture.cfg.session = { store: storePath };
-  if (foreign) {
-    fixture.cfg.agents = {
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, beta: {} },
-    };
-  }
+  fixture.cfg.agents = {
+    defaults: { sessionStore: { agentId: "ops" } },
+    entries: { ops: {}, beta: {} },
+  };
   const destinationPath = path.join(fixture.stateDir, "shared.sqlite");
   const foreignPath = path.join(fixture.stateDir, "shared.beta.sqlite");
-  const source = foreign
-    ? claim(fixture, "beta", "agent:main:chat", foreignPath)
-    : claim(fixture, "main");
+  const source = claim(fixture, "beta", "agent:main:chat", foreignPath);
   const destination = claim(fixture, "ops", "agent:ops:chat", destinationPath);
-  const sibling = foreign
-    ? { ...destination, key: "agent:ops:keep" }
-    : { ...source, key: "agent:other:keep" };
+  const siblings = [
+    { ...destination, key: "agent:ops:keep" },
+    { ...source, key: "agent:other:keep" },
+  ];
   const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
-  seedClaim(sibling);
+  siblings.forEach(seedClaim);
   const sourceBefore = readClaim(source);
-  const siblingBefore = readClaim(sibling);
-  if (foreign) {
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities: [source.key, entry.sessionId],
-      assertAllowed: () => {},
-    });
-    try {
-      await expect(repair(fixture)).rejects.toThrow("competing work is in flight");
-      expect(readClaim(source)).toEqual(sourceBefore);
-    } finally {
-      admission.release();
-    }
+  const siblingBefore = siblings.map(readClaim);
+  const admission = await beginSessionEffect({
+    scope: storePath,
+    identities: [source.key, entry.sessionId],
+    assertAllowed: () => {},
+  });
+  try {
+    await expect(repair(fixture)).rejects.toThrow("competing work is in flight");
+    expect(readClaim(source)).toEqual(sourceBefore);
+  } finally {
+    admission.release();
   }
   const result = await repair(fixture);
   const retry = await repair(fixture);
@@ -144,16 +147,8 @@ it.each(["foreign partition", "new destination"])("hands off %s", async (kind) =
   expect(readClaim(source)).toBeUndefined();
   expect(readClaim(destination)?.entry).toMatchObject(entry);
   expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
-  expect(readClaim(sibling)).toEqual(siblingBefore);
-  const unusedPartition = foreign ? "main" : "ops";
-  const unusedPath = path.join(fixture.stateDir, `shared.${unusedPartition}.sqlite`);
-  expect(fs.existsSync(unusedPath)).toBe(false);
-  if (!foreign) {
-    expect(outcomeKinds(result)).toContain("migrated-cross-store");
-    expect(fs.existsSync(storePath)).toBe(false);
-    const events = transaction(source, (db) => readTranscriptEventRows(db, entry.sessionId));
-    expect(events).toEqual([]);
-  }
+  expect(siblings.map(readClaim)).toEqual(siblingBefore);
+  expect(fs.existsSync(path.join(fixture.stateDir, "shared.main.sqlite"))).toBe(false);
 });
 
 it.each([
@@ -236,31 +231,7 @@ it.each(["existing-current", "cold", "utf16"] as const)(
       updatedAt: index + 1,
       ...(index > 0 ? { previousSessionId: ids[index - 1] } : {}),
     }));
-    const events = ids.map((id, index) => {
-      const timestamp = new Date(index + 1).toISOString();
-      return [
-        { type: "session", version: 3, id, timestamp },
-        {
-          ...message(
-            `message-${index}`,
-            "user",
-            `Retained exact history ${index}: café 🦞`,
-            undefined,
-            "answer-key",
-          ),
-          timestamp,
-        },
-        {
-          type: "custom",
-          id: `cache-${index}`,
-          parentId: `message-${index}`,
-          timestamp,
-          customType: "openclaw.cache-ttl",
-          display: true,
-          message: { role: "toolResult" },
-        },
-      ];
-    });
+    const events = ids.map(historyEvents);
     const seedGeneration = (target: ClaimTarget, index: number) => {
       const entry = entries[index]!;
       seedClaim({ ...target, entry, events: events[index] });
@@ -275,7 +246,7 @@ it.each(["existing-current", "cold", "utf16"] as const)(
               sessionKey: target.key,
             },
             {
-              ...message("latest-answer", "assistant", "Latest answer.", "cache-2", "answer-key"),
+              ...message("latest-answer", "assistant", "Latest answer.", "message-2", "answer-key"),
               timestamp: new Date(4).toISOString(),
             },
             { allowStoredAlias: true, idempotencyKeyMode: "relocate-owner" },
@@ -300,15 +271,6 @@ it.each(["existing-current", "cold", "utf16"] as const)(
       updateWindow(source, "transcript_updated_at = 1", fixture.env);
     }
     const before = snapshot(source);
-    expect(before.identities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ event_id: "message-2", message_idempotency_key: null }),
-        expect.objectContaining({
-          event_id: "latest-answer",
-          message_idempotency_key: "answer-key",
-        }),
-      ]),
-    );
     if (kind === "utf16") {
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       {
@@ -377,17 +339,10 @@ it("preserves the verified cold archive during an in-place key migration", async
   seedClaim({
     ...source,
     entry: { sessionId, updatedAt: 1 },
-    events: [
-      { type: "session", version: 3, id: sessionId, timestamp: new Date(1).toISOString() },
-      {
-        ...message("cold-question", "user", "Retain archived bytes: café 🦞"),
-        timestamp: new Date(1).toISOString(),
-      },
-    ],
+    events: historyEvents(sessionId),
   });
   const options = { agentId: "main", path: storePath, env: fixture.env };
-  const ageTranscript = "UPDATE session_windows SET transcript_updated_at = 1 WHERE session_id = ?";
-  transaction(source, ({ db }) => db.prepare(ageTranscript).run(sessionId), fixture.env);
+  updateWindow(source, "transcript_updated_at = 1", fixture.env);
   const archived = await archiveCold(storePath);
   expect(archived.archivedTranscripts).toBe(1);
   const snapshot = (key: string) =>

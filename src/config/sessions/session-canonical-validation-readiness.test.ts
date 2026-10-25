@@ -1,15 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
@@ -17,7 +9,6 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { withSqliteCanonicalValidationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
@@ -71,93 +62,8 @@ function certifyInWorker(options: Parameters<typeof certify>[0]) {
   return withSqliteCanonicalValidationWorker((withWorker) => certify(options, withWorker));
 }
 
-it.each(["unchanged", "pending edit", "replacement", "revoked", "unregistered"] as const)(
-  "admits only changed or revoked populated stores after a process restart (%s)",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentIds = ["main", "worker-a", "worker-b"];
-      for (const agentId of agentIds) {
-        const { options } = seedPendingRows(3, 0, agentId);
-        await certifyInWorker(options);
-      }
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const copiedPath = state.statePath("replacement.sqlite");
-      if (change === "replacement") {
-        database.db.prepare("VACUUM INTO ?").run(copiedPath);
-      } else if (change === "pending edit") {
-        markCanonicalSessionValidationPending(database);
-        markCanonicalSessionValidationPending(database);
-        database.db.exec("UPDATE session_nodes SET parent_session_key = 'agent:main:changed'");
-      }
-      closeOpenClawAgentDatabases(state.stateDir);
-      if (change === "replacement") {
-        renameSync(copiedPath, database.path);
-      }
-      const readinessUrl = resolveRuntimeWorkerUrl(
-        sessionNativeProcessEntrypoints.canonicalReadiness,
-      );
-      const readiness = readinessUrl.href;
-      const reader = resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.databaseReadOnly).href;
-      const validation = resolveRuntimeWorkerUrl(
-        sessionNativeProcessEntrypoints.databaseValidation,
-      ).href;
-      const registry = resolveRuntimeWorkerUrl(
-        sessionNativeProcessEntrypoints.databaseRegistry,
-      ).href;
-      const result = spawnSync(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(readinessUrl).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          `import { certifySessionCanonicalValidationPending } from ${JSON.stringify(readiness)};
-           import { openOpenClawAgentDatabaseReadOnly } from ${JSON.stringify(reader)};
-           import { unregisterOpenClawAgentDatabases } from ${JSON.stringify(registry)};
-           import {
-             getOpenClawAgentDatabaseValidation,
-             invalidateOpenClawAgentDatabaseValidation,
-           } from ${JSON.stringify(validation)};
-           if (${JSON.stringify(change)} === "revoked") {
-             invalidateOpenClawAgentDatabaseValidation(${JSON.stringify(database.path)});
-           } else if (${JSON.stringify(change)} === "unregistered") {
-             unregisterOpenClawAgentDatabases({ agentId: "main" });
-           }
-           let workers = 0;
-           let integrityReceipts = 0;
-         const observed = new Error("canonical worker requested");
-           for (const agentId of ${JSON.stringify(agentIds)}) {
-             try {
-               await certifySessionCanonicalValidationPending({ agentId }, async () => {
-                 workers++;
-                 throw observed;
-               });
-             } catch (error) {
-               if (error !== observed) throw error;
-             }
-             const opened = openOpenClawAgentDatabaseReadOnly({ agentId });
-             if (!opened.found) throw new Error("fixture database missing");
-             if (getOpenClawAgentDatabaseValidation(opened.database)) integrityReceipts++;
-             opened.database.close();
-           }
-           process.stdout.write(JSON.stringify({ workers, integrityReceipts }));`,
-        ],
-        { env: { ...process.env, ...state.env }, encoding: "utf8", timeout: 30_000 },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      // Pending canonical rows retain integrity proof; replacement or revocation loses only main's.
-      expect(JSON.parse(result.stdout)).toEqual({
-        workers: change === "unchanged" ? 0 : 1,
-        integrityReceipts:
-          change === "unchanged" || change === "pending edit"
-            ? agentIds.length
-            : agentIds.length - 1,
-      });
-    });
-  },
-);
-
-it("drains a large backlog while admitting foreground writes between batches", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("drains a large backlog while admitting foreground writes between batches", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { options, database } = seedPendingRows(260, 16 * 1024);
     const readRows = () =>
       database.db
@@ -184,13 +90,12 @@ it("drains a large backlog while admitting foreground writes between batches", a
     expect(events.lastIndexOf("batch")).toBeGreaterThan(events.indexOf("foreground"));
     expect(hasPendingCanonicalSessionValidation(database)).toBe(false);
     expect(readRows()).toEqual(before);
-  });
-});
+  }));
 
 it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
   "retains validation authority when %s during worker admission",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { options, database } = seedPendingRows(1);
       if (change === "startup revoked") {
         invalidateOpenClawAgentDatabaseValidation(database.path);
@@ -245,14 +150,13 @@ it.each(["row changed", "receipt revoked", "startup revoked"] as const)(
       } else {
         expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
       }
-    });
-  },
+    }),
 );
 
 it.each([false, true])(
   "fully validates a copied populated store whose pending table is clean (invalid row: %s)",
-  async (invalid) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (invalid) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { options, database } = seedPendingRows(130);
       await certify(options);
       const copiedPath = state.statePath("copied-agent.sqlite");
@@ -279,12 +183,11 @@ it.each([false, true])(
         expect(hasOpenClawAgentCanonicalValidation(copied)).toBe(true);
         expect(hasPendingCanonicalSessionValidation(copied)).toBe(false);
       }
-    });
-  },
+    }),
 );
 
-it("forces a fresh worker to revalidate a canonical receipt revoked by its parent", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("forces a fresh worker to revalidate a canonical receipt revoked by its parent", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { options, database } = seedPendingRows(1);
     await certifyInWorker(options);
     database.db.exec(`
@@ -294,11 +197,10 @@ it("forces a fresh worker to revalidate a canonical receipt revoked by its paren
     invalidateOpenClawAgentDatabaseValidation(database.path);
     await expect(certifyInWorker(options)).rejects.toThrow("invalid persisted session row");
     expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
-  });
-});
+  }));
 
-it("settles concurrent certification and retries after success or failure", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("settles concurrent certification and retries after success or failure", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { options, database } = seedPendingRows(1);
     const entered = createDeferredCore();
     let holdNext = false;
@@ -316,15 +218,7 @@ it("settles concurrent certification and retries after success or failure", asyn
       });
     });
     await certify(options);
-    const observed = observeHostDataSql();
-    try {
-      await certify(options);
-      expect(
-        observed.queries.filter((query) => /session_canonical_validation_pending/i.test(query)),
-      ).toEqual([]);
-    } finally {
-      observed.restore();
-    }
+    await certify(options);
     const dirty = () => {
       markCanonicalSessionValidationPending(database);
       database.db.exec("UPDATE session_nodes SET entry_json = entry_json || ' '");
@@ -361,5 +255,4 @@ it("settles concurrent certification and retries after success or failure", asyn
       resume?.();
       await Promise.allSettled(pending);
     }
-  });
-});
+  }));

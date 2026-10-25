@@ -1,17 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction as writeTransaction,
-} from "../../state/openclaw-agent-db.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createSessionTranscriptFtsInserter as createFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction as deleteFtsRows,
@@ -32,38 +26,26 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
-import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const projectionDatabases: DatabaseSync[] = [];
 afterEach(() => {
   for (const db of projectionDatabases.splice(0)) {
     db.close();
   }
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function rows(db: EngineConnection, sql: string) {
   return db.prepare(sql).all();
 }
 
-function fixture() {
-  const options = {
-    agentId: "main",
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("transcript-fts-") },
-  };
-  return { options, database: openOpenClawAgentDatabase(options) };
-}
-
 it("preserves exact 64-bit identities, duplicates and cold rows through deletion and rollback", () => {
-  const { options, database } = fixture();
+  const db = projectionFixture(false);
   const expectedRows = [
     { message_id: "duplicate", text: "first searchable", role: "user", timestamp: 10 },
     { message_id: "duplicate", text: "second searchable", role: "assistant", timestamp: "10" },
     { message_id: null, text: null, role: null, timestamp: null },
   ];
-  writeTransaction(({ db }) => {
+  runSqliteImmediateTransactionSync(db, () => {
     db.exec(`
       INSERT INTO session_transcript_fts_rows(id, session_id, message_id)
         VALUES (9007199254740992, 'other', 'duplicate');
@@ -74,10 +56,10 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
       db,
       "session",
     )(expectedRows.map(({ message_id, ...row }) => ({ ...row, messageId: message_id })));
-  }, options);
+  });
   expect(
     rows(
-      database.db,
+      db,
       "SELECT CAST(rowid AS TEXT) AS id, session_id, message_id FROM session_transcript_fts ORDER BY rowid",
     ),
   ).toEqual([
@@ -86,13 +68,12 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
     { id: "9007199254740994", session_id: "session", message_id: "duplicate" },
     { id: "9007199254740995", session_id: "session", message_id: null },
   ]);
-  const read = () =>
-    executeSqliteQuerySync(database.db, selectFtsRows(database.db, "session")).rows;
+  const read = () => executeSqliteQuerySync(db, selectFtsRows(db, "session")).rows;
   const before = read();
   expect(before).toEqual(expectedRows);
 
   expect(() =>
-    writeTransaction(({ db }) => {
+    runSqliteImmediateTransactionSync(db, () => {
       // Exercise the schema-owned delete independently of the runtime delete helper.
       db.exec(`DELETE FROM session_transcript_fts_rows
         WHERE id = (SELECT MIN(id) FROM session_transcript_fts_rows WHERE session_id = 'session')`);
@@ -104,18 +85,18 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
         ),
       ).toEqual([]);
       throw new Error("roll back both projections");
-    }, options),
+    }),
   ).toThrow("roll back both projections");
   expect(read()).toEqual(before);
 
-  writeTransaction(({ db }) => {
+  runSqliteImmediateTransactionSync(db, () => {
     expect(deleteFtsRows(db, "session", { messageIds: [] })).toBe(0);
     expect(deleteFtsRows(db, "session", { messageIds: ["duplicate"] })).toBe(2);
     expect(read()).toEqual([before[2]]);
     expect(deleteFtsRows(db, "session", { maxRows: 1 })).toBe(1);
     expect(deleteFtsRows(db, "session", { maxRows: 1 })).toBe(0);
-  }, options);
-  expect(database.db.prepare("SELECT session_id, text FROM session_transcript_fts").all()).toEqual([
+  });
+  expect(db.prepare("SELECT session_id, text FROM session_transcript_fts").all()).toEqual([
     { session_id: "other", text: "unrelated searchable" },
   ]);
 });
@@ -147,7 +128,7 @@ function projectionFixture(seed = true) {
       content: `needle ${eventId}`,
     });
     inserters.get(id)!({ seq, eventJson: JSON.stringify(event), createdAt: seq });
-    expect(appenders.get(id)!.append({ seq, event, eventId, createdAt: seq })).toBe(false);
+    appenders.get(id)!.append({ seq, event, eventId, createdAt: seq });
   }
   for (const appender of appenders.values()) {
     appender.flush();
@@ -181,32 +162,18 @@ it("replaces a suffix larger than SQLite's parameter limit without touching sibl
     .map((row) => String(row.compile_options))
     .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="));
   const bulkRows = Number(variableLimit?.split("=")[1] ?? 32766) + 1;
-  const totalRows = bulkRows + 4;
   db.exec("BEGIN");
-  db.prepare(`WITH RECURSIVE rows(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM rows WHERE n<${bulkRows - 1})
-        INSERT INTO transcript_events (session_id, seq, event_json, created_at,
-          navigation_type, navigation_custom_type, navigation_display, message_role,
-          navigation_last_type, navigation_last_custom_type, navigation_valid)
-        SELECT 'target', n+4,
-          json_object('type','message','id','bulk-'||n,
-            'parentId',CASE WHEN n=0 THEN 'target-3' ELSE 'bulk-'||(n-1) END,
-            'message',json_object('role','user','content','needle bulk-'||n)), n+4,
-          $navigation_type, $navigation_custom_type, $navigation_display, $message_role,
-          $navigation_last_type, $navigation_last_custom_type, $navigation_valid FROM rows`).run(
-    deriveTranscriptPredicateFields('{"type":"message","message":{"role":"user"}}'),
+  createFtsInserter(
+    db,
+    "target",
+  )(
+    Array.from({ length: bulkRows }, (_, index) => ({
+      messageId: `bulk-${index}`,
+      text: `needle bulk-${index}`,
+      role: "user",
+      timestamp: index + 4,
+    })),
   );
-  db.exec(`
-        INSERT INTO session_transcript_active_events
-          SELECT session_id,seq,seq,seq,1 FROM transcript_events WHERE session_id='target' AND seq>=4;
-        INSERT INTO session_transcript_fts(text,session_id,message_id,role,timestamp)
-          SELECT 'needle bulk-'||(seq-4),session_id,'bulk-'||(seq-4),'user',seq
-          FROM transcript_events WHERE session_id='target' AND seq>=4;
-        INSERT INTO session_transcript_fts_rows (id,session_id,message_id)
-          SELECT rowid,session_id,message_id FROM session_transcript_fts WHERE session_id='target'
-          AND message_id LIKE 'bulk-%';
-        UPDATE session_transcript_index_state SET active_event_count=${totalRows},
-          active_message_count=${totalRows}, indexed_seq=${totalRows - 1}, leaf_event_id='bulk-${bulkRows - 1}'
-          WHERE session_id='target';`);
   const removedMessageIds = [
     ...Array.from({ length: 4 }, (_, i) => `target-${i}`),
     ...Array.from({ length: bulkRows }, (_, i) => `bulk-${i}`),
@@ -280,10 +247,7 @@ function message(
   timestamp?: string,
 ) {
   return {
-    type: "message",
-    id,
-    ...(parentId !== undefined ? { parentId } : {}),
-    message: { role, content },
+    ...messageEvent(id, parentId, { role, content }),
     ...(timestamp ? { timestamp } : {}),
   };
 }

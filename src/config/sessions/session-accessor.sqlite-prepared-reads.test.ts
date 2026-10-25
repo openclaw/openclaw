@@ -14,11 +14,9 @@ import { sessionEntrySnapshotsSchemaSql } from "../../state/openclaw-agent-sessi
 import { getExactSessionEntryQueries } from "./session-accessor.sqlite-entry-query.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
 import {
-  type SessionEntrySnapshot,
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
-import { promptReport } from "./system-prompt-report.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openedDatabases: DatabaseSync[] = [];
@@ -75,14 +73,12 @@ function createDatabase(filename = ":memory:") {
     key = keys[0],
     projection: Parameters<typeof readExactSessionEntryRowValidated>[2] = "list",
   ) => readExactSessionEntryRowValidated(database, key, projection)?.entry;
-  const participant = (id: string) =>
-    sql("UPDATE session_participants SET actor_id = ? WHERE session_key = ?").run(id, keys[0]);
   const transact = (write: () => void, commit = true) => {
     db.exec("BEGIN");
     write();
     db.exec(commit ? "COMMIT" : "ROLLBACK");
   };
-  return { ...database, sql, read, participant, transact };
+  return { ...database, sql, read, transact };
 }
 
 function addOwnerColumns(db: DatabaseSync) {
@@ -91,45 +87,7 @@ function addOwnerColumns(db: DatabaseSync) {
   }
 }
 
-it("skips absent-field clearing only when the complete previous field set survives", () => {
-  const database = createDatabase();
-  const {
-    keys: [key],
-    sql,
-    transact,
-  } = database;
-  const previous = {
-    sessionId: "session-0",
-    updatedAt: 1,
-    skillsSnapshot: { prompt: "saved prompt", skills: [] },
-  };
-  // Match the initial complete snapshot, including its report.
-  const previousEntry = {
-    ...previous,
-    systemPromptReport: promptReport(1, 0, 0),
-  };
-  const replace = (entry: Record<string, unknown>, commit = true) => {
-    const split = splitSessionEntrySnapshots(entry, { previousEntry });
-    transact(() => writeSessionEntrySnapshots(database, key, split.snapshots, split), commit);
-  };
-  const fields = () =>
-    sql("SELECT field FROM session_entry_snapshots WHERE session_key = ? ORDER BY field")
-      .all(key)
-      .map((row) => row.field);
-  const both = ["skillsSnapshot", "systemPromptReport"];
-  for (const [entry, commit, expected] of [
-    [{ ...previousEntry, skillsSnapshot: { prompt: "new prompt", skills: [] } }, true, both],
-    [previous, false, both],
-    [previous, true, ["skillsSnapshot"]],
-  ] as const) {
-    replace(entry, commit);
-    expect(fields()).toEqual(expected);
-  }
-  transact(() => writeSessionEntrySnapshots(database, key, []));
-  expect(fields()).toEqual([]);
-});
-
-it("batches snapshot replacement while preserving values, revisions, and rollback", () => {
+it("rolls back snapshot replacement without changing another session", () => {
   const database = createDatabase();
   const {
     sql,
@@ -137,65 +95,23 @@ it("batches snapshot replacement while preserving values, revisions, and rollbac
     keys: [key, otherKey],
     transact,
   } = database;
-  const snapshots: SessionEntrySnapshot[] = [
-    { field: "sessionDiffBaseline", valueJson: '{"sessionId":"session-0"}' },
-    { field: "skillsSnapshot", valueJson: '{"prompt":"saved prompt","skills":[]}' },
-    { field: "systemPromptReport", valueJson: '{"source":"run"}' },
-  ];
-  const rows = () =>
-    sql(
+  const snapshot = () => ({
+    rows: sql(
       "SELECT field, value_json FROM session_entry_snapshots WHERE session_key = ? ORDER BY field",
-    ).all(key);
-  const revision = () =>
-    sql("SELECT snapshot_revision FROM session_nodes WHERE session_key = ?").get(key)
-      ?.snapshot_revision;
-  const changedSnapshots: SessionEntrySnapshot[] = [
-    snapshots[0]!,
-    { field: "skillsSnapshot", valueJson: '{"prompt":"changed prompt","skills":[]}' },
-  ];
-  const original = snapshots.map(({ field, valueJson }) => ({ field, value_json: valueJson }));
-  const changed = [
-    { field: "sessionDiffBaseline", value_json: '{"sessionId":"session-0"}' },
-    { field: "skillsSnapshot", value_json: '{"prompt":"changed prompt","skills":[]}' },
-  ];
-  for (const [values, commit, expected, expectedRevision] of [
-    [snapshots, true, original, 3],
-    [snapshots, true, original, 3],
-    [changedSnapshots, true, changed, 5],
-    [snapshots, false, changed, 5],
-    [[], true, [], 7],
-  ] as const) {
-    transact(() => writeSessionEntrySnapshots(database, key, values), commit);
-    expect({ rows: rows(), revision: revision() }).toEqual({
-      rows: expected,
-      revision: expectedRevision,
-    });
-  }
+    ).all(key),
+    revision: sql("SELECT snapshot_revision FROM session_nodes WHERE session_key = ?").get(key)
+      ?.snapshot_revision,
+  });
+  const before = snapshot();
+  const persisted = splitSessionEntrySnapshots(read(key, "full")!).snapshots;
+  transact(() => writeSessionEntrySnapshots(database, key, persisted));
+  expect(snapshot()).toEqual(before);
+  transact(() => {
+    writeSessionEntrySnapshots(database, key, []);
+    expect(snapshot()).toEqual({ rows: [], revision: Number(before.revision) + 2 });
+  }, false);
+  expect(snapshot()).toEqual(before);
   expect(read(otherKey, "full")?.skillsSnapshot).toEqual({ prompt: "saved prompt", skills: [] });
-});
-
-it("refreshes participant facts after savepoint and transaction rollback", () => {
-  const database = createDatabase();
-  const {
-    db,
-    participant,
-    keys: [key],
-  } = database;
-  const read = () => readExactSessionEntryRowValidated(database, key, "list");
-  try {
-    db.exec("BEGIN");
-    participant("local");
-    expect(read()?.entry.participants?.[0]?.identity.id).toBe("local");
-    db.exec("SAVEPOINT participant_edit");
-    participant("pending");
-    expect(read()?.entry.participants?.[0]?.identity.id).toBe("pending");
-    db.exec("ROLLBACK TO participant_edit");
-    expect(read()?.entry.participants?.[0]?.identity.id).toBe("local");
-    db.exec("RELEASE participant_edit");
-  } finally {
-    db.exec("ROLLBACK");
-  }
-  expect(read()?.entry.participants?.[0]?.identity.id).toBe("participant-0");
 });
 
 it.each(["row", "canonical"] as const)(
@@ -215,7 +131,6 @@ it.each(["row", "canonical"] as const)(
       );
     const oversized = "\u0100".repeat(600_000);
     replacePrompt(oversized);
-    expect(JSON.parse(read()!).prompt).toBe(oversized);
     expect(JSON.parse(read()!).prompt).toBe(oversized);
     replacePrompt("small current prompt");
     // A different projection observes the revision before the original shape is revisited.

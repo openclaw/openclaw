@@ -59,8 +59,8 @@ it.each([
   ["selection", true],
   ["transaction", false],
   ["transaction", true],
-] as const)("rejects revoked authority during %s (replay=%s)", async (phase, replay) => {
-  await withTempHome(async (home) => {
+] as const)("rejects revoked authority during %s (replay=%s)", (phase, replay) =>
+  withTempHome(async (home) => {
     const scope = makeScope(home, "main", "agent:main:main");
     await seed(scope, { lifecycleRevision: "source-generation" });
     const append = message("completion", "source", "assistant");
@@ -112,11 +112,11 @@ it.each([
     expect(committed).not.toHaveBeenCalled();
     expect(await loadEvents(scope)).toEqual(before);
     expect(loadSessionEntry(scope)).toEqual(entryBefore);
-  });
-});
+  }),
+);
 
-it("completes committed custody before a queued cancellation can interrupt the receipt", async () => {
-  await withTempHome(async (home) => {
+it("completes committed custody before a queued cancellation can interrupt the receipt", () =>
+  withTempHome(async (home) => {
     const scope = makeScope(home, "main", "agent:main:main");
     await seed(scope);
     const controller = new AbortController();
@@ -144,101 +144,79 @@ it("completes committed custody before a queued cancellation can interrupt the r
     expect(controller.signal.aborted).toBe(true);
     expect(completed).toEqual(["committed"]);
     expect(await loadEvents(scope)).toContainEqual(expect.objectContaining({ id: "committed" }));
-  });
-});
+  }));
 
-it.each(["undesignated", "retired", "pathless injected"] as const)(
-  "rejects an ownerless %s transcript write",
-  async (kind) => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      const configured = fleetConfig(
-        storePath,
-        kind === "undesignated" ? undefined : kind === "retired" ? "retired" : "ops",
-      );
-      const cfg =
-        kind === "undesignated" ? retainLegacyDefaultAgentId(configured, "ops") : configured;
-      const scope = makeScope(home, undefined, kind === "undesignated" ? "main" : "global");
-      const target =
-        kind === "pathless injected"
-          ? {
-              sessionId: scope.sessionId,
-              sessionKey: "global",
-              sessionStore: { global: { sessionId: scope.sessionId, updatedAt: 1 } },
-            }
-          : scope;
-
-      await expect(persistTurn(target, turnOptions(cfg, "must select"))).rejects.toBeInstanceOf(
-        AgentSelectionRequiredError,
-      );
-    });
-  },
-);
-
-it.each(["recorded default", "explicit per-agent store"] as const)(
-  "attributes a write to its %s",
-  async (kind) => {
-    await withTempHome(async (home) => {
-      const explicit = kind === "explicit per-agent store";
-      const agentId = explicit ? "research" : "ops";
-      const scope = makeScope(
-        home,
-        explicit ? agentId : undefined,
-        explicit ? "global" : "main",
-        explicit ? "research-sessions.json" : "sessions.json",
-      );
-      const cfg = fleetConfig(
-        explicit ? path.join(home, "shared-sessions.json") : scope.storePath,
-        explicit ? "ops" : undefined,
-      );
-      if (!explicit) {
+it.each([
+  ["undesignated", undefined, undefined, false],
+  ["retired", "retired", undefined, false],
+  ["pathless injected", "ops", undefined, false],
+  ["recorded default", undefined, undefined, true],
+  ["explicit per-agent store", "ops", "research", true],
+  ["fixed owner", "ops", "ops", true],
+  ["conflicting owner", "ops", "research", false],
+] as const)("resolves transcript ownership: %s", (kind, owner, agentId, allowed) =>
+  withTempHome(async (home) => {
+    const legacy = !owner;
+    const separate = kind === "explicit per-agent store";
+    const scope = makeScope(
+      home,
+      agentId,
+      legacy ? "main" : "global",
+      separate ? "research-sessions.json" : "sessions.json",
+    );
+    const cfg = fleetConfig(
+      separate ? path.join(home, "shared-sessions.json") : scope.storePath,
+      owner,
+    );
+    if (legacy) {
+      if (allowed) {
         cfg.agents = { ...cfg.agents, defaults: { systemAgent: { agentId: "ops" } } };
-        retainLegacyDefaultAgentId(cfg, "ops");
       }
-      await seed({ ...scope, agentId });
-
-      await expect(
-        persistTurn(scope, {
-          ...turnOptions(cfg, kind),
-          ...(explicit ? { expectedSessionId: scope.sessionId } : {}),
-        }),
-      ).resolves.toMatchObject({ messages: [{ appended: true }] });
-      await expect(loadEvents({ ...scope, agentId })).resolves.toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({ content: kind, role: "user" }),
-          type: "message",
-        }),
-      );
+      retainLegacyDefaultAgentId(cfg, "ops");
+    }
+    const target =
+      kind === "pathless injected"
+        ? {
+            sessionId: scope.sessionId,
+            sessionKey: "global",
+            sessionStore: { global: { sessionId: scope.sessionId, updatedAt: 1 } },
+          }
+        : scope;
+    if (allowed) {
+      await seed({ ...scope, agentId: agentId ?? "ops" });
+    }
+    const turn = persistTurn(target, {
+      ...turnOptions(cfg, kind),
+      ...(separate ? { expectedSessionId: scope.sessionId } : {}),
     });
-  },
+    if (!allowed) {
+      await expect(turn).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+      return;
+    }
+    await expect(turn).resolves.toMatchObject({ messages: [{ appended: true }] });
+    await expect(loadEvents({ ...scope, agentId: agentId ?? "ops" })).resolves.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ content: kind, role: "user" }),
+        type: "message",
+      }),
+    );
+  }),
 );
 
-it.each([false, ...(process.platform === "win32" ? [] : [true])])(
-  "rejects conflicting fixed-store owners (symlink=%s)",
-  async (alias) =>
-    withTempHome(async (home) => {
-      const file = alias ? "shared-store.sqlite" : "sessions.json";
-      const storePath = path.join(home, file);
-      const cfg = fleetConfig(storePath, "ops");
-      const scope = makeScope(home, "research", "global", alias ? "alias.sqlite" : file);
-      if (alias) {
-        await fs.writeFile(storePath, "");
-        await fs.symlink(storePath, scope.storePath);
-      }
-      await expect(persistTurn(scope, turnOptions(cfg, "wrong owner"))).rejects.toBeInstanceOf(
-        AgentSelectionRequiredError,
-      );
-      if (!alias) {
-        await seed({ ...scope, agentId: "ops" });
-        await expect(
-          persistTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
-        ).resolves.toMatchObject({ messages: [{ appended: true }] });
-      }
-    }),
+it.runIf(process.platform !== "win32")("rejects a conflicting owner through a store symlink", () =>
+  withTempHome(async (home) => {
+    const storePath = path.join(home, "shared-store.sqlite");
+    const scope = makeScope(home, "research", "global", "alias.sqlite");
+    await fs.writeFile(storePath, "");
+    await fs.symlink(storePath, scope.storePath);
+    await expect(
+      persistTurn(scope, turnOptions(fleetConfig(storePath, "ops"), "wrong owner")),
+    ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+  }),
 );
 
-it("completes a pathless injected write before a later failure", async () => {
-  await withTempHome(async (home) => {
+it("completes a pathless injected write before a later failure", () =>
+  withTempHome(async (home) => {
     const configuredStorePath = path.join(home, "shared-sessions.json");
     const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
     const sessionStore = { global: sessionEntry };
@@ -291,13 +269,12 @@ it("completes a pathless injected write before a later failure", async () => {
     expect(await loadEvents({ ...scope, storePath: configuredStorePath })).toContainEqual(
       expect.objectContaining({ id: "injected-first" }),
     );
-  });
-});
+  }));
 
 it.each(["writer", "lifecycle"] as const)(
   "fences transcript mutations with the admitted %s claim",
-  async (claim) => {
-    await withTempHome(async (home) => {
+  (claim) =>
+    withTempHome(async (home) => {
       const fence = {
         expectedLifecycleRevision: claim === "writer" ? "current-revision" : "superseded-revision",
         expectedWriterRunId: claim === "writer" ? "superseded-run" : "current-run",
@@ -370,6 +347,5 @@ it.each(["writer", "lifecycle"] as const)(
 
       expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
       await expect(loadEvents(scope)).resolves.toEqual([]);
-    });
-  },
+    }),
 );

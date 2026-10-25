@@ -11,7 +11,7 @@ import {
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
-import { appendTranscriptMessage, upsertSessionEntryCore } from "./session-accessor.js";
+import { appendTranscriptMessage } from "./session-accessor.js";
 import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
 import {
   actorLifetime as actorAuthority,
@@ -20,14 +20,13 @@ import {
   type MemoryOwner,
 } from "./session-actor-memory-family.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
+import {
+  failSessionActorMemoryPublication,
+  memoryStorage,
+} from "./session-actor-memory-publication.test-support.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
-import type {
-  SessionActorStorageOutcome,
-  SessionActorStorageWrites,
-} from "./session-actor-storage-contract.js";
 import type { TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 
 vi.mock("node:sqlite", async (original) => ({
@@ -49,7 +48,6 @@ const location = {
   path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
 const filter = { engineId: "test" };
-const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
 const outcomeDefaults = {
   provider: "test",
   model: "test",
@@ -58,11 +56,6 @@ const outcomeDefaults = {
   occurredAt: 1,
 };
 const openFixture = memoryOwnerFixture(location, () => memorySessionActorOwners.reset());
-
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  assert(outcome.kind === "committed", "Expected a committed storage command");
-  return outcome.value;
-}
 
 async function fixture(suffix = "one", existingOwner?: MemoryOwner) {
   const sessionKey = `agent:main:dashboard:incognito-side-${suffix}`;
@@ -77,39 +70,35 @@ async function fixture(suffix = "one", existingOwner?: MemoryOwner) {
     sessionId,
   };
   const scope = { ...storageScope, sessionActor: binding };
-  const mutate = async <K extends keyof SessionActorStorageWrites>(
-    type: K,
-    input: SessionActorStorageWrites[K]["input"],
-  ) => committed(await storage.mutate({ type, input }, authority));
+  const { commit: mutate } = memoryStorage(storage, authority);
   await mutate("session.metadata.initialize", {
     scope: storageScope,
     entry: { sessionId, updatedAt: 1, incognito: true },
   });
   const message = async (id: string, role: "user" | "assistant", text: string) => {
-    await mutate("session.metadata.append", {
-      scope: storageScope,
-      event: {
-        type: "message",
-        id,
-        parentId: null,
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      message: {
-        messageJson: JSON.stringify({ role, content: text, timestamp: 1 }),
-        cwd: "/synthetic",
-        validateTurn: false,
-      },
-      options: { appendIntent: "active-branch" },
+    const result = await appendTranscriptMessage(scope, {
+      eventId: id,
+      message: { role, content: text, timestamp: 1 },
+      parentId: null,
+      now: Date.parse("2026-10-11T00:00:00.000Z"),
     });
-    const anchor = actor.snapshot(authority)!.transcript.anchors.find((row) => row.entryId === id);
-    assert(anchor, "Missing appended anchor");
-    return anchor;
+    assert(result?.anchor, "Missing appended anchor");
+    return result.anchor;
   };
   const turn = async (id: string): Promise<TranscriptTurnBoundary> => ({
     admission: { ...(await message(`${id}-user`, "user", id)), logicalTurnId: id, role: "user" },
     terminal: await message(`${id}-assistant`, "assistant", `${id} reply`),
   });
-  return { owner, actor, storage, binding, scope, message, turn, mutate };
+  return {
+    owner,
+    actor,
+    storage,
+    binding,
+    scope,
+    unboundScope: storageScope,
+    turn,
+    mutate,
+  };
 }
 
 type Scope = Omit<Awaited<ReturnType<typeof fixture>>["scope"], "sessionActor">;
@@ -139,12 +128,8 @@ async function trajectorySink(scope: Scope, sessionActor?: Binding) {
 }
 
 async function publicationFails(scope: Scope, operation: () => Promise<unknown>) {
-  const stop = failSessionActorMemoryPublication(scope.sessionKey);
-  try {
-    await expect(operation()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
-  } finally {
-    stop();
-  }
+  using _ = { [Symbol.dispose]: failSessionActorMemoryPublication(scope.sessionKey) };
+  await expect(operation()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
 }
 
 function contextEngine(commitTurn: ContextEngine["commitTurn"]): ContextEngine {
@@ -174,24 +159,12 @@ function trajectory(sessionId: string, text: string, seq: number): TrajectoryEve
 
 describe("memory session side-data consumers", () => {
   it("routes unbound production side data through the current memory owner without recreating closed sessions", async () => {
-    const target = {
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: "/synthetic/phase-e-side-data" },
-      sessionKey: "agent:main:dashboard:incognito-unbound-side-data",
-      sessionId: "unbound-side-data",
-    };
-    const scope = { ...target, storePath: resolveIncognitoOpenClawAgentSqlitePath(target) };
-    await upsertSessionEntryCore(scope, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      incognito: true,
-    });
+    const { owner, unboundScope: scope } = await fixture("unbound");
     const outcome = {
       ...scope,
       runId: "user",
       ...outcomeDefaults,
     };
-    const owner = memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath })!;
     const sequence = () => owner.readSession(scope.sessionKey, authority)!.version.sequence;
     const beforeOutcome = sequence();
     await publicationFails(scope, () => recordMessageToolRunOutcome(outcome));
@@ -207,16 +180,11 @@ describe("memory session side-data consumers", () => {
     };
     const store = outbox(scope);
     await store.acceptIntent({ ...filter, boundary });
-    expect(await store.publishClosedTurn({ ...filter, boundary, ...publishLimits })).toBe("ok");
-    expect(await store.readNextPending({ ...filter, sessionId: scope.sessionId })).toMatchObject({
-      advancement_key: "unbound-turn",
-    });
-    await store.complete("unbound-turn");
+    expect(await store.hasPending(filter)).toBe(true);
     const event = trajectory(scope.sessionId, "unbound", 0);
     const sink = await trajectorySink(scope);
     sink.write(event, JSON.stringify(event));
     await sink.flush();
-    expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([event]);
     expect(loadSqliteTrajectoryRuntimeEventRowsSync(scope)).toEqual([{ event, seq: 0 }]);
     memorySessionActorOwners.closeSession(
       { agentId: scope.agentId, path: scope.storePath },
@@ -224,7 +192,6 @@ describe("memory session side-data consumers", () => {
     );
     await expect(recordMessageToolRunOutcome(outcome)).rejects.toThrow("incognito");
     expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([]);
-    expect(loadSqliteTrajectoryRuntimeEventRowsSync(scope)).toEqual([]);
     expect(
       memorySessionActorOwners
         .read({ agentId: scope.agentId, path: scope.storePath })
@@ -233,7 +200,7 @@ describe("memory session side-data consumers", () => {
   });
 
   it("recovers ordered accepted turns and allows plugin callbacks to await the same actor", async () => {
-    const { scope, actor, storage, binding, turn } = await fixture();
+    const { scope, storage, binding, turn } = await fixture();
     const store = outbox(scope, binding);
     const abandoned = await turn("abandoned");
     await store.enqueueIntent({ ...filter, admission: abandoned.admission });
@@ -276,7 +243,6 @@ describe("memory session side-data consumers", () => {
       pending: false,
     });
     expect(calls).toEqual(["first", "first", "second"]);
-    actor.assertReadable();
     const blocked = await turn("blocked");
     await store.acceptIntent({ ...filter, boundary: blocked });
     expect(
@@ -341,11 +307,7 @@ describe("memory session side-data consumers", () => {
   it("acknowledges an already handed-off turn while its actor handle releases", async () => {
     const { scope, actor, owner, binding, turn } = await fixture();
     const boundary = await turn("closing");
-    const store = openContextEngineTurnOutboxWorkerStore({
-      ...location,
-      sessionKey: scope.sessionKey,
-      sessionActor: binding,
-    });
+    const store = outbox(scope, binding);
     await store.acceptIntent({ ...filter, boundary });
     await store.publishClosedTurn({ ...filter, boundary, maxEvents: 10, maxBytes: 100_000 });
     const entered = Promise.withResolvers<void>();

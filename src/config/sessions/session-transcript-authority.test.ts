@@ -110,73 +110,24 @@ function withSeeded(
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager =
       realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
+    const values = observe(scope.sessionKey);
+    const ready = observe(scope.sessionKey, true);
     const seed =
       realm === "native"
         ? manager.appendMessage(message("seed"))
         : await manager.appendMessageAsync(message("seed"));
+    expect(values.at(-1)).toMatchObject({
+      ...readVersion(fixture.database, scope.sessionId),
+      sessionId: scope.sessionId,
+      sessionKey: scope.sessionKey,
+      lastMessagePreview: "seed",
+    });
+    expect(ready.at(-1)).toMatchObject({ sessionId: scope.sessionId, projectionReady: true });
     return run({ ...fixture, manager, seed });
   });
 }
 const withNativeSeeded = (label: string, run: Parameters<typeof withSeeded>[1]) =>
   withSeeded(label, run, "native");
-
-it.each(["native", "worker"] as const)(
-  "publishes the committed context through SessionManager %s persistence before completion",
-  (realm) =>
-    withTranscriptDatabase(`authority-${realm}`, async ({ database, scope }) => {
-      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager =
-        realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
-      const append = (content: string) =>
-        realm === "native"
-          ? manager.appendMessage(message(content))
-          : manager.appendMessageAsync(message(content));
-      const values = observe(scope.sessionKey);
-      const ready = observe(scope.sessionKey, true);
-      const invoke = async (write: () => unknown, lastMessagePreview?: string | null) => {
-        const count = values.length;
-        const result = write();
-        if (realm === "worker") {
-          await result;
-        }
-        expect(values.length).toBeGreaterThan(count);
-        expect(values.at(-1)).toMatchObject({
-          ...readVersion(database, scope.sessionId),
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        });
-        expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
-      };
-      await invoke(() => append("seed"), "seed");
-      expect(ready.at(-1)).toMatchObject({ sessionId: scope.sessionId, projectionReady: true });
-      await invoke(() =>
-        realm === "native"
-          ? manager.appendCustomEntry("authority")
-          : manager.appendCustomEntryAsync("authority"),
-      );
-      const refreshed =
-        realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
-      const populateRewrite = (rewriter: SessionManager) => {
-        rewriter.resetLeaf();
-        const ids = new Map<string, string>();
-        for (const entry of refreshed.getEntries()) {
-          if (entry.type === "message" && entry.message.role === "user") {
-            ids.set(entry.id, rewriter.appendMessage(entry.message));
-          }
-        }
-        return ids;
-      };
-      await invoke(() => {
-        if (realm === "native") {
-          const rewrite = refreshed.prepareTranscriptRewrite();
-          return rewrite.commit(populateRewrite(rewrite.sessionManager));
-        }
-        return refreshed
-          .prepareTranscriptRewriteAsync()
-          .then((rewrite) => rewrite.commit(populateRewrite(rewrite.sessionManager)));
-      });
-    }),
-);
 
 it("publishes bounded worker previews and clears them for nonprojectable and side appends", () =>
   withTranscriptDatabase("authority-preview", async ({ scope }) => {
@@ -214,7 +165,7 @@ it("publishes bounded worker previews and clears them for nonprojectable and sid
     expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
   }));
 
-it("installs final transcript facts before entry observers and discards nested rollback contributions", () =>
+it("publishes committed facts before observers and discards managed and raw rollbacks", () =>
   withNativeSeeded("rollback", async ({ database, scope, state, manager }) => {
     const before = readVersion(database, scope.sessionId);
     const values = observe(scope.sessionKey);
@@ -245,15 +196,11 @@ it("installs final transcript facts before entry observers and discards nested r
     }, options);
     expect(observed).toBe(true);
     expect(values).toMatchObject([{ rawSeq: (before.rawSeq ?? -1) + 1 }]);
+    expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
     values.length = 0;
     rollback("outer-rollback", "Outer rollback");
     expect(values).toEqual([]);
-  }));
-
-it("does not publish a tentative typed write inside an unmanaged raw outer transaction", () =>
-  withNativeSeeded("raw-outer", async ({ database, scope, manager }) => {
-    const before = readVersion(database, scope.sessionId);
-    const values = observe(scope.sessionKey);
+    const committed = readVersion(database, scope.sessionId);
     database.db.exec("BEGIN IMMEDIATE");
     try {
       manager.appendCustomEntry("uncommitted");
@@ -262,41 +209,82 @@ it("does not publish a tentative typed write inside an unmanaged raw outer trans
       database.db.exec("ROLLBACK");
     }
     expect(values).toEqual([]);
-    expect(readVersion(database, scope.sessionId)).toEqual(before);
+    expect(readVersion(database, scope.sessionId)).toEqual(committed);
   }));
 
-it("publishes worker initialization and branched entry metadata with the transcript before observers", () =>
-  withTranscriptDatabase("authority-companion", async ({ scope }) => {
-    const manager = await SessionManager.openAsync(scope);
-    const contexts = observe(scope.sessionKey);
-    const identities = observeIdentities(scope.sessionKey, (mutation) => {
-      if (mutation.kind === "replace") {
-        expect(contexts.at(-1)?.sessionId).toBe(mutation.current.sessionId);
+it.each([false, true])(
+  "publishes initialization and branch identity before observers (lost reply=%s)",
+  (lostReply) =>
+    withTranscriptDatabase(`authority-branch-${lostReply}`, async ({ database, scope }) => {
+      const manager = await SessionManager.openAsync(scope);
+      const contexts = observe(scope.sessionKey);
+      const observedManagers: unknown[] = [];
+      const identities = observeIdentities(scope.sessionKey, (mutation) => {
+        if (mutation.kind === "replace") {
+          expect(contexts.at(-1)?.sessionId).toBe(mutation.current.sessionId);
+          observedManagers.push([manager.getSessionId(), manager.getSessionTarget()?.sessionId]);
+        }
+      });
+      let entry: ReturnType<typeof readPreparedSessionEntryChange>;
+      listen(
+        scope.sessionKey,
+        (change) => {
+          entry = readPreparedSessionEntryChange(change, scope.sessionKey) ?? entry;
+        },
+        true,
+      );
+      const seed = await manager.appendMessageAsync(message("seed"));
+      expect(entry?.entry?.sessionId).toBe(scope.sessionId);
+      let observedBranch = false;
+      listen(scope.sessionKey, () => {
+        if (entry?.entry?.sessionId !== scope.sessionId) {
+          observedBranch = true;
+          expect(contexts.at(-1)?.sessionId).toBe(entry?.entry?.sessionId);
+        }
+      });
+      if (lostReply) {
+        const runMetadata = metadataRuntime.withSessionMetadataWorker;
+        vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(
+          (options, owner, assertCurrent, operation, controls) =>
+            runMetadata(
+              options,
+              owner,
+              assertCurrent,
+              (worker) =>
+                operation({
+                  async execute(command, executeOptions) {
+                    const value = await worker.execute(command, executeOptions);
+                    if (command.type === "session.transcript.branch") {
+                      throw new Error("Synthetic ordinary reply loss after native COMMIT");
+                    }
+                    return value;
+                  },
+                }),
+              controls,
+            ),
+        );
       }
-    });
-    let entry: ReturnType<typeof readPreparedSessionEntryChange>;
-    listen(
-      scope.sessionKey,
-      (change) => {
-        entry = readPreparedSessionEntryChange(change, scope.sessionKey) ?? entry;
-      },
-      true,
-    );
-    const seed = await manager.appendMessageAsync(message("seed"));
-    expect(entry?.entry?.sessionId).toBe(scope.sessionId);
-    let observedBranch = false;
-    listen(scope.sessionKey, () => {
-      if (entry?.entry?.sessionId !== scope.sessionId) {
-        observedBranch = true;
-        expect(contexts.at(-1)?.sessionId).toBe(entry?.entry?.sessionId);
+      const branch = manager.createBranchedSession(seed!);
+      if (lostReply) {
+        await expect(branch).rejects.toThrow("Synthetic ordinary reply loss after native COMMIT");
+      } else {
+        await branch;
       }
-    });
-    await manager.createBranchedSession(seed!);
-    expect(observedBranch).toBe(true);
-    expect(entry?.entry?.sessionId).toBe(manager.getSessionId());
-    expect(entry?.entry?.sessionId).not.toBe(scope.sessionId);
-    expect(identities.map((mutation) => mutation.kind)).toEqual(["create", "replace"]);
-  }));
+      const stored = readExactSessionEntryRow(database, scope.sessionKey)?.entry;
+      expect(observedBranch).toBe(true);
+      expect(entry?.entry?.sessionId).toBe(manager.getSessionId());
+      expect(stored?.sessionId).not.toBe(scope.sessionId);
+      expect(identities).toMatchObject([
+        { kind: "create" },
+        {
+          kind: "replace",
+          previous: { sessionId: scope.sessionId },
+          current: { sessionId: stored?.sessionId },
+        },
+      ]);
+      expect(observedManagers).toEqual([[stored?.sessionId, stored?.sessionId]]);
+    }),
+);
 
 it("keeps a delayed worker mutation postimage after native content-preserving publication and profile notification", () =>
   withSeeded("delayed", async ({ database, scope, state, manager }) => {
@@ -329,57 +317,9 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
     await manager.appendCustomEntryAsync("delayed-authority");
     expect(interposed).toBe(true);
     expect(values).toMatchObject([readVersion(database, scope.sessionId)]);
+    expect(values.at(-1)?.lastMessagePreview).toBeUndefined();
   }));
 
-it("publishes the committed branch identity when its ordinary reply is lost", () =>
-  withSeeded("lost-reply", async ({ database, scope, manager, seed }) => {
-    const originalTarget = manager.getSessionTarget();
-    const observedManagers: unknown[] = [];
-    const identities = observeIdentities(scope.sessionKey, () => {
-      observedManagers.push({
-        sessionId: manager.getSessionId(),
-        target: manager.getSessionTarget(),
-      });
-    });
-    const runMetadata = metadataRuntime.withSessionMetadataWorker;
-    vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(
-      (options, owner, assertCurrent, operation, controls) =>
-        runMetadata(
-          options,
-          owner,
-          assertCurrent,
-          (worker) =>
-            operation({
-              async execute(command, executeOptions) {
-                const value = await worker.execute(command, executeOptions);
-                if (command.type === "session.transcript.branch") {
-                  throw new Error("Synthetic ordinary reply loss after native COMMIT");
-                }
-                return value;
-              },
-            }),
-          controls,
-        ),
-    );
-    await expect(manager.createBranchedSession(seed!)).rejects.toThrow(
-      "Synthetic ordinary reply loss after native COMMIT",
-    );
-    const stored = readExactSessionEntryRow(database, scope.sessionKey)?.entry;
-    expect(stored?.sessionId).not.toBe(scope.sessionId);
-    expect(identities).toMatchObject([
-      {
-        kind: "replace",
-        previous: { sessionId: scope.sessionId },
-        current: { sessionId: stored?.sessionId },
-      },
-    ]);
-    expect(observedManagers).toEqual([
-      {
-        sessionId: stored?.sessionId,
-        target: { ...originalTarget, sessionId: stored?.sessionId },
-      },
-    ]);
-  }));
 it("keeps captured context current after a worker append rolls back at COMMIT", () =>
   withSeeded("commit-rollback", async ({ database, scope, manager }) => {
     const before = readVersion(database, scope.sessionId);

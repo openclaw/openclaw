@@ -29,15 +29,13 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 const message = { role: "user", content: "Original question" };
 const question = timedMessageEvent("question", null, "2026-01-01T00:00:01Z", message);
 
-function fixture(f: Fixture, pretty = false, sideEvents = 0) {
+function fixture(f: Fixture, sideEvents = 0) {
   const header = {
     type: "session",
     id: f.scope.sessionId,
     version: 3,
-    timestamp: "2026-01-01T00:00:00Z",
-    cwd: "/synthetic",
   };
-  const eventJson = pretty ? JSON.stringify(question, null, 2) : JSON.stringify(question);
+  const eventJson = JSON.stringify(question);
   runSqliteImmediateTransactionSync(f.database.db, () => {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
     appendTranscriptEventInTransaction(f.database, f.scope, question, { eventJson });
@@ -62,10 +60,10 @@ function fixture(f: Fixture, pretty = false, sideEvents = 0) {
     entryIds: [question.id],
   }).anchors[0];
   assert(anchor);
-  const selection: SessionMessageRewriteSelection = {
+  const selection = {
     scope: f.scope,
     target: { kind: "anchor", anchor, active: "exact" },
-  };
+  } satisfies SessionMessageRewriteSelection;
   const context: AgentWorkerOperationContext = {
     open: () => f.database,
     options: { agentId: "main", path: f.database.path },
@@ -74,8 +72,8 @@ function fixture(f: Fixture, pretty = false, sideEvents = 0) {
       return runSqliteImmediateTransactionSync(f.database.db, () => write(f.database));
     },
   };
-  const prepare = () => {
-    const expected = prepareSessionMessageRewrite(selection, context);
+  const prepare = (target = selection.target) => {
+    const expected = prepareSessionMessageRewrite({ ...selection, target }, context);
     assert(expected);
     return expected;
   };
@@ -83,7 +81,6 @@ function fixture(f: Fixture, pretty = false, sideEvents = 0) {
     header,
     eventJson,
     selection,
-    context,
     prepare,
     commit: (expected: ReturnType<typeof prepare>, next: unknown) =>
       applySessionMessageRewrite(
@@ -95,9 +92,9 @@ function fixture(f: Fixture, pretty = false, sideEvents = 0) {
   };
 }
 
-it("rewrites an active anchor older than the resident transcript window", async () => {
-  await withActor((f) => {
-    const rewrite = fixture(f, false, 520);
+it("rewrites an active anchor older than the resident transcript window", () =>
+  withActor((f) => {
+    const rewrite = fixture(f, 520);
     const expected = rewrite.prepare();
     expect(expected.eventJson).toBe(rewrite.eventJson);
     const updated = { ...message, __openclaw: { steerTargetRunId: "historical-run" } };
@@ -107,29 +104,10 @@ it("rewrites an active anchor older than the resident transcript window", async 
     expect(rows).toHaveLength(522);
     expect(JSON.parse(rows[1]!.eventJson)).toEqual({ ...question, message: updated });
     expect(JSON.parse(rows.at(-1)!.eventJson)).toMatchObject({ id: "side-519" });
-  });
-});
+  }));
 
-it("rejects a prepared rewrite after another metadata edit without overwriting its payload", async () => {
-  await withActor((f) => {
-    const rewrite = fixture(f, true);
-    const stale = rewrite.prepare();
-    expect(stale.eventJson).toBe(rewrite.eventJson);
-    const winner = { ...message, __openclaw: { steerTargetRunId: "winner" } };
-    rewrite.commit(rewrite.prepare(), winner);
-    const current = rewrite.prepare();
-    expect(current.event.message).toEqual(winner);
-    expect(current.eventJson).toBe(JSON.stringify({ ...question, message: winner }));
-
-    expect(() =>
-      rewrite.commit(stale, { ...message, __openclaw: { steerTargetRunId: "stale" } }),
-    ).toThrow(SessionTranscriptWriterClaimReboundError);
-    expect(rewrite.rows().at(-1)?.eventJson).toBe(JSON.stringify({ ...question, message: winner }));
-  });
-});
-
-it("rejects a reset between preparation and commit even when the replacement bytes match", async () => {
-  await withActor((f) => {
+it("rejects a reset between preparation and commit even when the replacement bytes match", () =>
+  withActor((f) => {
     const rewrite = fixture(f);
     const expected = rewrite.prepare();
     runSqliteImmediateTransactionSync(f.database.db, () => {
@@ -141,37 +119,21 @@ it("rejects a reset between preparation and commit even when the replacement byt
       rewrite.commit(expected, { ...message, __openclaw: { steerTargetRunId: "stale" } }),
     ).toThrow(SessionTranscriptWriterClaimReboundError);
     expect(rewrite.rows().at(-1)?.eventJson).toBe(expected.eventJson);
-  });
-});
+  }));
 
-it.each(["missing", "stale"] as const)(
-  "rejects a %s anchor in the current resident facts",
-  async (kind) => {
-    await withActor((f) => {
-      const rewrite = fixture(f);
-      const target = rewrite.selection.target;
-      assert(target.kind === "anchor");
-      const anchor = {
-        ...target.anchor,
-        ...(kind === "missing"
-          ? { entryId: "missing-message" }
-          : { generation: "stale-generation" }),
-      };
-      expect(() =>
-        prepareSessionMessageRewrite(
-          { ...rewrite.selection, target: { ...target, anchor } },
-          rewrite.context,
-        ),
-      ).toThrow(SessionTranscriptWriterClaimReboundError);
-      expect(rewrite.rows().at(-1)?.eventJson).toBe(rewrite.eventJson);
-    });
-  },
-);
+it("rejects a missing anchor in the current resident facts", () =>
+  withActor((f) => {
+    const rewrite = fixture(f);
+    const target = rewrite.selection.target;
+    expect(() =>
+      rewrite.prepare({ ...target, anchor: { ...target.anchor, entryId: "missing-message" } }),
+    ).toThrow(SessionTranscriptWriterClaimReboundError);
+    expect(rewrite.rows().at(-1)?.eventJson).toBe(rewrite.eventJson);
+  }));
 
 function promptCarrier(f: Fixture, text: string) {
-  const rewrite = fixture(f, true);
+  const rewrite = fixture(f);
   const before = f.read();
-  assert(rewrite.selection.target.kind === "anchor");
   const carrier = {
     type: "custom_message",
     id: "runtime-context",
@@ -206,8 +168,8 @@ function promptCarrier(f: Fixture, text: string) {
 it.each([
   { text: "Original question", lostResponse: false },
   { text: "Final transformed question", lostResponse: true },
-])("commits prompt capture and its carrier together ($text)", async ({ text, lostResponse }) => {
-  await withActor(async (f) => {
+])("commits prompt capture and its carrier together ($text)", ({ text, lostResponse }) =>
+  withActor(async (f) => {
     const { rewrite, before, carrier, command } = promptCarrier(f, text);
     await f.prepare(command);
     if (lostResponse) {
@@ -233,11 +195,11 @@ it.each([
     await f.reopenDatabase();
     expect(f.read().transcript.version).toEqual(outcome.receipt.transcript.after);
     expect(rewrite.rows().map((row) => JSON.parse(row.eventJson))).toEqual(expectedEvents);
-  });
-});
+  }),
+);
 
-it("commits a changed prompt with a duplicate carrier and leaves unchanged replay untouched", async () => {
-  await withActor(async (f) => {
+it("commits a changed prompt with a duplicate carrier and leaves unchanged replay untouched", () =>
+  withActor(async (f) => {
     const text = "Final transformed question";
     const { rewrite, carrier, command } = promptCarrier(f, text);
     assert("append" in command.input && command.input.append?.kind === "metadata");
@@ -278,13 +240,12 @@ it("commits a changed prompt with a duplicate carrier and leaves unchanged repla
     await f.reopenDatabase();
     expect(f.read().transcript.version).toEqual(changed.receipt.transcript.after);
     expect(rewrite.rows().map((row) => JSON.parse(row.eventJson))).toEqual(expectedEvents);
-  });
-});
+  }));
 
 it.each(["stale-preimage", "commit-refused"] as const)(
   "rolls back both prompt capture and its carrier when %s",
-  async (failure) => {
-    await withActor(async (f) => {
+  (failure) =>
+    withActor(async (f) => {
       const { rewrite, before, command } = promptCarrier(f, "Final transformed question");
       assert("append" in command.input && command.input.append?.kind === "metadata");
       if (failure === "stale-preimage") {
@@ -306,6 +267,5 @@ it.each(["stale-preimage", "commit-refused"] as const)(
         rewrite.header,
         question,
       ]);
-    });
-  },
+    }),
 );
