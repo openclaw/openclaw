@@ -17,27 +17,19 @@ const discoveryRequests = new WeakMap<
   Map<string, Promise<McpAppDiscoverResult>>
 >();
 
-/** A qualified session key already owns its agent; keep independently updated selection out. */
-export function resolveMcpAppExtensionTarget(input: {
-  sessionKey?: string;
-  agentId?: string;
-}): McpAppExtensionTarget {
-  const sessionKey = input.sessionKey?.trim() ?? "";
-  if (!sessionKey) {
-    return { sessionKey, ...(input.agentId ? { agentId: input.agentId } : {}) };
-  }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-  return { sessionKey, ...(agentId ? { agentId } : {}) };
-}
-
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
 export function createMcpAppCatalog(
   context: ApplicationContext,
-  target: () => McpAppExtensionTarget,
+  readTarget: () => McpAppExtensionTarget,
   prepareSession: () => boolean = () => false,
 ) {
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
+  const target = () => {
+    const value = readTarget();
+    // A qualified session owns its agent, independently of the current selection.
+    return { ...value, agentId: parseAgentSessionKey(value.sessionKey)?.agentId ?? value.agentId };
+  };
   // Retain accepted rows independently so a failed read does not replace focused controls.
   const [state, setState] = createStore<{
     servers: McpAppDiscoveredServer[];
@@ -200,6 +192,7 @@ export function createMcpAppCatalog(
       : { servers: [], onboarding: [] };
   };
   return {
+    target,
     snapshot,
     request,
     available,

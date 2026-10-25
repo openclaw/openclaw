@@ -2,7 +2,7 @@ import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import type { McpAppDiscoveredServer } from "../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { createMcpAppCatalog, resolveMcpAppExtensionTarget } from "../lib/mcp-app-catalog.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import "../styles/mcp-app-extensions.css";
@@ -23,11 +23,10 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
   const surface = () => props.surface ?? "global";
   const catalog = createMcpAppCatalog(
     context,
-    () =>
-      resolveMcpAppExtensionTarget({
-        sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
-        agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
-      }),
+    () => ({
+      sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
+      agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
+    }),
     () => surface() === "global",
   );
   const entries = (server: McpAppDiscoveredServer) =>

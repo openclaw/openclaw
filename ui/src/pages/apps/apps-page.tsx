@@ -8,7 +8,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createMcpAppCatalog, resolveMcpAppExtensionTarget } from "../../lib/mcp-app-catalog.ts";
+import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -30,19 +30,15 @@ export function AppsPage(props: { appSearch?: string }) {
   const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
   const catalog = createMcpAppCatalog(
     context,
-    () =>
-      resolveMcpAppExtensionTarget({
-        sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
-        agentId: selection.read().state.selectedId ?? undefined,
-      }),
+    () => ({
+      sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
+      agentId: selection.read().state.selectedId ?? undefined,
+    }),
     () => true,
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
-    const target = resolveMcpAppExtensionTarget({
-      sessionKey: state.snapshot.sessionKey,
-      agentId: selection.read().state.selectedId ?? undefined,
-    });
+    const target = catalog.target();
     const key = JSON.stringify([
       appSearch(),
       target.sessionKey,
@@ -84,8 +80,7 @@ export function AppsPage(props: { appSearch?: string }) {
       detail:
         server && entrypoint
           ? {
-              sessionKey: target.sessionKey,
-              agentId: target.agentId,
+              ...target,
               owner: state.snapshot.client,
               serverName: server.serverName,
               entrypoint,
