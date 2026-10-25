@@ -69,14 +69,6 @@ describe("agent run session target", () => {
     });
   }
 
-  function fixedOwnerConfig(
-    entries: NonNullable<OpenClawConfig["agents"]>["entries"],
-  ): OpenClawConfig {
-    return {
-      agents: { ownership: "explicit", defaults: { sessionStore: { agentId: "ops" } }, entries },
-    };
-  }
-
   const missingTarget = {
     code: "session-key-missing",
     name: "AgentRunSessionTargetResolutionError",
@@ -134,42 +126,25 @@ describe("agent run session target", () => {
     });
   });
 
-  it("resolves an existing bare row through its persisted fixed-store owner", async () => {
-    const sessionId = "fixed-owner-session";
-    await seed(sessionId, "global", "ops");
-
-    await expectKeyedTarget(
-      { config: fixedOwnerConfig({ ops: {}, research: {} }), sessionId },
-      "global",
-      "ops",
-    );
-  });
-
-  it("keeps a scoped live row available when the fixed-store owner is retired", async () => {
-    const sessionId = "research-session";
-    const sessionKey = "agent:research:work";
-    await seed(sessionId, sessionKey, "research");
-
-    await expectKeyedTarget(
-      { config: fixedOwnerConfig({ research: {}, support: {} }), sessionId },
-      sessionKey,
-      "research",
-    );
-  });
-
-  it("finds an agent-scoped row by id in an ownerless explicit fleet", async () => {
-    const sessionId = "research-session";
-    const sessionKey = "agent:research:work";
-    await seed(sessionId, sessionKey, "research");
-    await expectKeyedTarget(
-      {
-        config: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-        sessionId,
-      },
-      sessionKey,
-      "research",
-    );
-  });
+  it.each([
+    ["bare fixed owner", "ops", "global", ["ops", "research"], true],
+    ["retired fixed owner", "research", "agent:research:work", ["research", "support"], true],
+    ["ownerless fleet", "research", "agent:research:work", ["ops", "research"], false],
+  ] as const)(
+    "resolves the persisted row in a %s",
+    async (_name, agentId, sessionKey, agents, fixed) => {
+      const sessionId = "persisted-session";
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: Object.fromEntries(agents.map((id) => [id, {}])),
+          ...(fixed ? { defaults: { sessionStore: { agentId: "ops" } } } : {}),
+        },
+      };
+      await seed(sessionId, sessionKey, agentId);
+      await expectKeyedTarget({ config, sessionId }, sessionKey, agentId);
+    },
+  );
 
   it("uses the active runtime store when compatibility projection omits config", async () => {
     const sessionId = "7ef14ab2-4801-40e1-9c56-83f9250c1706";

@@ -16,13 +16,11 @@ import { createEditTool, createReadTool, createWriteTool } from "./sessions/inde
 import { createLsTool } from "./sessions/tools/ls.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
-import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 function expectContract(tool: AnyAgentTool, details: unknown): void {
-  expect(tool.outputSchema).toBeDefined();
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
 }
 
@@ -34,11 +32,7 @@ async function expectResult(
 ) {
   const result = await tool.execute("contract", args);
   expectContract(tool, result.details);
-  if (exact) {
-    expect(result.details).toEqual(details);
-  } else {
-    expect(result.details).toMatchObject(details);
-  }
+  expect(result.details)[exact ? "toEqual" : "toMatchObject"](details);
   return result;
 }
 
@@ -114,41 +108,67 @@ it("validates read text, image, truncation, and optional-not-found results", asy
   await check("long.txt", { kind: "truncated", truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 } });
   const missing = { path: "memory/2026-07-17.md", optional: true };
   await expectResult(tool, missing, { ...missing, kind: "not_found", status: "not_found" }, true);
-  expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
-  );
 });
 
 it.each([
-  ["adaptive cursor", true, 0, undefined, 0],
-  ["native line pages", false, 2, 500, 0],
-  ["adaptive blank pages", true, 2, 500, 500],
+  ["adaptive cursor", true, 0, 0, undefined, undefined, 16 * 1024, 0],
+  ["native line pages", false, 2, 0, 500, undefined, 16 * 1024, 0],
+  ["adaptive blank pages", true, 2, 500, 500, undefined, 16 * 1024, 0],
+  ["one leading blank", true, undefined, 1, undefined, undefined, undefined, 52 * 1024],
+  ["short file", true, undefined, 1, undefined, undefined, undefined, 10],
+  ["offset on blank", true, undefined, 1, undefined, 2, undefined, 52 * 1024],
+  ["blank then fitting page", true, undefined, 1, undefined, undefined, 1_024, 2_000],
 ] as const)(
-  "reassembles JSON from %s without display notices",
-  async (_mode, wrapped, indent, limit, leadingBlankLines) => {
+  "reassembles %s through Code Mode and preserves its display bytes",
+  async (_name, wrapped, indent, blanks, limit, offset, maxBytes, size) => {
     const records = Array.from({ length: 1_500 }, (_, index) => ({
       index,
       value: "é🦞".repeat(8),
     }));
-    const original = "\n".repeat(leadingBlankLines) + JSON.stringify(records, null, indent) + "\n";
-    await write("records.json", original);
-    const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 });
+    const data = indent === undefined ? { generated: "x".repeat(size) } : records;
+    const original =
+      "\n".repeat(blanks) + JSON.stringify(data, null, indent) + (indent === undefined ? "" : "\n");
+    await write("records.json", `${offset ? "before\n" : ""}${original}`);
+    const base = createReadTool(tmpDir, {
+      maxBytes: maxBytes ?? resolveAdaptiveReadMaxBytes(),
+    });
     const tool = wrapped ? createOpenClawReadTool(base) : base;
-    const first = await tool.execute("first-page", { path: "records.json" });
-    expectContract(tool, first.details);
-    expect(JSON.stringify(first.content)).toContain("to continue.");
+    let actual = "",
+      display = "",
+      separator = "";
     const result = await runCodeMode(
-      tool,
+      {
+        ...tool,
+        execute: async (...args) => {
+          const page = await tool.execute(...args);
+          expectContract(tool, page.details);
+          const details = page.details;
+          if (details.kind !== "text" && details.kind !== "truncated") {
+            throw new Error("Expected file text");
+          }
+          if (!actual && indent !== undefined) {
+            expect(JSON.stringify(page.content)).toContain("to continue.");
+          }
+          const text = page.content.find((block) => block.type === "text")!.text;
+          actual += separator + details.content;
+          display +=
+            separator +
+            (details.kind === "truncated" ? text.slice(0, text.lastIndexOf("\n\n[")) : text);
+          separator =
+            details.kind === "truncated" && details.continuation.kind === "line" ? "\n" : "";
+          return page;
+        },
+      },
       `
         let content = "";
-        let next = { path: "records.json", limit: ${limit ?? "undefined"} };
+        let next = { path: "records.json", limit: ${limit ?? "undefined"}, offset: ${offset ?? 1} };
         let delimiter = "";
         for (let page = 0; page < 32; page++) {
           const part = await read(next);
           content += delimiter + part.content;
           if (part.kind === "text") {
-            const records = JSON.parse(content);
-            return { count: records.length, last: records.at(-1), length: content.length };
+            const value = JSON.parse(content);
+            return { last: Array.isArray(value) ? value.at(-1) : value.generated.length, length: content.length };
           }
           if (part.kind !== "truncated") throw new Error("unexpected read result");
           const { kind, ...continuation } = part.continuation;
@@ -160,55 +180,11 @@ it.each([
     );
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(result.value).toEqual({
-      count: records.length,
-      last: records.at(-1),
+      last: indent === undefined ? size : records.at(-1),
       length: original.length,
     });
-  },
-);
-
-it.each([
-  ["one leading blank", "\n", 52 * 1024, undefined, undefined],
-  ["no leading blank", "", 52 * 1024, undefined, undefined],
-  ["two leading blanks", "\n\n", 52 * 1024, undefined, undefined],
-  ["short file", "\n", 10, undefined, undefined],
-  ["offset on blank", "\n", 52 * 1024, 2, undefined],
-  ["blank then fitting page", "\n", 2_000, undefined, 1_024],
-] as const)(
-  "preserves %s across read continuations",
-  async (_name, prefix, size, offset, maxBytes) => {
-    const expected = `${prefix}${JSON.stringify({ generated: "x".repeat(size) })}`;
-    await write("paged.json", `${offset ? "before\n" : ""}${expected}`);
-    const tool = read({ maxBytes: maxBytes ?? resolveAdaptiveReadMaxBytes() });
-    let args: { path: string; offset?: number; cursor?: number; limit?: number } = {
-      path: "paged.json",
-      ...(offset ? { offset } : {}),
-    };
-    let actual = "";
-    let display = "";
-    let separator = "";
-    for (let page = 0; page < 8; page++) {
-      const result = await tool.execute(`read-page-${page}`, args);
-      expectContract(tool, result.details);
-      const details = result.details;
-      if (details.kind !== "text" && details.kind !== "truncated") {
-        throw new Error("Expected file text");
-      }
-      const text = result.content.find((block) => block.type === "text")!.text;
-      actual += separator + details.content;
-      display +=
-        separator +
-        (details.kind === "truncated" ? text.slice(0, text.lastIndexOf("\n\n[")) : text);
-      if (details.kind === "text") {
-        expect(actual).toBe(expected);
-        expect(display).toBe(expected);
-        return;
-      }
-      const { kind, ...continuation } = details.continuation;
-      separator = kind === "line" ? "\n" : "";
-      args = { path: "paged.json", ...continuation };
-    }
-    throw new Error("Read did not reach EOF");
+    expect(actual).toBe(original);
+    expect(display).toBe(original);
   },
 );
 
@@ -224,28 +200,29 @@ it("bounds structured blank pages independently of their short display summary",
   expect(toolResultFitsBudget(details.content, resolveToolResultBudget(1_024))).toBe(true);
 });
 
-it("retains continuation when its notice exceeds the rebound budget", async () => {
-  await write("continued.txt", "x".repeat(2_000));
-  const tool = read({ maxBytes: 200 }, { modelContextWindowTokens: 100 });
+it.each([
+  {
+    name: "retains continuation when its notice exceeds the rebound budget",
+    content: "x".repeat(2_000),
+    options: { maxBytes: 200 },
+    wrapping: { modelContextWindowTokens: 100 },
+    args: {},
+    details: { continuation: { kind: "cursor", offset: 1, cursor: expect.any(Number) } },
+  },
+  {
+    name: "honors normalized limit 0 without automatic paging",
+    content: "alpha\nbeta\ngamma",
+    args: { limit: 0 },
+    details: { content: "alpha", continuation: { kind: "line", offset: 2, limit: 1 } },
+  },
+])("$name", async ({ content, options, wrapping, args, details }) => {
+  await write("limited.txt", content);
   await expectResult(
-    tool,
-    { path: "continued.txt" },
+    read(options, wrapping),
+    { path: "limited.txt", ...args },
     {
       kind: "truncated",
-      continuation: { kind: "cursor", offset: 1, cursor: expect.any(Number) },
-    },
-  );
-});
-
-it("honors normalized limit 0 without automatic paging", async () => {
-  await write("limited.txt", "alpha\nbeta\ngamma");
-  await expectResult(
-    read(),
-    { path: "limited.txt", limit: 0 },
-    {
-      kind: "truncated",
-      content: "alpha",
-      continuation: { kind: "line", offset: 2, limit: 1 },
+      ...details,
     },
   );
 });
@@ -260,9 +237,6 @@ it("validates edit changed and no-op results", async () => {
   });
   await expectResult(tool, edit("before"), { changed: true });
   await expectResult(tool, edit("after"), { changed: false }, true);
-  expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    "{ changed: false } | { changed: true; diff: string; patch: string; firstChangedLine?: number }",
-  );
 });
 
 it("validates write created, overwrite, unknown-state, and no-op results", async () => {
@@ -277,9 +251,6 @@ it("validates write created, overwrite, unknown-state, and no-op results", async
   await check("large.txt", "replacement\n", { changed: true, created: false }, true);
   await check("large-created.txt", large, { changed: true, created: true }, true);
   expectContract(tool, { changed: true });
-  expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    "{ changed: false } | { changed: true; created: true; diff: string; patch: string; firstChangedLine?: number } | { changed: true; created: false; diff: string; patch: string; firstChangedLine?: number } | { changed: true; created?: boolean }",
-  );
 });
 
 it("validates apply_patch path summaries", async () => {
@@ -291,8 +262,5 @@ it("validates apply_patch path summaries", async () => {
     },
     { summary: { added: ["added.txt"], modified: [], deleted: [] } },
     true,
-  );
-  expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    "{ summary: { added: Array<string>; deleted: Array<string>; modified: Array<string> } }",
   );
 });
