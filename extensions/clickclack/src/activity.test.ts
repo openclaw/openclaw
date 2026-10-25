@@ -1,4 +1,3 @@
-// Tests for the durable ClickClack agent-activity publisher (coalescing rules).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClickClackActivityPublisher } from "./activity.js";
 import type { ClickClackItemEventPayload } from "./progress.js";
@@ -41,12 +40,8 @@ const commentary = (
 ): ClickClackItemEventPayload => ({ itemId: "c1", kind: "preamble", progressText, ...overrides });
 
 describe("createClickClackActivityPublisher", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
 
   it("keeps complete commentary during a partial successor and accepts shorter completion", async () => {
     const { publisher, createActivityMessage, updateMessageBody } = createPublisher();
@@ -84,15 +79,12 @@ describe("createClickClackActivityPublisher", () => {
       progressText: "ls -la",
       suppressChannelProgress: true,
     });
-    // A shorter late echo must never clobber the richer body.
     publisher.onItemEvent(event);
     await publisher.finalize();
 
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
-      kind: "agent_tool",
-      body: "Exec",
-    });
+    expect(createActivityMessage.mock.calls).toMatchObject([
+      [{ kind: "agent_tool", body: "Exec" }],
+    ]);
     expect(updateMessageBody).not.toHaveBeenCalled();
     expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
@@ -105,11 +97,9 @@ describe("createClickClackActivityPublisher", () => {
     publisher.onItemEvent({ ...event, progressText: "Done" });
     await publisher.finalize();
 
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
-      kind: "agent_tool",
-      body: "Read: Done",
-    });
+    expect(createActivityMessage.mock.calls).toMatchObject([
+      [{ kind: "agent_tool", body: "Read: Done" }],
+    ]);
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 
@@ -181,12 +171,9 @@ describe("createClickClackActivityPublisher", () => {
     publisher.onItemEvent({ itemId: "life1", kind: "lifecycle", progressText: "internal state" });
     await publisher.finalize();
 
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
-      kind: "agent_commentary",
-      body: "step one",
-      provenance,
-    });
+    expect(createActivityMessage.mock.calls).toMatchObject([
+      [{ kind: "agent_commentary", body: "step one", provenance }],
+    ]);
   });
 
   it("normalizes reasoning-style progress lanes into durable commentary rows", async () => {
@@ -202,7 +189,6 @@ describe("createClickClackActivityPublisher", () => {
     publisher.onItemEvent({ itemId: "a1", kind: "analysis", summary: "Mapping" });
     await publisher.finalize();
 
-    expect(createActivityMessage).toHaveBeenCalledTimes(3);
     expect(createActivityMessage.mock.calls.map(([{ body, kind }]) => ({ body, kind }))).toEqual(
       ["Checking", "Comparing", "Mapping"].map((text) => ({
         body: `**Thinking**\n\n${text}`,

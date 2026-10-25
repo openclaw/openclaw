@@ -93,16 +93,6 @@ function expectLogs(runtime: Awaited<ReturnType<typeof verify>>, message: string
   expect(vi.mocked(runtime.log).mock.calls).toEqual([[message], [runningMessage]]);
 }
 
-async function expectValidationNote(message: string) {
-  const note = vi.fn(async () => undefined);
-  await runSetupWizardFinalize({
-    finalize,
-    cfg: configuredAccount,
-    prompter: createTestWizardPrompter({ note }),
-  });
-  expect(note).toHaveBeenCalledWith(message, "ClickClack connection check");
-}
-
 beforeEach(() => {
   claimClickClackSetupCode.mockReset();
   mocks.createClient.mockReset();
@@ -176,17 +166,16 @@ describe("ClickClack setup wizard", () => {
     });
   });
 
-  it.each(
-    warnings.flatMap(([arrange, message]) =>
-      (["wizard", "saved config"] as const).map((mode) => ({ arrange, message, mode })),
-    ),
-  )("continues with a warning in $mode ($message)", async ({ arrange, message, mode }) => {
+  it.each(warnings)("continues with a warning (%#)", async (arrange, message) => {
     arrange();
-    if (mode === "wizard") {
-      await expectValidationNote(message);
-    } else {
-      expectLogs(await verify(), message);
-    }
+    const note = vi.fn(async () => undefined);
+    await runSetupWizardFinalize({
+      finalize,
+      cfg: configuredAccount,
+      prompter: createTestWizardPrompter({ note }),
+    });
+    expect(note).toHaveBeenCalledWith(message, "ClickClack connection check");
+    expectLogs(await verify(), message);
   });
 
   it.each(["default", "wsp_default", "Default"])(
@@ -243,8 +232,8 @@ function bareConfig(
 
 const defaults = { defaultTo: "channel:general", allowFrom: ["*"], agentActivity: true };
 const codeInput = { code: "ABCD-EFGH-JKMN", baseUrl: baseInput.baseUrl };
-const exactClaimUrl =
-  "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
+const publicApiBase = "https://api.clickclack.example/services/clickclack";
+const exactClaimUrl = `${publicApiBase}/api/bot-setup-codes/claim`;
 
 function apply(input: ClickClackSetupInput, cfg: CoreConfig = {}, accountId = DEFAULT_ACCOUNT_ID) {
   return clickClackSetupContract.applyAccountConfig({ cfg, accountId, input });
@@ -270,21 +259,17 @@ async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
 describe("ClickClack setup adapter", () => {
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
     claimClickClackSetupCode.mockResolvedValue({ ...claimedAccount, defaults });
-
     await expect(
-      prepare({
-        code: "https://clickclack.example/#abcd-efgh-jkmn",
-        name: "Primary",
-      }),
+      prepare({ code: `${baseInput.baseUrl}/#abcd-efgh-jkmn`, name: "Primary" }),
     ).resolves.toEqual({
       name: "Primary",
-      baseUrl: "https://clickclack.example",
+      baseUrl: baseInput.baseUrl,
       token: "test-token",
       workspace: "wsp_1",
       ...defaults,
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
+      claimUrl: `${baseInput.baseUrl}/api/bot-setup-codes/claim`,
       code: "ABCDEFGHJKMN",
     });
   });
@@ -303,12 +288,12 @@ describe("ClickClack setup adapter", () => {
       claimClickClackSetupCode.mockResolvedValue({
         ...claimedAccount,
         contract_version: 1,
-        api_base_url: "https://api.clickclack.example/services/clickclack",
+        api_base_url: publicApiBase,
       });
 
       await expect(prepare({ code: `${exactClaimUrl}#${code}` }, cfg)).resolves.toHaveProperty(
         "baseUrl",
-        "https://api.clickclack.example/services/clickclack",
+        publicApiBase,
       );
       expect(claimClickClackSetupCode).toHaveBeenCalledWith({
         claimUrl,
@@ -398,16 +383,13 @@ describe("ClickClack setup adapter", () => {
       ...account,
       token: "root-token",
       defaultAccount: "ops",
-      accounts: {
-        Ops: { name: "Other spelling" },
-        ops: { name: "Active" },
-      },
+      accounts: { Ops: { name: "Other spelling" }, ops: { name: "Active" } },
     });
     const input = {
       baseUrl: "https://work.clickclack.example",
       workspace: "work",
       token: "work-token",
-    } satisfies ClickClackSetupInput;
+    };
 
     expect(validate(input, cfg, "work")).toBeNull();
     const next = apply(input, cfg, "work");

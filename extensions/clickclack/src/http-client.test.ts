@@ -1,11 +1,10 @@
 import { once } from "node:events";
-import { createServer, type Server } from "node:http";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
-import { listenOnLoopback as listenLoopbackServer } from "../../test-support/hanging-loopback-server.js";
 import { createClickClackClient } from "./http-client.js";
 
 const effectGate = await vi.hoisted(async () =>
@@ -104,49 +103,17 @@ function requestBodyJson(init: unknown): unknown {
   return JSON.parse(body);
 }
 
-function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
-  const closed = createDeferred<number>();
-  const server = createServer((req, res) => {
-    const prefix = Buffer.from('{"user":{"id":"');
-    const body = Buffer.alloc(64 * 1024, 0x61);
-    const suffix = Buffer.from('"}}');
-    const chunks = Math.floor(
-      (LOOPBACK_RESPONSE_BYTES - prefix.length - suffix.length) / body.length,
-    );
-    const stream = Readable.from([prefix, ...Array.from({ length: chunks }, () => body), suffix], {
-      objectMode: false,
-    });
-    let sentBytes = 0;
-    stream.on("data", (chunk: Buffer) => {
-      sentBytes += chunk.length;
-    });
-    res.writeHead(200, { connection: "close", "content-type": "application/json" });
-    res.on("close", () => {
-      stream.destroy();
-      closed.resolve(sentBytes);
-    });
-    req.on("aborted", () => res.destroy());
-    // pipe owns backpressure; response closure stops the remaining generator.
-    stream.pipe(res);
-  });
-  return { server, closed: closed.promise };
-}
-
 describe("ClickClack HTTP client", () => {
   it("merges recent thread replies into the global latest-message window", async () => {
     const root = historyRoot(10, 1);
     const newerRoot = historyRoot(11, 0, {
       id: "msg_newer",
       created_at: "2026-07-19T12:00:00.000Z",
-      thread_state: { root_message_id: "msg_newer", reply_count: 0, last_reply_author_ids: [] },
     });
-    const reply = historyRoot(10, 1, {
+    const reply = {
       id: "msg_reply",
-      parent_message_id: "msg_root",
-      thread_seq: 1,
       created_at: "2026-07-19T13:00:00.000Z",
-      thread_state: undefined,
-    });
+    };
     const fetchMock = jsonResponses(
       { messages: [newerRoot], oldest_seq: 11, newest_seq: 11, has_older: true },
       { messages: [root], oldest_seq: 10, newest_seq: 10, has_older: false },
@@ -169,16 +136,9 @@ describe("ClickClack HTTP client", () => {
 
   it("fails closed when a capped thread response cannot contain the latest replies", async () => {
     const root = historyRoot(1, 201);
-    const oldestReply = historyRoot(1, 201, {
-      id: "msg_oldest_reply",
-      parent_message_id: "msg_root",
-      thread_seq: 1,
-      created_at: "2026-07-19T10:01:00.000Z",
-      thread_state: undefined,
-    });
     const fetchMock = jsonResponses(
       { messages: [root], oldest_seq: 1, newest_seq: 1, has_older: false },
-      { replies: [oldestReply] },
+      { replies: [{ id: "msg_oldest_reply" }] },
     );
     expect(await createTestClient(fetchMock).latestChannelMessages("chn_discussion", 30)).toEqual({
       messages: [root],
@@ -261,22 +221,38 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("bounds oversized success JSON responses and closes the stream early", async () => {
-    const { server, closed } = createOversizedJsonServer();
-    const port = await listenLoopbackServer(server);
-    const client = createClickClackClient({
-      baseUrl: `http://127.0.0.1:${port}`,
-      token: "fake",
-    });
-
-    try {
-      await expect(client.me()).rejects.toThrow(
-        "ClickClack response: JSON response exceeds 16777216 bytes",
-      );
-      const sentBytes = await closed;
-      expect(sentBytes).toBeLessThan(LOOPBACK_RESPONSE_BYTES);
-    } finally {
-      server.close();
-    }
+    const closed = createDeferred<number>();
+    await withServer(
+      (req, res) => {
+        const prefix = Buffer.from('{"user":{"id":"');
+        const body = Buffer.alloc(64 * 1024, 0x61);
+        const suffix = Buffer.from('"}}');
+        const chunks = Math.floor(
+          (LOOPBACK_RESPONSE_BYTES - prefix.length - suffix.length) / body.length,
+        );
+        const stream = Readable.from(
+          [prefix, ...Array.from({ length: chunks }, () => body), suffix],
+          { objectMode: false },
+        );
+        let sentBytes = 0;
+        stream.on("data", (chunk: Buffer) => {
+          sentBytes += chunk.length;
+        });
+        res.writeHead(200, { connection: "close", "content-type": "application/json" });
+        res.on("close", () => {
+          stream.destroy();
+          closed.resolve(sentBytes);
+        });
+        req.on("aborted", () => res.destroy());
+        stream.pipe(res);
+      },
+      async (baseUrl) => {
+        await expect(createClickClackClient({ baseUrl, token: "fake" }).me()).rejects.toThrow(
+          "ClickClack response: JSON response exceeds 16777216 bytes",
+        );
+        expect(await closed.promise).toBeLessThan(LOOPBACK_RESPONSE_BYTES);
+      },
+    );
   });
 
   it("bounds error response details to 8 KiB", async () => {

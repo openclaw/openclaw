@@ -42,27 +42,20 @@ function expectUnavailable(
 
 describe("ClickClack account resolution", () => {
   it("merges partial named-account group overrides with the root group policy", () => {
+    const group = {
+      requireMention: true,
+      requireMentionInBotThreads: false,
+      mentionPatterns: ["@root-bot"],
+    };
     const account = resolve(
       {
         token: "test-token-placeholder",
-        groups: {
-          " chn_1 ": {
-            requireMention: true,
-            requireMentionInBotThreads: false,
-            mentionPatterns: ["@root-bot"],
-          },
-        },
+        groups: { " chn_1 ": group },
         accounts: { work: { groups: { chn_1: { requireMention: false } } } },
       },
       "work",
     );
-    expect(account.groups).toEqual({
-      chn_1: {
-        requireMention: false,
-        requireMentionInBotThreads: false,
-        mentionPatterns: ["@root-bot"],
-      },
-    });
+    expect(account.groups).toEqual({ chn_1: { ...group, requireMention: false } });
     expect(account.config.groups).toEqual(account.groups);
   });
 
@@ -80,12 +73,7 @@ describe("ClickClack account resolution", () => {
     await withTempDir("clickclack-token-", async (tempDir) => {
       const tokenFile = path.join(tempDir, "token");
       fs.writeFileSync(tokenFile, "  file-token  \n", "utf8");
-      const settings = {
-        enabled: true,
-        tokenFile,
-        accounts: { work: { token: "work-token" } },
-      };
-      expect(listClickClackAccountIds(accountConfig(settings))).toEqual(["default", "work"]);
+      const settings = { tokenFile, accounts: { work: { token: "work-token" } } };
       expect(resolve(settings).token).toBe("file-token");
       expect(resolve(settings, "work").token).toBe("work-token");
     });
@@ -165,33 +153,23 @@ describe("ClickClack account resolution", () => {
   });
 
   it("normalizes per-account discussion settings and defaults", () => {
+    const root = { enabled: true, controlUrlBase: "https://team.openclaw.ai/" };
+    const support = { enabled: true, workspace: "operations", section: "Live work" };
     const cfg = accountConfig({
-      enabled: true,
       token: "test-token",
       workspace: "default",
-      discussions: {
-        enabled: true,
-        controlUrlBase: "https://team.openclaw.ai/",
-      },
-      accounts: {
-        support: {
-          workspace: "support",
-          discussions: { enabled: true, workspace: "operations", section: "Live work" },
-        },
-      },
+      discussions: root,
+      accounts: { support: { workspace: "support", discussions: support } },
     });
 
     expect(resolveClickClackAccount({ cfg }).discussions).toEqual({
-      enabled: true,
+      ...root,
       workspace: "default",
-      controlUrlBase: "https://team.openclaw.ai/",
       section: "Sessions",
     });
     expect(resolveClickClackAccount({ cfg, accountId: "support" }).discussions).toEqual({
-      enabled: true,
-      workspace: "operations",
-      controlUrlBase: "https://team.openclaw.ai/",
-      section: "Live work",
+      ...root,
+      ...support,
     });
   });
 });

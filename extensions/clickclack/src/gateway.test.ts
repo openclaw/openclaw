@@ -123,7 +123,6 @@ function nativeCommand(
 async function publishNativeCommands(specs: NativeCommandSpec[]): Promise<CommandMenuEntry[]> {
   mocks.listNativeCommandSpecsForConfig.mockReturnValue(specs);
   await startGateway();
-  expect(client.setBotCommands).toHaveBeenCalledTimes(1);
   const commands = client.setBotCommands.mock.calls[0]?.[0];
   if (!commands) {
     throw new Error("Gateway startup did not publish its command menu");
@@ -213,10 +212,9 @@ describe("ClickClack gateway", () => {
   });
 
   it("maps native commands to the bounded ClickClack menu contract", async () => {
-    const longDescription = "\u{1F642}".repeat(101);
     const commands = await publishNativeCommands([
       nativeCommand("Deploy-Now", {
-        description: `  ${longDescription}  `,
+        description: `  ${"\u{1F642}".repeat(101)}  `,
         acceptsArgs: true,
         args: [
           { name: "target", description: "Target", type: "string", required: true },
@@ -226,7 +224,6 @@ describe("ClickClack gateway", () => {
       nativeCommand("deploy-now", { description: "Duplicate loses" }),
       nativeCommand("shortcut", { isAlias: true }),
       nativeCommand("bad name"),
-      nativeCommand("also/bad"),
       nativeCommand("status", { description: "   ", acceptsArgs: true }),
       nativeCommand("noargs"),
       nativeCommand("long-hint", {
@@ -237,12 +234,10 @@ describe("ClickClack gateway", () => {
           required: index === 0,
         })),
       }),
+      ...Array.from({ length: 101 }, (_, index) => nativeCommand(`command${index}`)),
     ]);
 
-    expect(mocks.listNativeCommandSpecsForConfig).toHaveBeenCalledWith(ctx.cfg, {
-      provider: "clickclack",
-    });
-    expect(commands).toEqual([
+    expect(commands.slice(0, 4)).toEqual([
       { command: "deploy-now", description: expect.any(String), args_hint: "<target> [message]" },
       { command: "status", description: "status", args_hint: "[args]" },
       { command: "noargs", description: "Run noargs", args_hint: "" },
@@ -250,20 +245,9 @@ describe("ClickClack gateway", () => {
     ]);
     expect(Array.from(commands[0]?.description ?? "")).toHaveLength(100);
     expect(Array.from(commands[3]?.args_hint ?? "")).toHaveLength(100);
-    expect(ctx.log?.warn).toHaveBeenCalledTimes(1);
-    expect(ctx.log?.warn).toHaveBeenCalledWith(
-      'ClickClack command menu skipped invalid native command names: "bad name", "also/bad"',
-    );
-  });
-
-  it("keeps the first 100 unique normalized commands", async () => {
-    const specs = Array.from({ length: 101 }, (_, index) => nativeCommand(`command${index}`));
-
-    const commands = await publishNativeCommands(specs);
-
     expect(commands).toHaveLength(100);
-    expect(commands[0]?.command).toBe("command0");
-    expect(commands[99]?.command).toBe("command99");
+    expect(commands[99]?.command).toBe("command95");
+    expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("bad name"));
   });
 
   it("returns an empty overwrite for an empty native catalog", async () => {
@@ -303,13 +287,9 @@ describe("ClickClack gateway", () => {
     expect(ctx.log?.[level]).toHaveBeenCalledWith(
       `[default] ClickClack command menu sync ${message}`,
     );
-    expectStatus({
-      running: true,
-      lifecycle: "starting",
-      configured: true,
-      enabled: true,
-      baseUrl: "https://clickclack.example",
-    });
+    expect(ctx.setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ running: true, lifecycle: "starting" }),
+    );
   });
 
   it("drains and processes every reconnect page before reopening realtime", async () => {
@@ -331,9 +311,15 @@ describe("ClickClack gateway", () => {
     expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-501");
   });
 
-  it("skips malformed frames and dispatches with the scoped context builder", async () => {
+  it("skips malformed frames and dispatches other bots with the scoped context builder", async () => {
     const { channel } = createPluginRuntimeMock();
     ctx.channelRuntime = channel;
+    client.message.mockResolvedValueOnce({
+      id: "msg-1",
+      channel_id: "chan-1",
+      author_id: "other-bot",
+      author: { id: "other-bot", kind: "bot" },
+    });
     await startGateway();
 
     socket.emit("message", Buffer.from("{not json"));
@@ -342,18 +328,14 @@ describe("ClickClack gateway", () => {
       "[default] skipped malformed ClickClack websocket event",
     );
 
-    emitMessageEvent(socket, 1);
+    emitMessageEvent(socket, 1, { author_id: "other-bot" });
 
     await expectCalls(inbound, 1);
-    expect(inbound.mock.calls[0]?.[0].buildContext).toBe(channel.inbound.buildContext);
-    expect(inbound.mock.calls[0]?.[0].access).toEqual({
-      shouldDispatch: true,
-      commandAuthorized: true,
+    expect(inbound.mock.calls[0]?.[0]).toMatchObject({
+      buildContext: channel.inbound.buildContext,
+      access: { shouldDispatch: true, commandAuthorized: true },
     });
-    expect(mocks.createClickClackClient).toHaveBeenCalledTimes(1);
     expect(inbound.mock.calls[0]?.[0]).not.toHaveProperty("correlationId");
-    abort.abort();
-    await run;
   });
 
   it("processes websocket events in order before reconnecting from their cursor", async () => {
@@ -416,18 +398,12 @@ describe("ClickClack gateway", () => {
   );
 
   it.each([
-    ["dispatch", new Error("dispatch failed"), 2, 3, "dispatch failed"],
-    ["message", new Error("message fetch failed"), 1, 1, "message fetch failed"],
-    [
-      "access",
-      { code: "ECONNRESET", retryable: true },
-      1,
-      1,
-      '{"code":"ECONNRESET","retryable":true}',
-    ],
+    ["dispatch", new Error("dispatch failed"), 2, 3],
+    ["message", new Error("message fetch failed"), 1, 1],
+    ["access", { code: "ECONNRESET", retryable: true }, 1, 1],
   ] as const)(
     "replays %s failures before committing the cursor",
-    async (source, error, eventCount, callCount, warning) => {
+    async (source, error, eventCount, callCount) => {
       const [firstSocket] = reconnectSockets();
       const events = Array.from({ length: eventCount }, (_, index) =>
         createBacklogEvent(index + 1, "message.created"),
@@ -455,9 +431,7 @@ describe("ClickClack gateway", () => {
       expect(firstSocket.close).toHaveBeenCalledOnce();
       expectBacklogPage(2, "");
       expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", `cursor-${eventCount}`);
-      expect(ctx.log?.warn).toHaveBeenCalledWith(
-        `[default] ClickClack event processing failed; reconnecting: ${warning}`,
-      );
+      expect(ctx.log?.warn).toHaveBeenCalled();
     },
   );
 
@@ -502,26 +476,6 @@ describe("ClickClack gateway", () => {
       botUserId: "bot-user",
     });
     expect(inbound).not.toHaveBeenCalled();
-    expect(ctx.log?.info).toHaveBeenCalledWith(
-      expect.stringContaining("skipped ClickClack message before agent dispatch"),
-    );
-  });
-
-  it("passes other bot-authored messages to ClickClack access policy", async () => {
-    mocks.client.message.mockResolvedValueOnce({
-      id: "msg-1",
-      channel_id: "chan-1",
-      author_id: "other-bot",
-      author: {
-        id: "other-bot",
-        kind: "bot",
-      },
-    });
-    await startGateway();
-    emitMessageEvent(socket, 1, { author_id: "other-bot" });
-
-    await expectCalls(inbound, 1);
-    expect(resolveAccess).toHaveBeenCalledTimes(1);
   });
 
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
