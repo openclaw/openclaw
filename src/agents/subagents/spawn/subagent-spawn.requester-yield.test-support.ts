@@ -85,12 +85,7 @@ export function registerYieldedRequesterBatchCase(
       let childCalls = 0;
       const childResult = createDeferred<EmbeddedAgentRunResult>();
       const parentStarted = createDeferred();
-      const parentCalls: Array<{
-        runId: string;
-        childSessionKey: string | undefined;
-        hasAuthority: boolean;
-        prompt: string;
-      }> = [];
+      const parentCalls: string[] = [];
       const admissionFailures: unknown[] = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
         try {
@@ -123,13 +118,9 @@ export function registerYieldedRequesterBatchCase(
             await recordFinal(bound, params, "Nested child result.");
             return result;
           }
-          const current = subagentRuns.get(params.runId);
-          parentCalls.push({
-            runId: params.runId,
-            childSessionKey: current?.childSessionKey,
-            hasAuthority: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
-            prompt: params.prompt,
-          });
+          expect(subagentRuns.get(params.runId)?.childSessionKey).toBe(bound.parentSessionKey);
+          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+          parentCalls.push(params.prompt);
           parentStarted.resolve();
           await recordFinal(bound, params, "Nested parent is complete.");
           return visibleResult("Nested parent is complete.");
@@ -258,11 +249,7 @@ export function registerYieldedRequesterBatchCase(
         await settleSubagentRegistryPersistenceWork();
         expect(admissionFailures).toEqual([]);
         expect(parentCalls).toHaveLength(1);
-        expect(parentCalls[0]).toMatchObject({
-          childSessionKey: bound.parentSessionKey,
-          hasAuthority: true,
-        });
-        expect(parentCalls[0]?.prompt).toContain("Nested child result.");
+        expect(parentCalls[0]).toContain("Nested child result.");
         const durable = loadSubagentRegistryFromSqlite().get(childRunId);
         expect(durable?.delivery?.status).toBe("delivered");
         expect(durable?.requesterSettleWake).toBeUndefined();

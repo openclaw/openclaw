@@ -48,49 +48,29 @@ describe("subagent spawn sandbox-CLI admission", () => {
     const cfg: OpenClawConfig = {
       logging: { audit: { enabled: false } },
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-      agents: params.visibleWorker
-        ? {
-            ownership: "explicit",
-            defaults,
-            entries: {
-              main: {
-                workspace: stateDir,
-                subagents: { allowAgents: ["worker"] },
-              },
-              worker: {
-                workspace: stateDir,
-                sandbox: { mode: "all" },
-                subagents: { model: "test-cli/haiku" },
-              },
-            },
-          }
-        : {
-            defaults: { ...defaults, ...sandbox },
-            entries: {
-              main: {
-                workspace: stateDir,
-                ...sandbox,
-                ...(params.childModel ? { subagents: { model: params.childModel } } : {}),
-              },
-            },
+      agents: {
+        defaults: { ...defaults, ...sandbox },
+        entries: {
+          main: {
+            workspace: stateDir,
+            ...sandbox,
+            subagents: params.visibleWorker
+              ? { allowAgents: ["worker"] }
+              : params.childModel
+                ? { model: params.childModel }
+                : undefined,
           },
-      models: {
-        providers: {
-          "test-cli": {
-            api: "openai-completions",
-            baseUrl: "https://example.invalid/v1",
-            models: [
-              {
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                id: "haiku",
-                input: ["text"],
-                maxTokens: 1_024,
-                name: "Haiku",
-                reasoning: false,
-              },
-            ],
-          },
+          ...(params.visibleWorker
+            ? {
+                worker: {
+                  workspace: stateDir,
+                  sandbox: { mode: "all" as const },
+                  subagents: { model: "test-cli/haiku" },
+                },
+              }
+            : {}),
         },
+        ...(params.visibleWorker ? { ownership: "explicit" as const } : {}),
       },
     };
     await fixture.configure(cfg);

@@ -244,12 +244,13 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
             delete bound.cfg.tools!.sandbox;
           }
           setRuntimeConfigSnapshot({ ...bound.cfg });
-          const before = {
-            ids: [...subagentRuns.keys()],
-            transcript: await transcript(),
-            adoption: adopt.mock.calls.length,
-            model: options.runEmbeddedAgent.mock.calls.length,
-          };
+          const effects = async () => [
+            [...subagentRuns.keys()],
+            await transcript(),
+            adopt.mock.calls.length,
+            options.runEmbeddedAgent.mock.calls.length,
+          ];
+          const before = await effects();
           await inReply(async () => {
             const requestId = [scenario.mode, scenario.deny].join("-");
             if (scenario.blocked) {
@@ -279,10 +280,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
             }
           });
           if (scenario.blocked) {
-            expect([...subagentRuns.keys()]).toEqual(before.ids);
-            expect(await transcript()).toEqual(before.transcript);
-            expect(adopt).toHaveBeenCalledTimes(before.adoption);
-            expect(options.runEmbeddedAgent).toHaveBeenCalledTimes(before.model);
+            expect(await effects()).toEqual(before);
           }
         }
       } catch (error) {

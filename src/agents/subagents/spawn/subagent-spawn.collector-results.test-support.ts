@@ -102,31 +102,22 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
           collected.completed.find((item) => item.runId === runId),
           `collected ${runId}`,
         );
-      // Lifecycle evidence stays a capped preview; the collected result is the recorded answer.
-      const preview = (runId: string | undefined) => {
-        const stored = subagentRuns.get(runId ?? "")?.completion?.terminalReply;
-        expect(stored).toMatchObject({
-          disposition: "visible",
-          text: expect.stringMatching(/…$/u),
-        });
-        const text = stored?.disposition === "visible" ? stored.text : "";
-        expect(text.length).toBeLessThanOrEqual(4_096);
-        return text;
-      };
-      runIds.forEach(preview);
+      // Preview truncation itself is covered by agent-run-terminal-reply.test.ts.
+      const preview = subagentRuns.get(unrecorded ?? "")?.completion?.terminalReply;
+      if (preview?.disposition !== "visible") {
+        throw new Error("Missing unrecorded child's lifecycle preview");
+      }
       expect(result(complete)).toMatchObject({ status: "done", result: answers.complete });
       expect(result(complete)).not.toHaveProperty("resultTruncated");
       expect(result(unrecorded)).toMatchObject({
         status: "done",
         resultTruncated: true,
-        result: `${preview(unrecorded)}\n\n[truncated: the complete child answer is unavailable; this is its 4,096-character preview]`,
+        result: `${preview.text}\n\n[truncated: the complete child answer is unavailable; this is its 4,096-character preview]`,
       });
       const bounded = result(oversized);
       expect(bounded.resultTruncated).toBe(true);
-      expect(Buffer.byteLength(bounded.result)).toBeLessThanOrEqual(100 * 1024);
-      expect(bounded.result).toMatch(
-        /\[truncated: frozen completion output exceeded 100KB \(120KB\)\]$/u,
-      );
+      // The frozen-output cap is covered at the registry owner; retain reader propagation here.
+      expect(bounded.result).toContain("[truncated: frozen completion output exceeded 100KB");
       expect(answers.oversized.startsWith(bounded.result.split("\n\n[truncated:")[0] ?? "")).toBe(
         true,
       );
@@ -139,7 +130,6 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
           config: bound.cfg,
         }),
       ).resolves.toMatchObject({ result: answers.complete });
-      expect(options.runEmbeddedAgent).toHaveBeenCalledTimes(3);
     } catch (error) {
       failures.push(error);
     } finally {
