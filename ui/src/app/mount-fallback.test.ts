@@ -209,35 +209,35 @@ describe("Control UI mount fallback", () => {
     );
   });
 
-  it("gives a slow module download a fresh grace window after DOMContentLoaded", async () => {
-    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
-    const win = createIsolatedWindow(undefined, fetch);
-    const readyState = vi.spyOn(win.document, "readyState", "get").mockReturnValue("loading");
-    installShell(win);
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs + 1_000);
-    expect(fetch).not.toHaveBeenCalled();
-    readyState.mockReturnValue("interactive");
-    win.document.dispatchEvent(new win.Event("DOMContentLoaded"));
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs - 1);
-    expect(fetch).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fetch).toHaveBeenCalledOnce();
-  });
-
-  it("waits for the entry stylesheet before starting failed-mount recovery", async () => {
-    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
-    const win = boot(fetch, undefined, "loading");
-    const styles = win.document.createElement("link");
-    styles.id = "openclaw-boot-styles";
-    styles.media = "print";
-    win.document.head.append(styles);
-    win.document.dispatchEvent(new win.Event("DOMContentLoaded"));
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs + 1_000);
-    expect(fetch).not.toHaveBeenCalled();
-    styles.dispatchEvent(new win.Event("load"));
-    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
-    expect(fetch).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "waits for document assets before recovery (stylesheet: %s)",
+    async (stylesheet) => {
+      const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+      const win = createIsolatedWindow(undefined, fetch);
+      const ready = vi.spyOn(win.document, "readyState", "get").mockReturnValue("loading");
+      installShell(win);
+      const styles = Object.assign(win.document.createElement("link"), {
+        id: "openclaw-boot-styles",
+        media: "print",
+      });
+      if (stylesheet) {
+        win.document.head.append(styles);
+        win.document.dispatchEvent(new win.Event("DOMContentLoaded"));
+      }
+      await vi.advanceTimersByTimeAsync(mountTimeoutMs + 1_000);
+      expect(fetch).not.toHaveBeenCalled();
+      if (stylesheet) {
+        styles.dispatchEvent(new win.Event("load"));
+      } else {
+        ready.mockReturnValue("interactive");
+        win.document.dispatchEvent(new win.Event("DOMContentLoaded"));
+      }
+      await vi.advanceTimersByTimeAsync(mountTimeoutMs - 1);
+      expect(fetch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not begin recovery while the unsupported browser screen is loading", async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true });

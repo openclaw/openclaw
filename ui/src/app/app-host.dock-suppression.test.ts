@@ -9,6 +9,7 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
@@ -25,6 +26,7 @@ import { readShellView } from "./app-shell-view-state.ts";
 import { makeBootRoster } from "./bootstrap.test-support.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { createGatewayHarness } from "./overlays-access.test-support.ts";
 import { loadSettings } from "./settings.ts";
 
 afterEach(async () => {
@@ -42,35 +44,28 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   const router = createApplicationRouter();
   onTestFinished(() => router.stop());
   const row: GatewaySessionRow = { key: "agent:main:main", kind: "direct", updatedAt: 0 };
+  const { gateway, update } = createGatewayHarness(client);
+  update({
+    sessionKey: row.key,
+    selfUser: null,
+    hello: {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: {
+        methods: [
+          "terminal.open",
+          "browser.request",
+          "openclaw.chat",
+          "desktop.observe",
+          "chat.history",
+          "chat.send",
+        ],
+      },
+    },
+  });
   const context = {
     router,
     basePath: "",
-    gateway: {
-      snapshot: {
-        phase: "connected",
-        client,
-        sessionKey: "agent:main:main",
-        assistantAgentId: "main",
-        hello: {
-          auth: { role: "operator", scopes: ["operator.admin"] },
-          features: {
-            methods: [
-              "terminal.open",
-              "browser.request",
-              "openclaw.chat",
-              "desktop.observe",
-              "chat.history",
-              "chat.send",
-            ],
-          },
-        },
-        lastError: null,
-        offlineStable: false,
-        selfUser: null,
-      },
-      connection: { gatewayUrl: "ws://gateway.test", token: "", password: "" },
-      connect: vi.fn(),
-    },
+    gateway,
     agents: {
       state: {
         agentsList: makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
@@ -81,7 +76,6 @@ it("applies route ownership to shell panels without session-gating desktop", asy
       get: () => null,
       entries: () => [],
       ensure: vi.fn(async () => undefined),
-      invalidate: vi.fn(),
       subscribe: () => () => undefined,
     },
     settingsAgentSelection: {
@@ -102,30 +96,13 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     sessions: {
       state: {
         agentId: "main",
-        result: {
-          count: 1,
-          defaults: {},
-          path: "",
-          sessions: [row],
-          ts: 0,
-        },
+        result: { count: 1, defaults: {}, path: "", sessions: [row], ts: 0 },
       },
     },
-    navigation: {
-      snapshot: {
-        navCollapsed: false,
-        navWidth: 280,
-        sidebarEntries: [],
-        pinnedAgentIds: [],
-      },
-      update: vi.fn(),
-    },
+    navigation: createNavigationPreferencesFixture(),
     overlays: {
       snapshot: {
-        updateAvailable: null,
-        updateRunning: false,
         updateStatusBanner: null,
-        recordedUpdateAttempt: null,
         controlUiRefreshRequired: false,
         approvalQueue: [],
         approvalBusy: false,
@@ -134,10 +111,8 @@ it("applies route ownership to shell panels without session-gating desktop", asy
         devicePairSetupLifecycle: { phase: "selection", access: "full" },
         devicePairPendingCount: 0,
       },
-      runUpdate: vi.fn(),
     },
     theme: { mode: "dark", settings: loadSettings(), branding: resolveThemeBranding({}) },
-    preload: vi.fn(),
   } as unknown as ApplicationContext;
   const shell = createShellOwner();
   shell.runtime = { context, router } as ApplicationRuntime;
