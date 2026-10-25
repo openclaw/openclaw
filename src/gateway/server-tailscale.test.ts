@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TailscaleRouteClaimExit } from "../infra/tailscale.js";
 
-const { mocks, makeClaim } = vi.hoisted(() => {
+const { mocks, makeClaim, makeExit } = vi.hoisted(() => {
   const stopRouteClaim = vi.fn<() => Promise<void>>(async () => undefined);
-  const claimFixture = (exited = new Promise<void>(() => {}), active = true) => ({
+  const exitFixture = (): TailscaleRouteClaimExit => ({
+    workerCode: 0,
+    workerSignal: null,
+    ageMs: 0,
+    stopping: false,
+    phase: "active",
+  });
+  const claimFixture = (
+    exited = new Promise<TailscaleRouteClaimExit>(() => {}),
+    active = true,
+  ) => ({
     exited,
     isActive: () => active,
     stop: stopRouteClaim,
@@ -16,7 +27,7 @@ const { mocks, makeClaim } = vi.hoisted(() => {
     getTailnetHostnameAfterServe: vi.fn<() => Promise<string | null>>(async () => null),
     hasTailscaleFunnelRouteForPort: vi.fn(async (_port: number) => false),
   };
-  return { mocks: tailscaleMocks, makeClaim: claimFixture };
+  return { mocks: tailscaleMocks, makeClaim: claimFixture, makeExit: exitFixture };
 });
 
 vi.mock("../infra/tailscale.js", () => ({
@@ -110,7 +121,7 @@ describe("startGatewayTailscaleExposure", () => {
   });
 
   it("fails startup when the route owner exits after reporting readiness", async () => {
-    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve(), false));
+    mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(Promise.resolve(makeExit()), false));
 
     await expect(startGatewayTailscaleExposure()).rejects.toThrow("claim exited during startup");
     expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
@@ -216,11 +227,11 @@ describe("startGatewayTailscaleExposure", () => {
   );
 
   it("clears the published origin and warns when the foreground claim exits", async () => {
-    const { promise: exited, resolve: resolveExit } = createDeferred();
+    const { promise: exited, resolve: resolveExit } = createDeferred<TailscaleRouteClaimExit>();
     mocks.claimTailscaleRoute.mockResolvedValue(makeClaim(exited));
     mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
     const cleanup = await startGatewayTailscaleExposure();
-    resolveExit();
+    resolveExit(makeExit());
 
     await vi.waitFor(() => {
       expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining("claim exited"));
@@ -253,11 +264,11 @@ describe("managed Tailscale claim recovery", () => {
   afterEach(() => vi.useRealTimers());
 
   function recoverableClaim() {
-    const exited = createDeferred();
+    const exited = createDeferred<TailscaleRouteClaimExit>();
     let active = true;
     const exit = () => {
       active = false;
-      exited.resolve();
+      exited.resolve(makeExit());
     };
     return {
       exited: exited.promise,

@@ -155,8 +155,23 @@ async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
+export type TailscaleRouteClaimExit = {
+  workerCode: number | null;
+  workerSignal: NodeJS.Signals | null;
+  ageMs: number;
+  stopping: boolean;
+  phase: "startup" | "active";
+  // A terminated worker may not have received its CLI's final report.
+  cli?: {
+    code: number | null;
+    signal: string | null;
+    stdoutBytes: number;
+    stderrBytes: number;
+  };
+};
+
 export type TailscaleRouteClaim = {
-  exited: Promise<void>;
+  exited: Promise<TailscaleRouteClaimExit>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
@@ -220,6 +235,7 @@ async function startTailscaleRouteOwner(
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     },
   );
+  const startedAt = Date.now();
   const runtimeFailure = observeChildRuntime(worker);
   let routePid: number | undefined;
   let ready = false;
@@ -227,7 +243,8 @@ async function startTailscaleRouteOwner(
   let stopping = false;
   let failure: Error | undefined;
   let stopFailure: Error | undefined;
-  const { promise: exited, resolve: resolveExit } = createDeferredCore();
+  let cliExit: TailscaleRouteClaimExit["cli"];
+  const { promise: exited, resolve: resolveExit } = createDeferredCore<TailscaleRouteClaimExit>();
 
   let startupDeadlineExpired = false;
   const startup = raceWithTimeout(
@@ -257,6 +274,13 @@ async function startTailscaleRouteOwner(
             ) {
               return;
             }
+            // Keep exit facts after startup without forwarding captured CLI output.
+            cliExit = {
+              code: event.code,
+              signal: typeof event.signal === "string" ? event.signal : null,
+              stdoutBytes: Buffer.byteLength(event.stdout),
+              stderrBytes: Buffer.byteLength(event.stderr),
+            };
             failure = routeClaimError(
               {
                 code: event.code,
@@ -282,7 +306,14 @@ async function startTailscaleRouteOwner(
         worker.once("close", (code, exitSignal) => {
           failure = runtimeFailure() ?? failure;
           active = false;
-          resolveExit();
+          resolveExit({
+            workerCode: code,
+            workerSignal: exitSignal,
+            ageMs: Date.now() - startedAt,
+            stopping,
+            phase: ready ? "active" : "startup",
+            ...(cliExit ? { cli: cliExit } : {}),
+          });
           if (!ready) {
             reject(
               failure ??

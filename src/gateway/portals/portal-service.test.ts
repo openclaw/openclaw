@@ -8,7 +8,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as advertisedLanHost from "../../infra/advertised-lan-host.js";
-import { claimTailscaleServePort, type TailscaleRouteClaim } from "../../infra/tailscale.js";
+import {
+  claimTailscaleServePort,
+  type TailscaleRouteClaim,
+  type TailscaleRouteClaimExit,
+} from "../../infra/tailscale.js";
 import * as httpListen from "../server/http-listen.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 import { createPortalOperations, type GatewayPortalService } from "./portal-service.js";
@@ -440,11 +444,17 @@ function publishManaged(mode: "serve" | "funnel" = "serve") {
 }
 
 function fakeClaim() {
-  const exit = createDeferred();
+  const exit = createDeferred<TailscaleRouteClaimExit>();
   let active = true;
   const lose = () => {
     active = false;
-    exit.resolve();
+    exit.resolve({
+      workerCode: 0,
+      workerSignal: null,
+      ageMs: 0,
+      stopping: false,
+      phase: "active",
+    });
   };
   const claim: TailscaleRouteClaim = {
     exited: exit.promise,
