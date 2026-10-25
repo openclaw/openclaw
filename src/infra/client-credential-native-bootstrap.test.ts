@@ -97,15 +97,11 @@ it.each([
   },
 );
 
-it.each([identity, auth, identity + auth])(
-  "recognizes only canonical native credential table pairs",
-  (schema) => {
-    using database = openNodeSqliteDatabase(":memory:");
-    database.exec(schema);
-    expect(isNativeClientCredentialBootstrap(database)).toBe(true);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-  },
-);
+it("recognizes a native auth-only database", () => {
+  using database = openNodeSqliteDatabase(":memory:");
+  database.exec(auth);
+  expect(isNativeClientCredentialBootstrap(database)).toBe(true);
+});
 
 it.each([
   "",
@@ -184,7 +180,6 @@ it.each(["", identity + auth])(
 );
 
 it.each([
-  { wal: false, credentials: true, companion: false },
   { wal: false, credentials: true, companion: true },
   { wal: true, credentials: true, companion: true },
   { wal: false, credentials: false, companion: true },

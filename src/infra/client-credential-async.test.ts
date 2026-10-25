@@ -110,22 +110,6 @@ async function listenApp(
   return server;
 }
 
-async function withApp(
-  root: string,
-  handle: Parameters<typeof listenApp>[1],
-  run: () => Promise<void>,
-  profile?: string,
-) {
-  const server = await listenApp(root, handle, profile);
-  try {
-    await run();
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
-}
-
 it("serializes first creation, preserves the winner and cancels queued writes without shared state", async () => {
   const { root, env } = fixture();
   const first = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(123), 456);
@@ -192,7 +176,7 @@ mac("routes approval socket ensure through the captured named-profile app", asyn
     updated_at_ms: 1,
   };
   const requests: unknown[] = [];
-  await withApp(
+  await using _ = await listenApp(
     root,
     (request, socket) => {
       requests.push(request);
@@ -202,20 +186,19 @@ mac("routes approval socket ensure through the captured named-profile app", asyn
         `${JSON.stringify({ ok: true, result: { kind: "socket", socket: appSocket } })}\n`,
       );
     },
-    () =>
-      withEnvAsync({ HOME: root, USERPROFILE: root, OPENCLAW_PROFILE: "default" }, async () => {
-        expect(await attachExecApprovalsSocket(snapshot, context)).toEqual({
-          ...snapshot,
-          file: {
-            ...snapshot.file,
-            socket: { path: appSocket.socket_path, token: appSocket.socket_token },
-          },
-        });
-        expect(requests).toHaveLength(1);
-        expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
-      }),
     "p",
   );
+  await withEnvAsync({ HOME: root, USERPROFILE: root, OPENCLAW_PROFILE: "default" }, async () => {
+    expect(await attachExecApprovalsSocket(snapshot, context)).toEqual({
+      ...snapshot,
+      file: {
+        ...snapshot.file,
+        socket: { path: appSocket.socket_path, token: appSocket.socket_token },
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
+  });
 });
 
 mac(
@@ -227,53 +210,45 @@ mac(
     let loseReply = false;
     let release: (() => void) | undefined;
     const requests: unknown[] = [];
-    await withApp(
-      root,
-      (request, socket) => {
-        requests.push(request);
-        expect(request.credentialRoot).toBe(root);
-        expect(request.operation).toBe("client.credentials");
-        if (loseReply) {
-          release?.();
-          socket.destroy();
-        } else {
-          socket.end(`${JSON.stringify({ ok: true, result: { kind: "identity", identity } })}\n`);
-        }
-      },
-      async () => {
-        const child = await holdStore(env);
-        let released: Promise<void> | undefined;
-        try {
-          await prepareStartupClientCredentials({ env });
-          expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
-            kind: "identity",
-            identity,
-          });
-          loseReply = true;
-          release = () => {
-            released = releaseStore(child);
-          };
-          await expect(
-            runClientCredentialOperationAsync(
-              env,
-              replaceToken(identity.device_id, "must-not-replay"),
-            ),
-          ).rejects.toThrow("did not reply");
-          await released;
-          expect(requests).toHaveLength(3);
-          expect(
-            runClientCredentialOperation(env, {
-              kind: "token.read",
-              key: tokenKey(identity.device_id),
-            }),
-          ).toEqual({ kind: "token", token: null });
-        } finally {
-          if (!released) {
-            await releaseStore(child);
-          }
-        }
-      },
-    );
+    await using _ = await listenApp(root, (request, socket) => {
+      requests.push(request);
+      expect(request.credentialRoot).toBe(root);
+      expect(request.operation).toBe("client.credentials");
+      if (loseReply) {
+        release?.();
+        socket.destroy();
+      } else {
+        socket.end(`${JSON.stringify({ ok: true, result: { kind: "identity", identity } })}\n`);
+      }
+    });
+    const child = await holdStore(env);
+    let released: Promise<void> | undefined;
+    try {
+      await prepareStartupClientCredentials({ env });
+      expect(await runClientCredentialOperationAsync(env, identityRead)).toEqual({
+        kind: "identity",
+        identity,
+      });
+      loseReply = true;
+      release = () => {
+        released = releaseStore(child);
+      };
+      await expect(
+        runClientCredentialOperationAsync(env, replaceToken(identity.device_id, "must-not-replay")),
+      ).rejects.toThrow("did not reply");
+      await released;
+      expect(requests).toHaveLength(3);
+      expect(
+        runClientCredentialOperation(env, {
+          kind: "token.read",
+          key: tokenKey(identity.device_id),
+        }),
+      ).toEqual({ kind: "token", token: null });
+    } finally {
+      if (!released) {
+        await releaseStore(child);
+      }
+    }
   },
 );
 
@@ -290,26 +265,21 @@ mac.each([
     const env = { ...homeEnv, OPENCLAW_STATE_DIR: customRoot };
     const operation = replaceToken("custom-root-device", "synthetic-custom-root-token");
     const { token } = operation;
-    await withApp(
-      root,
-      (request, socket) => {
-        expect(request.credentialRoot).toBe(customRoot);
-        socket.end(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
-      },
-      async () => {
-        const result = runClientCredentialOperationAsync(env, operation);
-        if (fallback) {
-          await expect(result).resolves.toEqual({ kind: "changed", changed: true });
-          expect(runClientCredentialOperation(env, { kind: "token.read", key: token })).toEqual({
-            kind: "token",
-            token,
-          });
-        } else {
-          await expect(result).rejects.toThrow("synthetic refusal");
-          expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
-        }
-      },
-    );
+    await using _ = await listenApp(root, (request, socket) => {
+      expect(request.credentialRoot).toBe(customRoot);
+      socket.end(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
+    });
+    const result = runClientCredentialOperationAsync(env, operation);
+    if (fallback) {
+      await expect(result).resolves.toEqual({ kind: "changed", changed: true });
+      expect(runClientCredentialOperation(env, { kind: "token.read", key: token })).toEqual({
+        kind: "token",
+        token,
+      });
+    } else {
+      await expect(result).rejects.toThrow("synthetic refusal");
+      expect(fs.existsSync(resolveClientCredentialStorePath(env))).toBe(false);
+    }
   },
 );
 
