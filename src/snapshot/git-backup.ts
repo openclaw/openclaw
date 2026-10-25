@@ -54,6 +54,15 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+/**
+ * Staging the refreshed artifacts re-hashes every dump, so the overlay-index update is
+ * sized by the data (minutes for a multi-gigabyte set) rather than by a Git metadata
+ * round trip. The generic 120-second Git deadline aborts a large set mid-write, so the
+ * backup owner gives that one command a budget of its own. The surrounding metadata
+ * reads (`rev-parse`, `ls-files`, `ls-tree`, `diff --cached`, `reset`) keep the generic
+ * deadline because they read the index or tree rather than dump content.
+ */
+const GIT_BACKUP_CONTENT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -240,6 +249,7 @@ async function commitGitBackup(params: {
       {
         env,
         input: params.paths.join("\0") + "\0",
+        timeoutMs: GIT_BACKUP_CONTENT_TIMEOUT_MS,
       },
     );
     const changed = await runGit(params.repositoryPath, ["diff", "--cached", "--quiet"], { env });
