@@ -21,83 +21,60 @@ import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implemen
 const audio = (model: string) => ({ provider: "openai", model, capabilities: ["audio" as const] });
 const gateway = { bind: "loopback", gatewayPort: 18789, gatewayToken: "test-token" } as const;
 const account = (cfg: OpenClawConfig) => cfg.channels?.whatsapp?.accounts?.sut;
-type ConfigCase = [
-  string,
-  Parameters<typeof config>[0],
-  (cfg: OpenClawConfig) => unknown,
-  unknown,
-  OpenClawConfig?,
-];
-it.each<ConfigCase>([
-  [
-    "command owners",
-    {},
-    (cfg) => cfg.commands?.ownerAllowFrom,
-    ["telegram:existing-owner", "+15550000001"],
-    { commands: { ownerAllowFrom: ["telegram:existing-owner"] } },
-  ],
-  [
-    "approval delivery",
-    { overrides: { approvals: { exec: true, plugin: true } } },
-    (cfg) => [
-      cfg.approvals?.exec,
-      cfg.approvals?.plugin,
-      account(cfg)?.allowFrom,
-      Object.hasOwn(account(cfg) ?? {}, "execApprovals"),
-    ],
-    [
-      { enabled: true, mode: "session" },
-      { enabled: true, mode: "session" },
-      ["+15550000001"],
-      false,
-    ],
-  ],
-  [
-    "action discovery",
-    { overrides: scenario("whatsapp-agent-message-action-react").configOverrides },
-    (cfg) => [
-      cfg.channels?.whatsapp?.actions?.reactions,
-      cfg.channels?.whatsapp?.reactionLevel,
-      cfg.tools?.alsoAllow?.includes("message"),
-    ],
-    [true, "minimal", true],
-  ],
-  [
-    "blocked group sender",
-    {
-      allowFrom: ["+15550000000"],
-      groupJid,
-      overrides: { blockGroupSender: true, groupPolicy: "allowlist" },
-    },
-    (cfg) => [account(cfg)?.groupPolicy, account(cfg)?.groupAllowFrom, account(cfg)?.groups],
-    ["allowlist", ["+15550000001"], undefined],
-  ],
-  [
-    "pending history",
-    { groupJid, overrides: scenario("whatsapp-group-pending-history-context").configOverrides },
-    (cfg) => {
-      const limit = cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
-      return [
-        typeof limit,
-        Number(limit) > 0,
-        account(cfg)?.replyToMode,
-        cfg.messages?.inbound?.byChannel?.whatsapp,
-        account(cfg)?.groups?.[groupJid]?.requireMention,
-      ];
-    },
-    ["number", true, "all", 0, true],
-  ],
-  [
-    "mention gating",
-    { groupJid },
-    (cfg) => [
-      cfg.messages?.groupChat?.visibleReplies,
-      cfg.messages?.groupChat?.mentionPatterns?.includes("\\bopenclawqa\\b"),
-    ],
-    ["automatic", true],
-  ],
-])("configures %s", (_name, options, select, expected, base) => {
-  expect(select(config(options, base))).toEqual(expected);
+it("preserves command owners", () => {
+  const cfg = config({}, { commands: { ownerAllowFrom: ["telegram:existing-owner"] } });
+  expect(cfg.commands?.ownerAllowFrom).toEqual(["telegram:existing-owner", "+15550000001"]);
+});
+
+it("configures approval delivery", () => {
+  const cfg = config({ overrides: { approvals: { exec: true, plugin: true } } });
+  expect([cfg.approvals?.exec, cfg.approvals?.plugin]).toEqual([
+    { enabled: true, mode: "session" },
+    { enabled: true, mode: "session" },
+  ]);
+  expect(account(cfg)?.allowFrom).toEqual(["+15550000001"]);
+  expect(Object.hasOwn(account(cfg) ?? {}, "execApprovals")).toBe(false);
+});
+
+it("configures action discovery", () => {
+  const cfg = config({
+    overrides: scenario("whatsapp-agent-message-action-react").configOverrides,
+  });
+  expect(cfg.channels?.whatsapp).toMatchObject({
+    actions: { reactions: true },
+    reactionLevel: "minimal",
+  });
+  expect(cfg.tools?.alsoAllow).toContain("message");
+});
+
+it("configures a blocked group sender", () => {
+  const cfg = config({
+    allowFrom: ["+15550000000"],
+    groupJid,
+    overrides: { blockGroupSender: true, groupPolicy: "allowlist" },
+  });
+  expect(account(cfg)).toMatchObject({
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15550000001"],
+  });
+  expect(account(cfg)?.groups).toBeUndefined();
+});
+
+it("configures pending history and mention gating", () => {
+  const cfg = config({
+    groupJid,
+    overrides: scenario("whatsapp-group-pending-history-context").configOverrides,
+  });
+  const limit = cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
+  expect(typeof limit).toBe("number");
+  expect(Number(limit)).toBeGreaterThan(0);
+  expect(account(cfg)).toMatchObject({
+    replyToMode: "all",
+    groups: { [groupJid]: { requireMention: true } },
+  });
+  expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
+  expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
+  expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
 });
 
 it.each([false, true])("preserves audio preflight with existing media=%s", (seeded) => {

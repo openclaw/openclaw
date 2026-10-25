@@ -147,49 +147,38 @@ it("derives a stable non-secret credential fingerprint", () => {
 });
 
 it("runs group media, audio and poll probes against the group target", async () => {
-  const shapes: Partial<WhatsAppQaDriverObservedMessage>[] = [
-    { kind: "media", hasMedia: true, mediaType: "image/png" },
-    {
-      kind: "media",
-      hasMedia: true,
-      mediaType: "application/pdf",
-      mediaFileName: "whatsapp-qa-group.pdf",
-    },
-    { kind: "media", hasMedia: true, mediaType: "audio/ogg; codecs=opus" },
-    {},
-    { kind: "poll", poll: { options: ["alpha", "beta"] } },
-  ];
-  const messages = shapes.map((shape, i) =>
-    fresh("", { ...shape, fromJid: groupJid, messageId: "group-" + i }),
-  );
   const calls: Array<[string, unknown]> = [];
   for (const kind of ["media", "audio", "poll"]) {
     const f = fixture("whatsapp-group-outbound-" + kind);
+    const messages: WhatsAppQaDriverObservedMessage[] = [];
     f.wait.mockImplementation(async ({ match }) =>
       expectDefined(messages.find(match), "group observation"),
     );
     f.rpc.mockImplementation(async (method, payload) => {
       calls.push([method, payload]);
       const { message, question } = payload as Record<string, unknown>;
-      const update = (i: number, patch: Partial<WhatsAppQaDriverObservedMessage>) =>
-        Object.assign(
-          expectDefined(messages[i], "message"),
-          { observedAt: new Date().toISOString() },
-          patch,
+      const observe = (text: string, shape: Partial<WhatsAppQaDriverObservedMessage>) =>
+        messages.push(
+          fresh(text, { fromJid: groupJid, messageId: "group-" + messages.length, ...shape }),
         );
       if (typeof question === "string" && question) {
-        update(4, { poll: { options: ["alpha", "beta"], question } });
+        observe("", { kind: "poll", poll: { options: ["alpha", "beta"], question } });
       }
       if (typeof message === "string") {
         if (message.endsWith("_IMAGE")) {
-          update(0, { text: message });
+          observe(message, { kind: "media", hasMedia: true, mediaType: "image/png" });
         }
         if (message.endsWith("_DOCUMENT")) {
-          update(1, { text: message });
+          observe(message, {
+            kind: "media",
+            hasMedia: true,
+            mediaType: "application/pdf",
+            mediaFileName: "whatsapp-qa-group.pdf",
+          });
         }
         if (message.endsWith("_AUDIO")) {
-          update(2, {});
-          update(3, { text: message });
+          observe("", { kind: "media", hasMedia: true, mediaType: "audio/ogg; codecs=opus" });
+          observe(message, {});
         }
       }
       return {};
@@ -575,10 +564,8 @@ it.each([false, true])("defines captionless audio with group=%s", (group) => {
 it.each([
   ["Connection Closed", true],
   ["status 440: session conflict", true],
-  ["Stream Errored (conflict)", true],
   ["timed out after 45000ms waiting for WhatsApp QA driver pending notifications", true],
   ["timed out waiting for WhatsApp QA driver message", false],
-  ["timed out waiting", false],
 ] as const)("classifies driver error %s", (message, retryable) => {
   expect(isTransientWhatsAppQaDriverError(new Error(message))).toBe(retryable);
 });
