@@ -255,52 +255,47 @@ describe("shared-state worker error transport", () => {
       actualSessionIdHash: "sha256:987654fedcba",
     },
   ] as const satisfies readonly TranscriptAppendRefusal[];
-  const cases: Array<{
-    error: Error;
-    fields?: object;
-    causeType?: new (message?: string) => Error;
-    nativeOpen?: true;
-  }> = [
-    {
-      error: new PluginStateStoreError("Synthetic binding deletion failed", {
+  const cases: Array<
+    [error: Error, fields?: object, causeType?: new (message?: string) => Error, nativeOpen?: true]
+  > = [
+    [
+      new PluginStateStoreError("plugin", {
         code: "PLUGIN_STATE_WRITE_FAILED",
         operation: "delete",
         path,
         owner,
         cause: syntaxCause,
       }),
-      fields: { code: "PLUGIN_STATE_WRITE_FAILED", operation: "delete", path, owner },
-      causeType: SyntaxError,
-    },
-    {
-      error: new McpOAuthStoreCorruptionError("synthetic-store", "store_json is not valid JSON", {
-        cause: syntaxCause,
-      }),
-      fields: { cause: { name: "SyntaxError", message: syntaxCause.message } },
-      causeType: Error,
-    },
-    {
-      error: new WorkerSessionAlreadyAttachedError("session", "environment"),
-      fields: { sessionId: "session", environmentId: "environment" },
-    },
-    {
-      error: new SqliteTranscriptMutationConflictError("session"),
-      fields: { sessionId: "session" },
-    },
-    ...transcriptRefusals.map((cause) => ({
-      error: new SessionTranscriptWriterClaimReboundError(cause),
-      fields: { cause },
-    })),
-    ...["detail", new SyntaxError("Synthetic rebound cause")].map((cause) => ({
-      error: Object.assign(new SessionTranscriptWriterClaimReboundError(), { cause }),
-      fields: { cause: typeof cause === "string" ? cause : { message: cause.message } },
-      causeType: cause instanceof Error ? SyntaxError : undefined,
-    })),
-    ...[undefined, "SQLITE_IOERR"].map((code) => ({
-      error: Object.assign(new Error("native open refused"), { code }),
-      fields: { code },
-      nativeOpen: true as const,
-    })),
+      { code: "PLUGIN_STATE_WRITE_FAILED", operation: "delete", path, owner },
+      SyntaxError,
+    ],
+    [
+      new McpOAuthStoreCorruptionError("store", "invalid JSON", { cause: syntaxCause }),
+      { cause: { name: "SyntaxError", message: syntaxCause.message } },
+      Error,
+    ],
+    [
+      new WorkerSessionAlreadyAttachedError("session", "environment"),
+      { sessionId: "session", environmentId: "environment" },
+    ],
+    [new SqliteTranscriptMutationConflictError("session"), { sessionId: "session" }],
+    ...transcriptRefusals.map((cause): [Error, object] => [
+      new SessionTranscriptWriterClaimReboundError(cause),
+      { cause },
+    ]),
+    ...["detail", new SyntaxError("rebound")].map(
+      (cause): [Error, object, (new (message?: string) => Error)?] => [
+        Object.assign(new SessionTranscriptWriterClaimReboundError(), { cause }),
+        { cause: typeof cause === "string" ? cause : { message: cause.message } },
+        cause instanceof Error ? SyntaxError : undefined,
+      ],
+    ),
+    ...[undefined, "SQLITE_IOERR"].map((code): [Error, object, undefined, true] => [
+      Object.assign(new Error("native open"), { code }),
+      { code },
+      undefined,
+      true,
+    ]),
     ...[
       { code: "ERR_SQLITE_ERROR", errcode: 517 },
       { code: "ERR_SQLITE_ERROR", errcode: 262 },
@@ -308,70 +303,66 @@ describe("shared-state worker error transport", () => {
       { code: "ERR_SQLITE_ERROR", errcode: 266 },
       { code: "SQLITE_BUSY" },
       { code: "SQLITE_LOCKED" },
-    ].map((fields) => ({
-      error: Object.assign(new Error("native SQLite failure"), fields),
-      fields,
-    })),
-    ...[RangeError, SyntaxError, TypeError, SkillUploadRequestError].map((ErrorType) => ({
-      error: Object.assign(new ErrorType("Synthetic invalid request"), {
-        code: "ERR_OUT_OF_RANGE",
-        cause: new Error("Synthetic decoding cause"),
-      }),
-      fields: { code: "ERR_OUT_OF_RANGE", cause: { message: "Synthetic decoding cause" } },
-    })),
-    {
-      error: verification,
-      fields: {
+    ].map((fields): [Error, object] => [Object.assign(new Error("SQLite"), fields), fields]),
+    ...[RangeError, SyntaxError, TypeError, SkillUploadRequestError].map(
+      (ErrorType): [Error, object] => [
+        Object.assign(new ErrorType("invalid"), {
+          code: "ERR_OUT_OF_RANGE",
+          cause: new Error("decode"),
+        }),
+        { code: "ERR_OUT_OF_RANGE", cause: { message: "decode" } },
+      ],
+    ),
+    [
+      verification,
+      {
         code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
         cause: { message: verificationCause.message },
       },
-      causeType: Error,
-    },
-    { error: new OpenClawStateOwnershipError("owner refused") },
-    {
-      error: new OpenClawStateOwnershipMetadataError(path, "invalid metadata"),
-      fields: { databasePath: path },
-    },
-    {
-      error: new OpenClawStateExternalOwnershipError(path, "fixture-manager"),
-      fields: { databasePath: path, managerId: "fixture-manager" },
-    },
-    {
-      error: new StartupMaintenanceRequiredError("state-migrations", "state migration"),
-      fields: { kind: "state-migrations", reason: "state migration" },
-    },
-    {
-      error: new SqliteSchemaVersionError("newer schema"),
-      fields: { kind: "newer-schema", reason: "a newer OpenClaw build" },
-    },
+      Error,
+    ],
+    [new OpenClawStateOwnershipError("owner")],
+    [new OpenClawStateOwnershipMetadataError(path, "metadata"), { databasePath: path }],
+    [
+      new OpenClawStateExternalOwnershipError(path, "manager"),
+      { databasePath: path, managerId: "manager" },
+    ],
+    [
+      new StartupMaintenanceRequiredError("state-migrations", "migration"),
+      { kind: "state-migrations", reason: "migration" },
+    ],
+    [
+      new SqliteSchemaVersionError("schema"),
+      { kind: "newer-schema", reason: "a newer OpenClaw build" },
+    ],
     ...(
       [
         ["audit-events-v2", "state database schema migration"],
         ["legacy-cron-run-logs", "cron run history migration"],
       ] as const
-    ).map(([kind, reason]) => ({
-      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(kind, path),
-      fields: { kind, pathname: path, reason },
-    })),
-    {
-      error: new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
-      fields: {
+    ).map(([kind, reason]): [Error, object] => [
+      new OpenClawStateDatabaseSchemaMigrationRequiredError(kind, path),
+      { kind, pathname: path, reason },
+    ]),
+    [
+      new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
+      {
         kind: "agent-media",
         pathname: "/fixture/agent.sqlite",
         schemaVersion: 11,
         reason: "offline media migration",
       },
-    },
-    {
-      error: new SqliteCoordinatorError("admission refused", new Error("native cause")),
-      fields: { cause: { message: "native cause" } },
-      causeType: Error,
-    },
-    { error: new GatewayStateOwnerContentionError(path), fields: { databasePath: path } },
+    ],
+    [
+      new SqliteCoordinatorError("admission", new Error("native")),
+      { cause: { message: "native" } },
+      Error,
+    ],
+    [new GatewayStateOwnerContentionError(path), { databasePath: path }],
   ];
-  it.each(cases)(
-    "preserves $error.name identity and recovery fields: $fields",
-    ({ error, fields, causeType, nativeOpen }) => {
+  it.for(cases)(
+    "preserves %s identity and recovery fields: %s",
+    ([error, fields, causeType, nativeOpen]) => {
       if (nativeOpen) {
         expect(() =>
           withSqliteNativeOpen(() => {

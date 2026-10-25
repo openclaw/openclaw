@@ -32,6 +32,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
+import { expectRow, expectRows, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -112,10 +113,6 @@ function seedEvent(db: EngineConnection, scope: string) {
   db.prepare(
     "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
   ).run(scope, "preserved", "{}", 1);
-}
-
-function readRow(db: EngineConnection, query: string) {
-  return db.prepare(query).get();
 }
 
 const statsTableQuery = "SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'";
@@ -297,7 +294,7 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     sql.assertIdle();
   });
-  expect(readRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'")).toEqual({
+  expectRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'", {
     tbl: "schema_meta",
   });
 });
@@ -368,7 +365,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
     expect(read.all("run-100", 0)).toEqual(before);
     {
       using fresh = new DatabaseSync(database.path, { readOnly: true });
-      expect(readRow(fresh, runStatsQuery)).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
+      expectRow(fresh, runStatsQuery, { stat: expect.stringMatching(/^[1-9]\d* /) });
       expect(fresh.prepare(`EXPLAIN QUERY PLAN ${query}`).all("run-100", 0)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -376,7 +373,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
           }),
         ]),
       );
-      expect(fresh.prepare(query).all("run-100", 0)).toEqual(before);
+      expectRows(fresh, query, before, "run-100", 0);
     }
     execute({ maxPages: 512, checkpointMode: "PASSIVE", continuation: true });
     expect(plannerPasses()).toBe(1);
@@ -401,9 +398,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
     await periodic();
     expect(plannerPasses()).toBe(3);
     expect(refreshedStatisticsAtCommit).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
-    expect(database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all()).toEqual(
-      statistics,
-    );
+    expectRows(database.db, "SELECT * FROM sqlite_stat1 ORDER BY tbl,idx", statistics);
     expect(read.all("run-100", 0)).toEqual(before);
     expect(database.db.isTransaction).toBe(false);
   } finally {
@@ -473,12 +468,13 @@ it("joins private timer cancellation after publisher failure", async () => {
     await close(scheduledWork);
   }
   const reopened = openOpenClawStateDatabase({ path: pathname });
-  expect(
-    readRow(
-      reopened.db,
-      "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
-    ),
-  ).toEqual({ value_json: "true" });
+  expectRow(
+    reopened.db,
+    "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
+    {
+      value_json: "true",
+    },
+  );
 });
 
 it.each([false, true])(
@@ -649,11 +645,12 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
     expect(observations).toEqual([]);
     sql.assertIdle();
     const reopened = openOpenClawStateDatabase({ path: database.path });
-    expect(
-      reopened.db
-        .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
-        .all("maintenance-close"),
-    ).toEqual([{ event_key: "preserved" }]);
+    expectRows(
+      reopened.db,
+      "SELECT event_key FROM diagnostic_events WHERE scope=?",
+      [{ event_key: "preserved" }],
+      "maintenance-close",
+    );
   } finally {
     stop();
     try {
@@ -682,9 +679,9 @@ it("flushes worker writes before host close without host SQL", async () => {
     close.mockRestore();
   }
   using reopened = new DatabaseSync(database.path, { readOnly: true });
-  expect(
-    readRow(reopened, "SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'"),
-  ).toEqual({ value_json: '"final"' });
+  expectRow(reopened, "SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'", {
+    value_json: '"final"',
+  });
 });
 
 it("joins worker retirement before granting raw sole custody", async () => {
