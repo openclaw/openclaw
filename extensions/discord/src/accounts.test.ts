@@ -83,6 +83,7 @@ describe("Discord accounts", () => {
     ).toBe(expected);
   });
   it("ignores disabled duplicate-token accounts", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
     const cfg = config({
       accounts: {
         disabled: { enabled: false, token: "same-token" },
@@ -94,23 +95,16 @@ describe("Discord accounts", () => {
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
     expect(isDiscordAccountEnabledForRuntime(inactiveAccount, cfg)).toBe(false);
     expect(resolveDiscordAccountDisabledReason(inactiveAccount, cfg)).toBe("disabled");
-    expect(inspect(cfg, "active", "disabled")).toMatchObject([
+    expect(inspect(cfg, "active", "disabled", "default")).toMatchObject([
       { enabled: true, configured: true },
       { enabled: false, configured: true, stateReason: "disabled" },
-    ]);
-    expect(enabledIds(cfg)).toEqual(["active"]);
-  });
-
-  it("inspects config-token precedence over a matching environment token", () => {
-    vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
-    expect(inspect(workConfig({ token: "same-token" }), "default", "work")).toMatchObject([
       {
         enabled: false,
         configured: true,
-        stateReason: 'duplicate bot token; using account "work"',
+        stateReason: 'duplicate bot token; using account "active"',
       },
-      { enabled: true, configured: true },
     ]);
+    expect(enabledIds(cfg)).toEqual(["active"]);
   });
 });
 

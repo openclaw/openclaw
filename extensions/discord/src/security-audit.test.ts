@@ -4,6 +4,7 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 
 type DiscordAccountConfig = ResolvedDiscordAccount["config"];
+type Guild = NonNullable<DiscordAccountConfig["guilds"]>[string];
 const memberLists = (users: string[], channelUsers: string[]) => ({
   "123": { users, channels: { general: { users: channelUsers } } },
 });
@@ -16,10 +17,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
-function guildConfig(
-  guild: NonNullable<DiscordAccountConfig["guilds"]>[string],
-  key = "team-space",
-): DiscordAccountConfig {
+function guildConfig(guild: Guild, key = "team-space"): DiscordAccountConfig {
   return { groupPolicy: "allowlist", guilds: { [key]: guild } };
 }
 
@@ -55,46 +53,47 @@ async function findingFor(check: string, params: Parameters<typeof collectFindin
 }
 
 describe("Discord security audit findings", () => {
-  it.each([
-    ["whole-guild wildcard", guildConfig({}, "*"), "*"],
+  it.each<[string, Guild, string, string | undefined, string | undefined]>([
+    ["guild wildcard", {}, "*", undefined, "guilds.*"],
+    ["channel wildcard", { channels: { "*": {} } }, "team", undefined, "guilds.team.channels.*"],
     [
-      "wildcard channel",
-      guildConfig({ channels: { "*": { enabled: true } } }),
-      "team-space.channels.*",
-    ],
-    [
-      "inherited member restriction",
-      guildConfig({ users: ["123456789012345678"], channels: { general: { enabled: true } } }),
+      "inherited users",
+      { users: ["123"], channels: { general: {} } },
+      "team",
+      undefined,
       undefined,
     ],
-    ["wildcard users", guildConfig({ users: ["*"] }), "team-space"],
-    ["wildcard roles", guildConfig({ roles: ["*"] }), "team-space"],
-    ["disabled channel", guildConfig({ channels: { general: { enabled: false } } }), undefined],
-  ] as const)("audits %s", async (_name, config, path) => {
-    const finding = await findingFor("allowlisted_groups.broad_members", { config });
+    ["wildcard users", { users: ["*"] }, "team", undefined, "guilds.team"],
+    ["wildcard roles", { roles: ["*"] }, "team", undefined, "guilds.team"],
+    [
+      "disabled channel",
+      { channels: { general: { enabled: false } } },
+      "team",
+      undefined,
+      undefined,
+    ],
+    ["named account", {}, "work", "work", "accounts.work.guilds.work"],
+  ])("audits %s", async (_name, guild, key, accountId, path) => {
+    const config = guildConfig(guild, key);
+    const finding = await findingFor("allowlisted_groups.broad_members", {
+      config,
+      accountId,
+      ...(accountId
+        ? {
+            cfg: { channels: { discord: { accounts: { [accountId]: config } } } },
+            orderedAccountIds: ["default", accountId],
+            hasExplicitAccountPath: true,
+          }
+        : {}),
+    });
     if (path === undefined) {
       expect(finding).toBeUndefined();
     } else {
       expect(finding).toMatchObject({
         severity: "warn",
-        detail: expect.stringContaining(`channels.discord.guilds.${path}`),
+        detail: expect.stringContaining(`channels.discord.${path}`),
       });
     }
-  });
-
-  it("uses the account-specific path for broad member warnings", async () => {
-    const config = guildConfig({}, "work");
-    const finding = await findingFor("allowlisted_groups.broad_members", {
-      cfg: { channels: { discord: { accounts: { work: config } } } },
-      config,
-      accountId: "work",
-      orderedAccountIds: ["default", "work"],
-      hasExplicitAccountPath: true,
-    });
-    expect(finding).toMatchObject({
-      severity: "warn",
-      detail: expect.stringContaining("channels.discord.accounts.work.guilds.work"),
-    });
   });
 
   it.each([
