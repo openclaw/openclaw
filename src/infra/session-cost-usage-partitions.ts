@@ -146,6 +146,7 @@ export function partitionUsageCostRollup(entry: UsageCostRollupEntry): {
     rollup: {
       ...createSessionUsageRollupData(),
       lastUserTimestamp: entry.rollup.lastUserTimestamp,
+      lastUserMirrorKey: entry.rollup.lastUserMirrorKey,
       untimestamped: entry.rollup.untimestamped,
     },
   };

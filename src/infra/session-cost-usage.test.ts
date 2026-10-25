@@ -858,3 +858,37 @@ it("preserves canonical tool calls and mixed content order in session logs", asy
     ["toolResult", "[Tool: read]\n[Tool Result]\nDone"],
   ]);
 });
+
+it("lists a re-mirrored prompt once in session logs", async () => {
+  const timestamp = Date.UTC(2026, 8, 6, 12);
+  const prompt = (turn: string, idempotencyKey?: string) =>
+    logMessage("user", "Scheduled prompt", {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      __openclaw: {
+        mirrorIdentity: `${turn}:prompt`,
+        mirrorOrigin: "codex-app-server",
+        mirrorSourceFingerprint: "synthetic-fingerprint",
+      },
+    });
+  const answer = logMessage("assistant", [textBlock("Done")]);
+  const messages = [
+    prompt("turn-1"),
+    prompt("turn-1", "codex-app-server:thread:turn-1:prompt"),
+    answer,
+    prompt("turn-2"),
+    answer,
+  ];
+  const sessionFile = await writeMessages(
+    ...messages.map((entry, index) =>
+      transcriptEntry(new Date(timestamp + index).toISOString(), entry),
+    ),
+  );
+
+  const logs = await loadSessionLogs({ agentId: "main", sessionFile, config: {} });
+  expect(logs?.map(({ role, content }) => ({ role, content }))).toEqual([
+    { role: "user", content: "Scheduled prompt" },
+    { role: "assistant", content: "Done" },
+    { role: "user", content: "Scheduled prompt" },
+    { role: "assistant", content: "Done" },
+  ]);
+});
