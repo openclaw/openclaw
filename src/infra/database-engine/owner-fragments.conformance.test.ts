@@ -4,7 +4,10 @@ import type {
   AuditEventInput,
   OutboundMessageProgressInput,
 } from "../../audit/audit-event-types.js";
-import { captureExecutionIdentityAdmissionEnvelope } from "../../audit/execution-identity.test-support.js";
+import {
+  captureExecutionIdentityAdmissionEnvelope,
+  executionIdentityFacts,
+} from "../../audit/execution-identity.test-support.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
 import { makeStore } from "../../cron/store.test-support.js";
@@ -327,12 +330,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const now = Date.now();
       const context = captureOpenClawStateWorkerContext();
       const envelope = captureExecutionIdentityAdmissionEnvelope(
-        {
-          runId: "pgfacts-outbound-run",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          runtime: { kind: "embedded" },
-        },
+        executionIdentityFacts("pgfacts-outbound-run"),
         { now, contextId: "pgfacts-context", executionId: "pgfacts-execution" },
       );
       const base = {

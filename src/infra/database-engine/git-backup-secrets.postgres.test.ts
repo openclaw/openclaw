@@ -10,7 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { verifyMatchedPostgresBackup } from "../../snapshot/database-backup.js";
-import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
+import { dumpGitBackupDatabase, type GitBackupIdentity } from "../../snapshot/git-backup-codec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
@@ -36,6 +36,12 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
           const client = new Client({ connectionString: connection });
           await client.connect();
           const namespace = `secrets_${randomUUID().replaceAll("-", "")}`;
+          const dump = (
+            snapshotPath: string,
+            outputPath: string,
+            identity: GitBackupIdentity,
+            excludeSecrets?: true,
+          ) => dumpGitBackupDatabase({ snapshotPath, outputPath, identity, excludeSecrets });
           try {
             const descriptor = await (
               family === "state" ? statePortProvider : agentPortProvider
@@ -131,18 +137,8 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             }
             const sqliteDir = state.path("sqlite-git");
             const pgDir = state.path("pg-git");
-            const sqliteManifest = await dumpGitBackupDatabase({
-              snapshotPath: sourcePath,
-              outputPath: sqliteDir,
-              identity,
-              excludeSecrets: true,
-            });
-            const pgManifest = await dumpGitBackupDatabase({
-              snapshotPath: anchorPath,
-              outputPath: pgDir,
-              identity: pgIdentity,
-              excludeSecrets: true,
-            });
+            const sqliteManifest = await dump(sourcePath, sqliteDir, identity, true);
+            const pgManifest = await dump(anchorPath, pgDir, pgIdentity, true);
             expect(pgManifest.schemaVersion).toBe(2);
             expect(pgManifest.excludedTables).toEqual(sqliteManifest.excludedTables);
             expect(pgManifest.excludedConfigStateKeyPrefixes).toEqual(
@@ -188,11 +184,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             ).toBe(1);
             // The default still captures credentials; exclusion must be an explicit choice.
             const unredacted = state.path("pg-full");
-            await dumpGitBackupDatabase({
-              snapshotPath: anchorPath,
-              outputPath: unredacted,
-              identity: pgIdentity,
-            });
+            await dump(anchorPath, unredacted, pgIdentity);
             expect(
               (await fs.readFile(path.join(unredacted, "postgres", "database.sqlite"))).includes(
                 Buffer.from(secret),
