@@ -13,9 +13,6 @@ const { connection, prefix: schema, client: admin } = harness;
 type Event = { seq: number; text: string; recordedBytes?: number };
 
 describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
-  const anchors: DatabaseSync[] = [];
-  const readers: PostgresSyncConnection[] = [];
-
   beforeAll(async () => {
     installDatabaseProcessRole("cli-oneshot");
     await admin.query(`CREATE SCHEMA "${schema}";
@@ -29,14 +26,6 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       INSERT INTO "${schema}".session_windows VALUES ('fixture', 7)`);
   });
   afterEach(() => vi.restoreAllMocks());
-  harness.onClose(() => {
-    for (const reader of readers) {
-      reader.close();
-    }
-    for (const anchor of anchors) {
-      anchor.close();
-    }
-  });
 
   async function fixture(events: Event[]) {
     await admin.query(`TRUNCATE "${schema}".transcript_events`);
@@ -51,9 +40,13 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       ],
     );
     const anchor = new DatabaseSync(":memory:");
-    anchors.push(anchor);
+    let closeReader: (() => void) | undefined;
+    harness.onClose(() => {
+      closeReader?.();
+      anchor.close();
+    });
     const reader = new PostgresSyncConnection(connection!, schema, anchor, schema);
-    readers.push(reader);
+    closeReader = () => reader.close();
     const queries = vi.spyOn(reader, "query");
     const pathname = `/synthetic/${schema}/anchor.sqlite`;
     const closedTransactions: boolean[] = [];

@@ -197,16 +197,16 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       withEngineStoreAdmission(() => {
         const agent = openStore(agentEngineSchema);
         const key = `agent:main:read-facts:${updated}`;
-        const insert = (sessionId: string) =>
+        const write = (sessionId: string) =>
           agent.writer.runTransaction(() =>
             agent.writer
               .prepare(
-                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_key) DO UPDATE SET current_session_id = excluded.current_session_id",
               )
               .run(key, sessionId, JSON.stringify({ sessionId, updatedAt: 100 }), 100),
           );
         if (initial) {
-          insert(initial);
+          write(initial);
         }
         const reader = agent.open();
         const queries = getExactSessionEntryQueries(reader);
@@ -221,15 +221,7 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         runSqliteReadSnapshotSync(reader, () => {
           expectRow(initial);
           expectRow(initial);
-          if (initial) {
-            agent.writer.runTransaction(() =>
-              agent.writer
-                .prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?")
-                .run(updated, key),
-            );
-          } else {
-            insert(updated);
-          }
+          write(updated);
           expectRow(initial);
           expect(rowReads()).toHaveLength(1);
         });

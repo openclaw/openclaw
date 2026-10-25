@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConformanceWorker } from "../database-engine/conformance.test-support.js";
+import {
+  conformanceWorkerResult,
+  createConformanceWorker,
+} from "../database-engine/conformance.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import {
@@ -40,11 +43,7 @@ function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) 
     message.error ? fail(new Error(message.error)) : events[message.event].resolve(message),
   );
   worker.on("error", fail);
-  const exited = new Promise<void>((resolve, reject) => {
-    worker.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`PostgreSQL regression worker exited ${code}`)),
-    );
-  });
+  const exited = conformanceWorkerResult<Message>(worker, "PostgreSQL regression");
   void exited.catch(() => {});
   return {
     wait: (event: Event) => events[event].promise,

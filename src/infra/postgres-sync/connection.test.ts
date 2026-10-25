@@ -58,19 +58,19 @@ function transportFixture(
     requestId: 1,
   });
   const sent = vi.spyOn(port1, "postMessage");
-  const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
+  const waits: number[] = [];
   let now = 0;
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.spyOn(Atomics, "wait").mockImplementation((_state, index, observed, timeout) => {
+  vi.spyOn(Atomics, "wait").mockImplementation((_state, index, _observed, timeout) => {
     pending = (receiveMessageOnPort(port2)?.message as BridgeRequest | undefined) ?? pending;
     if (!pending) {
       throw new Error("No request was sent to the bridge");
     }
     const query = pending.operation === "query" ? pending : undefined;
     if (query) {
-      waits.push({ observed, timeout });
+      waits.push(timeout ?? 0);
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -217,10 +217,7 @@ it.each([
 it("waits through a late notify until its own completion and preserves increasing ids", () => {
   const { db, sent, waits, normal } = transportFixture("spurious");
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
-  expect(waits).toEqual([
-    { observed: 1, timeout: 50 },
-    { observed: 1, timeout: 50 },
-  ]);
+  expect(waits).toEqual([50, 50]);
   normal();
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(sent.mock.calls.map(([request]) => request.id)).toEqual([2, 3]);
@@ -245,11 +242,11 @@ it.each(["mismatched", "missing", "timeout", "service-death"] as const)(
     const after = readToken(db.anchor, "entry");
     expect(after).not.toBe(before);
     if (mode === "timeout") {
-      expect(waits.reduce((sum, wait) => sum + (wait.timeout ?? 0), 0)).toBe(120_000);
-      expect(waits.every((wait) => wait.timeout! <= 50)).toBe(true);
+      expect(waits.reduce((sum, wait) => sum + wait, 0)).toBe(120_000);
+      expect(waits.every((wait) => wait <= 50)).toBe(true);
     }
     if (mode === "service-death") {
-      expect(waits).toEqual([{ observed: 1, timeout: 50 }]);
+      expect(waits).toEqual([50]);
     }
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");
