@@ -209,7 +209,10 @@ of identical prepared inputs share that identity; changing compiled code or nati
 resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
-standalone runtime, and retained plugin-loader bytes omit staging directory names.
+standalone runtime. Retained plugin-loader bytes and free CommonJS `__dirname` /
+`__filename` references use relocated runtime paths instead of staging directory
+names. Native package routing metadata is serialized independently of module
+discovery order.
 Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 
