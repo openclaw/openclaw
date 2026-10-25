@@ -6,7 +6,7 @@ import {
   type ManagedRun,
   type ProcessSupervisor,
 } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { SearchableSelectList } from "./components/searchable-select-list.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
@@ -31,8 +31,6 @@ function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
   return { supervisor, cleanupScope };
 }
 
-type ShellSupervisor = ReturnType<typeof createShellSupervisor>["supervisor"];
-
 const harnesses: Array<{ shutdown: () => Promise<void>; runs: Promise<void>[] }> = [];
 
 afterEach(async () => {
@@ -47,7 +45,7 @@ afterEach(async () => {
 });
 
 function createShellHarness(params?: {
-  spawn?: ShellSupervisor["spawn"];
+  spawn?: ProcessSupervisor["spawn"];
   supervisor?: ReturnType<typeof createShellSupervisor>;
 }) {
   const messages: string[] = [];
@@ -93,16 +91,6 @@ function createShellHarness(params?: {
 
 function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; error?: Error }) {
   return vi.fn<ProcessSupervisor["spawn"]>(async (input: SpawnInput) => {
-    const exit: RunExit = {
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 0,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    };
     const activity = { resultSettled: false, lastOutputAtMs: 0 };
     return {
       activity,
@@ -115,7 +103,16 @@ function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; err
         if (params.error) {
           throw params.error;
         }
-        return exit;
+        return {
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
       },
       cancel: vi.fn(),
       detachOutput: vi.fn(),
@@ -149,11 +146,12 @@ describe("createLocalShellRunner", () => {
 
     await harness.approve("!echo hi");
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn.mock.calls[0]?.[0]).toMatchObject({
-      mode: "anchored-shell",
-      env: { OPENCLAW_SHELL: "tui-local", PATH: "/tmp/bin" },
-    });
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        mode: "anchored-shell",
+        env: { OPENCLAW_SHELL: "tui-local", PATH: "/tmp/bin" },
+      }),
+    );
     expect(harness.messages).toContain("local shell: enabled for this session");
   });
 
@@ -219,10 +217,8 @@ describe("createLocalShellRunner", () => {
     await run;
 
     expect(harness.supervisor.spawn).not.toHaveBeenCalled();
-    expect(harness.supervisor.cancelScope).toHaveBeenCalledOnce();
-    expect(harness.cleanupScope).toHaveBeenCalledWith(
-      vi.mocked(harness.supervisor.cancelScope).mock.calls[0]?.[0],
-    );
+    expect(harness.supervisor.cancelScope).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+    expect(harness.cleanupScope.mock.calls).toEqual(harness.supervisor.cancelScope.mock.calls);
     expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
 
@@ -249,8 +245,7 @@ describe("createLocalShellRunner", () => {
     expect(first.shutdown()).toBe(shutdown);
     await shutdown;
 
-    expect(first.supervisor.cancelScope).toHaveBeenCalledOnce();
-    expect(first.supervisor.cancelScope).toHaveBeenCalledWith(firstScope);
+    expect(first.supervisor.cancelScope).toHaveBeenCalledExactlyOnceWith(firstScope);
     expect(first.cleanupScope).toHaveBeenCalledWith(firstScope);
     expect(liveScopes).toEqual(new Set([secondScope]));
   });
