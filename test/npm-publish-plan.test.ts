@@ -51,6 +51,10 @@ const noRetry = async () => {
   throw new Error("unexpected retry");
 };
 
+function cancellableResponse(status: number, cancel: () => void, headers: HeadersInit = {}) {
+  return new Response(new ReadableStream({ cancel }), { status, headers });
+}
+
 describe("fetchNpmRegistryPackumentWithRetry", () => {
   it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
     let requests = 0;
@@ -220,7 +224,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
     async (failure) => {
       const requests: string[] = [];
       const waits: number[] = [];
-      let canceled = 0;
+      const cancel = vi.fn();
       const result = await fetchTarball({
         fetchImpl: async (url) => {
           requests.push(url);
@@ -230,17 +234,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
           if (failure === "connection") {
             throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
           }
-          return new Response(
-            new ReadableStream({
-              cancel() {
-                canceled += 1;
-              },
-            }),
-            {
-              status: failure,
-              headers: failure === 429 ? { "retry-after": "2" } : {},
-            },
-          );
+          return cancellableResponse(failure, cancel, { "retry-after": "2" });
         },
         sleep: async (milliseconds) => {
           waits.push(milliseconds);
@@ -250,7 +244,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       expect(requests).toEqual([packageUrl, packageUrl]);
       expect(waits).toEqual([failure === 429 ? 2000 : 1000]);
       if (typeof failure === "number") {
-        expect(canceled).toBe(1);
+        expect(cancel).toHaveBeenCalledOnce();
       }
     },
   );
@@ -259,28 +253,20 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
     "does not retry or follow permanent HTTP %s responses",
     async (status) => {
       let requests = 0;
-      let canceled = 0;
+      const cancel = vi.fn();
       await expect(
         fetchTarball({
           fetchImpl: async () => {
             requests += 1;
-            return new Response(
-              new ReadableStream({
-                cancel() {
-                  canceled += 1;
-                },
-              }),
-              {
-                status,
-                headers: { location: "https://other.example/package.tgz" },
-              },
-            );
+            return cancellableResponse(status, cancel, {
+              location: "https://other.example/package.tgz",
+            });
           },
           sleep: noRetry,
         }),
       ).rejects.toThrow(`HTTP ${status}`);
       expect(requests).toBe(1);
-      expect(canceled).toBe(1);
+      expect(cancel).toHaveBeenCalledOnce();
     },
   );
 
