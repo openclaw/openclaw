@@ -1470,7 +1470,17 @@ extension DashboardWindowController {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if webView === self.webView {
+        if webView === self.webView, let page = self.signedOut {
+            // The signed-out page rejects the generic Reload, so redraw it with its own sign-in actions.
+            let progress = self.reconnectTask == nil ? nil : self.signInProgress
+            self.showFailureHTML(
+                DashboardFailurePage.html(
+                    signedOut: page,
+                    signingIn: progress != nil,
+                    browserAttempt: progress?.canOpenBrowser == true ? self.reconnectTask?.id : nil,
+                    error: progress?.error),
+                present: false)
+        } else if webView === self.webView {
             // A failure page instead of reload: a crash that recurs on load would loop.
             self.showDashboardFailure(
                 URLError(.networkConnectionLost),
