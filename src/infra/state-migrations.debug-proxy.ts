@@ -501,7 +501,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           let existingCount = existingCounts.get(key);
           if (existingCount === undefined) {
             const row = existingEventCount(values);
-            existingCount = Number(row?.count ?? 0);
+            existingCount = row?.count ?? 0;
             existingCounts.set(key, existingCount);
           }
           if (seenCount > existingCount) {
