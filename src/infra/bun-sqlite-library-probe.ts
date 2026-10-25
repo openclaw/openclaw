@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { BUN_SQLITE_LIBRARY_PROBE_SOURCE } from "./bun-sqlite-library-probe.generated.js";
@@ -14,6 +16,11 @@ export function probeBunSqliteLibrary(candidate: string): SqliteLibraryProbe {
     source: BUN_SQLITE_LIBRARY_PROBE_SOURCE,
   });
   try {
+    const scriptPath = fileURLToPath(script.url);
+    const directory = path.dirname(scriptPath);
+    const configPath = path.join(directory, "bunfig.toml");
+    // Project preloads can open SQLite or write to stdout before the fixed probe runs.
+    fs.writeFileSync(configPath, "", { mode: 0o600, flag: "wx" });
     const env: NodeJS.ProcessEnv = {};
     for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR"]) {
       if (process.env[key]) {
@@ -22,8 +29,15 @@ export function probeBunSqliteLibrary(candidate: string): SqliteLibraryProbe {
     }
     const result = spawnSync(
       process.execPath,
-      ["--no-install", fileURLToPath(script.url), candidate],
+      [
+        "--no-install",
+        "--no-env-file",
+        `--config=${configPath}`,
+        scriptPath,
+        path.resolve(candidate),
+      ],
       {
+        cwd: directory,
         env: resolveRuntimeScriptEnv(env),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
