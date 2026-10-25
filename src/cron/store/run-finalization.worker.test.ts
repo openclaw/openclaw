@@ -61,7 +61,12 @@ it("commits execution, delivery, and history once despite an owner edit and a du
               {
                 jobId: job.id,
                 job,
-                runReceipt: receipt,
+                runReceipt: {
+                  ...receipt,
+                  ownerPid: receipt.ownerPid + 1,
+                  ownerStartTime: null,
+                  configRevision: "old",
+                },
                 status,
                 completionStatus: status === "ok" ? "succeeded" : "failed",
                 deliveryState: {
@@ -90,6 +95,12 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     }).toEqual({ receipt: "running", history: 0, marker: receipt.receiptId });
     database.db.exec("DROP TRIGGER fail_cron_history");
     expect(finalize("ok").outcome.eventPlans).toHaveLength(1);
+    expect(
+      row(
+        "SELECT agent_id, started_at_ms, error_text FROM cron_run_receipts WHERE receipt_id = ?",
+        receipt.receiptId,
+      ),
+    ).toEqual({ agent_id: "main", started_at_ms: now, error_text: null });
     expect(finalize("error").outcome.eventPlans).toHaveLength(0);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
       name: edited.name,

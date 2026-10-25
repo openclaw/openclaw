@@ -39,8 +39,6 @@ import {
 } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
-  claimCronRunReceiptInDatabaseForTest,
-  prepareCronRunReceiptClaim,
   makeCronReceiptJob,
   finishCronRunReceiptAsync,
   makeCronRecoveryJob,
@@ -448,44 +446,6 @@ it.each(["present", "absent"] as const)(
   },
 );
 
-it("records completion by run ID after an owner edit and ignores duplicate outcomes", async () => {
-  const { storePath, job } = await storeJob(makeCronReceiptJob("idempotent-completion"));
-  const prepared = prepareCronRunReceiptClaim({
-    storePath,
-    job,
-    agentId: job.agentId!,
-    startedAtMs: 300,
-  });
-  prepared.handle.ownerStartTime = null;
-  const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabaseForTest({
-      database: db,
-      prepared,
-    }),
-  );
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job, agentId: "beta", updatedAtMs: 2 }],
-  });
-  const completed = { ...receipt, ownerPid: receipt.ownerPid + 1, configRevision: "old" };
-  await finishOk(completed, 310);
-  await finishCronRunReceiptAsync({
-    handle: completed,
-    status: "error",
-    finishedAtMs: 320,
-    error: "duplicate result",
-  });
-  expect(receipts(storePath, job.id)).toEqual([
-    {
-      receiptId: receipt.receiptId,
-      status: "ok",
-      agentId: "alpha",
-      startedAtMs: 300,
-      error: null,
-    },
-  ]);
-});
-
 it.each([
   ["commit", "started", 1, "committed"],
   ["retired", "not-started", 0, "not-committed"],
@@ -626,11 +586,7 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
   for (let index = 0; index < 64; index += 1) {
     const receipt = claimCronRunReceiptForTest(storePath, job, now + 100 + index * 2);
     history.push(receipt.receiptId);
-    await finishCronRunReceiptAsync({
-      handle: receipt,
-      status: "ok",
-      finishedAtMs: now + 101 + index * 2,
-    });
+    await finishOk(receipt, now + 101 + index * 2);
   }
   const database = openOpenClawStateDatabase().db;
   const terminalIds = () =>
