@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -48,18 +47,6 @@ const boundary = vi.hoisted(() => {
   };
 });
 
-vi.mock("node:sqlite", () => ({
-  DatabaseSync: class {
-    readonly isOpen = true;
-    constructor(private readonly pathname: string) {}
-    location() {
-      return this.pathname;
-    }
-  },
-}));
-vi.mock("../config/state-dir.js", () => ({
-  resolveStateDir: (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/synthetic/default",
-}));
 // mock-isolation: Use a deterministic route to observe the captured environment before admission.
 vi.mock("./openclaw-agent-db.paths.js", () => ({
   INCOGNITO_AGENT_SQLITE_BASENAME: "incognito-openclaw-agent.sqlite",
@@ -79,21 +66,10 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
 }));
 // mock-isolation: The fixture supplies database admission without opening operator databases.
 vi.mock("./agent-database-admission.js", () => ({ assertAgentDatabaseAdmitted: vi.fn() }));
-vi.mock("./agent-deletion-cleanup.js", () => ({
-  assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
-  getAgentDeletionDatabaseCleanup: () => undefined,
-}));
-vi.mock("./openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./openclaw-state-db-async-lifecycle.js")>()),
-  getOpenClawDatabaseMaintenanceScope: () => undefined,
-  observeOpenClawDatabaseMaintenanceResource: vi.fn(),
-}));
 vi.mock("../infra/sqlite-integrity-worker.js", () => ({
   assertSqliteIntegrityInWorker: boundary.integrity,
 }));
-// mock-isolation: Keep native integrity checks outside this environment-capture fixture.
-vi.mock("../infra/sqlite-integrity.js", () => ({ runSqliteIntegrityCheckSync: vi.fn() }));
-// mock-isolation: Exercise the admission owner without native database initialization.
+// Exercise native admission against a minimal database without agent schema initialization.
 vi.mock("./openclaw-agent-db.js", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const { createSqliteWalReclamationResult } = await import("../infra/sqlite-wal-reclamation.js");
@@ -104,7 +80,6 @@ vi.mock("./openclaw-agent-db.js", async () => {
     options: OpenClawAgentDatabaseOptions,
   ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
     const pathname = boundary.route(options);
-    writeFileSync(pathname, "", { flag: "wx" });
     const database = {
       agentId: options.agentId,
       path: pathname,
@@ -127,6 +102,9 @@ vi.mock("./openclaw-agent-db.js", async () => {
 
 afterEach(() => {
   expect([boundary.cache.pending.size, boundary.cache.activePending.size]).toEqual([0, 0]);
+  for (const { db } of boundary.cache.databases.values()) {
+    db.close();
+  }
   boundary.cache.databases.clear();
   boundary.controls.ready = Promise.resolve();
   boundary.controls.onIntegrity = undefined;

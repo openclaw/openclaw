@@ -26,22 +26,15 @@ function largeEntry(index: number): SessionEntry {
   return {
     sessionId,
     updatedAt: 10,
-    lifecycleRevision: `revision-${index}`,
     label: `Conversation ${index}`,
-    sessionDiffBaseline: {
-      version: 1,
-      sessionId,
-      root: "/synthetic/workspace",
-      files: [{ path: "src/component.ts", fingerprint: "a".repeat(64) }],
-    },
-    skillsSnapshot: { prompt: "p".repeat(40_000), skills: [{ name: "fixture" }], version: 1 },
+    sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic/workspace", files: [] },
+    skillsSnapshot: { prompt: "p".repeat(40_000), skills: [] },
     systemPromptReport: {
       source: "run",
       generatedAt: 9,
-      sessionId,
       systemPrompt: { chars: 40_000, projectContextChars: 0, nonProjectContextChars: 40_000 },
       injectedWorkspaceFiles: [],
-      skills: { promptChars: 40_000, entries: [{ name: "fixture", blockChars: 40_000 }] },
+      skills: { promptChars: 40_000, entries: [] },
       tools: { listChars: 0, schemaChars: 0, entries: [] },
     },
   };
@@ -56,25 +49,20 @@ function seedV23(database: DatabaseSync, count: number) {
     (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 10)`);
   const entries = new Map<string, SessionEntry>();
   database.exec("BEGIN");
-  try {
-    for (let index = 0; index < count; index += 1) {
-      const entry = largeEntry(index);
-      const key = `agent:main:fixture-${index}`;
-      insert.run(key, entry.sessionId, JSON.stringify(entry));
-      entries.set(key, entry);
-    }
-    database.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
-      VALUES ('session-0', 'agent:main:fixture-0', 1, 10)`);
-    const eventJson = ' {"type":"custom","data":{"text":"Snow 雪","duplicate":1,"duplicate":2}}\n';
-    database
-      .prepare(`INSERT INTO transcript_events(session_id, seq, event_json, created_at)
-        VALUES ('session-0', 0, ?, 7)`)
-      .run(eventJson);
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
+  for (let index = 0; index < count; index += 1) {
+    const entry = largeEntry(index);
+    const key = `agent:main:fixture-${index}`;
+    insert.run(key, entry.sessionId, JSON.stringify(entry));
+    entries.set(key, entry);
   }
+  database.exec(`INSERT INTO session_windows(session_id, session_key, created_at, updated_at)
+      VALUES ('session-0', 'agent:main:fixture-0', 1, 10)`);
+  const eventJson = ' {"type":"custom","data":{"text":"Snow 雪","duplicate":1,"duplicate":2}}\n';
+  database
+    .prepare(`INSERT INTO transcript_events(session_id, seq, event_json, created_at)
+        VALUES ('session-0', 0, ?, 7)`)
+    .run(eventJson);
+  database.exec("COMMIT");
   return entries;
 }
 

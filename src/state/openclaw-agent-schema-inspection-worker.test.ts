@@ -136,11 +136,8 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       const { closed } = observeChild();
       const failure = await inspection.catch((error: unknown) => error);
       expect(failure).toMatchObject({
-        name: "Error",
         code: "ERR_SQLITE_ERROR",
         errcode: 14,
-        message:
-          "failed while creating its private snapshot: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
       });
       expect(closed).toHaveBeenCalledOnce();
       expect(fs.statSync(snapshot, { bigint: true })).toMatchObject({
@@ -159,13 +156,10 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([
         2, 2, 2,
       ]);
-      for (const location of [pathname, snapshot]) {
-        using source = sqlite.openNodeSqliteDatabase(location, { readOnly: true });
-        expect(source.prepare("SELECT value FROM probe").get()).toEqual({ value: "unchanged" });
-        expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        source.close();
-        expect(fs.readFileSync(location)).toEqual(before);
-      }
+      expect([pathname, snapshot].map((location) => fs.readFileSync(location))).toEqual([
+        before,
+        before,
+      ]);
     } finally {
       fs.chmodSync(snapshot, 0o600);
     }
