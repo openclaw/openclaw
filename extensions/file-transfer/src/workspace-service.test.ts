@@ -612,16 +612,7 @@ it.each(["parent", "root"])(
   },
 );
 
-it("returns no local fallback after service shutdown", async () => {
-  const bridge = (await f.start()).bridge;
-  await f.service.stop?.(f.context());
-  f.invoke.mockClear();
-  await expect(bridge.readFile({ filePath: "AGENTS.md" })).rejects.toThrow(/stopped/);
-  expect(() => getAccess(f.local)).toThrow(/not ready/);
-  expect(f.invoke).not.toHaveBeenCalled();
-});
-
-it("cancels an in-flight request when the service stops", async () => {
+it("cancels in-flight reads and prevents local fallback after service shutdown", async () => {
   const bridge = (await f.start()).bridge;
   const response = createDeferred<unknown>();
   f.invoke.mockImplementationOnce(async () => response.promise);
@@ -631,6 +622,10 @@ it("cancels an in-flight request when the service stops", async () => {
   expect(signal?.aborted).toBe(true);
   response.resolve({ payload: {} });
   await expect(pending).rejects.toThrow(/stopped/);
+  f.invoke.mockClear();
+  await expect(bridge.readFile({ filePath: "AGENTS.md" })).rejects.toThrow(/stopped/);
+  expect(() => getAccess(f.local)).toThrow(/not ready/);
+  expect(f.invoke).not.toHaveBeenCalled();
 });
 
 async function attachmentInput(sizeMiB: number) {
