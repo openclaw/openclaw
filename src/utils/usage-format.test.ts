@@ -23,21 +23,14 @@ import {
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
 
-function pricingModel(id: string, cost: ModelDefinitionConfig["cost"]): ModelDefinitionConfig {
-  return { id, name: id, reasoning: false, input: ["text"], maxTokens: 1, cost };
-}
-
-function pricingConfig(provider: string, models: ModelDefinitionConfig[]): OpenClawConfig {
-  return {
-    models: { providers: { [provider]: { baseUrl: "https://fixture.invalid", models } } },
-  };
-}
-
 const inputRates = (input: number) => ({ input, output: 0, cacheRead: 0, cacheWrite: 0 });
 type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
 function sourceConfig(provider: string, models: SourceModel[]): OpenClawConfig {
   return { models: { providers: { [provider]: { models } } } } as unknown as OpenClawConfig;
 }
+const pricedModel = (input: number) => ({ id: "demo-model", cost: inputRates(input) });
+const resolveCost = (provider: string, model: string, config?: OpenClawConfig, agentDir?: string) =>
+  resolveModelCostConfig({ provider, model, config, agentDir });
 
 async function writePricing(
   agentDir: string,
@@ -79,46 +72,34 @@ describe("usage-format", () => {
   });
 
   it.each([
-    [
-      "refreshing",
-      0,
-      1,
-      "Usage totals may be incomplete (refreshing). Run this command again later.\n",
-    ],
-    ["fresh", 1, 0, ""],
-  ] as const)("formats the %s cache notice", (status, cachedFiles, pendingFiles, expected) => {
-    expect(formatCostUsageCachePrefix({ status, cachedFiles, pendingFiles, staleFiles: 0 })).toBe(
-      expected,
-    );
+    ["refreshing", "Usage totals may be incomplete (refreshing). Run this command again later.\n"],
+    ["fresh", ""],
+  ] as const)("formats the %s cache notice", (status, expected) => {
+    expect(
+      formatCostUsageCachePrefix({ status, cachedFiles: 1, pendingFiles: 0, staleFiles: 0 }),
+    ).toBe(expected);
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {
     const opsAgentDir = path.join(stateDir, "custom-ops-agent");
-    await writePricing(opsAgentDir, "demo-roster", [pricingModel("demo-model", inputRates(42))]);
+    await writePricing(opsAgentDir, "demo-roster", [pricedModel(42)]);
     const config = {
       agents: { entries: { ops: { agentDir: opsAgentDir } } },
     } satisfies OpenClawConfig;
 
-    expect(
-      resolveModelCostConfig({ provider: "demo-roster", model: "demo-model", config })?.input,
-    ).toBe(42);
+    expect(resolveCost("demo-roster", "demo-model", config)?.input).toBe(42);
   });
 
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
     const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
     const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
-    await writePricing(agentDir, "demo-scoped", [pricingModel("demo-model", inputRates(10))]);
-    await writePricing(secondAgentDir, "demo-scoped", [pricingModel("demo-model", inputRates(20))]);
+    await writePricing(agentDir, "demo-scoped", [pricedModel(10)]);
+    await writePricing(secondAgentDir, "demo-scoped", [pricedModel(20)]);
     await fs.mkdir(configuredOnlyAgentDir, { recursive: true });
 
-    const config = pricingConfig("demo-scoped", [pricingModel("demo-model", inputRates(30))]);
+    const config = sourceConfig("demo-scoped", [pricedModel(30)]);
     const resolveInputPrice = (scopedAgentDir?: string) =>
-      resolveModelCostConfig({
-        provider: "demo-scoped",
-        model: "demo-model",
-        config,
-        agentDir: scopedAgentDir,
-      })?.input;
+      resolveCost("demo-scoped", "demo-model", config, scopedAgentDir)?.input;
 
     expect(
       [agentDir, secondAgentDir, configuredOnlyAgentDir, undefined].map(resolveInputPrice),
@@ -136,13 +117,7 @@ describe("usage-format", () => {
     let previousFingerprint: string | undefined;
     const check = (label: string, expected: ModelCostConfig | undefined) => {
       const snapshot = structuredClone(config);
-      const resolve = () =>
-        resolveModelCostConfig({
-          config: snapshot,
-          agentDir,
-          provider: "venice",
-          model: "priced-fixture",
-        });
+      const resolve = () => resolveCost("venice", "priced-fixture", snapshot, agentDir);
       expect.soft(resolve(), label).toEqual(expected);
       const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
       expect.soft(fingerprint, label).not.toBe(previousFingerprint);
@@ -177,7 +152,7 @@ describe("usage-format", () => {
       { id: "priced-model", cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } },
     ]);
     const resolve = (model: string, snapshot = config) =>
-      resolveModelCostConfig({ provider: "demo-metadata-row", model, config: snapshot });
+      resolveCost("demo-metadata-row", model, snapshot);
     expect(resolve("metadata-only")).toBeUndefined();
     expect(resolve("priced-model")?.input).toBe(1);
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
@@ -188,9 +163,7 @@ describe("usage-format", () => {
       { id: "priced-model", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
     ]);
 
-    expect(
-      resolveModelCostConfig({ provider: "demo-metadata-json", model: "priced-model" })?.input,
-    ).toBe(5);
+    expect(resolveCost("demo-metadata-json", "priced-model")?.input).toBe(5);
   });
 });
 
@@ -242,7 +215,7 @@ describe("usage cost estimation", () => {
       ...rates,
       tieredPricing: tiered ? [{ ...rates, range: [0, Infinity] }] : undefined,
     };
-    const config = pricingConfig("fixture", [pricingModel("priced", cost)]);
+    const config = sourceConfig("fixture", [{ id: "priced", cost }]);
     expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
     expect(
       estimateAggregateUsageCost({
