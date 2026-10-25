@@ -67,6 +67,13 @@ function queueFixture(context: QueueContext, stateDir: string) {
     started: (entry: Parameters<typeof markStarted>[0]) => markStarted(entry, context),
     fail: (id: string, error: string) => fail(id, error, context),
     defer: (id: string, delay: number) => defer(id, delay, context),
+    expectSettled(
+      onSettled: NonNullable<RecoveryOptions["onSettled"]>,
+      id: string,
+      outcome: "recovered" | "moved-to-failed",
+    ) {
+      expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), outcome, context);
+    },
     async first() {
       const [entry] = await pending();
       if (!entry) {
@@ -134,7 +141,7 @@ describe("session-delivery queue recovery", () => {
         );
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(onSettled).toHaveBeenCalledTimes(2);
-        expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), outcome, q.context);
+        q.expectSettled(onSettled, id, outcome);
         await q.expectPending();
         if (terminal) {
           expect(log.warn).toHaveBeenNthCalledWith(
@@ -155,9 +162,7 @@ describe("session-delivery queue recovery", () => {
     "cleans exhausted acknowledged tombstones through %s without replay or backoff",
     async (mode) => {
       await withQueue(async (q) => {
-        const id = await q.turn("image:task-drain-ack:agent-loop", {
-          maxRetries: 1,
-        });
+        const id = await q.turn("image:task-drain-ack:agent-loop", { maxRetries: 1 });
         q.seed({
           ...(await q.first()),
           acknowledgedAt: Date.now(),
@@ -168,23 +173,12 @@ describe("session-delivery queue recovery", () => {
         const deliver = vi.fn(async () => undefined);
         const onSettled = vi.fn(async () => undefined);
         if (mode === "recovery") {
-          expect(await q.recover({ deliver, onSettled })).toMatchObject({
-            recovered: 1,
-          });
+          expect(await q.recover({ deliver, onSettled })).toMatchObject({ recovered: 1 });
         } else {
-          await q.drain({
-            id,
-            logLabel: "test acknowledged cleanup",
-            deliver,
-            onSettled,
-          });
+          await q.drain({ id, logLabel: "test acknowledged cleanup", deliver, onSettled });
         }
         expect(deliver).not.toHaveBeenCalled();
-        expect(onSettled).toHaveBeenCalledWith(
-          expect.objectContaining({ id }),
-          "recovered",
-          q.context,
-        );
+        q.expectSettled(onSettled, id, "recovered");
         expect(await q.pending()).toStrictEqual([]);
       });
     },
@@ -257,25 +251,22 @@ describe("session-delivery queue recovery", () => {
       failure: "transient failure",
       started: true,
       safe: false,
-      messageId: "restart-sentinel:agent:main:main:agentTurn:123",
     },
     {
       failure: "session lookup unavailable",
       started: false,
       safe: false,
-      messageId: "restart-sentinel:pre-dispatch-failure",
     },
     {
       failure: "busy before agent start",
       started: true,
       safe: true,
-      messageId: "restart-sentinel:safe-retry",
     },
   ])(
     "keeps $failure retryable with correct attempt ownership",
-    async ({ failure, started, safe, messageId }) => {
+    async ({ failure, started, safe }) => {
       await withQueue(async (q) => {
-        const id = await q.turn(messageId, { message: "continue" });
+        const id = await q.turn("restart-sentinel:retry", { message: "continue" });
         const log = createInfoWarnErrorLogger();
         const summary = await q.recover({
           deliver: vi.fn(async (entry) => {
@@ -388,11 +379,7 @@ describe("session-delivery queue recovery", () => {
         ]) {
           expect(warnings).not.toContain(privateValue);
         }
-        expect(onSettled).toHaveBeenCalledWith(
-          expect.objectContaining({ id }),
-          "moved-to-failed",
-          q.context,
-        );
+        q.expectSettled(onSettled, id, "moved-to-failed");
         expect(await q.pending()).toStrictEqual([]);
         expect((await q.recover(options)).failed).toBe(0);
         expect(options.deliver).toHaveBeenCalledTimes(1);
@@ -431,18 +418,12 @@ describe("session-delivery queue recovery", () => {
         const deliver = vi.fn(async () => undefined);
         const onSettled = vi.fn(async () => undefined);
         if (mode === "startup") {
-          expect(await q.recover({ deliver, onSettled })).toMatchObject({
-            skippedMaxRetries: 1,
-          });
+          expect(await q.recover({ deliver, onSettled })).toMatchObject({ skippedMaxRetries: 1 });
         } else {
           await q.drainNow(id, deliver, { onSettled });
         }
         expect(deliver).not.toHaveBeenCalled();
-        expect(onSettled).toHaveBeenCalledWith(
-          expect.objectContaining({ id }),
-          "moved-to-failed",
-          q.context,
-        );
+        q.expectSettled(onSettled, id, "moved-to-failed");
         await q.expectPending();
       });
     },
@@ -456,9 +437,7 @@ describe("session-delivery queue recovery", () => {
       }
       try {
         await withQueue(async (q) => {
-          const id = await q.turn(`image:task-exhausted-${mode}:agent-loop`, {
-            maxRetries: 1,
-          });
+          const id = await q.turn(`image:task-exhausted-${mode}:agent-loop`, { maxRetries: 1 });
           const entry = await q.first();
           await q.started(entry);
           await q.fail(id, "final response lost");
@@ -494,9 +473,7 @@ describe("session-delivery queue recovery", () => {
 
   it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
     await withQueue(async (q) => {
-      const id = await q.turn("image:task-reconciliation-failed:agent-loop", {
-        maxRetries: 1,
-      });
+      const id = await q.turn("image:task-reconciliation-failed:agent-loop", { maxRetries: 1 });
       const entry = await q.first();
       await q.started(entry);
       await q.fail(id, "final response lost");
