@@ -1119,7 +1119,6 @@
 ["extensions/whatsapp/src/setup-surface.test.ts","./login.js","d69d06dde8f830c9eaa0240274665dfdbb67061855ab1a5b3eae5d1deb22a91e",1]
 ["extensions/whatsapp/src/state-migrations.test.ts","openclaw/plugin-sdk/security-runtime","6f82d68f95067946d346629a15a8556b66919aa8c7ddd3b6687033f0df8cff78",1]
 ["extensions/whatsapp/src/test-helpers.ts","./auth-store.runtime.js","b3c0a09ae4f3a91ad1b11f0fa010d81f3568121833e08d0b8d0953a15c59e302",1]
-["extensions/whatsapp/src/test-helpers.ts","./auto-reply/monitor/group-activation.runtime.js","64def962e57d696d13ff648c6cad0b85ef720bea5eb4f20cb3b590dd679404d2",1]
 ["extensions/whatsapp/src/test-helpers.ts","./qr-terminal.js","52efe05b6f5ca1c1768b045fc7fdab64ccc152a8fa542a792766feb7a0f18f7b",1]
 ["extensions/workboard/index.test.ts","./src/store.js","b749a888c1ebe4af21829497411189cd2dfd4154aa54a231f352da87f71733b8",1]
 ["extensions/workboard/src/sessions-board.test.ts","openclaw/plugin-sdk/logging-core","0b3ec9cec3895d4840ed1c9df417931f61189b1c15512a218d1b1d1778b57d56",1]
