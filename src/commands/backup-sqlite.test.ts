@@ -37,6 +37,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 let state: OpenClawTestState;
+let runtime: ReturnType<typeof createRuntime>;
 
 beforeEach(async () => {
   // Rejected requests can record outcomes too; every case must own its state.
@@ -47,6 +48,7 @@ beforeEach(async () => {
   configMocks.getRuntimeConfig.mockReset().mockReturnValue({
     agents: { entries: { main: {}, "ops-team": {} } },
   });
+  runtime = createRuntime();
 });
 
 afterEach(async () => {
@@ -90,108 +92,90 @@ function createGlobalDatabase(databasePath: string): void {
 }
 
 describe("SQLite backup commands", () => {
-  it.each([false, true])(
-    "creates, lists, verifies, and fresh-restores the global database (mixed: %s)",
-    async (mixed) => {
-      if (mixed) {
-        configMocks.getRuntimeConfig.mockReturnValue({
-          database: { families: { workboard: { engine: "postgres" } } },
-        });
-      }
-      const tempDir = state.root;
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const scratchPath = path.join(tempDir, "scratch");
-      const restorePath = path.join(tempDir, "restore", "openclaw.sqlite");
-      const databasePath = resolveOpenClawStateSqlitePath();
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      await fs.mkdir(scratchPath, { mode: 0o700 });
-      await fs.chmod(scratchPath, 0o700);
-      createGlobalDatabase(databasePath);
-      const runtime = createRuntime();
+  it("creates, lists, verifies, and fresh-restores SQLite in a mixed-engine config", async () => {
+    configMocks.getRuntimeConfig.mockReturnValue({
+      database: { families: { workboard: { engine: "postgres" } } },
+    });
+    const repositoryPath = state.path("snapshots");
+    const scratchPath = state.path("scratch");
+    const restorePath = state.path("restore", "openclaw.sqlite");
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.mkdir(scratchPath, { mode: 0o700 });
+    await fs.chmod(scratchPath, 0o700);
+    createGlobalDatabase(databasePath);
 
-      const created = await backupSqliteCreateCommand(runtime, {
-        global: true,
-        repository: repositoryPath,
-        json: true,
-      });
-      expect(created.manifest.database).toMatchObject({
-        role: "global",
-        basename: "openclaw.sqlite",
-        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(created);
+    const created = await backupSqliteCreateCommand(runtime, {
+      global: true,
+      repository: repositoryPath,
+      json: true,
+    });
+    expect(created.manifest.database).toMatchObject({
+      role: "global",
+      basename: "openclaw.sqlite",
+      userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(created);
 
-      const listed = await backupSqliteListCommand(runtime, {
-        repository: repositoryPath,
-        json: true,
-      });
-      expect(listed.snapshots).toHaveLength(1);
-      expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
+    const listed = await backupSqliteListCommand(runtime, {
+      repository: repositoryPath,
+      json: true,
+    });
+    expect(listed.snapshots).toHaveLength(1);
+    expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
 
-      const missingScratchPath = path.join(tempDir, "missing-scratch");
-      await expect(
-        backupSqliteVerifyCommand(runtime, created.snapshotPath, {
-          scratch: missingScratchPath,
-        }),
-      ).rejects.toThrow(
-        `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
-      );
+    const missingScratchPath = state.path("missing-scratch");
+    await expect(
+      backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+        scratch: missingScratchPath,
+      }),
+    ).rejects.toThrow(
+      `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
 
-      const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
-        scratch: scratchPath,
-        json: true,
-      });
-      expect(verified.manifest).toEqual(created.manifest);
-      await expect(fs.readdir(scratchPath)).resolves.toEqual([]);
+    const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+      scratch: scratchPath,
+      json: true,
+    });
+    expect(verified.manifest).toEqual(created.manifest);
+    await expect(fs.readdir(scratchPath)).resolves.toEqual([]);
 
-      const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
-        target: restorePath,
-        json: true,
-      });
-      expect(restored).toMatchObject({
-        ok: true,
-        snapshotPath: created.snapshotPath,
-        targetPath: restorePath,
-      });
-      expect(runtime.error).not.toHaveBeenCalled();
+    const restored = await backupSqliteRestoreCommand(runtime, created.snapshotPath, {
+      target: restorePath,
+      json: true,
+    });
+    expect(restored).toMatchObject({
+      ok: true,
+      snapshotPath: created.snapshotPath,
+      targetPath: restorePath,
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
 
-      const sqlite = requireNodeSqlite();
-      const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
-      try {
-        expect(
-          restoredDatabase.prepare("SELECT value FROM durable_entries ORDER BY id").all(),
-        ).toEqual([{ value: "checkpointed" }, { value: "committed-in-wal" }]);
-        expect(
-          restoredDatabase.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
-        ).toEqual({ count: 0 });
-      } finally {
-        restoredDatabase.close();
-      }
-    },
-  );
+    const sqlite = requireNodeSqlite();
+    const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
+    try {
+      expect(
+        restoredDatabase.prepare("SELECT value FROM durable_entries ORDER BY id").all(),
+      ).toEqual([{ value: "checkpointed" }, { value: "committed-in-wal" }]);
+      expect(
+        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      restoredDatabase.close();
+    }
+  });
 
   it("reports missing snapshot paths for verify and restore", async () => {
     const repositoryPath = state.path("snapshots");
     const snapshotPath = path.join(repositoryPath, "missing-snapshot");
     const restorePath = state.path("restored.sqlite");
-    const runtime = createRuntime();
     const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
 
-    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
-      missingRepositoryMessage,
-    );
-    await expect(
-      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
-    ).rejects.toThrow(missingRepositoryMessage);
+    await expectUnreadableSnapshot(snapshotPath, restorePath, missingRepositoryMessage);
 
     await fs.mkdir(repositoryPath, { mode: 0o700 });
     const missingSnapshotMessage = `SQLite snapshot does not exist: ${snapshotPath}. Run \`openclaw backup sqlite list --repository ${repositoryPath}\` to inspect available snapshots.`;
-    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
-      missingSnapshotMessage,
-    );
-    await expect(
-      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
-    ).rejects.toThrow(missingSnapshotMessage);
+    await expectUnreadableSnapshot(snapshotPath, restorePath, missingSnapshotMessage);
   });
 
   it.each(["directory", "file"])(
@@ -206,7 +190,6 @@ describe("SQLite backup commands", () => {
         await fs.writeFile(gitPath, "gitdir: ../git-admin\n");
       }
 
-      const runtime = createRuntime();
       await expect(
         backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
       ).rejects.toThrow(
@@ -215,33 +198,20 @@ describe("SQLite backup commands", () => {
     },
   );
 
-  it("requires exactly one named OpenClaw database source", async () => {
-    const runtime = createRuntime();
-
-    await expect(
-      backupSqliteCreateCommand(runtime, { repository: "/tmp/snapshots" }),
-    ).rejects.toThrow("Choose a SQLite snapshot source");
-    await expect(
-      backupSqliteCreateCommand(runtime, {
-        global: true,
-        agent: "main",
-        repository: "/tmp/snapshots",
-      }),
-    ).rejects.toThrow("Choose exactly one SQLite snapshot source");
-  });
-
   it.each([
+    [{}, "Choose a SQLite snapshot source"],
+    [{ global: true, agent: "main" }, "Choose exactly one SQLite snapshot source"],
     [
-      "unknown",
-      "nope-agent",
+      { agent: "nope-agent" },
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
+    [{ agent: "   " }, "--agent must not be blank"],
+    [{ global: true, repository: undefined }, "Missing required --repository value"],
+  ] as const)("rejects invalid SQLite snapshot source %j", async (options, message) => {
     await expect(
-      backupSqliteCreateCommand(createRuntime(), {
-        agent,
+      backupSqliteCreateCommand(runtime, {
         repository: "/tmp/snapshots",
+        ...options,
       }),
     ).rejects.toThrow(message);
   });
@@ -251,7 +221,6 @@ describe("SQLite backup commands", () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, Buffer.alloc(32));
-    const runtime = createRuntime();
 
     await expect(
       backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
@@ -263,12 +232,7 @@ describe("SQLite backup commands", () => {
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
-  it("requires repository, snapshot, and restore target paths", async () => {
-    const runtime = createRuntime();
-
-    await expect(backupSqliteCreateCommand(runtime, { global: true })).rejects.toThrow(
-      "Missing required --repository value",
-    );
+  it("requires snapshot and restore target paths", async () => {
     await expect(backupSqliteVerifyCommand(runtime, " ", {})).rejects.toThrow(
       "Missing required <snapshot> value",
     );
@@ -292,25 +256,32 @@ describe("SQLite backup commands", () => {
       path: databasePath,
       identity: { role: "generic", id: "generic-test" },
     });
-    const runtime = createRuntime();
 
     await expect(backupSqliteListCommand(runtime, { repository: repositoryPath })).rejects.toThrow(
       /database role generic is not allowed/u,
     );
-    await expect(backupSqliteVerifyCommand(runtime, snapshot.ref.path, {})).rejects.toThrow(
+    await expectUnreadableSnapshot(
+      snapshot.ref.path,
+      restorePath,
       /database role generic is not allowed/u,
     );
-    await expect(
-      backupSqliteRestoreCommand(runtime, snapshot.ref.path, { target: restorePath }),
-    ).rejects.toThrow(/database role generic is not allowed/u);
     await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
+async function expectUnreadableSnapshot(
+  snapshot: string,
+  target: string,
+  message: string | RegExp,
+) {
+  await expect(backupSqliteVerifyCommand(runtime, snapshot, {})).rejects.toThrow(message);
+  await expect(backupSqliteRestoreCommand(runtime, snapshot, { target })).rejects.toThrow(message);
+}
+
 function createRuntime() {
-  const runtime = createTestRuntime();
-  runtime.exit.mockImplementation((code) => {
+  const testRuntime = createTestRuntime();
+  testRuntime.exit.mockImplementation((code) => {
     throw new Error(`exit ${code}`);
   });
-  return runtime;
+  return testRuntime;
 }

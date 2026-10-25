@@ -35,6 +35,7 @@ const STORE_OPTIONS = {
   maxEntries: 10,
   overflowPolicy: "reject-new",
 } as const;
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 
 function cleanupFixture(
   state: OpenClawTestState,
@@ -104,18 +105,15 @@ function writeCleanupPlugins(bundledRoot: string) {
       },
     };`,
   });
-  fs.writeFileSync(
-    path.join(owner.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: owner.id,
-      activation: { onStartup: false, onAgentHarnesses: [HARNESS_ID] },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(owner.dir, "package.json"),
-    JSON.stringify({ name: `@openclaw/${owner.id}`, openclaw: { extensions: ["./index.cjs"] } }),
-  );
+  writeJson(path.join(owner.dir, "openclaw.plugin.json"), {
+    id: owner.id,
+    activation: { onStartup: false, onAgentHarnesses: [HARNESS_ID] },
+    configSchema: { type: "object", additionalProperties: false },
+  });
+  writeJson(path.join(owner.dir, "package.json"), {
+    name: `@openclaw/${owner.id}`,
+    openclaw: { extensions: ["./index.cjs"] },
+  });
   const unrelated = writePlugin({
     id: "unrelated-cleanup-plugin",
     body: `require("node:fs").writeFileSync(require("node:path").join(__dirname, "loaded"), "loaded");

@@ -171,7 +171,6 @@ describe("runConversationalOnboarding", () => {
       runSystemAgent({ ...opts, input: terminal, output: terminal }, runtime),
     );
     return {
-      binding: fixture.binding,
       registry,
       launchConversation,
       currentConfig: () => config,
