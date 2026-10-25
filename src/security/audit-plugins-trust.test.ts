@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
@@ -25,15 +25,7 @@ const mockPluginRegistryIds = vi.hoisted(() => ["anthropic", "discord", "some-pl
 const mockPluginTools = vi.hoisted(() => ({ names: ["some_plugin_tool"] as string[] | undefined }));
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
-  vi.fn(async (dir: string): Promise<string | undefined> => {
-    if (dir.includes("/extensions/voice-call") || dir.includes("\\extensions\\voice-call")) {
-      return "9.9.9";
-    }
-    if (dir.includes("/hooks/test-hooks") || dir.includes("\\hooks\\test-hooks")) {
-      return "8.8.8";
-    }
-    return undefined;
-  }),
+  vi.fn(async (_dir: string): Promise<string | undefined> => undefined),
 );
 
 vi.mock("../infra/package-update-utils.js", () => ({
@@ -117,18 +109,10 @@ describe("security audit install metadata findings", () => {
     stateDir: string,
     records: Record<string, PluginInstallRecord>,
   ) => {
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "2026.4.25",
-      compatRegistryVersion: "compat",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: Date.now(),
-      installRecords: records,
-      plugins: [],
-      diagnostics: [],
-    };
-    await writePersistedInstalledPluginIndex(index, { stateDir });
+    await writePersistedInstalledPluginIndex(
+      createInstalledPluginIndex({ installRecords: records, plugins: [] }),
+      { stateDir },
+    );
   };
 
   beforeAll(async () => {
@@ -147,32 +131,6 @@ describe("security audit install metadata findings", () => {
     }
   });
 
-  it("evaluates install metadata findings", async () => {
-    for (const pinned of [false, true]) {
-      const stateDir = await makeTmpDir(`pinned-${pinned}`);
-      const record = (packageName: string, integrity: string) =>
-        npm(`@openclaw/${packageName}${pinned ? "@1.2.3" : ""}`, {
-          ...(pinned ? { integrity } : {}),
-          resolvedSpec: `@openclaw/${packageName}@1.2.3`,
-        });
-      await writePluginIndexInstallRecords(stateDir, {
-        "voice-call": record("voice-call", "sha512-plugin"),
-      });
-      writeHookInstalls(stateDir, { "test-hooks": record("test-hooks", "sha512-hook") });
-      const findings = await audit({}, stateDir);
-      for (const owner of ["plugins", "hooks"]) {
-        for (const suffix of ["unpinned_npm_specs", "missing_integrity"]) {
-          const finding = findings.find(({ checkId }) => checkId === `${owner}.installs_${suffix}`);
-          if (pinned) {
-            expect(finding).toBeUndefined();
-          } else {
-            expect(finding).toMatchObject({ severity: "warn" });
-          }
-        }
-      }
-    }
-  });
-
   it("keeps install metadata precedence and reads hooks after plugin versions", async () => {
     const stateDir = await makeTmpDir("install-metadata-order");
     const pluginPath = path.join(stateDir, "custom-plugin");
@@ -182,6 +140,7 @@ describe("security audit install metadata findings", () => {
         installPath: pluginPath,
         version: "0.9.0",
         resolvedVersion: "1.0.0",
+        resolvedSpec: "@openclaw/voice-call@1.0.0",
       }),
       "empty-version": npm("@openclaw/empty-version@1.0.0", {
         integrity: "sha512-empty",
@@ -200,7 +159,12 @@ describe("security audit install metadata findings", () => {
         reads.push(dir);
         if (dir === pluginPath) {
           writeHookInstalls(stateDir, {
-            "test-hooks": npm("@openclaw/test-hooks", { integrity: " ", version: "2.0.0" }),
+            "test-hooks": npm("@openclaw/test-hooks", {
+              integrity: " ",
+              version: "2.0.0",
+              resolvedSpec: "@openclaw/test-hooks@2.0.0",
+            }),
+            "pinned-hooks": npm("@openclaw/test-hooks@1.2.3", { integrity: "sha512-hook" }),
           });
           return "1.1.0";
         }
@@ -215,14 +179,19 @@ describe("security audit install metadata findings", () => {
           hookPath,
         ]);
         expect(findings).toHaveLength(6);
+        const details = findings.map(({ detail }) => detail).join("\n");
+        expect(details).not.toContain("empty-version");
+        expect(details).not.toContain("pinned-hooks");
         for (const [owner, id, recorded, installed] of [
           ["plugins", "voice-call", "1.0.0", "1.1.0"],
           ["hooks", "test-hooks", "2.0.0", "2.1.0"],
         ]) {
           for (const suffix of ["unpinned_npm_specs", "missing_integrity", "version_drift"]) {
-            expect(requireInstallFinding(findings, `${owner}.installs_${suffix}`).detail).toContain(
-              id,
-            );
+            const finding = requireInstallFinding(findings, `${owner}.installs_${suffix}`);
+            expect(finding).toMatchObject({
+              severity: "warn",
+              detail: expect.stringContaining(id),
+            });
           }
           expect(
             requireInstallFinding(findings, `${owner}.installs_version_drift`).detail,
@@ -325,46 +294,37 @@ describe("security audit extension tool reachability findings", () => {
           ...allowed,
           tools: { profile: "coding", alsoAllow: ["group:plugins"] },
         };
-        const cases: Array<
-          [string, OpenClawConfig, string[] | undefined, string | false, string?]
-        > = [
-          ["no allowlist", {}, declared, "plugins.extensions_no_allowlist"],
-          ["permissive", allowed, declared, reachable],
-          [
-            "agent scope",
-            { ...allowed, agents: { entries: { ops: { tools: { profile: "full" } } } } },
-            declared,
-            reachable,
-            "- agents.entries.ops",
-          ],
-          ["restrictive", { ...allowed, tools: { profile: "coding" } }, declared, false],
-          ["plugin group", grouped, declared, reachable],
-          ["missing contract", grouped, undefined, reachable],
-          ["empty contract", allowed, [], false],
-          [
-            "concrete deny",
-            { ...grouped, tools: { ...grouped.tools, deny: declared } },
-            declared,
-            false,
-          ],
-        ];
-        for (const [name, cfg, tools, checkId, detail] of cases) {
+        async function check(
+          cfg: OpenClawConfig,
+          checkId: string | false,
+          tools: string[] | undefined,
+          detail?: string,
+        ) {
           mockPluginTools.names = tools;
           const findings = await collectPluginsTrustFindings({ cfg, stateDir });
           if (checkId) {
-            expect(findings, name).toContainEqual(
-              expect.objectContaining({ checkId, severity: "warn" }),
-            );
+            expect(findings).toContainEqual(expect.objectContaining({ checkId, severity: "warn" }));
           } else {
-            expect(
-              findings.some((entry) => entry.checkId === reachable),
-              name,
-            ).toBe(false);
+            expect(findings.some((entry) => entry.checkId === reachable)).toBe(false);
           }
           if (detail) {
             expect(findings.find((entry) => entry.checkId === reachable)?.detail).toContain(detail);
           }
         }
+        await check({}, "plugins.extensions_no_allowlist", declared);
+        await check(allowed, reachable, declared);
+        const ops = { tools: { profile: "full" as const } };
+        await check(
+          { ...allowed, agents: { entries: { ops } } },
+          reachable,
+          declared,
+          "- agents.entries.ops",
+        );
+        await check({ ...allowed, tools: { profile: "coding" } }, false, declared);
+        await check(grouped, reachable, declared);
+        await check(grouped, reachable, undefined);
+        await check(allowed, false, []);
+        await check({ ...grouped, tools: { ...grouped.tools, deny: declared } }, false, declared);
       });
     } finally {
       homedirSpy.mockRestore();

@@ -7,7 +7,7 @@ const loadPluginMetadataRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredChannelPluginIdsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+  applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
 
 // mock-isolation: Collector-scope fixtures supply channel owners without persisted plugin discovery.
@@ -20,13 +20,12 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
   return {
     ...actual,
-    getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+    getActivePluginRegistry: getActivePluginRegistryMock,
   };
 });
 
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
-  loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
-    loadPluginMetadataRegistrySnapshotMock(...args),
+  loadPluginMetadataRegistrySnapshot: loadPluginMetadataRegistrySnapshotMock,
 }));
 
 const { runSecurityAuditCore } = await import("./audit.js");
@@ -35,24 +34,15 @@ const sourceConfig: OpenClawConfig = {
   agents: { entries: { main: {} } },
   plugins: { allow: ["external-channel-plugin", "audit-plugin"] },
 };
-function createAuditOptions(
-  plugins: Parameters<typeof runSecurityAuditCore>[0]["plugins"] = [],
-): Parameters<typeof runSecurityAuditCore>[0] {
-  return {
-    config: sourceConfig,
-    sourceConfig,
-    env: {},
-    platform: process.platform,
-    includeFilesystem: false,
-    deep: false,
-    deepTimeoutMs: 5000,
-    stateDir: "/tmp/openclaw-test-state",
-    configPath: "/tmp/openclaw-test-config.json",
-    plugins,
-    loadPluginSecurityCollectors: true,
-    configSnapshot: null,
-  };
-}
+const auditOptions = {
+  config: sourceConfig,
+  sourceConfig,
+  env: {},
+  includeFilesystem: false,
+  stateDir: "/tmp/openclaw-test-state",
+  configPath: "/tmp/openclaw-test-config.json",
+  plugins: [],
+} satisfies Parameters<typeof runSecurityAuditCore>[0];
 
 function expectNoCollectorDiscovery() {
   for (const mock of [
@@ -95,9 +85,11 @@ describe("security audit read-only plugin scope", () => {
       });
       resolveConfiguredChannelPluginIdsMock.mockReturnValue(["external-channel-plugin"]);
 
-      await runSecurityAuditCore(
-        createAuditOptions(audited ? ([{ id: "external-channel-plugin" }] as never) : []),
-      );
+      await runSecurityAuditCore({
+        ...auditOptions,
+        loadPluginSecurityCollectors: true,
+        plugins: audited ? ([{ id: "external-channel-plugin" }] as never) : [],
+      });
 
       const params = resolveConfiguredChannelPluginIdsMock.mock.calls[0]?.[0];
       expect(params?.config).toBe(sourceConfig);
@@ -109,27 +101,16 @@ describe("security audit read-only plugin scope", () => {
     },
   );
 
-  it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
-    const report = await runSecurityAuditCore({
-      ...createAuditOptions(),
-      loadPluginSecurityCollectors: false,
-    });
+  it.each([false, undefined])(
+    "skips collector discovery when loading is %s",
+    async (loadPluginSecurityCollectors) => {
+      const report = await runSecurityAuditCore({
+        ...auditOptions,
+        loadPluginSecurityCollectors,
+      });
 
-    expect(report.findings.some((finding) => finding.checkId.startsWith("plugins."))).toBe(false);
-    expectNoCollectorDiscovery();
-  });
-
-  it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
-    await runSecurityAuditCore({
-      config: sourceConfig,
-      sourceConfig,
-      env: {},
-      includeFilesystem: false,
-      plugins: [],
-      stateDir: "/tmp/openclaw-test-state",
-      configPath: "/tmp/openclaw-test-config.json",
-    });
-
-    expectNoCollectorDiscovery();
-  });
+      expect(report.findings.some((finding) => finding.checkId.startsWith("plugins."))).toBe(false);
+      expectNoCollectorDiscovery();
+    },
+  );
 });

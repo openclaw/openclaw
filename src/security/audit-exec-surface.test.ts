@@ -121,10 +121,6 @@ describe("security audit exec surface findings", () => {
           extensions: ["./index.js"],
           channel: {
             id: "audit-fixture",
-            label: "Audit fixture",
-            selectionLabel: "Audit fixture",
-            docsPath: "/channels/audit-fixture",
-            blurb: "Synthetic audit metadata",
             doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
           },
         },
@@ -248,7 +244,6 @@ describe("security audit exec surface findings", () => {
       agents: { entries: { main: {} } },
       tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
     });
-
     requireFinding(findings, "tools.elevated.allowFrom.whatsapp.wildcard", {
       severity: "critical",
     });
@@ -323,6 +318,7 @@ describe("security audit exec surface findings", () => {
     const dangerousDetail = (detail: string) =>
       expect.objectContaining({
         checkId,
+        severity: "warn",
         detail: expect.stringContaining(detail),
       });
     const suppression = { checkId, detailIncludes: gmailFlag, reason: "test suppression" };
