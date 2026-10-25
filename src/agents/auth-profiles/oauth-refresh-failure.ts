@@ -13,7 +13,12 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { isRecoverableOAuthRefreshFailure } from "../../shared/oauth-refresh-outcome.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
-import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
+import type {
+  AuthProfileBlockedReason,
+  AuthProfileFailureReason,
+  AuthProfileStore,
+  OAuthCredential,
+} from "./types.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -538,11 +543,14 @@ export function buildOAuthRefreshFailureLoginCommand(
 
 /** Build operator guidance for an active profile cooldown or disable window. */
 export function buildAuthProfileUnusableHint(params: {
-  kind: "cooldown" | "disabled";
-  reason?: AuthProfileFailureReason;
+  kind: "blocked" | "cooldown" | "disabled";
+  reason?: AuthProfileFailureReason | AuthProfileBlockedReason;
   provider: string;
   profileId: string;
 }): string {
+  if (params.kind === "blocked") {
+    return "Restore subscription quota, then re-authenticate to clear the cached block.";
+  }
   if (
     params.reason === "auth" ||
     params.reason === "auth_permanent" ||

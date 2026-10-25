@@ -363,6 +363,54 @@ describe("modelsStatusCommand auth overview", () => {
     },
   );
 
+  it("reports active subscription blocks instead of cooldowns", async () => {
+    const profileId = "openai:subscription";
+    const until = Date.now() + 3 * 24 * 60 * 60_000;
+    const expiredProfileId = "openai:expired-block";
+    mocks.store.profiles = {
+      [profileId]: createOAuthRefreshCredential({
+        access: "credential-secret-133065",
+        refresh: "refresh-secret-133065",
+      }),
+    };
+    mocks.store.usageStats = {
+      [profileId]: {
+        blockedUntil: until,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        blockedScope: "model",
+        blockedModel: "gpt-5.6-luna",
+      },
+      [expiredProfileId]: {
+        blockedUntil: Date.now() - 1,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, id) =>
+      id === profileId ? until : id === expiredProfileId ? Date.now() - 1 : undefined,
+    );
+
+    const { payload } = await jsonStatus();
+    expect(payload.auth.unusableProfiles).toEqual([
+      expect.objectContaining({
+        profileId,
+        kind: "blocked",
+        reason: "subscription_limit",
+        blockedSource: "wham",
+        blockedScope: "model",
+        blockedModel: "gpt-5.6-luna",
+        recoveryHint: "Restore subscription quota, then re-authenticate to clear the cached block.",
+      }),
+    ]);
+
+    const result = await textStatus();
+    expect(result.text).toContain("openai:subscription (openai) blocked:subscription_limit (3d)");
+    expect(result.text).not.toContain("cooldown");
+    expect(result.text).not.toContain("expired-block");
+    expect(JSON.stringify(payload)).not.toMatch(/credential-secret|refresh-secret/u);
+  });
+
   it("keeps status metadata scoped while another operation publishes metadata", async () => {
     const scope = {
       config: mocks.loadConfig(),

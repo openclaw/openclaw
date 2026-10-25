@@ -296,6 +296,34 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(json)).not.toMatch(/secret|legacy-model-must-not-leak/u);
   });
 
+  it("keeps a valid cooldown when the subscription block deadline is invalid", () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const cooldownUntil = NOW + 5 * 60_000;
+    const store = {
+      ...createAuthProfileStoreFixture({
+        "openai:invalid-block": createOAuthRefreshCredential({ provider: "openai" }),
+      }),
+      usageStats: {
+        "openai:invalid-block": {
+          blockedUntil: 8_700_000_000_000_000,
+          blockedReason: "subscription_limit" as const,
+          blockedSource: "wham" as const,
+          cooldownUntil,
+          cooldownReason: "rate_limit" as const,
+        },
+      },
+    } satisfies AuthProfileStore;
+
+    expect(listUnavailableAuthProfiles(store)).toEqual([
+      expect.objectContaining({
+        profileId: "openai:invalid-block",
+        kind: "cooldown",
+        reason: "rate_limit",
+        until: cooldownUntil,
+      }),
+    ]);
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     setOAuthProfile("google-gemini-cli:legacy", "google-gemini-cli", {
       cooldownUntil: 1_900_000_100_000,

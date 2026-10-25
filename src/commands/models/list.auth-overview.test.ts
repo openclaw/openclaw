@@ -15,6 +15,9 @@ import {
 } from "./list.auth-overview.js";
 
 const persistedStores = vi.hoisted(() => new Map<string, { profiles: Record<string, unknown> }>());
+const usageMocks = vi.hoisted(() => ({
+  resolveProfileUnusableUntilForDisplay: vi.fn<() => number | undefined>(() => undefined),
+}));
 
 // mock-isolation: read only synthetic credential stores, never operator credentials.
 vi.mock("../../agents/auth-profiles/persisted.js", () => ({
@@ -35,7 +38,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 
 // mock-isolation: host cooldown state must not change synthetic auth overview results.
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
-  resolveProfileUnusableUntilForDisplay: () => undefined,
+  resolveProfileUnusableUntilForDisplay: usageMocks.resolveProfileUnusableUntilForDisplay,
 }));
 
 type OverviewParams = Parameters<typeof resolveProviderAuthOverview>[0];
@@ -58,7 +61,10 @@ function providerConfig(provider: string, entry: Omit<ModelProviderConfig, "mode
   return { models: { providers: { [provider]: { ...entry, models: [] } } } };
 }
 
-beforeEach(() => persistedStores.clear());
+beforeEach(() => {
+  persistedStores.clear();
+  usageMocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+});
 
 it("labels token profiles that only have tokenRef", () => {
   const result = resolveOverview("github-copilot", {
@@ -137,6 +143,30 @@ it("reports the main auth store for inherited profiles", () => {
     detail: "/tmp/auth-profiles.json",
   });
   expect(result.profiles.labels).toEqual([`${profileId}=OAuth (Work account)`]);
+});
+
+it("labels active subscription blocks in profile summaries", () => {
+  const profileId = "openai:blocked";
+  const until = Date.now() + 5 * 60_000;
+  usageMocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(until);
+  const result = resolveProviderAuthOverview({
+    provider: "openai",
+    cfg: {},
+    store: {
+      version: 1,
+      profiles: { [profileId]: createOAuthRefreshCredential() },
+      usageStats: {
+        [profileId]: {
+          blockedUntil: until,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+        },
+      },
+    },
+    modelsPath: "/tmp/models.json",
+  });
+
+  expect(result.profiles.labels).toEqual([`${profileId}=OAuth [blocked:subscription_limit 5m]`]);
 });
 
 const marker = "marker(oauth:openai)";
