@@ -42,6 +42,16 @@ jobs:
         with:
           version: 12.12.1
           run_install: false
+      - name: Provision Bash 5 required by workflow contract fixtures
+        run: |
+          set -euo pipefail
+          if ! brew list --versions bash > /dev/null 2>&1; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install bash
+          fi
+          workflow_bash="$(brew --prefix bash)/bin/bash"
+          "$workflow_bash" --noprofile --norc -c 'test "${BASH_VERSINFO[0]}" -ge 5'
+          dirname "$workflow_bash" >> "$GITHUB_PATH"
+          "$workflow_bash" --version | tee "$RUNNER_TEMP/native-workflow-bash.txt"
       - name: Check qualification inputs and workflow contracts
         env:
           CI: "true"
@@ -93,6 +103,7 @@ jobs:
           path: |
             ${{ runner.temp }}/native-service-trust-proof/evidence
             ${{ runner.temp }}/native-launchd-preflight.txt
+            ${{ runner.temp }}/native-workflow-bash.txt
             ${{ runner.temp }}/native-trust-source.txt
           if-no-files-found: error
           retention-days: 14
