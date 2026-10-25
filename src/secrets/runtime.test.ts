@@ -23,18 +23,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type SnapshotParams = Parameters<typeof prepareSnapshot>[0];
 type Snapshot = Awaited<ReturnType<typeof prepareSnapshot>>;
 
-function prepareSecretsRuntimeSnapshot(params: SnapshotParams) {
-  return prepareSnapshot({ includeAuthStoreRefs: false, ...params });
-}
-
 function prepare(
   config: SnapshotParams["config"],
   env: SnapshotParams["env"] = {},
   options: Partial<SnapshotParams> = {},
 ) {
-  return prepareSecretsRuntimeSnapshot({
+  return prepareSnapshot({
     config,
     env,
+    includeAuthStoreRefs: false,
     loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     ...options,
   });
@@ -118,13 +115,12 @@ afterEach(() => {
 
 const TTS_REF = envRef("ELEVENLABS_API_KEY");
 
-function expectWarning(snapshot: Snapshot, expected: { code: string; path: string }): void {
-  const warning = snapshot.warnings.find(
-    (entry) => entry.code === expected.code && entry.path === expected.path,
+function expectSandboxWarning(snapshot: Snapshot, code: string): void {
+  expect(snapshot.warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ code, path: "agents.defaults.sandbox.ssh.identityData" }),
+    ]),
   );
-  if (!warning) {
-    throw new Error(`Expected warning ${expected.code} ${expected.path}`);
-  }
 }
 
 describe("secrets runtime snapshot", () => {
@@ -146,11 +142,7 @@ describe("secrets runtime snapshot", () => {
       },
     });
     const env = {};
-    const initial = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+    const initial = await prepare(config, env);
     activateSecretsRuntimeSnapshot(initial);
     await fs.writeFile(secretFile, JSON.stringify({ apiKey: "refreshed-value" }));
     const displayConfig = {
@@ -158,10 +150,7 @@ describe("secrets runtime snapshot", () => {
       meta: { lastTouchedVersion: "2026.10.11" },
       ui: { prefs: { chatShowToolCalls: true } },
     };
-    const displayed = await prepareSecretsRuntimeSnapshot({
-      config: displayConfig,
-      env,
-    });
+    const displayed = await prepare(displayConfig, env, { loadablePluginOrigins: undefined });
     expect(displayed.config.models?.providers?.example?.apiKey).toBe("prepared-value");
     expect(displayed.config.ui?.prefs?.chatShowToolCalls).toBe(true);
     expect(displayed.sourceConfig).toEqual(displayConfig);
@@ -182,8 +171,10 @@ describe("secrets runtime snapshot", () => {
         forceColdRefKeys: new Set(["file:fixture:/apiKey"]),
       },
     ]) {
-      const refreshed = await prepareSecretsRuntimeSnapshot({
-        ...params,
+      const { config: refreshConfig, env: refreshEnv, ...options } = params;
+      const refreshed = await prepare(refreshConfig, refreshEnv, {
+        loadablePluginOrigins: undefined,
+        ...options,
       });
       expect(refreshed.config.models?.providers?.example?.apiKey).toBe("refreshed-value");
     }
@@ -202,9 +193,7 @@ describe("secrets runtime snapshot", () => {
     const candidate = await prepare(
       siblingConfig(id),
       { SECOND_KEY: "second-new" },
-      {
-        allowUnavailableSecretOwners: true,
-      },
+      { allowUnavailableSecretOwners: true },
     );
     expect(candidate.config.models?.providers?.first?.apiKey).toEqual(apiKey);
     expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
@@ -225,11 +214,7 @@ describe("secrets runtime snapshot", () => {
     const config = (baseUrl: string) =>
       asConfig({
         ...explicitMainRoster(),
-        models: {
-          providers: {
-            first: { apiKey: apiKeyRef, baseUrl, models: [] },
-          },
-        },
+        models: { providers: { first: provider(apiKeyRef, baseUrl) } },
       });
     const active = await prepare(config("https://old.example.invalid/v1"), {
       PROVIDER_KEY: "last-known-good",
@@ -239,9 +224,7 @@ describe("secrets runtime snapshot", () => {
     const candidate = await prepare(
       config("https://new.example.invalid/v1"),
       {},
-      {
-        allowUnavailableSecretOwners: true,
-      },
+      { allowUnavailableSecretOwners: true },
     );
 
     expect(candidate.config.models?.providers?.first).toMatchObject({
@@ -255,39 +238,33 @@ describe("secrets runtime snapshot", () => {
 
   it("isolates one plugin route while resolving its sibling snapshot", async () => {
     const missingRef = envRef("MISSING_WEBHOOK_SECRET");
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: pluginConfig("route-fixture", {
+    const makeRoute = (secret: unknown) => ({ sessionKey: "agent:main:main", secret });
+    const snapshot = await prepare(
+      pluginConfig("route-fixture", {
         routes: {
-          healthy: {
-            sessionKey: "agent:main:main",
-            secret: envRef("HEALTHY_WEBHOOK_SECRET"),
-          },
-          cold: {
-            sessionKey: "agent:main:main",
-            secret: missingRef,
-          },
-          inlineCold: {
-            sessionKey: "agent:main:main",
-            secret: "${MISSING_INLINE_WEBHOOK_SECRET}",
-          },
+          healthy: makeRoute(envRef("HEALTHY_WEBHOOK_SECRET")),
+          cold: makeRoute(missingRef),
+          inlineCold: makeRoute("${MISSING_INLINE_WEBHOOK_SECRET}"),
         },
       }),
-      env: { HEALTHY_WEBHOOK_SECRET: "healthy-secret" },
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: new Map([["route-fixture", "bundled"]]),
-      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "route-fixture",
-            configContracts: {
-              secretInputs: {
-                paths: [{ path: "routes.*.secret", expected: "string", ownerKind: "route" }],
+      { HEALTHY_WEBHOOK_SECRET: "healthy-secret" },
+      {
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: new Map([["route-fixture", "bundled"]]),
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "route-fixture",
+              configContracts: {
+                secretInputs: {
+                  paths: [{ path: "routes.*.secret", expected: "string", ownerKind: "route" }],
+                },
               },
             },
-          },
-        ],
-      }),
-    });
+          ],
+        }),
+      },
+    );
 
     const routes = snapshot.config.plugins?.entries?.["route-fixture"]?.config?.routes as Record<
       string,
@@ -318,27 +295,22 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: sandboxConfig(
+    const snapshot = await prepare(
+      sandboxConfig(
         envRef("DEFAULT_SSH_IDENTITY"),
         {
           worker: {
             enabled: false,
-            sandbox: {
-              ssh: {
-                identityData: envRef("WORKER_SSH_IDENTITY"),
-              },
-            },
+            sandbox: { ssh: { identityData: envRef("WORKER_SSH_IDENTITY") } },
           },
         },
         { mode: "off", backend: "ssh", target: "peter@example.com:22" },
       ),
-      env: {
+      {
         DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
         WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
       },
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+    );
 
     expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toBe(
       "DEFAULT PRIVATE KEY",
@@ -350,21 +322,16 @@ describe("secrets runtime snapshot", () => {
 
   it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
     const missingRef = envRef("MISSING_COLD_SSH_IDENTITY");
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: sandboxConfig(missingRef, {
+    const snapshot = await prepare(
+      sandboxConfig(missingRef, {
         cold: {},
         healthy: {
-          sandbox: {
-            ssh: {
-              identityData: envRef("HEALTHY_SSH_IDENTITY"),
-            },
-          },
+          sandbox: { ssh: { identityData: envRef("HEALTHY_SSH_IDENTITY") } },
         },
       }),
-      env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+      { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
+      { allowUnavailableSecretOwners: true },
+    );
 
     expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(missingRef);
     expect(snapshot.config.agents?.entries?.healthy?.sandbox?.ssh?.identityData).toBe(
@@ -378,34 +345,20 @@ describe("secrets runtime snapshot", () => {
         paths: ["agents.defaults.sandbox.ssh.identityData"],
       },
     ]);
-    expectWarning(snapshot, {
-      code: "SECRETS_OWNER_UNAVAILABLE",
-      path: "agents.defaults.sandbox.ssh.identityData",
-    });
+    expectSandboxWarning(snapshot, "SECRETS_OWNER_UNAVAILABLE");
   });
 
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: sandboxConfig(
-        envRef("SSH_IDENTITY_DATA"),
-        { main: {} },
-        {
-          mode: "all",
-          backend: "docker",
-        },
-      ),
-      env: {},
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+    const snapshot = await prepare(
+      sandboxConfig(envRef("SSH_IDENTITY_DATA"), { main: {} }, { mode: "all", backend: "docker" }),
+      {},
+      { allowUnavailableSecretOwners: true },
+    );
 
     expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(
       envRef("SSH_IDENTITY_DATA"),
     );
-    expectWarning(snapshot, {
-      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-      path: "agents.defaults.sandbox.ssh.identityData",
-    });
+    expectSandboxWarning(snapshot, "SECRETS_REF_IGNORED_INACTIVE_SURFACE");
   });
 
   it("resolves active bundled Codex app-server plugin SecretRefs", async () => {
@@ -415,9 +368,7 @@ describe("secrets runtime snapshot", () => {
         CODEX_APP_SERVER_TOKEN: "resolved-app-server-token",
         CODEX_CLIENT_SESSION_TOKEN: "resolved-session-token",
       },
-      {
-        loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
-      },
+      { loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS },
     );
 
     expect(snapshot.config.plugins?.entries?.codex?.config).toMatchObject({
@@ -436,32 +387,20 @@ describe("secrets runtime snapshot", () => {
       prepare(
         codexConfig(),
         { CODEX_CLIENT_SESSION_TOKEN: "resolved-session-token" },
-        {
-          loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
-        },
+        { loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS },
       ),
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
   });
 
   it("rejects owner isolation after provider policy failures", async () => {
     await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: ttsConfig(TTS_REF, {
-          secrets: {
-            providers: {
-              default: {
-                source: "env",
-                allowlist: ["OTHER_API_KEY"],
-              },
-            },
-          },
+      prepare(
+        ttsConfig(TTS_REF, {
+          secrets: { providers: { default: { source: "env", allowlist: ["OTHER_API_KEY"] } } },
         }),
-        env: {
-          ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
-        },
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
+        { ELEVENLABS_API_KEY: "test-elevenlabs-api-key" },
+        { allowUnavailableSecretOwners: true },
+      ),
     ).rejects.toThrow("not allowlisted");
   });
 
@@ -470,17 +409,15 @@ describe("secrets runtime snapshot", () => {
       prepare(
         ttsConfig({ ...TTS_REF, provider: "missing" }),
         {},
-        {
-          allowUnavailableSecretOwners: true,
-        },
+        { allowUnavailableSecretOwners: true },
       ),
     ).rejects.toThrow('Secret provider "missing" is not configured');
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {
     await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
+      prepare(
+        asConfig({
           ...explicitMainRoster(),
           talk: {
             provider: "example",
@@ -488,20 +425,14 @@ describe("secrets runtime snapshot", () => {
               example: { apiKey: { source: "exec", provider: "vault", id: "a/../b" } },
             },
           },
-          secrets: {
-            providers: {
-              vault: {
-                source: "exec",
-                command: process.execPath,
-              },
-            },
-          },
+          secrets: { providers: { vault: { source: "exec", command: process.execPath } } },
         }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
+        {},
+        {
+          agentDirs: ["/tmp/openclaw-agent-main"],
+          loadAuthStore: () => ({ version: 1, profiles: {} }),
+        },
+      ),
     ).rejects.toThrow(/must not include "\." or "\.\." path segments/i);
   });
 });

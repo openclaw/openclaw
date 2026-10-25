@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
@@ -45,19 +44,13 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
   },
 }));
 
-function createCoverageWebProvider({
-  pluginId,
-  id,
-  envVar,
-  order,
-  kind,
-}: {
-  pluginId: string;
-  id: string;
-  envVar: string;
-  order: number;
-  kind: "webSearch" | "webFetch";
-}): PluginWebSearchProviderEntry & PluginWebFetchProviderEntry {
+function createCoverageWebProvider(
+  pluginId: string,
+  envVar: string,
+  order: number,
+  kind: "webSearch" | "webFetch" = "webSearch",
+): PluginWebSearchProviderEntry & PluginWebFetchProviderEntry {
+  const id = pluginId;
   const credentialPath = `plugins.entries.${pluginId}.config.${kind}.apiKey`;
   const segments = credentialPath.split(".");
   return {
@@ -90,20 +83,15 @@ const COVERAGE_WEB_SEARCH_PROVIDERS = new Map<string, PluginWebSearchProviderEnt
     ] as const
   ).map(([pluginId, envVar, order]) => [
     pluginId,
-    createCoverageWebProvider({ pluginId, id: pluginId, envVar, order, kind: "webSearch" }),
+    createCoverageWebProvider(pluginId, envVar, order),
   ]),
 );
 
 const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
-  [
-    createCoverageWebProvider({
-      pluginId: "firecrawl",
-      id: "firecrawl",
-      envVar: "FIRECRAWL_API_KEY",
-      order: 10,
-      kind: "webFetch",
-    }),
-  ].map((provider) => [provider.pluginId, provider]),
+  [createCoverageWebProvider("firecrawl", "FIRECRAWL_API_KEY", 10, "webFetch")].map((provider) => [
+    provider.pluginId,
+    provider,
+  ]),
 );
 
 // mock-isolation: secret traversal uses the fixed provider inventory below, not installed plugins.
@@ -232,18 +220,6 @@ function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string)
   return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey"
     ? "FIRECRAWL_API_KEY"
     : fallbackEnvId;
-}
-
-function toCoverageEnvRefId(prefix: string, id: string): string {
-  const normalized = id
-    .toUpperCase()
-    .replace(/[^A-Z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const name = normalized || "TARGET";
-  const hash = createHash("sha256").update(id).digest("hex").slice(0, 12).toUpperCase();
-  const maxNameLength = 128 - prefix.length - hash.length - 2;
-  return `${prefix}_${name.slice(0, Math.max(1, maxNameLength))}_${hash}`;
 }
 
 function addCoveragePluginLoadPath(config: OpenClawConfig, pluginId: string): void {
@@ -413,7 +389,7 @@ async function expectOpenClawCoverageBatchResolved(
   const config: OpenClawConfig = {};
   const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
   for (const [index, entry] of batch.entries()) {
-    const envId = toCoverageEnvRefId("OPENCLAW_SECRET_TARGET", entry.id);
+    const envId = `OPENCLAW_SECRET_TARGET_${index}`;
     env[resolveCoverageEnvId(entry, envId)] = `resolved-${entry.id}`;
     applyConfigForOpenClawTarget(config, entry, envId, `sample-${index}`);
   }
@@ -447,57 +423,35 @@ async function expectOpenClawCoverageBatchResolved(
   }
 }
 
-function toCoverageBatchCase(batch: SecretRegistryEntry[]) {
-  const firstEntry = batch[0];
-  return {
-    name:
-      batch.length === 1 && firstEntry
-        ? firstEntry.id
-        : firstEntry
-          ? `${resolveCoverageBatchKey(firstEntry)} (${batch.length})`
-          : "empty",
-    batch,
-  };
-}
-
 describe("secrets runtime representative target coverage", () => {
   beforeAll(async () => {
-    const [
-      sharedRuntime,
-      configCollectors,
-      runtimeWebTools,
-      channelContracts,
-      officialExternalChannelContract,
-    ] = await Promise.all([
-      import("./runtime-shared.js"),
-      import("./runtime-config-collectors.js"),
-      import("./runtime-web-tools.js"),
-      Promise.all(
-        COVERAGE_BUNDLED_CHANNEL_IDS.map(
-          async (channelId) =>
-            [
-              channelId,
-              await loadBundledPluginFacade<object>({
-                pluginId: channelId,
-                artifactBasename: "secret-contract-api.js",
-              }),
-            ] as const,
-        ),
-      ),
-      import("./official-external-channel-secret-contract.js"),
+    await Promise.all([
+      import("./runtime-shared.js").then((runtime) => {
+        ({ applyResolvedAssignments, createResolverContext } = runtime);
+      }),
+      import("./runtime-config-collectors.js").then((runtime) => {
+        ({ collectConfigAssignments } = runtime);
+      }),
+      import("./runtime-web-tools.js").then((runtime) => {
+        ({ resolveRuntimeWebTools } = runtime);
+      }),
+      ...COVERAGE_BUNDLED_CHANNEL_IDS.map(async (channelId) => {
+        COVERAGE_CHANNEL_CONTRACTS.set(
+          channelId,
+          await loadBundledPluginFacade<object>({
+            pluginId: channelId,
+            artifactBasename: "secret-contract-api.js",
+          }),
+        );
+      }),
+      import("./official-external-channel-secret-contract.js").then((runtime) => {
+        const contract = runtime.loadOfficialExternalChannelSecretContractApi("qqbot");
+        if (!contract) {
+          throw new Error("missing coverage contract for official QQBot channel");
+        }
+        COVERAGE_CHANNEL_CONTRACTS.set("qqbot", contract);
+      }),
     ]);
-    for (const [channelId, contract] of channelContracts) {
-      COVERAGE_CHANNEL_CONTRACTS.set(channelId, contract);
-    }
-    const qqbotContract =
-      officialExternalChannelContract.loadOfficialExternalChannelSecretContractApi("qqbot");
-    if (!qqbotContract) {
-      throw new Error("missing coverage contract for official QQBot channel");
-    }
-    COVERAGE_CHANNEL_CONTRACTS.set("qqbot", qqbotContract);
-    ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
-    ({ collectConfigAssignments } = configCollectors);
-    ({ resolveRuntimeWebTools } = runtimeWebTools);
   });
 
   describe.each([
@@ -505,7 +459,7 @@ describe("secrets runtime representative target coverage", () => {
     ["plugin", true],
   ] as const)("openclaw.json %s registry targets", (_name, includePluginEntries) => {
     const cases = buildCoverageBatches(collectOpenClawCoverageEntries(includePluginEntries));
-    test.each(cases.map(toCoverageBatchCase))(
+    test.each(cases.map((batch) => ({ name: batch.map(({ id }) => id).join(", "), batch })))(
       "handles $name",
       ({ batch }) => expectOpenClawCoverageBatchResolved(batch),
       RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
