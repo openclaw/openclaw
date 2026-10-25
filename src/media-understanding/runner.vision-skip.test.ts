@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasAvailableAuthForProvider as checkAvailableAuth } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -11,6 +13,7 @@ import { readImageMetadataFromHeader } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 import { mediaModels } from "./media-config.test-support.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { runProviderEntry } from "./runner.entries.js";
@@ -63,17 +66,14 @@ function findImageDecision(ctx: MsgContext) {
 }
 
 type ImageFixture = Parameters<Parameters<typeof withMediaFixture>[1]>[0];
-async function withImageFixture<T>(
-  run: (fixture: ImageFixture) => Promise<T>,
-  source = Buffer.from("image"),
-): Promise<T> {
+async function withImageFixture<T>(run: (fixture: ImageFixture) => Promise<T>): Promise<T> {
   let result: { value: T } | undefined;
   await withMediaFixture(
     {
       filePrefix: "openclaw-image",
       extension: "png",
       mediaType: "image/png",
-      fileContents: source,
+      fileContents: Buffer.from("image"),
     },
     async (fixture) => {
       result = { value: await run(fixture) };
@@ -190,12 +190,9 @@ function expectImageOutput(
 }
 
 const activeVisionModel = { provider: "openai", model: "gpt-4.1" };
-const explicitImageModel = {
-  provider: "openrouter",
-  model: "google/gemini-2.5-flash",
-  capabilities: ["image" as const],
-};
-const explicitImageConfig = imageConfig([explicitImageModel]);
+const explicitImageConfig = imageConfig([
+  { provider: "openrouter", model: "google/gemini-2.5-flash", capabilities: ["image"] },
+]);
 
 beforeEach(() => {
   imagePolicy.mockReset().mockResolvedValue({});
@@ -285,6 +282,32 @@ describe("automatic media selection", () => {
       );
     },
   );
+
+  it("checks audio providers once in priority order until auth is available", async () => {
+    selectionAuth.mockImplementation(async ({ provider }) => provider === "second");
+    const providers = ["first", "second"].map((id, priority): MediaUnderstandingProvider => ({
+      id,
+      capabilities: ["audio"],
+      autoPriority: { audio: priority },
+      defaultModels: { audio: `${id}-transcription` },
+      transcribeAudio: async ({ model }) => ({ text: id, model }),
+    }));
+    const result = await runMediaFixture("audio", "media-selection-provider-order", {
+      cfg: {},
+      providerRegistry: new Map(providers.map((provider) => [provider.id, provider])),
+    });
+    expect(selectionAuth.mock.calls.map(([{ provider }]) => provider)).toEqual(["first", "second"]);
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        provider: "second",
+        model: "second-transcription",
+        text: "second",
+      },
+    ]);
+    expect(result.decision.outcome).toBe("success");
+  });
 });
 
 it("skips imageModel fallback when MiniMax M3 supports vision", async () => {
@@ -342,41 +365,21 @@ it("records native handoff and remote failures for selected and dropped images",
   });
 });
 
-it.each([false, true])(
-  "runs explicit image models despite native probe failure: %s",
-  async (fails) => {
-    const describeImage = describeSentinel();
-    const check = async () => {
-      const ctx = await applyImage(
-        {
-          cfg: explicitImageConfig,
-          providers: { openrouter: imageProvider("openrouter", describeImage) },
-          activeModel: activeVisionModel,
-        },
-        4,
-      );
-      const decision = findImageDecision(ctx);
-      expect(decision).toMatchObject({
-        outcome: "success",
-        attachmentDispositions: {
-          0: { kind: "handled" },
-          1: { kind: "not-selected" },
-          2: { kind: "not-selected" },
-          3: { kind: "not-selected" },
-        },
-      });
-      if (fails) {
-        expect(decision).not.toHaveProperty("nativeVisionActive");
-      } else {
-        expect(decision?.nativeVisionActive).toBe(true);
-      }
-      expect(describeImage).toHaveBeenCalledOnce();
-      expect(ctx.Body).toContain(plantedVisionSentinel);
-      expect(ctx.Body).not.toContain("attachment limit reached");
-    };
-    await (fails ? unavailableCatalog(check) : check());
-  },
-);
+it("runs explicit image models untouched by native-vision probe failure", async () => {
+  await unavailableCatalog(async () => {
+    const ctx = await applyImage({
+      cfg: explicitImageConfig,
+      providers: { openrouter: imageProvider("openrouter") },
+      activeModel: activeVisionModel,
+    });
+    expect(ctx.Body).toContain(plantedVisionSentinel);
+    expect(findImageDecision(ctx)).toMatchObject({
+      outcome: "success",
+      attachmentDispositions: { 0: { kind: "handled" } },
+    });
+    expect(findImageDecision(ctx)).not.toHaveProperty("nativeVisionActive");
+  });
+});
 
 it("keeps disabled outcomes precise and suppresses markers when the vision probe fails", async () => {
   const ctx: MsgContext = {
@@ -398,12 +401,44 @@ it("keeps disabled outcomes precise and suppresses markers when the vision probe
   });
 });
 
+it("uses explicit image models even when the active model supports vision", async () => {
+  const describeImage = describeSentinel();
+  const ctx = await applyImage(
+    {
+      cfg: explicitImageConfig,
+      providers: { openrouter: imageProvider("openrouter", describeImage) },
+      activeModel: activeVisionModel,
+    },
+    4,
+  );
+  expect(findImageDecision(ctx)).toMatchObject({
+    outcome: "success",
+    nativeVisionActive: true,
+    attachmentDispositions: {
+      1: { kind: "not-selected" },
+      2: { kind: "not-selected" },
+      3: { kind: "not-selected" },
+    },
+  });
+  expect(describeImage).toHaveBeenCalledOnce();
+  expect(ctx.Body).toContain(plantedVisionSentinel);
+  expect(ctx.Body).not.toContain("attachment limit reached");
+});
+
 it("lets per-request image prompts override entry prompts", async () => {
+  let seenPrompt: string | undefined;
   const result = await runImage({
-    cfg: imageConfig([{ ...explicitImageModel, prompt: "entry prompt" }]),
+    cfg: imageConfig([
+      {
+        provider: "openrouter",
+        model: "google/gemini-2.5-flash",
+        prompt: "entry prompt",
+        capabilities: ["image"],
+      },
+    ]),
     providerRegistry: imageRegistry(
       imageProvider("openrouter", async ({ prompt, model }) => {
-        expect(prompt).toBe("Use this request prompt");
+        seenPrompt = prompt;
         return { text: "request prompt ok", model };
       }),
     ),
@@ -411,6 +446,7 @@ it("lets per-request image prompts override entry prompts", async () => {
     activeModel: activeVisionModel,
   });
   expect(result.decision.outcome).toBe("success");
+  expect(seenPrompt).toBe("Use this request prompt");
 });
 
 it("skips malformed image defaults and runs providerless fallbacks on their configured provider", async () => {
@@ -440,9 +476,19 @@ it("skips malformed image defaults and runs providerless fallbacks on their conf
     ),
   });
   expectImageOutput(result, "ollama", "qwen2.5vl:7b", "ok qwen2.5vl:7b");
-  expect(result.decision.attachments[0]?.attempts).toMatchObject([
-    { type: "provider", provider: "ollama", model: "moondream", outcome: "failed" },
-    { type: "provider", provider: "ollama", model: "qwen2.5vl:7b", outcome: "success" },
+  expect(result.decision.attachments[0]?.attempts).toEqual([
+    expect.objectContaining({
+      type: "provider",
+      provider: "ollama",
+      model: "moondream",
+      outcome: "failed",
+    }),
+    expect.objectContaining({
+      type: "provider",
+      provider: "ollama",
+      model: "qwen2.5vl:7b",
+      outcome: "success",
+    }),
   ]);
 });
 
@@ -473,13 +519,15 @@ it("routes legacy MiniMax chat models through VLM despite catalog image input", 
 });
 
 it("passes workspace and agent context to auth and writable catalog reads", async () => {
-  selectionAuth.mockClear();
+  const { hasAvailableAuthForProvider: checkAuth } = await import("../agents/model-auth.js");
+  const hasAvailableAuthForProvider = vi.mocked(checkAuth);
+  hasAvailableAuthForProvider.mockClear();
   const scope = {
     agentId: "vision-agent",
     agentDir: "/tmp/openclaw-agent",
     workspaceDir: "/tmp/openclaw-workspace",
   };
-  await selectionAuth.withImplementation(
+  await hasAvailableAuthForProvider.withImplementation(
     async (params) => params.workspaceDir === "/tmp/openclaw-workspace",
     async () => {
       const result = await runImage({
@@ -489,7 +537,7 @@ it("passes workspace and agent context to auth and writable catalog reads", asyn
         activeModel: { provider: "workspace-vision", model: "vision-v1" },
       });
       expectImageOutput(result, "workspace-vision", "vision-v1");
-      expect(selectionAuth).toHaveBeenCalledWith(
+      expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "workspace-vision",
           agentDir: "/tmp/openclaw-agent",
@@ -503,11 +551,18 @@ it("passes workspace and agent context to auth and writable catalog reads", asyn
 });
 
 it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
+  let seenModel: string | undefined;
   const result = await runImage({
     cfg: configuredProvider("openrouter", "https://openrouter.ai/api/v1", "test-openrouter-key"),
-    providerRegistry: imageRegistry(imageProvider("openrouter")),
+    providerRegistry: imageRegistry(
+      imageProvider("openrouter", async ({ model }) => {
+        seenModel = model;
+        return { text: "openrouter ok", model };
+      }),
+    ),
   });
-  expectImageOutput(result, "openrouter", "auto");
+  expectImageOutput(result, "openrouter", "auto", "openrouter ok");
+  expect(seenModel).toBe("auto");
 });
 
 it("skips configured image providers without an auto-resolvable model", async () => {
@@ -521,66 +576,108 @@ it("skips configured image providers without an auto-resolvable model", async ()
 });
 
 describe("image resizing", () => {
-  it.each([
-    {
-      quality: "high" as const,
-      policy: { maxSidePx: 1600, preferredSidePx: 1400 },
-      size: 1400,
-      maxBytes: undefined,
-    },
-    { quality: undefined, policy: {}, size: 2400, maxBytes: undefined },
-    { quality: undefined, policy: { maxBytes: 8 }, size: 0, maxBytes: undefined },
-    { quality: undefined, policy: {}, size: 0, maxBytes: 8 },
-  ])(
-    "applies model policy independently of image-tool quality: %j",
-    async ({ quality, policy, size, maxBytes }) => {
-      const source = createSolidPngBuffer(2400, 1800, { r: 24, g: 96, b: 208 });
-      imagePolicy.mockResolvedValue(policy);
-      await withImageFixture(async ({ cache }) => {
-        const describeImage = vi.fn(async (_request: ImageDescriptionRequest) => ({
-          text: "described",
-        }));
-        const result = runProviderEntry({
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  type ImageFixtureOptions = Partial<Pick<ImageDescriptionRequest, "fileName" | "mime" | "cfg">> & {
+    maxBytes?: number;
+    policy?: ImageCompressionModelPolicy;
+  };
+  async function setupProvider(source: Buffer, options: ImageFixtureOptions = {}) {
+    imagePolicy
+      .mockReset()
+      .mockResolvedValue(options.policy ?? { maxSidePx: 1600, preferredSidePx: 1400 });
+    const root = tempDirs.make("openclaw-image-resize-");
+    const attachmentPath = path.join(root, options.fileName ?? "phone.png");
+    await fs.writeFile(attachmentPath, source);
+    const cache = new MediaAttachmentCache(
+      [{ index: 0, path: attachmentPath, mime: options.mime ?? "image/png" }],
+      { localPathRoots: [root], includeDefaultLocalPathRoots: false },
+    );
+    const description = { text: "described", model: "vision-v1" };
+    const describeImage = vi.fn(async (_request: ImageDescriptionRequest) => description);
+    const run = async () => {
+      try {
+        return await runProviderEntry({
           capability: "image",
-          entry: { provider: "vision-plugin", model: "vision-v1", maxBytes },
-          cfg: quality ? { agents: { defaults: { imageQuality: quality } } } : {},
+          entry: { provider: "vision-plugin", model: "vision-v1", maxBytes: options.maxBytes },
+          cfg: options.cfg ?? {},
           attachmentIndex: 0,
           cache,
-          agentDir: "/tmp",
-          providerRegistry: imageRegistry(imageProvider("vision-plugin", describeImage)),
+          agentDir: root,
+          providerRegistry: new Map<string, MediaUnderstandingProvider>([
+            ["vision-plugin", { id: "vision-plugin", capabilities: ["image"], describeImage }],
+          ]),
         });
-        if (!size) {
-          await expect(result).rejects.toMatchObject({
-            name: "MediaUnderstandingSkipError",
-            reason: "maxBytes",
-          });
-          expect(describeImage).not.toHaveBeenCalled();
-          expect(imagePolicy).toHaveBeenCalledTimes(maxBytes ? 0 : 1);
-          return;
-        }
-        await expect(result).resolves.toMatchObject({ ok: true, value: { text: "described" } });
-        const request = expectDefined(describeImage.mock.calls[0], "image request")[0];
-        expect(readImageMetadataFromHeader(request.buffer)).toEqual({
-          width: size,
-          height: (size * 3) / 4,
+      } finally {
+        await cache.cleanup();
+      }
+    };
+    return {
+      async describe() {
+        await expect(run()).resolves.toMatchObject({
+          ok: true,
+          value: { ...description, provider: "vision-plugin" },
         });
-        expect(request).toMatchObject({
-          provider: "vision-plugin",
-          model: "vision-v1",
-          fileName: expect.stringMatching(/^openclaw-image-.*\.(png|jpg)$/),
+        expect(describeImage).toHaveBeenCalledOnce();
+        return describeImage.mock.calls[0]![0];
+      },
+      async reject(maxBytes: number) {
+        await expect(run()).rejects.toMatchObject({
+          name: "MediaUnderstandingSkipError",
+          reason: "maxBytes",
+          message: `Attachment 1 exceeds maxBytes ${maxBytes}`,
         });
-        if (!quality) {
-          expect(request.buffer).toEqual(source);
-          expect(request.mime).toBe("image/png");
-          expect(request.fileName).toMatch(/\.png$/);
-        }
-      }, source);
+        expect(describeImage).not.toHaveBeenCalled();
+      },
+    };
+  }
+
+  const png = (width: number, height: number) =>
+    createSolidPngBuffer(width, height, { r: 24, g: 96, b: 208 });
+
+  it.each(["high", "efficient", undefined] as const)(
+    "respects model limits rather than the image-tool preference %s",
+    async (quality) => {
+      const source = quality ? png(1600, 1200) : png(2400, 1800);
+      const provider = await setupProvider(source, {
+        cfg: quality ? { agents: { defaults: { imageQuality: quality } } } : {},
+        policy: quality ? undefined : {},
+      });
+      const request = await provider.describe();
+      expect(readImageMetadataFromHeader(request.buffer)).toEqual(
+        quality ? { width: 1400, height: 1050 } : { width: 2400, height: 1800 },
+      );
+      expect(request).toMatchObject({
+        provider: "vision-plugin",
+        model: "vision-v1",
+        fileName: expect.stringMatching(/^phone\.(png|jpg)$/),
+      });
+      if (!quality) {
+        expect(request.buffer.equals(source)).toBe(true);
+        expect(request).toMatchObject({ mime: "image/png", fileName: "phone.png" });
+      }
+    },
+  );
+
+  it.each(["source", "PNG", "provider-owned"])(
+    "enforces the %s byte cap before provider I/O",
+    async (format) => {
+      const custom = format === "provider-owned";
+      const source = custom ? Buffer.from("custom-image") : png(1, 1);
+      const maxBytes = format === "source" ? source.length - 1 : 8;
+      const provider = await setupProvider(source, {
+        ...(custom ? { fileName: "phone.custom", mime: "image/x-custom" } : {}),
+        maxBytes: format === "source" ? maxBytes : undefined,
+        policy: { maxBytes: 8 },
+      });
+      await provider.reject(maxBytes);
+      expect(imagePolicy).toHaveBeenCalledTimes(format === "source" ? 0 : 1);
     },
   );
 });
 
 describe("apply registry lifetime", () => {
   const activeModel = { provider: "usage-proxy", model: "gpt-5.4" };
+  const registryBuild = vi.fn();
   const visionConfig: OpenClawConfig = {
     models: mediaModels(activeModel.provider, activeModel.model, ["text", "image"]),
   };
@@ -602,17 +699,37 @@ describe("apply registry lifetime", () => {
   }
   const apply = (ctx: MsgContext, cfg: OpenClawConfig) =>
     applyMediaUnderstanding({ ctx, cfg, activeModel });
-  beforeEach(() => {
-    catalog = [catalogModel(activeModel.provider, activeModel.model)];
-    discover.mockImplementation(() => {
+  const breakRegistry = () =>
+    registryBuild.mockImplementation(() => {
       throw new Error("registry build failed");
+    });
+  beforeEach(() => {
+    catalog = [catalogModel(activeModel.provider, activeModel.model, "GPT-5.4")];
+    registryBuild.mockReset();
+    discover.mockImplementation(({ key }: { key: string }) => {
+      if (key === "mediaUnderstandingProviders") {
+        registryBuild();
+      }
+      return [];
     });
   });
 
+  it.each([
+    ["explicit image model", configWithModels(["image"]), false, ["text", "image"]],
+    ["text-only model", {}, false, ["text"]],
+    ["mixed image and audio", visionConfig, true, ["text", "image"]],
+  ] as const)("builds the registry once for %s", async (_name, cfg, audio, input) => {
+    catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: [...input] }];
+    await apply(imageContext(audio), cfg);
+    expect(registryBuild).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects apply on registry failure without partially recording decisions", async () => {
+    breakRegistry();
     catalog = [{ ...catalogModel(activeModel.provider, activeModel.model), input: ["text"] }];
     const ctx = imageContext(true);
     await expect(apply(ctx, {})).rejects.toThrow("registry build failed");
+    expect(registryBuild).toHaveBeenCalledTimes(1);
     expect(ctx.MediaUnderstandingDecisions).toBeUndefined();
   });
 
@@ -620,6 +737,7 @@ describe("apply registry lifetime", () => {
     { name: "no shared models", capabilities: undefined },
     { name: "audio and video shared models", capabilities: ["audio", "video"] },
   ] as const)("keeps native vision with $name", async ({ capabilities }) => {
+    breakRegistry();
     const ctx = imageContext();
     await expect(
       apply(ctx, configWithModels(capabilities ? [...capabilities] : undefined)),
@@ -632,6 +750,6 @@ describe("apply registry lifetime", () => {
         attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
       }),
     );
-    expect(discover).not.toHaveBeenCalled();
+    expect(registryBuild).not.toHaveBeenCalled();
   });
 });

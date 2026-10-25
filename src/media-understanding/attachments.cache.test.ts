@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
@@ -12,6 +13,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveScopeDecision } from "./resolve.js";
@@ -305,6 +307,23 @@ it.for([
   }
   await expect(localCache(file, base).getBuffer(request)).rejects.toThrow(error);
 });
+it("opens local attachments with nofollow on posix", async ({ base }) => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const file = await mediaFile(base, "voice-note.m4a", "ok");
+  const openSpy = vi.spyOn(fs, "open");
+  await localCache(file, base).getBuffer(request);
+  expect(openSpy).toHaveBeenCalled();
+  const [openedPath, openedFlags] = mockCall(openSpy);
+  expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
+    await fs.realpath(file),
+  );
+  expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+});
+
 it.for(["canonical", "directory alias"] as const)(
   "keeps session-scoped roots authoritative for %s attachment paths",
   async (spelling, { base }) => {
@@ -569,11 +588,11 @@ test("retries failed cleanup across later staging success", async ({ base, cache
   await expect(cache.getPath(request)).rejects.toBe(error);
   expect(await fs.readdir(base)).toHaveLength(1);
   expect(warn).toHaveBeenCalledTimes(1);
-  expect(warn.mock.calls[0]?.[0]).toContain(base);
   expect(warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /could not remove staged attachment .*remove it manually if it remains: Error: permission denied/,
-    ),
+    expect.stringContaining(`could not remove staged attachment ${base}${path.sep}`),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("remove it manually if it remains: Error: permission denied"),
   );
 
   const staged = await cache.getPath(request);
