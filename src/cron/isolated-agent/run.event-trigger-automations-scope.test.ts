@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { isAgentToolExecutionAvailable } from "../../agents/agent-tool-availability.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
@@ -8,6 +9,7 @@ import {
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { admitEventOccurrence } from "../event-occurrence-admission.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 import type { CronJob } from "../types.js";
@@ -62,6 +64,12 @@ function hookShapedJob(toolsAllow?: string[]): CronJob {
   };
 }
 
+// The owner-only surface the last run's tools got: its sender bit and which
+// owner-only tools it may call.
+let lastOwnerSurface:
+  | { senderIsOwner: boolean | undefined; callable: Record<string, boolean> }
+  | undefined;
+
 type AutomationsOutcome =
   | { offered: false }
   | { offered: true; actions: string[]; error?: string; gated?: true };
@@ -87,6 +95,15 @@ async function runAndTouchSibling(params: {
     withAuthorityTools(
       runParams,
       async (constructed) => {
+        const ownerOnly: readonly string[] = GATEWAY_OWNER_ONLY_CORE_TOOLS;
+        lastOwnerSurface = {
+          senderIsOwner: runParams.senderIsOwner,
+          callable: Object.fromEntries(
+            constructed
+              .filter((tool) => ownerOnly.includes(tool.name))
+              .map((tool) => [tool.name, isAgentToolExecutionAvailable(tool)]),
+          ),
+        };
         const tools = applyEmbeddedAttemptToolsAllow(constructed, runParams.toolsAllow, {
           toolMeta: getPluginToolMeta,
         });
@@ -174,4 +191,18 @@ it("event-triggered turns without an admitted context cannot use automations", a
 it("channel join introductions are offered no automations tool", async () => {
   const outcome = await runAndTouchSibling({ trigger: "event", toolsAllow: [] });
   expect(outcome).toEqual({ offered: false });
+});
+
+// Owner status for ingress turns is a separate decision: hook turns keep the
+// embedded owner surface (no sender bit, every owner-only tool except intent).
+it("hook turns keep their existing owner-only surface", async () => {
+  lastOwnerSurface = undefined;
+  await runAndTouchSibling({ trigger: "event", ingressBoundary: "gateway.hooks.agent" });
+  expect(lastOwnerSurface?.senderIsOwner).toBeUndefined();
+  const callable = lastOwnerSurface?.callable ?? {};
+  expect(callable[AUTOMATIONS_TOOL_NAME]).toBe(true);
+  expect(Object.keys(callable).length).toBeGreaterThan(1);
+  for (const [name, available] of Object.entries(callable)) {
+    expect({ name, available }).toEqual({ name, available: name !== "intent" });
+  }
 });
