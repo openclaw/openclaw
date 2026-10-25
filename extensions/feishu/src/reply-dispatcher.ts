@@ -49,6 +49,7 @@ import {
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
+import { normalizeEpochMs } from "./reply-dispatcher-time.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   chunkFeishuCardMarkdown,
@@ -78,7 +79,6 @@ function mergeStreamingFinalText(
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
-const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
@@ -93,15 +93,6 @@ function isStreamingStartBackedOff(accountId: string): boolean {
     return false;
   }
   return true;
-}
-
-function normalizeEpochMs(timestamp: number | undefined): number | undefined {
-  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  // Defensive normalization: some payloads use seconds, others milliseconds.
-  // Values below 1e12 are treated as epoch-seconds.
-  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
 type CreateFeishuReplyDispatcherParams = {
@@ -1379,11 +1370,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               return updateStreamingStatusLine(statusLine, payload.phase !== "end");
             }
             const { kind: itemKind, ...item } = payload;
-            const statusLineLocal = formatChannelProgressDraftLineForEntry(account.config, {
-              event: "item",
-              itemKind,
-              ...item,
-            });
+            const statusLineLocal = formatChannelProgressDraftLineForEntry(
+              account.config,
+              {
+                event: "item",
+                itemKind,
+                ...item,
+              },
+              { toolIcons: true },
+            );
             if (statusLineLocal) {
               return updateStreamingStatusLine(statusLineLocal);
             }
