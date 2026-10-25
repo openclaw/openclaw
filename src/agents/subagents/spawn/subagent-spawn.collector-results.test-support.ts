@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
@@ -21,8 +19,11 @@ import {
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
+  materializeSessionProjection,
+  recordFinal,
+} from "./subagent-spawn.boundary-run.test-support.js";
+import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -83,12 +84,7 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
       );
       // The unrecorded child loses its transcript answer, as retention cleanup can.
       if (name !== "unrecorded") {
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "collector session"),
-          runId: params.runId,
-          text: answers[name],
-        });
+        await recordFinal(bound, params, answers[name]);
       }
       return producerResult(answers[name]);
     });
@@ -156,13 +152,7 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
     const bound = await options.createBoundParent();
     const { context, runtime } = await options.createBoundGateway(bound);
     // sessions_send resolves its target through the Gateway's session projection.
-    const projection = await createSessionRowProjection({ cfg: bound.cfg, modelCatalog: [] });
-    onTestFinished(async () => {
-      projection.dispose();
-      await projection.ensureMaterialized();
-    });
-    bindSessionRowProjection(context, () => projection);
-    await projection.ensureMaterialized();
+    await materializeSessionProjection(bound, context);
     // A controlled clock that still runs at real pace, so Gateway work is not starved.
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout"],

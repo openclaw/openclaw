@@ -15,6 +15,7 @@ import {
 } from "../../agent-tool-availability.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   holdNativeCapacity,
@@ -23,7 +24,6 @@ import {
 import {
   createSpawnTranscriptTarget,
   createSpawnOperatorSource,
-  recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -185,12 +185,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
           await holdNativeCapacity(bound, capacity);
         } else {
           options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-            await recordSpawnBoundaryFinal({
-              storePath: bound.storePath,
-              sessionKey: expectDefined(params.sessionKey, "child session"),
-              runId: params.runId,
-              text: "private child result",
-            });
+            await recordFinal(bound, params, "private child result");
             return visibleResult("private child result");
           });
           await inReply(async () => {

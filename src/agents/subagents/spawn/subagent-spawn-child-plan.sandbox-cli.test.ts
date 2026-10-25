@@ -25,13 +25,7 @@ function useInProcessSpawns() {
   });
 }
 
-/**
- * Sandboxed delegated children must never resolve to a host-executed CLI
- * backend: the CLI runs as the Gateway OS user outside the configured
- * container while the session is reported sandboxed. The spawn gate decides
- * on the config-derived classification before model resolution, so admission
- * re-checks once the child runtime is knowable.
- */
+// Host CLI execution cannot honor a child's container sandbox.
 describe("subagent spawn sandbox-CLI admission", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
@@ -49,16 +43,15 @@ describe("subagent spawn sandbox-CLI admission", () => {
     visibleWorker?: boolean;
   }) {
     const stateDir = fixture.stateDir;
+    const defaults = { workspace: stateDir, model: { primary: "openai/gpt-5.4" } };
+    const sandbox = params.sandboxMode ? { sandbox: { mode: params.sandboxMode } } : {};
     const cfg: OpenClawConfig = {
       logging: { audit: { enabled: false } },
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
       agents: params.visibleWorker
         ? {
             ownership: "explicit",
-            defaults: {
-              workspace: stateDir,
-              model: { primary: "openai/gpt-5.4" },
-            },
+            defaults,
             entries: {
               main: {
                 workspace: stateDir,
@@ -72,15 +65,11 @@ describe("subagent spawn sandbox-CLI admission", () => {
             },
           }
         : {
-            defaults: {
-              workspace: stateDir,
-              model: { primary: "openai/gpt-5.4" },
-              ...(params.sandboxMode ? { sandbox: { mode: params.sandboxMode } } : {}),
-            },
+            defaults: { ...defaults, ...sandbox },
             entries: {
               main: {
                 workspace: stateDir,
-                ...(params.sandboxMode ? { sandbox: { mode: params.sandboxMode } } : {}),
+                ...sandbox,
                 ...(params.childModel ? { subagents: { model: params.childModel } } : {}),
               },
             },
@@ -107,15 +96,15 @@ describe("subagent spawn sandbox-CLI admission", () => {
     await fixture.configure(cfg);
   }
 
-  async function planChildSpawn(params: {
-    childModel?: string;
-    sandboxMode?: "off" | "all";
-    sandbox?: "inherit" | "require";
-  }) {
-    await configureSpawnConfig({
-      sandboxMode: params.sandboxMode,
-      childModel: params.childModel,
-    });
+  async function checkChildPlan(
+    params: {
+      childModel?: string;
+      sandboxMode?: "off" | "all";
+      sandbox?: "inherit" | "require";
+    },
+    check: (plan: Awaited<ReturnType<typeof resolveSubagentChildPlan>>) => void,
+  ) {
+    await configureSpawnConfig(params);
     await fixture.writeSession(fixture.parentSessionKey, "sandbox-cli-requester");
     const request = { task: "delegated containment work", context: "isolated" as const };
     const ctx = { agentSessionKey: fixture.parentSessionKey };
@@ -124,68 +113,52 @@ describe("subagent spawn sandbox-CLI admission", () => {
       throw new Error(JSON.stringify(preparation.result));
     }
     try {
-      const plan = await resolveSubagentChildPlan({
-        ...preparation.resolved,
-        request,
-        ctx,
-        sandboxMode: params.sandbox ?? "require",
-        swarmEnabled: false,
-      });
-      return { plan, preparation };
-    } catch (err) {
+      check(
+        await resolveSubagentChildPlan({
+          ...preparation.resolved,
+          request,
+          ctx,
+          sandboxMode: params.sandbox ?? "require",
+          swarmEnabled: false,
+        }),
+      );
+    } finally {
       preparation.resolved.admissionReservation?.release();
-      throw err;
     }
   }
 
   it("rejects a sandbox-classified child whose resolved model runs on a host CLI backend", async () => {
-    const { plan, preparation } = await planChildSpawn({
-      childModel: "test-cli/haiku",
-      sandboxMode: "all",
-      sandbox: "require",
-    });
-    try {
-      expect(plan).toMatchObject({
-        ok: false,
-        result: { status: "forbidden" },
-      });
+    await checkChildPlan({ childModel: "test-cli/haiku", sandboxMode: "all" }, (plan) => {
+      expect(plan).toMatchObject({ ok: false, result: { status: "forbidden" } });
       if (plan.ok) {
         throw new Error("Expected the sandboxed CLI child to be rejected");
       }
       expect(plan.result.error).toContain("test-cli");
       expect(plan.result.error).toContain("cannot honor the sandbox");
-    } finally {
-      preparation.resolved.admissionReservation?.release();
-    }
-  });
-
-  it("admits a sandbox-classified child with an embedded/API model", async () => {
-    const { plan, preparation } = await planChildSpawn({ sandboxMode: "all" });
-    try {
-      if (!plan.ok) {
-        throw new Error(JSON.stringify(plan.result));
-      }
-      expect(plan.resolved.childRuntimeSandboxed).toBe(true);
-      expect(plan.resolved.resolvedModelMetadata.resolvedProvider).toBe("openai");
-    } finally {
-      preparation.resolved.admissionReservation?.release();
-    }
-  });
-
-  it("keeps CLI-backed children admitted when no sandbox classification applies", async () => {
-    const { plan, preparation } = await planChildSpawn({
-      childModel: "test-cli/haiku",
-      sandbox: "inherit",
     });
-    try {
+  });
+
+  it.each([
+    { sandboxMode: "all", sandbox: "require", childModel: undefined, model: "openai/gpt-5.4" },
+    {
+      sandboxMode: undefined,
+      sandbox: "inherit",
+      childModel: "test-cli/haiku",
+      model: "test-cli/haiku",
+    },
+  ] as const)("admits $model with sandbox=$sandboxMode", async ({ model, ...params }) => {
+    await checkChildPlan(params, (plan) => {
       if (!plan.ok) {
         throw new Error(JSON.stringify(plan.result));
       }
-      expect(plan.resolved.childRuntimeSandboxed).toBe(false);
-      expect(plan.resolved.resolvedModelMetadata.resolvedModel).toBe("test-cli/haiku");
-    } finally {
-      preparation.resolved.admissionReservation?.release();
-    }
+      expect(plan.resolved).toMatchObject({
+        childRuntimeSandboxed: params.sandboxMode === "all",
+        resolvedModelMetadata: {
+          resolvedProvider: params.sandboxMode === "all" ? "openai" : "test-cli",
+          resolvedModel: model,
+        },
+      });
+    });
   });
 
   it("rejects a sandbox-classified visible child whose model runs on a host CLI backend", async () => {
