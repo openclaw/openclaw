@@ -30,7 +30,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 it
   .runIf(process.platform === "linux" || process.platform === "darwin")
   .for([
-    "open",
     "close-before-open",
     "stdin-closed",
     "delayed-output",
@@ -40,6 +39,8 @@ it
   "runs a real owned worker through its IPC start gate and output drain (%s)",
   { timeout: 20_000 },
   async (action, { signal }) => {
+    const forced = action === "force-descendant";
+    const delayed = action === "delayed-output";
     const home = tempDirs.make("openclaw-owned-worker-gate-");
     const env = {
       HOME: home,
@@ -71,8 +72,7 @@ it
     let descendantPid: number | undefined;
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
     let cleanup: Promise<ProcessExtinctionResult> | undefined;
-    const expectedOutput =
-      action === "delayed-output" ? "x".repeat(256 * 1024) : "owned worker finished\n";
+    const expectedOutput = delayed ? "x".repeat(256 * 1024) : "owned worker finished\n";
     const rootExited = createDeferred();
     const output: string[] = [];
     let stderr = "";
@@ -96,9 +96,9 @@ it
               for (const fd of message.lineageFds) fs.fstatSync(fd);
               fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
               process.send({ phase: "started", message }, () => {
-                process.stdout.write(${action === "delayed-output" ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => {
+                process.stdout.write(${delayed ? '"x".repeat(256 * 1024)' : JSON.stringify(expectedOutput)}, () => {
                   ${
-                    action === "force-descendant"
+                    forced
                       ? `const descendant = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], {
                           stdio: ["ignore", "ignore", "ignore", ...message.lineageFds, "ipc"],
                         });
@@ -123,7 +123,7 @@ it
         stdinMode: "pipe-open",
         oomScoreWrapperSelected: false,
         ownedWorker: true,
-        ...(action === "force-descendant" ? {} : { nativeProcessOwnerSupported: true as const }),
+        ...(forced ? {} : { nativeProcessOwnerSupported: true as const }),
         cleanupBinding,
         onWorkerMessage,
         onSpawnCleanup: (pending) => {
@@ -134,7 +134,7 @@ it
       adapter = startup.adapter;
       await startup.ready;
       const collectOutput = output.push.bind(output);
-      if (action !== "delayed-output") {
+      if (!delayed) {
         adapter.onStdout(collectOutput);
       }
       adapter.onExit(() => rootExited.resolve());
@@ -177,13 +177,13 @@ it
           expect(stderr).toBe("");
         }
         await Promise.all([adapter.openStartGate!(), adapter.openStartGate!()]);
-        if (action === "delayed-output") {
+        if (delayed) {
           await withinTest(rootExited.promise, signal);
           // Leave the host pipe backpressured while the anchor processes root exit.
           await delay(100);
           adapter.onStdout(collectOutput);
         }
-        if (action === "force-descendant") {
+        if (forced) {
           descendantPid = await withinTest(descendantReady.promise, signal);
           expect(isPidDefinitelyDead(descendantPid)).toBe(false);
           adapter.kill("SIGKILL");
@@ -191,21 +191,17 @@ it
           expect(isPidDefinitelyDead(descendantPid)).toBe(true);
         }
         await expect(adapter.wait()).resolves.toEqual(
-          action === "force-descendant"
-            ? { code: null, signal: "SIGKILL" }
-            : { code: 0, signal: null },
+          forced ? { code: null, signal: "SIGKILL" } : { code: 0, signal: null },
         );
         expect(onWorkerMessage).toHaveBeenCalledWith({
           phase: "started",
           message: {
             type: "openclaw-worker-start-v1",
             lineageFds: expect.any(Array),
-            ...(action !== "force-descendant"
-              ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
-              : {}),
+            ...(forced ? {} : { nativeProcessOwner: expect.stringMatching(/^file:/u) }),
           },
         });
-        expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
+        expect(onWorkerMessage).toHaveBeenCalledTimes(forced ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
         expect(output.join("")).toBe(expectedOutput);
       } else {

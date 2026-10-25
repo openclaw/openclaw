@@ -19,17 +19,24 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 const cleanups: Array<() => void> = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
   }
   await nextTurn();
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 const mockLinuxRelay = () =>
   mockWritableRelay((child) => mocks.spawn.mockReturnValue(child), "linux");
+
+function finishRelay(stub: ReturnType<typeof mockLinuxRelay>) {
+  stub.control.destroy();
+  stub.lineage.end();
+  stub.disconnectMock();
+  stub.emitExit(0);
+}
 
 it.each([false, true])(
   "joins accepted stdout after identity loss while preserving an observed root (root observed=%s)",
@@ -108,9 +115,7 @@ it.each([false, true])(
         expect(stub.stdout).toMatchObject({ destroyed: false, readableEnded: false });
         stub.stderr.end();
       }
-      stub.lineage.end();
-      stub.disconnectMock();
-      stub.emitExit(0);
+      finishRelay(stub);
       await nextTurn();
       if (!rootObserved) {
         expect(adapter.confirmExtinction()).toBe(false);
@@ -123,10 +128,7 @@ it.each([false, true])(
       release.resolve();
       stub.stdout.end();
       stub.stderr.end();
-      stub.control.destroy();
-      stub.lineage.end();
-      stub.disconnectMock();
-      stub.emitExit(0);
+      finishRelay(stub);
       await results;
       adapter.dispose();
     }
@@ -236,22 +238,18 @@ it("joins native cleanup with final output before reporting no-loss settlement",
 
 it("counts raw-only construction activity without renewing the original overall deadline", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
-    const f = await startSupervisedRelay({ timeoutMs: 100, noOutputTimeoutMs: 60 });
-    f.child.stdout?.emit("data", Buffer.from("before timeout"));
+  const f = await startSupervisedRelay({ timeoutMs: 100, noOutputTimeoutMs: 60 });
+  f.child.stdout?.emit("data", Buffer.from("before timeout"));
+  for (const byte of [0xe2, 0x82]) {
     await vi.advanceTimersByTimeAsync(40);
-    f.child.stdout?.emit("data", Buffer.from([0xe2]));
-    await vi.advanceTimersByTimeAsync(40);
-    f.child.stdout?.emit("data", Buffer.from([0x82]));
-    expect(f.killMock).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(20);
-    await vi.advanceTimersToNextTimerAsync();
-    const run = await f.starting;
-    expect(await run.wait()).toMatchObject({ reason: "overall-timeout", stdout: "before timeout" });
-    await expect(f.closeScope()).rejects.toThrow("construction aborted");
-  } finally {
-    vi.useRealTimers();
+    f.child.stdout?.emit("data", Buffer.from([byte]));
   }
+  expect(f.killMock).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(20);
+  await vi.advanceTimersToNextTimerAsync();
+  const run = await f.starting;
+  expect(await run.wait()).toMatchObject({ reason: "overall-timeout", stdout: "before timeout" });
+  await expect(f.closeScope()).rejects.toThrow("construction aborted");
 });
 
 it("reports native cleanup failure without waiting for output during shutdown", async () => {
@@ -261,12 +259,8 @@ it("reports native cleanup failure without waiting for output during shutdown", 
   f.child.stdout?.emit("data", Buffer.from("retained root output"));
   f.emit({ type: "root-result", code: 23, signal: null });
   // No closing receipt, and stdout/stderr intentionally never reach EOF until finally.
-  f.control.destroy();
-  f.lineage.end();
-  f.disconnectMock();
-  f.emitExit(0);
+  finishRelay(f);
   await nextTurn();
-  expect(run.waitForExtinction).toBeTypeOf("function");
   const [cleanup, settled] = observeSettlement(f.supervisor.shutdown());
   try {
     await nextTurn();
@@ -280,6 +274,5 @@ it("reports native cleanup failure without waiting for output during shutdown", 
     expect(result).toMatchObject({ stdout: "retained root output", exitCode: 23 });
     await cleanup.catch(() => undefined);
     await f.closeScope().catch(() => undefined);
-    vi.useRealTimers();
   }
 });

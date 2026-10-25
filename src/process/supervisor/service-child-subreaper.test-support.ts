@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { inspectChildWaitState } from "@openclaw/proc-safe/reaper";
@@ -20,6 +20,17 @@ function waitForAdoptedChildExit(pid: number) {
     };
     process.on("SIGCHLD", observe);
   });
+}
+
+function spawnOwned(
+  owner: ReturnType<typeof acquireLinuxChildSubreaper>,
+  source: string,
+  stdio: SpawnOptions["stdio"],
+) {
+  const child = spawn(process.execPath, ["-e", source], { stdio });
+  assert.ok(child.pid);
+  owner.retainSpawnedChild(child.pid, child);
+  return child;
 }
 
 // A focused kernel contract, not an emulation of a sandbox service or provider.
@@ -54,16 +65,11 @@ for (const label of ["A", "B"]) {
 // Drive repeated observation synchronously after a one-shot TERM handler has
 // acknowledged its signal. No wall-clock sleep can hide a duplicate TERM.
 const signalOwner = acquireLinuxChildSubreaper();
-const cooperative = spawn(
-  process.execPath,
-  [
-    "-e",
-    'process.on("message", () => {}); process.once("SIGTERM", () => { process.once("message", () => process.send("graceful", () => process.exit(23))); process.send("term-received"); }); process.send("ready");',
-  ],
-  { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+const cooperative = spawnOwned(
+  signalOwner,
+  'process.on("message", () => {}); process.once("SIGTERM", () => { process.once("message", () => process.send("graceful", () => process.exit(23))); process.send("term-received"); }); process.send("ready");',
+  ["ignore", "ignore", "inherit", "ipc"],
 );
-assert.ok(cooperative.pid);
-signalOwner.retainSpawnedChild(cooperative.pid, cooperative);
 const messages: unknown[] = [];
 cooperative.on("message", (message: unknown) => messages.push(message));
 const cooperativeClosed = once(cooperative, "close");
@@ -91,26 +97,21 @@ receipts.push({
 // The root exits first, leaving its child to the dedicated owner. Wait for this
 // child's native exit state before asserting that the drain proves extinction.
 const realtimeOwner = acquireLinuxChildSubreaper();
-const realtimeRoot = spawn(
-  process.execPath,
-  [
-    "-e",
-    `const { spawn } = require("node:child_process");
+const realtimeRoot = spawnOwned(
+  realtimeOwner,
+  `const { spawn } = require("node:child_process");
      const child = spawn(process.execPath, ["-e", 'require("node:net").createServer().listen(String.fromCharCode(0) + "openclaw-realtime-" + process.pid)'], {
        stdio: ["ignore", "inherit", "inherit"],
      });
      process.stdout.write(String(child.pid) + "\\n");
      child.unref();`,
-  ],
-  { stdio: ["ignore", "pipe", "inherit"] },
+  ["ignore", "pipe", "inherit"],
 );
-assert.ok(realtimeRoot.pid);
-realtimeOwner.retainSpawnedChild(realtimeRoot.pid, realtimeRoot);
 const realtimeRootExit = once(realtimeRoot, "exit");
 const realtimeRootClosed = once(realtimeRoot, "close");
 const realtimePid = await new Promise<number>((resolve) => {
   let output = "";
-  realtimeRoot.stdout.on("data", (chunk) => {
+  realtimeRoot.stdout!.on("data", (chunk) => {
     output += chunk;
     if (output.includes("\n")) {
       resolve(Number(output.trim()));
@@ -147,11 +148,9 @@ const intermediateSource = `const { spawn } = require("node:child_process");
     process.stdout.write(String(child.pid));
     child.unref();
   });`;
-const activeRoot = spawn(
-  process.execPath,
-  [
-    "-e",
-    `const { spawn } = require("node:child_process");
+const activeRoot = spawnOwned(
+  activeOwner,
+  `const { spawn } = require("node:child_process");
      const child = spawn(process.execPath, ["-e", ${JSON.stringify(intermediateSource)}], {
        stdio: ["ignore", "pipe", "inherit"],
      });
@@ -162,11 +161,8 @@ const activeRoot = spawn(
        process.send(Number(output));
      });
      process.once("message", () => process.exit(37));`,
-  ],
-  { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  ["ignore", "ignore", "inherit", "ipc"],
 );
-assert.ok(activeRoot.pid);
-activeOwner.retainSpawnedChild(activeRoot.pid, activeRoot);
 const activeRootClosed = once(activeRoot, "close");
 try {
   const [orphanPid] = await once(activeRoot, "message");
