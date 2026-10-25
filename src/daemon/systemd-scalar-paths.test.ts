@@ -153,24 +153,16 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     expect(command?.workingDirectory).toBe(workingDirectory);
   });
 
-  it.each(["argv", "inline environment"] as const)(
-    "keeps builder percent input literal in %s while retaining word quoting",
-    async (surface) => {
-      const literal = path.join(home, 'source %h literal%% "quoted"');
-      const argv =
-        surface === "argv"
-          ? [path.join(literal, "openclaw"), "gateway", "--label", "two words"]
-          : programArguments;
-      const environment = surface === "inline environment" ? { OPENCLAW_STATE_DIR: literal } : {};
-      await writeUnit(buildSystemdUnit({ programArguments: argv, environment }));
+  it("keeps percent input literal in argv and inline environment", async () => {
+    const literal = path.join(home, 'source %h literal%% "quoted"');
+    const argv = [path.join(literal, "openclaw"), "gateway", "--label", "two words"];
+    const environment = { OPENCLAW_STATE_DIR: literal };
+    await writeUnit(buildSystemdUnit({ programArguments: argv, environment }));
 
-      const command = await readCommand();
-      expect(command?.programArguments).toEqual(argv);
-      if (surface === "inline environment") {
-        expect(command?.environment).toEqual(environment);
-      }
-    },
-  );
+    const command = await readCommand();
+    expect(command?.programArguments).toEqual(argv);
+    expect(command?.environment).toEqual(environment);
+  });
 
   it.each(literalDirectories.filter(({ name }) => name !== "question mark"))(
     "generates a literal EnvironmentFile with $name without selecting neighboring files",

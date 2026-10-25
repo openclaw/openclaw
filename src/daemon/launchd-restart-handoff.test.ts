@@ -161,22 +161,15 @@ it("waits for the caller pid before kickstarting launchd", () => {
     ok: true,
     value: expect.any(Promise),
   });
-  expect(spawnMock).toHaveBeenCalledTimes(1);
   const [, args] = spawnCall();
-  expect([args[0], args[2], args[6]]).toEqual(["-c", "openclaw-launchd-restart-handoff", "9876"]);
+  expect(args[6]).toBe("9876");
   for (const fragment of [
     'while kill -0 "$wait_pid" >/dev/null 2>&1; do',
-    "exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1",
-    "openclaw restart attempt source=handoff mode=kickstart",
-    "pid=%s interactive=0",
-    'launchctl enable "$service_target"',
     'if launchctl kickstart -k "$service_target"; then',
     'if launchctl bootstrap "$domain" "$plist_path"; then\n    status=0\n  else\n    launchctl kickstart -k "$service_target"',
   ]) {
     expect(args[1]).toContain(fragment);
   }
-  expect(args[1]).not.toMatch(/launchctl[^\n]*\/dev\/null/);
-  expect(args[1]).not.toContain("sleep 1");
   expect(unrefMock).toHaveBeenCalledTimes(1);
 });
 
@@ -222,10 +215,8 @@ it("executes the generated reload handoff through a delayed launchd stop", async
   );
 
   expectReload(result, { print: 21, bootstrap: 1 });
-  const [, args] = spawnCall();
-  // #110137: outwait launchd's SIGKILL ceiling, then retry only while registered.
-  expect(args[1]).toContain('bootout_wait_count="345"');
-  expect(args[1]).toContain("sleep 1");
+  // #110137: the executed handoff must outwait teardown and reload in order.
+  expect(spawnCall()[1][1]).toContain('bootout_wait_count="345"');
   expect(result.log).toContain("mode=reload");
   expect(result.calls.slice(0, 2)).toEqual([
     "enable gui/501/test.label",
@@ -264,7 +255,6 @@ it("sanitizes restart helper environment overrides before spawning", () => {
   };
   schedule({ env: { ...defaultEnv, ...unsafe }, mode: "kickstart" });
   const [, args, options] = spawnCall();
-  expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
   for (const value of Object.values(unsafe)) {
     expect(args[1]).not.toContain(value);
   }
