@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { MemoryAudience, MemoryProviderHandle } from "../plugins/memory-provider-types.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
-// The fake session owner stands in for SQLite rows and generation leases on both
-// sides: cron admission's parent read and the memory resolver's lineage reads.
 // mock-isolation: the fake session owner replaces SQLite generation facts.
 vi.mock("../config/sessions/session-delivery-generation.js", async () => {
   const { fakeSessionGenerationModule } =
@@ -58,16 +57,8 @@ beforeEach(() => {
 
 function storedJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
-    id: "job-1",
+    ...cronTestJob({ id: "job-1", name: "Knowledge ingest", wakeMode: "now" }),
     agentId: "main",
-    name: "Knowledge ingest",
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "ingest" },
     delivery: { mode: "none" },
     state: {},
     owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
@@ -99,10 +90,7 @@ function bindToRun(raw: MemoryProviderHandle, audience: MemoryAudience) {
   });
 }
 
-/**
- * Admits one occurrence of `job` as cron does, then resolves the run's memory
- * audience on the embedded and CLI runtimes from the same admitted run.
- */
+// Resolve both runtimes from the same admitted occurrence.
 async function runOccurrence(job: CronStoredJob) {
   const runRow = { sessionId: RUN_SESSION, updatedAt: 1 };
   fakeSessionOwner.rows.set(RUN_KEY, runRow);
@@ -178,16 +166,6 @@ it("gives both runtimes owner-private memory for an owner's direct-chat child an
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
-it("gives a non-owner requester only the conversation's memory", async () => {
-  setParent("direct");
-  profiles.revoked.add(OWNER_PROFILE);
-  const run = await runOccurrence(storedJob());
-  for (const audience of run.audiences) {
-    expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
-  }
-  run.settle();
-});
-
 it("gives a group conversation's child that conversation's memory, never owner-private", async () => {
   setParent("group");
   const run = await runOccurrence(storedJob());
@@ -221,7 +199,9 @@ it("drops owner-private memory on the next run after the requester loses owner s
   first.settle();
   profiles.revoked.add(OWNER_PROFILE);
   const next = await runOccurrence(storedJob());
-  expect(next.audiences[0]).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
+  for (const audience of next.audiences) {
+    expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
+  }
   next.settle();
 });
 

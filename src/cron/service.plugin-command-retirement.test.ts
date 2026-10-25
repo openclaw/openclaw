@@ -28,10 +28,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "openclaw-comm
 const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 const everyMs = 60_000;
 
-/**
- * The real service, queue worker and host timer drive a private command schedule. The occurrence
- * runner is a stub because retirement belongs to the scheduler, not to the command result.
- */
+// Real service/queue/timer; only the occurrence runner is stubbed.
 async function runSchedule(
   overrides: Partial<PluginCommandSchedule>,
   ticks: number,
@@ -110,42 +107,32 @@ afterEach(() => {
 });
 
 describe("private command schedules under the live scheduler", () => {
-  it("stops waking once its final allowed attempt launches", async () => {
-    const result = await runSchedule({ maxRuns: 2, deadlineAtMs: nowMs + 60 * everyMs }, 8);
-    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-    expect(result.runSessionEvent).not.toHaveBeenCalled();
-    expect(result.stored).toMatchObject({ enabled: false });
-    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
-    // Two launches and no skipped wake-ups after retirement.
-    expect(result.history).toEqual([
-      { status: "ok", error: undefined },
-      { status: "ok", error: undefined },
-    ]);
-  });
-
-  it("retires at the deadline with one terminal receipt and no further wake-ups", async () => {
-    const result = await runSchedule({ maxRuns: 100, deadlineAtMs: nowMs + everyMs + 30_000 }, 8);
-    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
-    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
-    expect(result.history).toEqual(
-      expect.arrayContaining([
-        { status: "skipped", error: "cron: plugin command schedule deadline expired" },
-      ]),
-    );
-    expect(result.history).toHaveLength(2);
-  });
-
-  it("retires a schedule from a previous Gateway process before spending an attempt", async () => {
+  it.each([
+    ["attempt limit", { maxRuns: 2 }, 2, undefined],
+    [
+      "deadline",
+      { deadlineAtMs: nowMs + everyMs + 30_000 },
+      1,
+      "cron: plugin command schedule deadline expired",
+    ],
+    [
+      "previous Gateway process",
+      { hostProcessId: "1:previous-boot" },
+      0,
+      "cron: plugin command schedule ended with its Gateway process",
+    ],
+  ] as const)("retires at %s without further wake-ups", async (_name, overrides, runs, error) => {
     const result = await runSchedule(
-      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs, hostProcessId: "1:previous-boot" },
+      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs, ...overrides },
       8,
     );
-    expect(result.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(runs);
     expect(result.runSessionEvent).not.toHaveBeenCalled();
-    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 0 } });
+    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: runs } });
+    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
     expect(result.history).toEqual([
-      { status: "skipped", error: "cron: plugin command schedule ended with its Gateway process" },
+      ...Array.from({ length: runs }, () => ({ status: "ok", error: undefined })),
+      ...(error ? [{ status: "skipped", error }] : []),
     ]);
   });
 

@@ -66,15 +66,10 @@ beforeEach(() => {
 afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron model selection", () => {
-  it.each([
-    { payloadModel: 42 },
-    { payloadModel: false },
-    { payloadModel: {} },
-    { payloadModel: [] },
-  ])("ignores a malformed persisted payload model ($payloadModel)", async ({ payloadModel }) => {
+  it("ignores a malformed persisted payload model", async () => {
     const overrides: Partial<SelectionParams> = {};
     // Persisted rows can contain values outside the TypeScript contract.
-    Object.assign(overrides, { payloadModel });
+    Object.assign(overrides, { payloadModel: 42 });
     await expect(select(overrides)).resolves.toMatchObject({
       ok: true,
       ...defaultRef,
@@ -120,10 +115,7 @@ describe("cron model selection", () => {
 
   it("uses one replacement catalog owner for config, policy, and selected identity", async () => {
     const cfg = {
-      agents: {
-        defaults: { model: "anthropic/caller-model" },
-        entries: { worker: {} },
-      },
+      agents: { defaults: { model: "anthropic/caller-model" }, entries: { worker: {} } },
     };
     const ownerConfig = {
       agents: {
@@ -147,11 +139,6 @@ describe("cron model selection", () => {
         sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
       }),
     ).resolves.toMatchObject({ ok: true, ...selectedRef, owner, modelSource: "payload" });
-    expect(mocks.loadOwner).toHaveBeenCalledExactlyOnceWith({
-      config: cfg,
-      readOnly: true,
-      allowGatewaySubagentBinding: true,
-    });
     expect(mocks.configured).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
     );

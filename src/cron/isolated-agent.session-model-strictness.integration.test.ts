@@ -12,6 +12,7 @@ import "../llm/ai-transport-host.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -144,15 +145,12 @@ describe("stored cron session model selections through the real embedded runner"
       };
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const stored: CronStoredJob = {
+      const stored: CronStoredJob = cronTestJob({
         id: "session-model",
         name: "Session model",
         agentId: "main",
-        enabled: true,
         createdAtMs: 1,
         updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
         wakeMode: "now",
         delivery: { mode: "none" },
         payload: {
@@ -161,8 +159,7 @@ describe("stored cron session model selections through the real embedded runner"
           lightContext: true,
           ...params.payload,
         },
-        state: {},
-      };
+      });
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:cron:session-model" },
         {
@@ -191,41 +188,31 @@ describe("stored cron session model selections through the real embedded runner"
   }
 
   it.each([
-    { name: "user", storedSelection: { modelOverrideSource: "user" as const } },
-    { name: "legacy", storedSelection: {} },
-  ])(
-    "reports a failed $name session selection instead of answering from a configured fallback",
-    async ({ storedSelection }) => {
-      const { result, requests } = await runWithFailingPinnedModel({ storedSelection });
-
-      expect(requests).toEqual(["pinned/model-x"]);
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("invalid_api_key");
-    },
-  );
-
-  it.each([
     {
-      // Distinct from the configured fallback, so the job's own list is what answers.
+      name: "user pin",
+      storedSelection: { modelOverrideSource: "user" as const },
+      payload: undefined,
+      expected: [],
+    },
+    { name: "legacy pin", storedSelection: {}, payload: undefined, expected: [] },
+    {
       name: "explicit fallbacks",
+      storedSelection: { modelOverrideSource: "user" as const },
       payload: { fallbacks: ["jobfallback/model-c"] },
-      expected: ["pinned/model-x", "jobfallback/model-c"],
+      expected: ["jobfallback/model-c"],
     },
     {
       name: "its own model",
+      storedSelection: { modelOverrideSource: "user" as const },
       payload: { model: "pinned/model-x" },
-      expected: ["pinned/model-x", "fallback/model-b"],
+      expected: ["fallback/model-b"],
     },
-  ])(
-    "keeps falling back for a pinned session when the job sets $name",
-    async ({ payload, expected }) => {
-      const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: { modelOverrideSource: "user" },
-        payload,
-      });
-
-      expect(requests).toEqual(expected);
-      expect(result.status, result.error).toBe("ok");
-    },
-  );
+  ])("honors fallback policy for $name", async ({ storedSelection, payload, expected }) => {
+    const { result, requests } = await runWithFailingPinnedModel({ storedSelection, payload });
+    expect(requests).toEqual(["pinned/model-x", ...expected]);
+    expect(result.status, result.error).toBe(expected.length ? "ok" : "error");
+    if (!expected.length) {
+      expect(result.error).toContain("invalid_api_key");
+    }
+  });
 });

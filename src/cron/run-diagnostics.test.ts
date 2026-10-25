@@ -30,6 +30,14 @@ function terminalResult(extra: Record<string, unknown> = {}) {
   };
 }
 
+function expectDiagnostic(
+  result: unknown,
+  message: string,
+  overrides: Partial<CronRunDiagnostic> = {},
+) {
+  expect(result).toEqual({ summary: message, entries: [entry(message, overrides)] });
+}
+
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
     const diagnostics = normalizeDiagnostics({
@@ -44,10 +52,13 @@ describe("cron run diagnostics", () => {
 
     expect(diagnostics?.entries).toHaveLength(10);
     expect(diagnostics?.entries[0]?.message).toBe("entry 2");
-    expect(diagnostics?.entries.at(-1)?.message.endsWith("…")).toBe(true);
+    expect(diagnostics?.entries.at(-1)).toMatchObject({
+      source: "delivery",
+      severity: "error",
+      truncated: true,
+      message: expect.stringMatching(/…$/),
+    });
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
-    expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
-    expect(diagnostics?.entries.at(-1)).toMatchObject({ source: "delivery", severity: "error" });
     expect(diagnostics?.summary).toHaveLength(2_000);
   });
 
@@ -66,14 +77,10 @@ describe("cron run diagnostics", () => {
   });
 
   it("creates diagnostics from errors and prefers the latest error summary", () => {
-    const first = diagnosticsFromError("cron-preflight", "first failure", {
-      nowMs: () => 100,
-    });
-    const second = diagnosticsFromError("delivery", new Error("delivery failed"), {
-      nowMs: () => 200,
-    });
-
-    const merged = mergeDiagnostics(first, second);
+    const merged = mergeDiagnostics(
+      diagnosticsFromError("cron-preflight", "first failure", { nowMs: () => 100 }),
+      diagnosticsFromError("delivery", new Error("delivery failed"), { nowMs: () => 200 }),
+    );
     expect(merged).toMatchObject({
       summary: "delivery failed",
       entries: [{ message: "first failure" }, { message: "delivery failed" }],
@@ -82,23 +89,15 @@ describe("cron run diagnostics", () => {
   });
 
   it("warns when cron toolsAllow requests web_search without a provider", () => {
-    const diagnostics = missingWebSearchProvider({
-      toolsAllow: ["web_*"],
-      hasWebSearchProvider: false,
-      nowMs: () => 900,
-    });
-
-    expect(diagnostics).toEqual({
-      summary: webSearchWarning,
-      entries: [
-        entry(webSearchWarning, {
-          ts: 900,
-          source: "cron-preflight",
-          severity: "warn",
-          toolName: "web_search",
-        }),
-      ],
-    });
+    expectDiagnostic(
+      missingWebSearchProvider({
+        toolsAllow: ["web_*"],
+        hasWebSearchProvider: false,
+        nowMs: () => 900,
+      }),
+      webSearchWarning,
+      { ts: 900, source: "cron-preflight", severity: "warn", toolName: "web_search" },
+    );
   });
 
   it("does not warn for an unrestricted tools policy", () => {
@@ -159,25 +158,19 @@ describe("cron run diagnostics", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "downgrades recovered terminal failures",
-      result: terminalResult(),
-      finalStatus: "ok",
-      entries: [entry(terminalMessage, { severity: "warn" })],
+  it.each(["ok", undefined] as const)(
+    "sanitizes terminal metadata with final status %s",
+    (finalStatus) => {
+      expectDiagnostic(
+        diagnosticsFromResult(
+          terminalResult({ message: "private-path /home/operator/.config/token" }),
+          { ...fixedClock, finalStatus },
+        ),
+        terminalMessage,
+        { severity: finalStatus === "ok" ? "warn" : "error" },
+      );
     },
-    {
-      name: "reconstructs safe diagnostics from private terminal metadata",
-      result: terminalResult({ message: "private-path /home/operator/.config/token" }),
-      finalStatus: undefined,
-      entries: [entry(terminalMessage)],
-    },
-  ] as const)("$name", ({ result, finalStatus, entries }) => {
-    expect(diagnosticsFromResult(result, { ...fixedClock, finalStatus })).toEqual({
-      summary: terminalMessage,
-      entries,
-    });
-  });
+  );
 
   it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
     const diagnostics = diagnosticsFromResult(
@@ -217,17 +210,10 @@ describe("cron run diagnostics", () => {
   });
 
   it("captures silent failed exec details with a fallback message", () => {
-    const diagnostics = diagnosticsFromResult(execResult({ status: "completed", exitCode: 2 }), {
-      nowMs: () => 500,
-    });
-
-    expect(diagnostics?.entries).toEqual([
-      entry("exec failed with exit code 2", {
-        ts: 500,
-        source: "exec",
-        severity: "warn",
-        exitCode: 2,
-      }),
-    ]);
+    expectDiagnostic(
+      diagnosticsFromResult(execResult({ status: "completed", exitCode: 2 }), { nowMs: () => 500 }),
+      "exec failed with exit code 2",
+      { ts: 500, source: "exec", severity: "warn", exitCode: 2 },
+    );
   });
 });
