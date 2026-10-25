@@ -2,10 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import {
-  normalizeProviderConfigWithPlugin,
-  resolveProviderConfigApiKeyWithPlugin,
-} from "../plugins/provider-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as authProfileStoreRuntime from "./auth-profiles/store-runtime.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
@@ -13,6 +9,15 @@ import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as modelsConfigProviders from "./models-config.providers.implicit.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  normalizeProviderConfigWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").normalizeProviderConfigWithPlugin
+  >(() => undefined),
+  resolveProviderConfigApiKeyWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").resolveProviderConfigApiKeyWithPlugin
+  >(() => undefined),
+}));
 
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
@@ -26,8 +31,8 @@ vi.mock("../plugins/provider-external-auth-core.js", () => ({
   }),
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
-  normalizeProviderConfigWithPlugin: vi.fn<typeof normalizeProviderConfigWithPlugin>(),
-  resolveProviderConfigApiKeyWithPlugin: vi.fn<typeof resolveProviderConfigApiKeyWithPlugin>(),
+  normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -46,24 +51,26 @@ vi.mock("./model-auth-env-vars.js", () => ({
     authEvidenceMap: {},
   }),
 }));
-const policyMocks = [
-  vi.mocked(normalizeProviderConfigWithPlugin),
-  vi.mocked(resolveProviderConfigApiKeyWithPlugin),
-];
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const mock of policyMocks) {
+  for (const mock of Object.values(providerRuntimeMocks)) {
     mock.mockReset();
+    mock.mockReturnValue(undefined);
   }
 });
 
 const discover = (providers: Record<string, ProviderConfig>) =>
   vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue(providers);
 
+const defaultModel = modelDefinition("gpt-5.5", {
+  name: "GPT-5.5",
+  contextWindow: 400000,
+  maxTokens: 128000,
+});
 const provider = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
   baseUrl: "https://api.openai.com/v1",
   api: "openai-responses",
-  models: [modelDefinition("gpt-5.5")],
+  models: [structuredClone(defaultModel)],
   ...overrides,
 });
 async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>[0]> = {}) {
@@ -85,8 +92,12 @@ async function generate(params: Partial<Parameters<typeof planModelsJsonForTest>
 
 describe("models-config planning", () => {
   it("does not expose the full registry to provider policy hooks for a scoped snapshot", async () => {
-    vi.mocked(resolveProviderConfigApiKeyWithPlugin).mockReturnValue("POLICY_ALIAS_API_KEY");
-    discover({ "policy-alias": provider({ baseUrl: "https://policy.example/v1" }) });
+    providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
+      "POLICY_ALIAS_API_KEY",
+    );
+    discover({
+      "policy-alias": provider({ baseUrl: "https://policy.example/v1" }),
+    });
     await generate({
       pluginMetadataSnapshot: {
         ...createPluginMetadataSnapshotFixture(),
@@ -94,7 +105,7 @@ describe("models-config planning", () => {
       },
     });
 
-    for (const mock of policyMocks) {
+    for (const mock of Object.values(providerRuntimeMocks)) {
       const params = mock.mock.calls.find(([call]) => call.provider === "policy-alias")?.[0];
       expect(params).toBeDefined();
       expect(params?.manifestRegistry).toBeUndefined();
@@ -131,8 +142,13 @@ describe("models-config planning", () => {
           },
         },
       });
-      const published = ["auth-only", "oauth", "openai", "retained", "role"];
-      expect(Object.keys(plan.providers).toSorted()).toEqual(published);
+      expect(Object.keys(plan.providers).toSorted()).toEqual([
+        "auth-only",
+        "oauth",
+        "openai",
+        "retained",
+        "role",
+      ]);
       for (const id of ["openai", "oauth", "role", "retained"]) {
         expect(plan.providers[id]).toMatchObject({ models: [{ id: "gpt-5.5" }] });
         expect(plan.providers[id]).not.toHaveProperty("apiKey");
@@ -163,15 +179,22 @@ describe("models-config planning", () => {
     expect(plan.pluginCatalogWrites).toEqual({});
   });
 
+  it("writes canonical env markers for discovered providers", async () => {
+    discover({ openai: provider() });
+    const plan = await generate({ env: { OPENAI_API_KEY: "sk-test" } });
+    expect(plan.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+  });
+
   it("keeps static catalog rows when an auth profile supplies the key", async () => {
-    discover({
-      "google-vertex": provider({
-        baseUrl: "https://{location}-aiplatform.googleapis.com",
-        api: "google-vertex",
-        models: [modelDefinition("gemini-2.5-pro")],
-      }),
+    const agentDir = "/tmp/openclaw-google-vertex-models-profile";
+    const vertex = provider({
+      baseUrl: "https://{location}-aiplatform.googleapis.com",
+      api: "google-vertex",
+      models: [modelDefinition("gemini-2.5-pro")],
     });
+    discover({ "google-vertex": vertex });
     const plan = await generate({
+      agentDir,
       authStore: {
         version: 1,
         profiles: {
@@ -197,6 +220,7 @@ describe("models-config planning", () => {
         openrouter: provider({
           baseUrl: "https://openrouter.ai/api/v1",
           api: "openai-completions",
+          apiKey: "OPENROUTER_API_KEY",
         }),
       });
       await withEnvAsync({ OPENROUTER_API_KEY: hostValue }, async () => {
