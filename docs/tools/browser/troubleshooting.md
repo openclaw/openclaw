@@ -105,3 +105,26 @@ Security guidance:
 - Do **not** relax browser SSRF policy by default.
 - Prefer narrow exact-hostname `allowedHostnames` exceptions over broad private-network access.
 - Use `dangerouslyAllowPrivateNetwork: true` only in intentionally trusted environments where private-network browser access is required and reviewed.
+
+## Profile lock names another hostname
+
+If `start` fails with `Chromium profile lock names another hostname`, the
+profile's `SingletonLock` names a different host than this machine reports now.
+OpenClaw does not clear such a lock on its own, because it cannot verify the
+owner from this machine.
+
+On macOS this can also follow a network-driven hostname change. If
+`scutil --get HostName` reports `not set`, macOS may derive its hostname from
+DHCP or reverse DNS, so the name can change between, for example,
+`my-mac.local` and `my-mac.lan`.
+
+To recover, first confirm that the lock names this Mac's previous hostname
+(`readlink` on `SingletonLock` shows `<hostname>-<pid>`) and that no browser on
+this or another host is using the profile. Then remove `SingletonLock`,
+`SingletonSocket`, and `SingletonCookie` from the profile's `user-data`
+directory (for the default managed profile,
+`~/.openclaw/browser/openclaw/user-data`) and start the browser again. This
+preserves the profile data, including cookies; no profile reset is needed.
+
+With the browser closed, you can optionally set a stable hostname with
+`sudo scutil --set HostName <name>` to prevent further network-driven changes.
