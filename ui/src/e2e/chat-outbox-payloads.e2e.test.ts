@@ -1,5 +1,7 @@
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import type { BrowserContext, Page } from "playwright/test";
-import { assert, expect, it } from "vitest";
+import { assert, expect, inject, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
@@ -123,6 +125,18 @@ suite.define(() => {
       const queueModule = controlUiE2eBuiltModuleRequest(
         "ui/src/pages/chat/components/chat-composer-queue.tsx",
       );
+      const buildRoot = inject("controlUiE2eBuildRoot");
+      assert(buildRoot);
+      const assetsDir = path.join(buildRoot, "assets");
+      const queueStyles = readdirSync(assetsDir).filter(
+        (file) =>
+          file.endsWith(".css") &&
+          /(?:^|\})\s*\.chat-queue\s*\{/u.test(readFileSync(path.join(assetsDir, file), "utf8")),
+      );
+      expect(queueStyles).toHaveLength(1);
+      // Vite can reject the queue's CSS preload before requesting its JavaScript.
+      const isQueueAsset = (text: string) =>
+        queueModule.test(text) || text.includes(`/assets/${queueStyles[0]}`);
       await page.addInitScript(() => {
         window.addEventListener("vite:preloadError", (event) => {
           console.debug(
@@ -138,12 +152,12 @@ suite.define(() => {
       await context.setOffline(true);
       await disconnect(page, gateway);
       const [failedQueueRequest] = await Promise.all([
-        page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
+        page.waitForEvent("requestfailed", (request) => isQueueAsset(request.url())),
         page.waitForEvent(
           "console",
           (consoleMessage) =>
             consoleMessage.text().startsWith("outbox-preload-error: ") &&
-            queueModule.test(consoleMessage.text()),
+            isQueueAsset(consoleMessage.text()),
         ),
         send(page),
       ]);

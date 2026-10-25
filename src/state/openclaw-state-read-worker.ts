@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
@@ -287,6 +288,12 @@ function createReadTransport(
     try {
       if (closed) {
         throw new WorkerTaskError("Shared-state read transport is closed", "unavailable");
+      }
+      if (
+        context.databaseEngineSelection &&
+        Object.values(context.databaseEngineSelection.effectiveEngines).includes("postgres")
+      ) {
+        getPostgresPool();
       }
       const request: OpenClawStateReadRequest = {
         context: {

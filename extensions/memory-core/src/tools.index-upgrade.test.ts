@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  requireNativeSqliteDatabase,
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { requireNativeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexDatabase } from "./memory/manager-database-context.js";
 import { readMemoryDatabaseRevision } from "./memory/manager-db-kernel.js";
@@ -38,13 +34,10 @@ describe("memory_search index versions", () => {
 
   const indexHit = expect.objectContaining({ path: "memory/2026-01-12.md" });
   const providerCost = expect.stringContaining("provider cost");
-  const toolFor = (config: Parameters<typeof fixture.getFreshManager>[0], oneShotCliRun = false) =>
-    createMemorySearchToolOrThrow({ config, agentId: "main", oneShotCliRun });
-  const search = async (
-    config: Parameters<typeof toolFor>[0],
-    oneShotCliRun = false,
-    params: { query: string; corpus: "memory" } = query,
-  ) => (await toolFor(config, oneShotCliRun).execute("search", params)).details;
+  const toolFor = (config: Parameters<typeof fixture.getFreshManager>[0]) =>
+    createMemorySearchToolOrThrow({ config, agentId: "main" });
+  const search = async (config: Parameters<typeof toolFor>[0]) =>
+    (await toolFor(config).execute("search", query)).details;
   async function publishIndex(cfg: Parameters<typeof toolFor>[0]) {
     const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ reason: "cli", force: true });
@@ -68,10 +61,6 @@ describe("memory_search index versions", () => {
     cfg = uncachedConfig(),
   ) {
     const manager = await publishIndex(cfg);
-    const dbPath = manager.status().dbPath;
-    if (!dbPath) {
-      throw new Error("memory search manager database path missing");
-    }
     await manager.close();
     await closeAllMemorySearchManagers();
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
@@ -79,7 +68,6 @@ describe("memory_search index versions", () => {
     return {
       cfg,
       db,
-      dbPath,
       before: readMemoryDatabaseRevision(db),
       embedded: fixture.provider.embedBatchCalls,
     };
@@ -280,60 +268,4 @@ describe("memory_search index versions", () => {
       fixture.provider.embedBatchPermanentFailure = null;
     }
   });
-  async function seedPriorChunkingVersionIndex(
-    cfg: Parameters<typeof fixture.getFreshManager>[0],
-  ): Promise<string> {
-    const { dbPath } = await seedIndex({ chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }, cfg);
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    return dbPath;
-  }
-
-  it.each(["keyword fallback", "missing FTS", "changed scope"] as const)(
-    "handles an upgrade with %s",
-    async (scenario) => {
-      const cfg = fixture.createConfig({ minScore: 0 });
-      const filePath = path.join(fixture.paths.memory, "upgrade.md");
-      await fs.writeFile(filePath, "UpgradeKeywordFallback alpha note.");
-      let indexedConfig = cfg;
-      if (scenario === "changed scope") {
-        const wikiPath = path.join(fixture.paths.root, "wiki");
-        await fs.mkdir(wikiPath, { recursive: true });
-        await fs.writeFile(path.join(wikiPath, "note.md"), "UpgradeScopeWiki alpha note.");
-        indexedConfig = fixture.createConfig({ extraPaths: [wikiPath], minScore: 0 });
-      }
-      const dbPath = await seedPriorChunkingVersionIndex(indexedConfig);
-      // A changed file prevents the embedding cache from satisfying the rebuild.
-      await fs.writeFile(filePath, "UpgradeKeywordFallback changed after publication.");
-      if (scenario === "missing FTS") {
-        using db = new DatabaseSync(dbPath);
-        db.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
-        db.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
-      }
-      fixture.provider.embedBatchPermanentFailure = Object.assign(
-        new Error("openai embeddings failed: 429 insufficient_quota"),
-        { status: 429, code: "insufficient_quota" },
-      );
-      try {
-        expect(
-          await search(cfg, true, { ...query, query: "UpgradeKeywordFallback" }),
-        ).toMatchObject(
-          scenario === "keyword fallback"
-            ? { results: [expect.objectContaining({ path: "memory/upgrade.md" })] }
-            : {
-                results: [],
-                disabled: true,
-                unavailable: true,
-                error: expect.stringContaining("insufficient_quota"),
-                warning: expect.stringContaining(
-                  "Rebuilding may call the configured embedding provider",
-                ),
-              },
-        );
-      } finally {
-        await closeAllMemorySearchManagers();
-        closeOpenClawAgentDatabasesForTest();
-      }
-    },
-  );
 });

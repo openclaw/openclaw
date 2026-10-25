@@ -6,9 +6,9 @@ import {
 import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 const checkpointWork = vi.hoisted(() => ({ characters: 0 }));
-vi.mock("../../packages/tool-call-repair/src/index.js", async (importOriginal) => {
+vi.mock("../../packages/tool-call-repair/src/payload.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../packages/tool-call-repair/src/index.js")>();
+    await importOriginal<typeof import("../../packages/tool-call-repair/src/payload.js")>();
   return {
     ...actual,
     projectPlainTextToolCallBlocks(

@@ -8,7 +8,11 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { ApprovalCountdown, approvalRemainingLabel } from "./approval-countdown.tsx";
+import {
+  ApprovalCountdown,
+  approvalRemainingLabel,
+  readApprovalTime,
+} from "./approval-countdown.tsx";
 import {
   approvalTitle,
   ExecApprovalCard,
@@ -159,7 +163,10 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
         {explicitlyOpen() && active() && bridgeProps.props ? (
           <openclaw-modal-dialog
             label={approvalTitle(active()!)}
-            description={approvalRemainingLabel(active()!.expiresAtMs, Date.now())}
+            description={approvalRemainingLabel(
+              active()!.expiresAtMs,
+              readApprovalTime(active()!.expiresAtMs),
+            )}
             onKeyDown={handleKeydown}
             onModal-cancel={handleCancel}
           >

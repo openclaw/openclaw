@@ -13,6 +13,7 @@ import {
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createPlacementPane,
@@ -91,14 +92,7 @@ function startMove(pane: ReturnType<typeof createTestChatPane>["pane"], row: Gat
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   dialogs = createModalDialogTestFixture();
 });
 

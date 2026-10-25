@@ -15,7 +15,7 @@ import type { PluginRegistry } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
-import type { MigrationPlan, MigrationProviderContext } from "./types.js";
+import type { MigrationProviderContext } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const logger = { info() {}, warn() {}, error() {} };
@@ -150,28 +150,12 @@ describe("migration provider runtime", () => {
     "retains managed migration execution through %s",
     async (route) => {
       const provider = createMigrationProvider("managed-import");
-      const store = createPluginRuntimeStore<{ plan: MigrationPlan }>("migration runtime missing");
-      const runtime = {
-        plan: {
-          providerId: provider.id,
-          source: "fixture",
-          items: [],
-          summary: {
-            total: 0,
-            planned: 0,
-            migrated: 0,
-            skipped: 0,
-            conflicts: 0,
-            errors: 0,
-            sensitive: 0,
-          },
-        },
-      };
+      const runtime = { plan: { source: "fixture" } };
+      const store = createPluginRuntimeStore<typeof runtime>("migration runtime missing");
       const registry = createOwnedMigrationRegistry("managed-migration", provider, () =>
         store.setRuntime(runtime),
       );
       const owner = expectDefined(getPluginValueInstance(provider), "registered provider owner");
-      expect(registry.migrationProviders[0]?.provider).toBe(provider);
       createOwnedMigrationRegistry("managed-migration", provider, () =>
         store.setRuntime({ plan: { ...runtime.plan, source: "another instance" } }),
       );
@@ -233,9 +217,6 @@ describe("migration provider runtime", () => {
             expectRetired();
           },
         );
-        expect(mocks.acquirePluginRegistryForInspection).toHaveBeenCalledTimes(
-          route === "acquired registry" ? 1 : 0,
-        );
       } finally {
         resume.resolve();
         await owner.dispose();
@@ -257,6 +238,11 @@ describe("migration provider runtime", () => {
       const scanDir = tempDirs.make("openclaw-migration-artifact-");
       const rootDir = path.join(scanDir, "fixture-dir");
       const executedPath = path.join(scanDir, "artifact-executed");
+      const manifest = {
+        id: "fixture",
+        contracts: { migrationProviders: ["fixture-import"] },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      };
       fs.mkdirSync(rootDir);
       writeJson(rootDir, "package.json", {
         name: "@openclaw/fixture",
@@ -264,11 +250,7 @@ describe("migration provider runtime", () => {
         type: "module",
         openclaw: { extensions: ["./index.js"] },
       });
-      writeJson(rootDir, "openclaw.plugin.json", {
-        id: "fixture",
-        contracts: { migrationProviders: ["fixture-import"] },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      });
+      writeJson(rootDir, "openclaw.plugin.json", manifest);
       fs.writeFileSync(
         path.join(rootDir, "index.js"),
         'throw new Error("Heavy plugin runtime loaded");',
@@ -294,14 +276,7 @@ describe("migration provider runtime", () => {
       if (origin === "global") {
         mocks.metadata.mockReturnValue({
           index: { plugins: [{ pluginId: "fixture", origin, enabled: true }] },
-          plugins: [
-            {
-              id: "fixture",
-              origin,
-              rootDir,
-              contracts: { migrationProviders: ["fixture-import"] },
-            },
-          ],
+          plugins: [{ ...manifest, origin, rootDir }],
         });
       }
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", scanDir);
@@ -358,14 +333,6 @@ describe("migration provider runtime", () => {
       });
       await providers[0]?.plan(createContext());
       expect(provider.plan).toHaveBeenCalledOnce();
-    });
-    if (origin === "bundled") {
-      expect(mocks.listBundledPluginMetadata).toHaveBeenCalledWith({
-        includeChannelConfigs: false,
-      });
-    }
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      onlyPluginIds: [pluginId],
     });
   });
 

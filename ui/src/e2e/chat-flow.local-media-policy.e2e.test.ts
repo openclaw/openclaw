@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {
@@ -17,6 +17,11 @@ const outbound = "/home/node/.openclaw/media/outbound";
 const ticket = "ticket-local";
 
 suite.define(() => {
+  beforeAll(async () => {
+    // Prepare Gateway fixture workers before the per-case behavior timeout starts.
+    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
+  });
+
   it.each([
     ["audio", `${outbound}/voice.mp3`, "allowed"],
     ["image", `${outbound}/image.png`, "allowed"],

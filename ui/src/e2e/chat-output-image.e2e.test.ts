@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Outputs image preview" });
@@ -44,12 +45,7 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page, {
         sessionKey,
-        historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "The project preview is ready in Outputs." }],
-          },
-        ],
+        historyMessages: [chatMessage("assistant", "The project preview is ready in Outputs.")],
         methodResponses: {
           "artifacts.list": { artifacts: [artifact, pendingArtifact] },
           "artifacts.download": {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import type { MessagePort } from "node:worker_threads";
 import zlib from "node:zlib";
 import { requireDirectorySync, syncDirectorySync } from "../../infra/directory-durability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -57,6 +58,7 @@ import {
 import type {
   SessionColdExternalization,
   SessionColdMutationResult,
+  SessionColdOversized,
   SessionColdPlan,
   SessionColdPrepared,
 } from "./session-cold-storage.types.js";
@@ -92,7 +94,7 @@ export type SessionColdBatchPrepared = {
   protectionKeys: string[];
   prepared: SessionColdPrepared[];
   externalizations: SessionColdExternalization[];
-  oversizedSessionIds: string[];
+  oversizedTranscripts: SessionColdOversized[];
   envelopeBytes: number;
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
@@ -113,11 +115,16 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
     }
 );
 export type SessionColdWorkerData = {
-  type: "sqlite-transcript-archive-v2";
-  operation: "cold-mutate";
   commitGate: SharedArrayBuffer;
   sourceMatches?: SessionColdSourceMatches;
   plan: SessionColdMutationPlan;
+};
+
+export type SqliteArchiveMutationRequest = {
+  type: "cold-mutation";
+  operationId: number;
+  data: SessionColdWorkerData;
+  port: MessagePort;
 };
 
 async function prepareSessionColdArchiveInWorker(
@@ -350,7 +357,7 @@ export async function prepareSessionColdBatchInWorker(
     protectionKeys: [],
     prepared: [],
     externalizations: [],
-    oversizedSessionIds: [],
+    oversizedTranscripts: [],
     envelopeBytes: 0,
   };
   const selection = selectSessionColdBatch(input);
@@ -358,6 +365,7 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
+  result.oversizedTranscripts = selection.value.oversizedTranscripts;
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({
@@ -388,9 +396,11 @@ export async function prepareSessionColdBatchInWorker(
         throw error;
       }
       if (remaining === MAX_COLD_ARCHIVE_BYTES) {
-        result.oversizedSessionIds.push(
-          candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
-        );
+        result.oversizedTranscripts.push({
+          sessionId:
+            candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
+          lowerBoundBytes: remaining + 1,
+        });
       }
       // A rejected partial envelope consumed the remaining preparation budget too.
       result.envelopeBytes = maxBytes;

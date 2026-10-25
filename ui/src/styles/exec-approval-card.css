@@ -1,0 +1,303 @@
+.exec-approval-card--modal {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.exec-approval-modal-content {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.exec-approval-modal-content > .exec-approval-list {
+  margin-top: 10px;
+}
+
+.exec-approval-card--severity-warning {
+  --exec-approval-accent: var(--warn);
+}
+
+.exec-approval-card--severity-danger {
+  --exec-approval-accent: var(--danger);
+}
+
+.exec-approval-queue,
+.exec-approval-chip {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+}
+
+.exec-approval-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.exec-approval-chip {
+  padding: 2px 8px;
+}
+
+.exec-approval-command-span {
+  border-radius: 3px;
+  padding: 0 2px;
+  background: color-mix(in srgb, var(--exec-highlight) 34%, transparent);
+  color: var(--text);
+}
+
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.exec-approval-meta {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.exec-approval-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.exec-approval-meta-row span:last-child {
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.exec-approval-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-details summary {
+  width: fit-content;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-details .exec-approval-meta {
+  margin-top: 8px;
+}
+
+.exec-approval-warning {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--warn);
+}
+
+/* Opted in by the mobile composer. Width alone must not restyle desktop cards. */
+.exec-approval-card.exec-approval-card--mobile {
+  min-height: 36px;
+  min-width: 0;
+  flex-shrink: 0;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
+  border-color: var(--chat-composer-hairline, var(--border));
+  border-radius: 22px;
+  font-family: var(--font-body);
+}
+
+.exec-approval-card--mobile .exec-approval-header {
+  gap: 8px;
+}
+
+.exec-approval-card--mobile .exec-approval-title {
+  font-weight: 500;
+}
+
+.exec-approval-card--mobile .exec-approval-countdown {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.exec-approval-mobile-disclosure {
+  min-width: 0;
+  flex-shrink: 0;
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.exec-approval-mobile-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  cursor: var(--cursor-action);
+  list-style: none;
+}
+
+.exec-approval-mobile-summary::-webkit-details-marker {
+  display: none;
+}
+
+.exec-approval-mobile-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.exec-approval-mobile-terminal,
+.exec-approval-mobile-chevron {
+  width: 16px;
+  height: 20px;
+  flex: 0 0 16px;
+  color: var(--muted);
+}
+
+.exec-approval-mobile-disclosure[open] .exec-approval-mobile-chevron {
+  transform: rotate(180deg);
+}
+
+.exec-approval-mobile-summary .exec-approval-command {
+  flex: 1;
+  min-width: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.exec-approval-mobile-summary .exec-approval-command[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+}
+
+.exec-approval-mobile-disclosure[open] .exec-approval-command {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  mask-image: none;
+}
+
+.exec-approval-mobile-host {
+  display: contents;
+}
+
+.exec-approval-mobile-metadata .exec-approval-meta {
+  font-weight: 500;
+}
+
+.exec-approval-mobile-metadata .exec-approval-meta-row span:last-child {
+  font-weight: 400;
+}
+
+.exec-approval-mobile-host .exec-approval-meta-row span:last-child {
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+
+.exec-approval-card--mobile .exec-approval-actions:not(openclaw-modal-actions) {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.exec-approval-card--mobile .exec-approval-actions .btn {
+  width: auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.exec-approval-card--mobile .exec-approval-mobile-action--allow-always {
+  margin-right: auto;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  background: transparent;
+  color: var(--text);
+}
+
+.exec-approval-card--mobile .exec-approval-mobile-action--deny {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.exec-approval-list {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.exec-approval-list__heading {
+  padding: 2px 4px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.exec-approval-list__item {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.25fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-list__item:hover,
+.exec-approval-list__item:focus-visible {
+  border-color: var(--border);
+  background: var(--secondary);
+}
+
+.exec-approval-list__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.exec-approval-list__agent,
+.exec-approval-list__command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.exec-approval-list__agent {
+  color: var(--muted);
+}
+
+.exec-approval-list__expiry {
+  color: var(--warn);
+  font: 11px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+}

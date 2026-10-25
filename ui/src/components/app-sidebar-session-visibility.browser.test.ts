@@ -40,11 +40,6 @@ function expectIndicator(indicator: Element, hidden: boolean, animation: string)
   expect(offscreen(indicator)).toBe(hidden);
   expect(getComputedStyle(indicator).animationPlayState).toBe(animation);
 }
-function runningRows(root: ParentNode, indicator = ".session-glyph__ring") {
-  return [...root.querySelectorAll<HTMLElement>(".session-row-host")].filter((row) =>
-    row.querySelector(indicator),
-  );
-}
 function sizeSidebar(sidebar: Parameters<typeof settleRoster>[0], height: number) {
   sidebar.style.cssText = `display:block;position:fixed;inset:0 auto auto 0;width:280px;height:${height}px`;
   const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
@@ -79,29 +74,14 @@ function runState(
 
 function visibilityProbe() {
   const NativeObserver = IntersectionObserver;
-  const observers: IntersectionObserver[] = [];
   const activeObservers = new Set<IntersectionObserver>();
   const observed = new Set<Element>();
-  const intersections = new Map<Element, IntersectionObserverEntry>();
-  let delivery = Promise.withResolvers<void>();
-  let deliveryReady = () => true;
   vi.stubGlobal(
     "IntersectionObserver",
     class extends NativeObserver {
       constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-        super((entries, observer) => {
-          callback(entries, observer);
-          if (options?.root instanceof Element && options.root.matches(".sidebar-shell__body")) {
-            for (const entry of entries) {
-              intersections.set(entry.target, entry);
-            }
-            if (deliveryReady()) {
-              delivery.resolve();
-            }
-          }
-        }, options);
+        super(callback, options);
         if (options?.root instanceof Element && options.root.matches(".sidebar-shell__body")) {
-          observers.push(this);
           activeObservers.add(this);
         }
       }
@@ -121,19 +101,7 @@ function visibilityProbe() {
       }
     },
   );
-  return {
-    observers,
-    activeObservers,
-    observed,
-    intersections,
-    get delivered() {
-      return delivery.promise;
-    },
-    reset(ready = () => true) {
-      deliveryReady = ready;
-      delivery = Promise.withResolvers<void>();
-    },
-  };
+  return { activeObservers, observed };
 }
 
 it("unmounts offscreen session content and restores its live indicators when scrolled back", async () => {
@@ -230,38 +198,10 @@ it("unmounts offscreen session content and restores its live indicators when scr
   expect(probe.activeObservers.size).toBe(1);
 });
 
-it("registers the aggregate agent run ring without exposing session rows", async () => {
-  const probe = visibilityProbe();
-  const rows = runState({ agentId: "main", isMain: false }).result!.sessions;
-  const { sidebar, context, result } = await mountRoster(agents, rows);
-  const scroller = sizeSidebar(sidebar, 800);
-  sidebar.sidebarAgentsMode = "roster";
-  await settleRoster(sidebar);
-  const roster = sidebar.querySelector("openclaw-sidebar-agent-roster")!;
-  await waitForSolid(() => expect(runningRows(roster)).toHaveLength(1));
-  const visibleRuns = runningRows(roster);
-  expect(probe.activeObservers.size).toBe(1);
-  expect(visibleRuns.filter((row) => probe.observed.has(row))).toHaveLength(1);
-  expect(probe.observed.size).toBe(1);
-  const first = visibleRuns[0]!;
-  expect(first.closest('[data-agent-group="main"]')).not.toBeNull();
-  expect(first.querySelector("[data-session-key]")).toBeNull();
-  expect(first.getBoundingClientRect().bottom).toBeLessThan(
-    scroller.getBoundingClientRect().bottom,
-  );
-  expectIndicator(ring(first), false, "running");
-  result.sessions = result.sessions.map((row) =>
-    Object.assign({}, row, { hasActiveRun: false, status: "done" }),
-  );
-  await rosterActivityStore(context).refresh();
-  await settleRoster(sidebar);
-  expect(runningRows(roster)).toHaveLength(0);
-  expect(probe.observed.size).toBe(0);
-});
-
 it.each(["chip", "roster"] as const)(
-  "preserves running animations through %s session refreshes",
+  "preserves running animations through %s refreshes and retires their observations",
   async (mode) => {
+    const probe = visibilityProbe();
     const variants: Partial<GatewaySessionRow>[] = [{}, { icon: "🦞" }, { owner }, pair];
     const roster = runState(
       (index) => ({
@@ -280,8 +220,7 @@ it.each(["chip", "roster"] as const)(
       result,
       context,
     } = await mountRoster(agents, roster.result!.sessions);
-    sidebar.style.cssText =
-      "display:block;position:fixed;inset:0 auto auto 0;width:320px;height:900px";
+    const scroller = sizeSidebar(sidebar, 900);
     sidebar.sidebarAgentsMode = mode;
     await settleRoster(sidebar);
     const indicators = () => [
@@ -293,6 +232,18 @@ it.each(["chip", "roster"] as const)(
     ];
     await waitForSolid(() => expect(indicators()).toHaveLength(mode === "chip" ? 4 : 1));
     const original = indicators();
+    expect(probe.activeObservers.size).toBe(1);
+    if (mode === "roster") {
+      const aggregate = original[0]!.closest<HTMLElement>(".session-row-host")!;
+      expect(probe.observed.has(aggregate)).toBe(true);
+      expect(probe.observed.size).toBe(1);
+      expect(aggregate.closest('[data-agent-group="main"]')).not.toBeNull();
+      expect(aggregate.querySelector("[data-session-key]")).toBeNull();
+      expect(aggregate.getBoundingClientRect().bottom).toBeLessThan(
+        scroller.getBoundingClientRect().bottom,
+      );
+      expectIndicator(original[0]!, false, "running");
+    }
     const keys = original.map((element) =>
       mode === "chip"
         ? element.closest<HTMLElement>("[data-session-key]")!.dataset.sessionKey
@@ -338,5 +289,17 @@ it.each(["chip", "roster"] as const)(
         expect(animations[index]!.currentTime).toBe(500);
       });
     }
+    result.sessions = result.sessions.map((row) => ({
+      ...row,
+      hasActiveRun: false,
+      status: "done",
+    }));
+    harness.publishList({ result });
+    if (mode === "roster") {
+      await rosterActivityStore(context).refresh();
+    }
+    await settleRoster(sidebar);
+    expect(indicators()).toHaveLength(0);
+    expect(probe.observed.size).toBe(0);
   },
 );

@@ -208,7 +208,7 @@ export function executePluginStateCommand(
                 (_command, tx) => tx.entries(shortcut.store).length === 0,
               );
               if (probe.value) {
-                return { ...probe, value: shortcut.value };
+                return { ...probe, value: shortcut.value, emptyShortcut: true as const };
               }
             }
             const run = () => executePluginStateOperation(store, command.input, handler);

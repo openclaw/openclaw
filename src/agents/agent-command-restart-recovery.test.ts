@@ -9,7 +9,6 @@ import {
   buildRestartRecoveryTerminalDeliveryEvidence as capture,
 } from "./agent-command-restart-recovery.js";
 import { hasMessagingToolDeliveryToSource as deliveredToSource } from "./subagents/announce/subagent-announce-completion-delivery.js";
-import { createDirectAnnounceResponseClassifier } from "./subagents/announce/subagent-announce-direct-response.js";
 
 const session = { sessionId: "session-1", updatedAt: 1 };
 const source = { channel: "discord", to: "channel:123" };
@@ -89,116 +88,63 @@ function project(result: TerminalDeliveryInput) {
   return evidence;
 }
 
-const classify = createDirectAnnounceResponseClassifier({
-  params: {
-    sourceTool: "subagent_settle",
-    expectsCompletionMessage: false,
-    requesterIsSubagent: false,
-  },
-  parentOnly: false,
-  requesterSessionBound: true,
-  replyExpectation: "optional",
-  deliveryTarget: {},
-  shouldDeliverAgentFinal: true,
-  requiresMessageToolDelivery: false,
-  isSubagentCompletion: false,
-  hasSuccessfulTrustedSubagentNoOutputCompletion: false,
-  hasRequiredSubagentNoOutputCompletion: false,
-  subagentDirectMessageCompletionRequiresMessageTool: false,
-  effectiveDirectOrigin: undefined,
-  requesterSessionOrigin: undefined,
-  textCompletionDirectDeliveryKind: "completed_result",
-  tryTextCompletionDirectDelivery: async () => undefined,
-});
-
-const delivery = (result: TerminalDeliveryInput) => classify({ status: "ok", result });
 const suppressedOutcomes = (reason: string, count = 65): PayloadOutcome[] =>
   Array.from({ length: count }, (_, index) => ({ index, status: "suppressed", reason }));
+const suppressed = (reason: string, payloadOutcomes?: PayloadOutcome[]) => ({
+  status: "suppressed" as const,
+  resultCount: 0,
+  reason,
+  payloadOutcomes,
+});
 const silent = { terminalReply: { disposition: "silent" as const } };
 const privateError = new Error("private synthetic failure");
-const ambiguous = { delivered: false, disposition: "ambiguous" };
-
-it.each<[string, TerminalDeliveryInput, boolean]>([
-  ["intentional silent final", { meta: silent }, true],
-  ["unsettled yielded silence", { meta: { ...silent, yielded: true } }, false],
-  ["pending continuation", { meta: { ...silent, continuationPending: true } }, false],
-  ["aborted silent run", { meta: { ...silent, aborted: true } }, false],
-  ["failed silent run", { meta: { ...silent, error: privateError } }, false],
-  ["settled yield", { meta: { yielded: true }, requesterContinuationSettled: true }, true],
-  ["legacy empty optional receipt", { payloads: [] }, true],
-])("replays %s without inventing visible delivery", async (_name, result, delivered) => {
-  const stored = project(result);
-  const classified = await delivery(stored);
-  expect(classified).toMatchObject({ delivered, path: "direct" });
-  expect(JSON.stringify(stored)).not.toContain("private synthetic failure");
-  if (!delivered) {
-    expect(classified).toMatchObject({ reason: "visible_reply_missing" });
-  }
-});
-
-it.each([
-  ["no_visible_payload", { reason: "visible_reply_missing" }],
-  ["message_tool_only", { reason: "visible_reply_missing" }],
-  ["adapter_returned_no_identity", { disposition: "ambiguous" }],
+// Announcement classification is covered by subagent-announce-delivery{,.yielded-settle}.test.ts;
+// this owner proves the exact facts surviving persistence, including private-error redaction.
+it.each<[string, TerminalDeliveryInput, Partial<ReturnType<typeof capture>>]>([
+  ["silent final", { meta: silent }, { meta: silent }],
+  ["yielded", { meta: { ...silent, yielded: true } }, { meta: { ...silent, yielded: true } }],
   [
-    "cancelled_by_message_sending_hook",
-    { disposition: "intentional_non_delivery", reason: "delivery_suppressed" },
+    "pending",
+    { meta: { ...silent, continuationPending: true } },
+    { meta: { ...silent, continuationPending: true } },
   ],
-] as const)("replays suppression %s", async (reason, expected) => {
-  const stored = project({
-    payloads: [],
-    meta: { yielded: true },
-    deliveryStatus: { status: "suppressed", resultCount: 0, reason },
-  });
-  expect(await classify({ status: "ok", result: stored })).toMatchObject({
-    delivered: false,
-    ...expected,
-  });
+  ["aborted", { meta: { ...silent, aborted: true } }, { meta: { ...silent, aborted: true } }],
+  ["failed", { meta: { ...silent, error: privateError } }, { meta: { ...silent, error: true } }],
+  [
+    "settled",
+    { meta: { yielded: true }, requesterContinuationSettled: true },
+    { meta: { yielded: true }, requesterContinuationSettled: true },
+  ],
+  ["empty", { payloads: [] }, {}],
+])("persists %s completion facts", (_name, input, expected) => {
+  expect(project(input)).toEqual({ runId: "original", captured: true, ...expected });
 });
 
 it.each<Omit<PayloadOutcome, "index">>([
   { status: "suppressed", reason: "adapter_returned_no_identity" },
   { status: "failed", sentBeforeError: true },
   { status: "sent" },
-])("retains truncated $status send evidence", async (lastOutcome) => {
+])("retains truncated $status send evidence", (lastOutcome) => {
   const original = {
     payloads: Array.from({ length: 65 }, () => ({ text: "progress", isCommentary: true })),
-    deliveryStatus: {
-      status: "suppressed",
-      resultCount: 0,
-      reason: "cancelled_by_message_sending_hook",
-      payloadOutcomes: [
-        ...suppressedOutcomes("cancelled_by_message_sending_hook", 64),
-        { index: 64, ...lastOutcome },
-      ],
-    },
+    deliveryStatus: suppressed("cancelled_by_message_sending_hook", [
+      ...suppressedOutcomes("cancelled_by_message_sending_hook", 64),
+      { index: 64, ...lastOutcome },
+    ]),
   } satisfies TerminalDeliveryInput;
-  expect(await delivery(original)).toMatchObject(ambiguous);
   const stored = project(original);
   expect(stored?.deliveryStatus?.payloadOutcomes).toHaveLength(64);
   expect(stored?.deliveryStatus?.payloadOutcomes?.[63]).toEqual({ index: 64, ...lastOutcome });
-  expect(await delivery(stored)).toMatchObject(ambiguous);
 });
 
-it("preserves late policy cancellation beyond the bounded outcome list", async () => {
+it("preserves late policy cancellation beyond the bounded outcome list", () => {
   const original = {
-    deliveryStatus: {
-      status: "suppressed",
-      resultCount: 0,
-      reason: "no_visible_payload",
-      payloadOutcomes: [
-        ...suppressedOutcomes("no_visible_payload", 64),
-        { index: 64, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
-      ],
-    },
+    deliveryStatus: suppressed("no_visible_payload", [
+      ...suppressedOutcomes("no_visible_payload", 64),
+      { index: 64, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+    ]),
   } satisfies TerminalDeliveryInput;
-  const expected = {
-    delivered: false,
-    disposition: "intentional_non_delivery",
-    reason: "delivery_suppressed",
-  };
-  expect(await delivery(original)).toMatchObject(expected);
-  expect(await delivery(project(original))).toMatchObject(expected);
+  expect(project(original).deliveryStatus?.reason).toBe("cancelled_by_message_sending_hook");
 });
 
 it("bounds suppression reasons and outcomes without retaining raw terminal objects", () => {

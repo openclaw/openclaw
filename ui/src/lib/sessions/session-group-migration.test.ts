@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { sessionRequest as groupRequests } from "./hydration-family.test-support.ts";
 import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness as sharedGatewayHarness,
@@ -11,7 +12,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
-import { sessionRpc as groupRequests, sessionChanged } from "./session-rpc.test-support.ts";
+import { sessionChanged } from "./session-rpc.test-support.ts";
 
 const legacyKey = "openclaw:sessions:custom-groups";
 const clientGroup = { name: "Client", position: 0 };

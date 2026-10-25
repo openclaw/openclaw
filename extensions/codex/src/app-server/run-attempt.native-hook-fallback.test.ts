@@ -18,7 +18,7 @@ import {
 } from "./inference-routing.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import * as nativeToolCatalog from "./native-tool-catalog.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
@@ -49,7 +49,10 @@ import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
-import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createLeasedCodexLifecycleHarness,
+  writeNativeCatalogFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function participantHostCapabilities(
@@ -579,6 +582,8 @@ describe("Codex native tool catalog probe cleanup", () => {
     "awaits isolated catalog probe exit before continuing (read failure: %s)",
     async (fails) => {
       const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+      const codexHome = path.join(tempDir, "catalog-home");
+      const rolloutPath = path.join(codexHome, "sessions", "catalog-thread.jsonl");
       const attempt = createStartedThreadHarness();
       const connection = await prepareCodexAttemptConnection({
         params,
@@ -593,7 +598,7 @@ describe("Codex native tool catalog probe cleanup", () => {
         onWrite: (line, send) => {
           const { id, method } = JSON.parse(line);
           if (method === "initialize") {
-            send({ id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` } });
+            send({ id, result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome } });
           }
         },
       });
@@ -601,11 +606,6 @@ describe("Codex native tool catalog probe cleanup", () => {
       try {
         const runtime = await prepareCodexAttemptRuntime(connection);
         using _ = { [Symbol.dispose]: runtime.nativeExecutionPolicy.release };
-        connection.mutable.startupBinding = {
-          threadId: "catalog-thread",
-          cwd: params.workspaceDir,
-          connectionScope: "supervision",
-        };
         vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(probe.client);
         connection.attemptClientFactory = createIsolatedCodexAppServerClient;
         connection.appServer.start = {
@@ -613,14 +613,22 @@ describe("Codex native tool catalog probe cleanup", () => {
           command: process.execPath,
           args: [],
           headers: {},
+          codexHome,
         };
         connection.startupClientAuthProfileId = null;
-        const failure = new Error("native catalog unavailable");
-        const read = vi.spyOn(nativeToolCatalog, "loadCodexNativeToolCatalog");
-        if (fails) {
-          read.mockRejectedValue(failure);
-        } else {
-          read.mockResolvedValue([]);
+        connection.mutable.startupBinding = {
+          threadId: "catalog-thread",
+          cwd: params.workspaceDir,
+          connectionScope: "supervision",
+          rolloutPath,
+          dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
+          appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+            connection.appServer,
+            connection.agentDir,
+          ),
+        };
+        if (!fails) {
+          await writeNativeCatalogFixture(rolloutPath, "catalog-thread", []);
         }
         const stdinClosed = once(probe.process.stdin, "close");
         let settled = false;
@@ -638,7 +646,9 @@ describe("Codex native tool catalog probe cleanup", () => {
         expect(probe.process.exitCode).toBeNull();
         probe.emitExit();
         if (fails) {
-          await expect(pending).rejects.toBe(failure);
+          await expect(pending).rejects.toThrow(
+            "Codex native metadata is unavailable on the selected client",
+          );
         } else {
           await pending;
         }

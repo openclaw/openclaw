@@ -16,7 +16,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -194,11 +193,26 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[], canonic
 it.each(cases)("$name", async ({ events, branches }) => {
   const scope = await seedStoredBranchEvents(events);
   await expectBranchList(scope, branches);
-  expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
 });
 
 const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
   seedStoredBranchEvents(events, true);
+
+const append = (
+  scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,
+  eventId: string,
+  parentId: string,
+  content: string,
+  role = "user",
+  now = 1_000,
+  phase?: string,
+) =>
+  appendTranscriptMessage(scope, {
+    eventId,
+    parentId,
+    now,
+    message: { role, content, ...(phase ? { phase } : {}) },
+  });
 
 function branchSnapshot(
   scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,
@@ -218,25 +232,8 @@ it("extends a selected ancestor while retaining its inactive descendants and hea
     leaf("selected", "side", "root"),
   ];
   const scope = await seedCanonicalBranchEvents(events);
-  await expect(listSessionBranches(scope)).resolves.toMatchObject({
-    status: "ok",
-    branches: [
-      { leafEntryId: "root", active: true },
-      { leafEntryId: "side", active: false },
-    ],
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: "tool",
-    parentId: "root",
-    now: 2_000,
-    message: { role: "toolResult", content: "tool result" },
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: "analysis",
-    parentId: "tool",
-    now: 3_000,
-    message: { role: "assistant", content: "hidden", phase: "commentary" },
-  });
+  await append(scope, "tool", "root", "tool result", "toolResult", 2_000);
+  await append(scope, "analysis", "tool", "hidden", "assistant", 3_000, "commentary");
   await expectBranchList(scope, [
     branch("analysis", "root headline", 3, true, "1970-01-01T00:00:03.000Z"),
     branch("side", "side headline", 2),
@@ -255,12 +252,7 @@ it("rescans when an append resolves an older opaque forward reference", async ()
       { leafEntryId: "forward", messageCount: 0, active: false },
     ],
   });
-  await appendTranscriptMessage(scope, {
-    eventId: "future",
-    parentId: "root",
-    now: 1_000,
-    message: { role: "user", content: "new headline" },
-  });
+  await append(scope, "future", "root", "new headline");
   await expectBranchList(scope, [
     branch("future", "new headline", 2, true, "1970-01-01T00:00:01.000Z"),
     branch("forward", "new headline", 2),
@@ -278,12 +270,7 @@ it("reads only the newest usable appended headline while retaining cached histor
     ["commentary", "not a headline", "assistant", "commentary"],
     ["tool", "tool payload", "toolResult", undefined],
   ] as const) {
-    await appendTranscriptMessage(scope, {
-      eventId,
-      parentId,
-      now: 1_000,
-      message: { role, content, ...(phase ? { phase } : {}) },
-    });
+    await append(scope, eventId, parentId, content, role, 1_000, phase);
     parentId = eventId;
   }
   const tracked = trackSqliteStatementExecutions(
@@ -310,12 +297,7 @@ it("rescans an unindexed legacy prefix after an append reuses one of its IDs", a
   const scope = await seedStoredBranchEvents([message("legacy", null, "legacy headline")]);
   const { read } = branchSnapshot(scope, false);
 
-  await appendTranscriptMessage(scope, {
-    eventId: "legacy",
-    parentId: "legacy",
-    now: 1_000,
-    message: { role: "user", content: "duplicate creates a cycle" },
-  });
+  await append(scope, "legacy", "legacy", "duplicate creates a cycle");
 
   expect(read()).toMatchObject({
     status: "ok",

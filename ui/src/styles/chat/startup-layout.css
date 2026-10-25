@@ -1124,14 +1124,27 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--bottom .sidebar-column__divider {
-  --resize-handle-line-block: 100%;
   width: 100%;
 }
 
 .sidebar-column__divider {
-  --resize-handle-line-inline: 100%;
+  --resize-handle-line-size: var(--shell-divider-size);
+  --resize-handle-active-line-size: calc(var(--shell-divider-size) * 2);
+
   z-index: 2;
   grid-area: divider;
+}
+
+/* Paint the complete line inside the gutter, clear of the overlapping panel. */
+.sidebar-column__divider::after {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  transform: none;
+}
+
+.sidebar-column__divider[orientation="horizontal"]::after {
+  top: auto;
+  bottom: 0;
 }
 
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
@@ -1368,7 +1381,8 @@ openclaw-chat-sidebar-region,
   grid-template-areas: "main-header" "main" "divider" "side-header" "side";
 }
 
-.sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+.sidebar-region--desktop [data-region="side"],
+.sidebar-region--desktop [data-region-header="side"] {
   position: absolute;
   z-index: 3;
   grid-area: auto;

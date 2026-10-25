@@ -100,33 +100,15 @@ describe("OpenAI realtime voice response control", () => {
     emitSessionUpdated(socket);
     await connecting;
     const sent = parseSent(socket);
-    expect(sent).toEqual([
-      expect.objectContaining({ type: "session.update" }),
-      expect.objectContaining({ type: "conversation.item.create" }),
-      {
-        type: "session.update",
-        session: {
-          type: "realtime",
-          audio: {
-            input: {
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 500,
-                create_response: false,
-                interrupt_response: true,
-              },
-            },
-          },
-        },
-      },
-      expect.objectContaining({ type: "response.create" }),
-      {
-        type: "input_audio_buffer.append",
-        audio: Buffer.from("before-ready").toString("base64"),
-      },
+    expect(sent.map(({ type }) => type)).toEqual([
+      "session.update",
+      "conversation.item.create",
+      "session.update",
+      "response.create",
+      "input_audio_buffer.append",
     ]);
+    expectTurnDetection(socket, false, 2);
+    expect(sent[4]?.audio).toBe(Buffer.from("before-ready").toString("base64"));
     expect(onReady).toHaveBeenCalledTimes(1);
     emitServerEvent(socket, { type: "response.done" });
 

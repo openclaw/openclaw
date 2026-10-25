@@ -25,6 +25,7 @@ import {
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { waitForAbort } from "./contract.test-support.js";
 import { evaluateDecisionInRegistry, prepareDecisionProviderReload } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import type { DecisionProviderV1 } from "./types.js";
@@ -51,10 +52,6 @@ const policyConfig = (llm: LlmPolicy, agents = config.agents): OpenClawConfig =>
   agents,
   plugins: { entries: { owner: { llm } } },
 });
-const waitForAbort = (signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 const sdk = (host: Host, overrides: Partial<ReturnType<typeof options>> = {}) =>
   host.api.runtime.decisions.evaluate(batch, { ...options(), ...overrides });
 const expectOk = async (pending: Promise<unknown>) => {

@@ -108,11 +108,15 @@ class SessionPrefetcher {
     this.stopVisibility?.();
     this.stopVisibility = undefined;
     this.cancelScheduledWork();
+    this.lastAttemptAt.clear();
   }
 
   update(snapshot: SessionPrefetchSnapshot): void {
     const previous = this.snapshot;
     this.snapshot = snapshot;
+    if (previous?.client !== snapshot.client) {
+      this.lastAttemptAt.clear();
+    }
     if (
       !previous ||
       previous.client !== snapshot.client ||
@@ -218,18 +222,18 @@ class SessionPrefetcher {
     // Hydration and cursor removal are synchronous owned writes. Renew
     // only after checking the previous claim, before another await.
     let ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache();
+    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache.isCurrent();
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
     const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
-    if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
-      return;
-    }
     const target = { sessionKey: candidate.canonicalSessionKey };
     const readSnapshot = () => readChatSessionSnapshot(this.cache, snapshot.snapshotHost, target);
     const cacheSnapshot = (value: ChatSessionSnapshot) =>
       cacheChatSessionSnapshot(this.cache, snapshot.snapshotHost, target, value);
     try {
+      if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
+        return;
+      }
       let existing = readSnapshot();
       if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
         existing = await this.snapshotStore.read(candidate.snapshotKey);
@@ -238,6 +242,7 @@ class SessionPrefetcher {
         }
         if (existing) {
           cacheSnapshot(existing);
+          ownsCache.dispose();
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
       }
@@ -259,6 +264,7 @@ class SessionPrefetcher {
           const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
           cacheSnapshot(withoutCursor);
           existing = withoutCursor;
+          ownsCache.dispose();
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
         if (!mayRequest()) {
@@ -312,10 +318,20 @@ class SessionPrefetcher {
         `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
         error,
       );
+    } finally {
+      ownsCache.dispose();
     }
   }
 
   private selectCandidate(snapshot: SessionPrefetchSnapshot): SessionPrefetchCandidate | null {
+    const now = Date.now();
+    // Only attempts within the cooldown affect admission; old session keys
+    // must not accumulate across a long-lived page's navigation history.
+    for (const [key, attemptedAt] of this.lastAttemptAt) {
+      if (now - attemptedAt >= SESSION_PREFETCH_COOLDOWN_MS) {
+        this.lastAttemptAt.delete(key);
+      }
+    }
     const row = snapshot.rows?.find((candidate) => candidate.key === snapshot.intentSessionKey);
     // The presented pane owns transient run adoption and replay. Prefetch only
     // warms durable history after navigation intent.
@@ -339,7 +355,7 @@ class SessionPrefetcher {
     if (savedAt !== null && savedAt >= activityAt) {
       return null;
     }
-    const elapsed = Date.now() - (this.lastAttemptAt.get(snapshotKey) ?? 0);
+    const elapsed = now - (this.lastAttemptAt.get(snapshotKey) ?? 0);
     if (elapsed < SESSION_PREFETCH_COOLDOWN_MS) {
       this.schedule(SESSION_PREFETCH_COOLDOWN_MS - elapsed);
       return null;

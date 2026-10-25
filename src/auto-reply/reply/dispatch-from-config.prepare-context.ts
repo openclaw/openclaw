@@ -45,7 +45,7 @@ import {
 } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 
 export async function prepareDispatchOperationContext(state: PrepareDispatchDeliveryReadyState) {
@@ -430,7 +430,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     const queuedFinal =
       isReplyOperationStalledBeforeOutput(operation) &&
       state.replyOperationRunState.continueStalledTurn?.() !== true
-        ? dispatcher.sendFinalReply({ text: STALLED_TURN_NOTICE_TEXT, isError: true })
+        ? dispatcher.sendFinalReply({
+            text: resolveStalledTurnNoticeText(operation),
+            isError: true,
+          })
         : false;
     if (
       state.turnAdoptionState &&

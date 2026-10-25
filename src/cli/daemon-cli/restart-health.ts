@@ -98,6 +98,7 @@ type GatewayRestartWaitOptions = {
   requireRunningService?: boolean;
   requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  allowUnattributedDiagnosticProbe?: boolean;
   /** Diagnostics can report absence immediately; start/restart callers wait for installation. */
   waitForMissingService?: boolean;
   supervisorKeepsAlive?: boolean;
@@ -258,6 +259,7 @@ export async function waitForGatewayHealthyRestart(
         expectedBuildId: params.expectedBuildId,
         requirePluginHealth: params.requirePluginHealth,
         requireChannelHealth: params.requireChannelHealth,
+        allowUnattributedDiagnosticProbe: params.allowUnattributedDiagnosticProbe,
         probeContext,
         configuredProbe,
         probeHosts,

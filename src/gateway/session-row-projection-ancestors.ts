@@ -18,6 +18,7 @@ import {
   selectStoredSessionLineage,
 } from "./session-store-key.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
+import { reuseSessionRowChildLinks } from "./session-utils-projection.js";
 
 /** Materialization reads current physical relations from the projection's existing indexes. */
 export function createSessionRowRelationReads(owner: {
@@ -110,7 +111,7 @@ export function createSessionRowRelationReads(owner: {
       });
       // Keyed child refreshes reorder the parent index; presentation must stay stable.
       links.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-      return links;
+      return reuseSessionRowChildLinks(links, row.materialized?.source.childLinks);
     },
   };
 }

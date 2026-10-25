@@ -139,9 +139,9 @@ it("passes refreshed OAuth grant metadata to the catalog", async () => {
     credential: refreshed,
     readCurrentCredential: null,
   });
-  const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
+  let observedAuth: ReturnType<ProviderAuthResolver> | undefined;
   const provider = catalogProvider("openai", "OpenAI", async (ctx) => {
-    observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
+    observedAuth = ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" });
     return null;
   });
   const prepared = await prepare({
@@ -159,17 +159,14 @@ it("passes refreshed OAuth grant metadata to the catalog", async () => {
     resolveProviderApiKey: () => ({ apiKey: undefined }),
   });
   await runProviderCatalog(prepared);
-
-  expect(observedAuth).toEqual([
-    {
-      apiKey: "oauth-marker",
-      discoveryApiKey: refreshed.access,
-      authFlow: undefined,
-      profileId,
-      mode: "oauth",
-      source: "profile",
-    },
-  ]);
+  expect(observedAuth).toEqual({
+    apiKey: "oauth-marker",
+    discoveryApiKey: refreshed.access,
+    authFlow: undefined,
+    profileId,
+    mode: "oauth",
+    source: "profile",
+  });
 });
 
 it.each([true, false])(

@@ -140,6 +140,10 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+This retention covers Node and Bun late imports, including CommonJS dependencies
+and JSON. Module state already loaded by the updater stays shared through cleanup;
+imports outside that retained generation continue using the active installation.
+
 Source updates qualify the installed pnpm launcher outside the checkout so even
 its version probe cannot rewrite the checkout's lockfile. If another version is
 needed, the updater uses a temporary Corepack shim or npm-installed pnpm matching
@@ -229,7 +233,9 @@ the update result. This does not change Gateway authentication or pairing.
 The retained verifier runs the previous package, so an update that changes the
 Gateway protocol version, in either direction, gets the same HTTP identity check
 with an RPC protocol warning instead of waiting for an RPC handshake that cannot
-succeed.
+succeed. When readiness never settles, the recorded timeout names both the read
+the budget interrupted and the last health probe error, such as an RPC
+rejection.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`

@@ -1,10 +1,8 @@
 // Mirrors successful outbound payloads into the configured session transcript.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  getOwnedSessionTranscriptWriterFence,
-  runWithoutOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";

@@ -16,6 +16,21 @@ import {
 type ZalouserIngressDispatch = Parameters<typeof createZalouserIngressMonitor>[0]["dispatch"];
 type ZalouserIngressLifecycle = Parameters<ZalouserIngressDispatch>[1];
 
+const adoptingDispatch = () =>
+  vi.fn<ZalouserIngressDispatch>(async (_message, lifecycle) => lifecycle.onAdopted());
+
+function enqueueStored(
+  queue: ChannelIngressQueue<ZalouserTestIngressPayload>,
+  id: string,
+  rawMessage = JSON.stringify(createRawZalouserMessage({ msgId: id })),
+) {
+  return queue.enqueue(
+    id,
+    { version: 1, receivedAt: 1, rawMessage },
+    { receivedAt: 1, laneKey: "direct:sender-1" },
+  );
+}
+
 function createIngress(
   params: Omit<
     Parameters<typeof createZalouserIngressMonitor>[0],
@@ -49,9 +64,7 @@ describe("Zalouser durable ingress", () => {
         ...queue,
         enqueue,
       };
-      const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
-        await lifecycle.onAdopted();
-      });
+      const dispatch = adoptingDispatch();
       const terminal = observeZalouserIngressVerdict(gatedQueue, "durable-first", "completed");
       const ingress = createIngress({
         queue: gatedQueue,
@@ -74,20 +87,8 @@ describe("Zalouser durable ingress", () => {
 
   it("recovers a pending event with a fresh drain and dispatches exactly once", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
-      const rawMessage = createRawZalouserMessage({ msgId: "restart" });
-      await queue.enqueue(
-        "restart",
-        {
-          version: 1,
-          receivedAt: 1,
-          rawMessage: JSON.stringify(rawMessage),
-        },
-        { receivedAt: 1, laneKey: "direct:sender-1" },
-      );
-
-      const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
-        await lifecycle.onAdopted();
-      });
+      await enqueueStored(queue, "restart");
+      const dispatch = adoptingDispatch();
       const terminal = observeZalouserIngressVerdict(queue, "restart", "completed");
       const recovered = createIngress({
         queue,
@@ -104,9 +105,7 @@ describe("Zalouser durable ingress", () => {
 
   it("rejects a post-completion duplicate by platform msgId", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
-      const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
-        await lifecycle.onAdopted();
-      });
+      const dispatch = adoptingDispatch();
       const terminal = observeZalouserIngressVerdict(queue, "duplicate", "completed");
       const ingress = createIngress({
         queue,
@@ -252,11 +251,7 @@ describe("Zalouser durable ingress", () => {
 
   it("dead-letters malformed persisted envelopes without dispatch", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
-      await queue.enqueue(
-        "malformed",
-        { version: 1, receivedAt: 1, rawMessage: "{" },
-        { receivedAt: 1, laneKey: "direct:sender-1" },
-      );
+      await enqueueStored(queue, "malformed", "{");
       const dispatch = vi.fn();
       const terminal = observeZalouserIngressVerdict(queue, "malformed", "failed");
       const ingress = createIngress({
@@ -388,15 +383,7 @@ describe("Zalouser durable ingress", () => {
 
   it("does not start a claim after stop wins an async prune", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
-      await queue.enqueue(
-        "shutdown",
-        {
-          version: 1,
-          receivedAt: 1,
-          rawMessage: JSON.stringify(createRawZalouserMessage({ msgId: "shutdown" })),
-        },
-        { receivedAt: 1, laneKey: "direct:sender-1" },
-      );
+      await enqueueStored(queue, "shutdown");
       const { promise: pruneGate, resolve: releasePrune } = Promise.withResolvers<void>();
       const realPrune = queue.prune.bind(queue);
       const gatedQueue: ChannelIngressQueue<ZalouserTestIngressPayload> = {

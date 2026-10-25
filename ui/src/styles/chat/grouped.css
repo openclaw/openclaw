@@ -781,6 +781,11 @@
   margin: 0 auto;
 }
 
+.chat-notice__actions {
+  display: flex;
+  justify-content: center;
+}
+
 /* Mid-run context is part of the agent's turn: a compact card flush with its column. */
 .chat-notice-inline {
   width: fit-content;
@@ -1070,12 +1075,12 @@ img.chat-avatar {
 
 /* Center on the first text line inside the native 4px-padded assistant bubble:
    the strip row and bubble padding above the line, minus half the avatar's
-   overhang beyond one line box. */
+   overhang beyond one chat line box, independent of the avatar glyph line-height. */
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
     var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
-      (1lh - var(--chat-avatar-column)) / 2
+      (var(--chat-text-size) * 1.5 - var(--chat-avatar-column)) / 2
   );
 }
 

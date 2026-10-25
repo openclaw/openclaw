@@ -57,38 +57,33 @@ async function createFixture() {
     response.end("ok");
   });
   const origin = await listenLoopback(server);
-  const model = attachProviderAuthAuthority(
-    attachModelProviderLocalService(
-      makeProviderModelFixture({
-        id: "fixture-model",
-        provider: "local-auth-fixture",
-        api: "openai-completions",
-        baseUrl: `${origin}/v1`,
-      }),
-      {
-        command: process.execPath,
-        args: [
-          "-e",
-          `require("node:http").get(${JSON.stringify(`${origin}/started`)},r=>r.resume());setInterval(()=>{},1000);`,
-        ],
-        readyTimeoutMs: 5_000,
-      },
-    ),
-    () => {
-      if (!state.current) {
-        throw new Error(retired);
-      }
+  const serviceModel = attachModelProviderLocalService(
+    makeProviderModelFixture({
+      id: "fixture-model",
+      provider: "local-auth-fixture",
+      api: "openai-completions",
+      baseUrl: `${origin}/v1`,
+    }),
+    {
+      command: process.execPath,
+      args: [
+        "-e",
+        `require("node:http").get(${JSON.stringify(`${origin}/started`)},r=>r.resume());setInterval(()=>{},1000);`,
+      ],
+      readyTimeoutMs: 5_000,
     },
   );
+  const model = attachProviderAuthAuthority(serviceModel, () => {
+    if (!state.current) {
+      throw new Error(retired);
+    }
+  });
   return {
     state,
     model,
     acquire: (key?: string, target = model) =>
       ensureModelProviderLocalService(target, key ? headers(key) : undefined),
-    async close() {
-      await stopManagedProviderLocalServices();
-      await closeHttpServer(server);
-    },
+    close: () => closeHttpServer(server),
   };
 }
 
@@ -99,6 +94,7 @@ describe("local service credential authority", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
+    await stopManagedProviderLocalServices();
     await fixture.close();
   });
 
@@ -128,8 +124,7 @@ describe("local service credential authority", () => {
         const track = localServiceProcess.trackLocalServiceProcess;
         vi.spyOn(localServiceProcess, "trackLocalServiceProcess").mockImplementation((child) => {
           const owned = track(child);
-          // Revoke after spawn, before readiness dispatch. A child HTTP notification
-          // can arrive after an already-authorized health request is in flight.
+          // Revoke synchronously before readiness dispatch, not in the child notification.
           state.current = false;
           return owned;
         });

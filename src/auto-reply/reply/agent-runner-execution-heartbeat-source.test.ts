@@ -10,7 +10,7 @@ import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   setupAgentRunnerExecutionTestState,
   useProductionEmbeddedRunExecutionParamsForTest,
   type FallbackRunnerParams,
@@ -37,13 +37,8 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       followupRun.run.model = model;
       state.isCliProviderMock.mockReturnValue(isCli);
       await useProductionEmbeddedRunExecutionParamsForTest();
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-          provider,
-          model,
-          attempts: [],
-        }),
+      state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+        runFallbackCandidate(params, provider, model),
       );
       const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
       let sourceReply:
@@ -142,14 +137,9 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
     state.isCliProviderMock.mockReturnValue(isCli);
     await useProductionEmbeddedRunExecutionParamsForTest();
     let current = true;
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      return {
-        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-        provider,
-        model,
-        attempts: [],
-      };
-    });
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, provider, model),
+    );
     const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
     let sourceFailure: unknown;
     let admissionFailure: unknown;

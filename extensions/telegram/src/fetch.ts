@@ -706,9 +706,6 @@ export function resolveTelegramTransport(
     forceFallback: (reason: string, err?: unknown) =>
       promoteStickyAttempt(stickyAttemptIndex + 1, err ?? new Error("forced fallback"), reason),
     close: async () => {
-      if (closed) {
-        return;
-      }
       closed = true;
       const toDestroy = [...ownedDispatchers];
       ownedDispatchers.clear();
