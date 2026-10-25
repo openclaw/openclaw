@@ -7,6 +7,7 @@ import type { Ajv } from "@modelcontextprotocol/client/validators/ajv";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { JsonSchemaRefinement } from "@openclaw/normalization-core/json-schema";
 import type { JsonSchemaValidator as PreparedValidator } from "@openclaw/normalization-core/json-schema-validator";
+import { findJsonSchemaUnsafePatternError } from "../shared/json-schema-defaults.js";
 import {
   createJsonSchemaValidatorProvider,
   type JsonSchemaValidatorProvider,
@@ -89,6 +90,12 @@ export function createInterpretedMcpJsonSchemaValidator(formats: McpFormats): js
   let draft7Provider: JsonSchemaValidatorProvider | undefined;
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      // Same admission as the compiled validator: remotely supplied patterns must pass the
+      // safe-regex guard before the interpreted provider can execute them.
+      const unsafePatternError = findJsonSchemaUnsafePatternError(schema as never);
+      if (unsafePatternError) {
+        throw new Error(`Invalid MCP JSON Schema: ${unsafePatternError}`);
+      }
       const modern = schema.$schema === DRAFT_2020_12_SCHEMA;
       let validator: PreparedValidator;
       try {

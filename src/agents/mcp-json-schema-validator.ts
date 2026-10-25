@@ -13,7 +13,10 @@ import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
 import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
-import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import {
+  findJsonSchemaShapeError,
+  findJsonSchemaUnsafePatternError,
+} from "../shared/json-schema-defaults.js";
 import { createInterpretedMcpJsonSchemaValidator } from "./mcp-json-schema-validator-interpreted.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -51,6 +54,12 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
+      // Remotely supplied tool schemas must not get regex execution in the host process:
+      // reject catastrophic patterns before Ajv or TypeBox compiles them.
+      const unsafePatternError = findJsonSchemaUnsafePatternError(schema as never);
+      if (unsafePatternError) {
+        throw new Error(`Invalid MCP JSON Schema: ${unsafePatternError}`);
+      }
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }

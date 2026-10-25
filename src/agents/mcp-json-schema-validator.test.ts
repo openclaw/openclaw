@@ -235,6 +235,72 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     expect(validate({ b: 2 }).valid).toBe(true);
     expect(validate({ b: "invalid" }).valid).toBe(false);
   });
+
+  it("rejects unsafe regex patterns in string schemas before compiling them", () => {
+    const provider = createMcpJsonSchemaValidator();
+    expect(() =>
+      provider.getValidator({
+        type: "object",
+        properties: { cmd: { type: "string", pattern: "^(a+)+$" } },
+        required: ["cmd"],
+      }),
+    ).toThrow(/not safe to compile/);
+  });
+
+  it("rejects unsafe regex patterns in patternProperties keys", () => {
+    const provider = createMcpJsonSchemaValidator();
+    expect(() =>
+      provider.getValidator({
+        type: "object",
+        patternProperties: { "^(x+x+)+y$": { type: "number" } },
+      }),
+    ).toThrow(/not safe to compile/);
+  });
+
+  it("rejects unsafe regex patterns nested in applicator schemas", () => {
+    const provider = createMcpJsonSchemaValidator();
+    expect(() =>
+      provider.getValidator({
+        type: "object",
+        allOf: [
+          {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            properties: { cmd: { type: "string", pattern: "(a|aa)+$" } },
+          },
+        ],
+      }),
+    ).toThrow(/not safe to compile/);
+  });
+
+  it("keeps schemas with safe patterns validating unchanged", () => {
+    const validate = createMcpJsonSchemaValidator().getValidator({
+      type: "object",
+      properties: { name: { type: "string", pattern: "^[a-z][a-z0-9-]*$" } },
+      patternProperties: { "^x-[a-z]+$": { type: "number" } },
+      required: ["name"],
+    });
+    expect(validate({ name: "proof-safe-1", "x-a": 3 }).valid).toBe(true);
+    expect(validate({ name: "BAD NAME" }).valid).toBe(false);
+    expect(validate({ name: "ok", "x-a": "not-a-number" }).valid).toBe(false);
+    const modern = createMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: { cmd: { type: "string", pattern: "^[a-z]+$" } },
+      required: ["cmd"],
+    });
+    expect(modern({ cmd: "ok" }).valid).toBe(true);
+    expect(modern({ cmd: "NO" }).valid).toBe(false);
+  });
+
+  it("does not treat pattern-shaped annotation data as regex sources", () => {
+    const validate = createMcpJsonSchemaValidator().getValidator({
+      type: "object",
+      properties: {
+        config: { type: "object", default: { pattern: "^(a+)+$" } },
+      },
+    });
+    expect(validate({ config: { pattern: "^(a+)+$" } }).valid).toBe(true);
+  });
 });
 
 describe("MCP without string code generation", () => {

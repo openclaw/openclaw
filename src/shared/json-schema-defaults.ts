@@ -7,6 +7,7 @@ import {
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { validateSchemaKeywordShapes, validateTypeKeyword } from "./json-schema-keywords.js";
 
 type LocalRefResolution =
@@ -389,6 +390,74 @@ export function findJsonSchemaShapeError(
   context?: JsonSchemaReferenceContext,
 ): string | undefined {
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined, context);
+}
+
+const schemaAnnotationKeywords = new Set(["default", "example", "examples"]);
+const unsafeSchemaPatternPreviewLimit = 120;
+
+function collectSchemaRegexPatterns(
+  node: JsonSchemaNode,
+  patterns: string[],
+  seen: Set<object>,
+): void {
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      collectSchemaRegexPatterns(entry, patterns, seen);
+    }
+    return;
+  }
+  if (!isRecord(node) || seen.has(node)) {
+    return;
+  }
+  seen.add(node);
+  for (const [keyword, value] of Object.entries(node)) {
+    if (keyword === "pattern") {
+      if (typeof value === "string") {
+        patterns.push(value);
+      }
+      continue;
+    }
+    if (schemaAnnotationKeywords.has(keyword)) {
+      // Annotation payloads are data, not subschemas; their keys are never regex sources.
+      continue;
+    }
+    if (keyword === "patternProperties" && isRecord(value)) {
+      for (const pattern of Object.keys(value)) {
+        patterns.push(pattern);
+      }
+    }
+    if (schemaMapKeywords.has(keyword) && isRecord(value)) {
+      for (const child of Object.values(value)) {
+        collectSchemaRegexPatterns(child, patterns, seen);
+      }
+      continue;
+    }
+    if (schemaValueKeywords.has(keyword) || schemaArrayKeywords.has(keyword)) {
+      collectSchemaRegexPatterns(value, patterns, seen);
+    }
+  }
+}
+
+/**
+ * Return the first `pattern` / `patternProperties` regex that the safe-regex guard rejects,
+ * or undefined when every pattern in the schema is safe to compile and execute. Used to keep
+ * remotely supplied schemas (e.g. MCP tool schemas) from executing catastrophic backtracking
+ * in the host process.
+ */
+export function findJsonSchemaUnsafePatternError(schema: JsonSchemaValue): string | undefined {
+  const patterns: string[] = [];
+  collectSchemaRegexPatterns(schema, patterns, new Set());
+  for (const pattern of patterns) {
+    const result = compileSafeRegexDetailed(pattern);
+    if (!result.regex) {
+      const preview =
+        pattern.length > unsafeSchemaPatternPreviewLimit
+          ? `${pattern.slice(0, unsafeSchemaPatternPreviewLimit)}…`
+          : pattern;
+      return `regex pattern ${JSON.stringify(preview)} is not safe to compile (${result.reason ?? "unknown"})`;
+    }
+  }
+  return undefined;
 }
 
 function inlineLocalRefsForMatch(
