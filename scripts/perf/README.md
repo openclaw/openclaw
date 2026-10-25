@@ -275,6 +275,18 @@ session lifecycles (including disposal); public HTTP also checks a conditional G
 feature probes, not complete Gateway turns. The count guard rejects repeated
 imports/evaluations after first use. Omit the preload and count guard for timing;
 use matched baseline/candidate processes and report sample counts and host noise.
+Set `--iterations N` (integer at least 2) to change each path's sample count.
+
+For coordinated warm samples, give both processes the same fresh `--barrier-dir DIR`
+and distinct `--side a` / `--side b` values. Before each path's second operation,
+the probe exclusively creates `<name>-<side>.ready`, then polls every 25 ms for
+`<name>.start` containing a future epoch time in milliseconds. The coordinator
+waits for both ready files and writes the shared start file; the probes wait until
+that time before measuring. Each barrier has a 120-second total wait limit;
+existing ready files, malformed or past start times, and filesystem errors other
+than a missing start file fail the probe. MCP has separate `mcp-catalog`,
+`mcp-call`, and `mcp-fresh-session` barriers. The single conditional public GET
+has no barrier. Barrier waits are excluded from operation timings.
 
 ### Summary identity strings
 

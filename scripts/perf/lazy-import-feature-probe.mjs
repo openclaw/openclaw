@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 
 // Run each mode in a fresh process; traced counts and untraced latency need separate runs.
@@ -11,17 +12,30 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     output: { type: "string" },
+    iterations: { type: "string", default: "20" },
+    "barrier-dir": { type: "string" },
+    side: { type: "string" },
     help: { type: "boolean" },
     "expect-single-load": { type: "boolean" },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/perf/lazy-import-feature-probe.mjs <mcp|config|public|parser> [--output result.json] [--expect-single-load]\nFor import counts, also load scripts/perf/lazy-import-trace-preload.mjs with OPENCLAW_LAZY_IMPORT_TRACE_DIR set. Each mode verifies 20 operations. --expect-single-load requires tracing and rejects repeated imports/evaluations after first use.",
+    "Usage: node --import ./scripts/tsx.mjs scripts/perf/lazy-import-feature-probe.mjs <mcp|config|public|parser> [--output result.json] [--iterations N] [--barrier-dir DIR --side a|b] [--expect-single-load]\nFor import counts, also load scripts/perf/lazy-import-trace-preload.mjs with OPENCLAW_LAZY_IMPORT_TRACE_DIR set. Each path defaults to 20 operations. --expect-single-load requires tracing and rejects repeated imports/evaluations after first use.",
   );
   process.exit(0);
 }
 const [mode] = positionals;
+const iterations = Number(values.iterations);
+assert(Number.isSafeInteger(iterations) && iterations >= 2, "--iterations must be an integer >= 2");
+if (values.side !== undefined) {
+  assert(values.side === "a" || values.side === "b", "--side must be a or b");
+}
+const barrierDir = values["barrier-dir"] ? path.resolve(values["barrier-dir"]) : undefined;
+if (barrierDir) {
+  assert(values.side, "--side is required with --barrier-dir");
+  await fs.mkdir(barrierDir, { recursive: true });
+}
 assert(
   ["mcp", "config", "public", "parser"].includes(mode),
   "mode: mcp | config | public | parser",
@@ -64,7 +78,34 @@ const phase = (value) => {
 };
 phase(`${mode}-setup`);
 const operations = [];
+async function waitForSteadyStart(name, directory) {
+  const deadline = performance.now() + 120_000;
+  await fs.writeFile(path.join(directory, `${name}-${values.side}.ready`), "", { flag: "wx" });
+  let start;
+  while (start === undefined) {
+    assert(performance.now() < deadline, `${name} barrier timed out`);
+    try {
+      start = Number(await fs.readFile(path.join(directory, `${name}.start`), "utf8"));
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+      await delay(25);
+    }
+  }
+  assert(
+    Number.isSafeInteger(start) && start > Date.now(),
+    `${name} start must be a future epoch ms`,
+  );
+  while (Date.now() < start) {
+    assert(performance.now() < deadline, `${name} barrier timed out`);
+    await delay(Math.min(25, start - Date.now()));
+  }
+}
 async function measure(name, iteration, run) {
+  if (barrierDir && iteration === 2) {
+    await waitForSteadyStart(name, barrierDir);
+  }
   phase(`${name}-${iteration}`);
   const before = trace?.events.length ?? 0;
   const started = performance.now();
@@ -152,7 +193,7 @@ async function runMcp() {
     sessionId: "synthetic-feature-probe",
   });
   try {
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= iterations; i++) {
       await measure("mcp-catalog", i, async () => {
         const catalog = await runtime.getCatalog();
         assert.deepEqual(
@@ -163,7 +204,7 @@ async function runMcp() {
         return { tools: catalog.tools.length };
       });
     }
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= iterations; i++) {
       await measure("mcp-call", i, async () => {
         const value = `synthetic-${i}`;
         const result = await runtime.callTool("probe", "echo", { value });
@@ -171,7 +212,7 @@ async function runMcp() {
         return { echoed: true };
       });
     }
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= iterations; i++) {
       await measure("mcp-fresh-session", i, async () => {
         const freshRuntime = createSessionMcpRuntime({
           ...runtimeOptions,
@@ -191,9 +232,9 @@ async function runMcp() {
         }
       });
     }
-    assert.equal(counts.initialize, 21);
-    assert.equal(counts["tools/list"], 21);
-    assert.equal(counts["tools/call"], 20);
+    assert.equal(counts.initialize, iterations + 1);
+    assert.equal(counts["tools/list"], iterations + 1);
+    assert.equal(counts["tools/call"], iterations);
     return { transport: "real loopback HTTP; production guarded transport", wireRequests: counts };
   } finally {
     phase("mcp-cleanup");
@@ -219,7 +260,7 @@ async function runConfig() {
     shellEnvFallback: "defer",
   });
   let expected;
-  for (let i = 1; i <= 20; i++) {
+  for (let i = 1; i <= iterations; i++) {
     await measure("config-invalid-snapshot", i, async () => {
       const snapshot = await readConfigFileSnapshotFromContext(context);
       assert.equal(snapshot.valid, false);
@@ -321,7 +362,7 @@ async function runPublic() {
   const origin = await listen(server);
   let expectedBody, expectedEtag;
   try {
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= iterations; i++) {
       await measure("public-session-get", i, async () => {
         const response = await fetch(`${origin}${route}`);
         const body = await response.text();
@@ -374,7 +415,7 @@ async function runParser() {
     maxTokens: 1024,
     cost,
   };
-  for (let i = 1; i <= 20; i++) {
+  for (let i = 1; i <= iterations; i++) {
     await measure("parser-stream", i, async () => {
       const assistantOutput = {
         role: "assistant",
@@ -442,7 +483,7 @@ try {
     instrumented: Boolean(trace),
     pid: process.pid,
     node: process.version,
-    iterations: 20,
+    iterations,
     evidence,
     operations,
     traceEvents: trace?.events ?? [],
