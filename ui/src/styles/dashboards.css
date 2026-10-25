@@ -140,7 +140,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--card);
-  box-shadow: none;
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
