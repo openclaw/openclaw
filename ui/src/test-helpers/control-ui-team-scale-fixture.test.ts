@@ -198,7 +198,11 @@ describe("Team-scale Gateway fixture", () => {
   });
 
   it("keeps persistent child details outside both boot root windows", () => {
-    const fixture = createControlUiTeamScaleFixture({ now, sidebarPersistentChildren: true });
+    const fixture = createControlUiTeamScaleFixture({
+      now,
+      sidebarPersistentChildren: true,
+      sidebarPresentation: true,
+    });
     const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
     const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
     const roots = [
@@ -213,6 +217,12 @@ describe("Team-scale Gateway fixture", () => {
     const children = owner.list({ spawnedBy: parentKey, limit: 100 }).result;
     expect(children.sessions.map((row) => row.key)).toEqual(childKeys);
     expect(children.sessions.every((row) => !row.key.includes(":subagent:"))).toBe(true);
+    const viewer = fixture.sidebarListInput.viewerProfileId;
+    const owned = owner.list({ rowMode: "sidebar", ownerId: viewer, limit: 200 }).result;
+    expect(owned.sessions).toHaveLength(200);
+    expect(owned.hasMore).toBe(true);
+    expect(owned.sessions.some((row) => childKeys.includes(row.key))).toBe(false);
+    expect(children.sessions.every((row) => row.owner?.actor.id === viewer)).toBe(true);
   });
 
   it("keeps an off-roster deep-link target outside both boot windows and pins", () => {

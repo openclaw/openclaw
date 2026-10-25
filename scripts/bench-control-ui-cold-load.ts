@@ -1307,7 +1307,10 @@ try {
       try {
         const records = await new Promise<
           Array<{
-            model: { sections: Array<{ visibleLimit: number; rows: SavedRow[] }> };
+            model: {
+              pinnedSessions: SavedRow[];
+              sections: Array<{ visibleLimit: number; rows: SavedRow[] }>;
+            };
           }>
         >((resolve, reject) => {
           const request = database
@@ -1332,6 +1335,7 @@ try {
               collect(row.children ?? []);
             }
           };
+          collect(model.pinnedSessions);
           collect(model.sections.flatMap((section) => section.rows));
           return (
             (!expanded || model.sections.some(({ visibleLimit }) => visibleLimit > 10)) &&
@@ -1371,12 +1375,15 @@ try {
   > = [];
   if (!firstLoad) {
     await page.goto(url);
+    const ownerFilter = values["session-event-ancestor-refs"]
+      ? "all"
+      : fixture.sidebarPersistentChildren
+        ? `owner:${fixture.sidebarListInput.viewerProfileId}`
+        : "involving-me";
     try {
       await page.locator("#sidebar-session-owner-title").click();
       await page
-        .locator(
-          `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
-        )
+        .locator(`.sidebar-session-owner-filter [role="option"][data-value="${ownerFilter}"]`)
         .click();
     } catch (error) {
       await writeFile(
