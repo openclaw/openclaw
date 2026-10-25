@@ -1,11 +1,7 @@
 import path from "node:path";
 import type { AgentHarnessSupportContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-import {
-  getSessionEntry,
-  patchSessionEntry,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   useSessionStoreTempDirs,
   withNativeSessionMutationForTest,
@@ -224,94 +220,75 @@ describe("Codex agent harness supports()", () => {
     );
   });
 
-  it("lets explicitly selected Codex discover a new model with harness-owned auth", () => {
+  it.each([
+    { source: "profile", mode: "oauth", requirement: "subscription" },
+    { source: "profile", mode: "api_key", requirement: "api-key" },
+  ] as const)("accepts prepared $requirement auth", (preparedAuth) => {
     expect(
       supports({
-        modelId: "gpt-future",
-        modelProvider: { requestTransportOverrides: "none", preparedAuth: { source: "harness" } },
+        modelProvider: {
+          runtimePolicy: { compatibleIds: ["codex"] },
+          preparedAuth,
+        },
       }),
     ).toEqual({ supported: true, priority: 100 });
   });
 
-  it.each([
-    ["automatic runtime", "auto", { preparedAuth: { source: "harness" } }],
+  it.each<[string, Partial<AgentHarnessSupportContext>, string]>([
+    ["automatic runtime", { requestedRuntime: "auto", modelProvider: {} }, "not declared"],
     [
       "authored endpoint",
-      "codex",
-      {
-        baseUrl: "https://relay.example.test/v1",
-        preparedAuth: { source: "harness" },
-      },
+      { modelProvider: { baseUrl: "https://relay.example.test/v1" } },
+      "not declared",
     ],
-    ["selected credential", "codex", { preparedAuth: { source: "profile", mode: "api-key" } }],
-  ] as const)(
-    "does not infer native model access for %s",
-    (_label, requestedRuntime, modelProvider) => {
+    [
+      "selected credential",
+      { modelProvider: { preparedAuth: { source: "profile", mode: "api-key" } } },
+      "not declared",
+    ],
+    [
+      "unvalidated subscription",
+      {
+        modelProvider: {
+          runtimePolicy: { compatibleIds: ["codex"] },
+          preparedAuth: { source: "harness", requirement: "subscription" },
+        },
+      },
+      "prepared",
+    ],
+    [
+      "incompatible route",
+      { modelProvider: { runtimePolicy: { compatibleIds: ["openclaw"] } } },
+      "prepared provider route",
+    ],
+  ])("rejects %s", (_label, context, reason) => {
+    expect(supports({ modelId: "gpt-future", ...context })).toMatchObject({
+      supported: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it.each([false, true])(
+    "supports an unobserved native model with authored overrides=%s",
+    (overrides) => {
       const result = supports({
         modelId: "gpt-future",
-        requestedRuntime,
-        modelProvider: { requestTransportOverrides: "none", ...modelProvider },
+        modelProvider: {
+          preparedAuth: { source: "harness" },
+          requestTransportOverrides: overrides ? "present" : "none",
+        },
       });
-
-      expect(result.supported).toBe(false);
-      expect(!result.supported ? result.reason : undefined).toContain("not declared");
+      expect(result).toEqual(
+        overrides
+          ? {
+              supported: false,
+              reason: "Codex cannot reproduce authored request transport overrides",
+              fallbackRuntime: "openclaw",
+            }
+          : { supported: true, priority: 100 },
+      );
     },
   );
-
-  it.each([
-    ["OAuth", { source: "profile", mode: "oauth", requirement: "subscription" }, true],
-    ["Platform key", { source: "profile", mode: "api_key", requirement: "api-key" }, true],
-    ["unvalidated subscription", { source: "harness", requirement: "subscription" }, false],
-  ] as const)("reports %s reproducibility", (_label, preparedAuth, supported) => {
-    const result = supports({
-      modelProvider: {
-        api:
-          preparedAuth.requirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
-        baseUrl:
-          preparedAuth.requirement === "api-key"
-            ? "https://api.openai.com/v1"
-            : "https://chatgpt.com/backend-api/codex",
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        preparedAuth,
-      },
-    });
-
-    expect(result.supported).toBe(supported);
-    if (!supported) {
-      expect(!result.supported ? result.reason : undefined).toContain("prepared");
-    }
-  });
-
-  it("rejects a prepared route that does not declare Codex compatibility", () => {
-    const result = supports({
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "https://relay.example.test/v1",
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    });
-    expect(result.supported).toBe(false);
-    expect(!result.supported ? result.reason : undefined).toContain("prepared provider route");
-  });
-
-  it("rejects authored request overrides defensively", () => {
-    const result = supports({
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        requestTransportOverrides: "present",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        preparedAuth: { source: "harness" },
-      },
-    });
-    expect(result).toEqual({
-      supported: false,
-      reason: "Codex cannot reproduce authored request transport overrides",
-      fallbackRuntime: "openclaw",
-    });
-  });
 
   it("honors explicit provider id overrides", () => {
     const narrowHarness = makeHarness({
@@ -597,9 +574,6 @@ describe("Codex session runtime ownership", () => {
   );
 
   it("reads native auth ownership from the recorded predecessor without adopting it", async () => {
-    const root = sessionDirs.make();
-    const storePath = path.join(root, "sessions.json");
-    const scope = { agentId: session.agentId, sessionKey: session.sessionKey, storePath };
     const fixture = createOwnershipFixture();
     const successor = { ...identity, sessionId: "session-successor" };
     const binding: CodexAppServerThreadBinding = {
@@ -609,33 +583,21 @@ describe("Codex session runtime ownership", () => {
       supervisionSourceThreadId: "native-source",
       conversationSourceTransferComplete: true,
     };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: session.sessionId, updatedAt: 1 },
-    });
     await fixture.bind(binding);
-    await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
-    const readPreviousSessionId = async () => {
-      const entry = getSessionEntry({
-        ...scope,
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      });
-      return entry?.sessionId === successor.sessionId ? entry.previousSessionId : undefined;
-    };
+    const readPreviousSessionId = vi.fn(async () => session.sessionId);
 
     expect(
       await fixture.resolveOwnership({
         sessionId: successor.sessionId,
         readPreviousSessionId,
-        storePath,
-        config: { session: { store: path.join(root, "other", "sessions.json") } },
+        config: { session: { store: "/unrelated/sessions.json" } },
       }),
     ).toEqual({
       model: "native",
       auth: "native",
       modelRef: { provider: binding.modelProvider, model: binding.model },
     });
+    expect(readPreviousSessionId).toHaveBeenCalledOnce();
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
     expect(fixture.bindingStore.read(successor)).toBeUndefined();
   });

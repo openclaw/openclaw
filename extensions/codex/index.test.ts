@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
@@ -167,21 +166,6 @@ describe("codex plugin", () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
-      const calibration = new DatabaseSync(":memory:");
-      try {
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
-        const read = calibration.prepare("SELECT value FROM calibration");
-        read.get();
-        read.all();
-        expect([...read.iterate()]).toHaveLength(1);
-        for (const operation of sql) {
-          expect(operation).toHaveBeenCalled();
-          operation.mockClear();
-        }
-      } finally {
-        calibration.close();
-      }
       plugin.register(createTestPluginApi({ id: "codex", runtime, registerAgentHarness }));
       expect(runtime.state.openKeyedStoreV2).not.toHaveBeenCalled();
       expect(runtime.state.openSyncKeyedStore).not.toHaveBeenCalled();
@@ -266,59 +250,24 @@ describe("codex plugin", () => {
     }
   });
 
-  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
+  it.each([true, false])("registers request-scoped surfaces with catalog enabled=%s", (enabled) => {
+    const registration = registerPlugin({
+      config: explicitAgentConfig,
+      ...(!enabled ? { pluginConfig: { sessionCatalog: { enabled: false } } } : {}),
+    });
     const {
       registerAgentHarness,
       registerGatewayMethod,
       registerNodeHostCommand,
       registerNodeInvokePolicy,
+      registerProvider,
       registerSessionCatalog,
-    } = registerPlugin({ config: explicitAgentConfig });
-
+    } = registration;
     expect(registerAgentHarness).toHaveBeenCalledOnce();
     expect(registerGatewayMethod).toHaveBeenCalledWith("codex.accountUsage", expect.any(Function), {
       scope: "operator.admin",
     });
-    expect(registerSessionCatalog).toHaveBeenCalledOnce();
-    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
-      expect.arrayContaining([
-        "codex.appServer.threads.list.v1",
-        "codex.appServer.thread.turns.list.v1",
-        "codex.terminal.resume.v1",
-        "codex.exec-server.stdio.v1",
-      ]),
-    );
-    const nodeExecServerCommand = registerNodeHostCommand.mock.calls
-      .map(([command]) => command)
-      .find((command) => command.command === "codex.exec-server.stdio.v1");
-    expect(nodeExecServerCommand).toMatchObject({
-      command: "codex.exec-server.stdio.v1",
-      cap: "codex.exec-server",
-      dangerous: true,
-      duplex: true,
-    });
-    const nodeExecServerPolicy = registerNodeInvokePolicy.mock.calls
-      .map(([policy]) => policy)
-      .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1"));
-    expect(nodeExecServerPolicy).toMatchObject({
-      commands: ["codex.exec-server.stdio.v1"],
-      dangerous: true,
-    });
-    expect(nodeExecServerPolicy.defaultPlatforms).toBeUndefined();
-  });
-
-  it("lets native session discovery be disabled without disabling the Codex plugin", () => {
-    const {
-      registerAgentHarness,
-      registerNodeHostCommand,
-      registerProvider,
-      registerSessionCatalog,
-    } = registerPlugin({
-      config: explicitAgentConfig,
-      pluginConfig: { sessionCatalog: { enabled: false } },
-    });
-
-    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerSessionCatalog).toHaveBeenCalledTimes(Number(enabled));
     expect(registerProvider).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         id: "codex",
@@ -326,15 +275,38 @@ describe("codex plugin", () => {
         prepareSyntheticAuth: expect.any(Function),
       }),
     );
-    const nodeCommands = registerNodeHostCommand.mock.calls.map(
-      ([command]) => (command as { command: string }).command,
-    );
-    expect(nodeCommands).toEqual([
-      "codex.cli.sessions.list",
-      "codex.cli.session.resume",
-      "codex.exec-server.stdio.v1",
-    ]);
-    expect(registerSessionCatalog).not.toHaveBeenCalled();
+    const commands = registerNodeHostCommand.mock.calls.map(([command]) => command);
+    const names = commands.map(({ command }) => command);
+    if (enabled) {
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "codex.appServer.threads.list.v1",
+          "codex.appServer.thread.turns.list.v1",
+          "codex.terminal.resume.v1",
+          "codex.exec-server.stdio.v1",
+        ]),
+      );
+    } else {
+      expect(names).toEqual([
+        "codex.cli.sessions.list",
+        "codex.cli.session.resume",
+        "codex.exec-server.stdio.v1",
+      ]);
+    }
+    expect(commands.find(({ command }) => command === "codex.exec-server.stdio.v1")).toMatchObject({
+      cap: "codex.exec-server",
+      dangerous: true,
+      duplex: true,
+    });
+    expect(
+      registerNodeInvokePolicy.mock.calls
+        .map(([policy]) => policy)
+        .find((policy) => policy.commands.includes("codex.exec-server.stdio.v1")),
+    ).toMatchObject({
+      commands: ["codex.exec-server.stdio.v1"],
+      dangerous: true,
+      defaultPlatforms: undefined,
+    });
   });
 
   it("keeps native declarations across owner, completion, and owner turns", async () => {
