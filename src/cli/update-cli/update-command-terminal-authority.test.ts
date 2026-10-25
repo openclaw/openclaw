@@ -164,14 +164,9 @@ function expectPublication(anchor: string) {
 function readReport(run: Run) {
   return syncFs.readFileSync(reportPath(run), "utf8");
 }
-function beforeRelease(
-  run: Run,
-  fixture: Fixture,
-  anchor: string,
-  restartSentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>>,
-) {
+async function beforeRelease(run: Run, fixture: Fixture, anchor: string) {
   return {
-    sentinel: restartSentinel,
+    sentinel: await readRestartSentinelReadOnly(run.env),
     run: readRun(run),
     leaseKind: createManagedHandoffLeaseStore().read(fixture.packageRoot).kind,
     originalJournalRetired: !syncFs.existsSync(anchor),
@@ -209,7 +204,7 @@ it.skipIf(process.platform === "win32").each([
     let postReleaseRead: { mockRestore: () => void } | undefined;
     const postReleaseReadOwners: Array<string | undefined> = [];
     const writeSentinel = sentinel.writeControlPlaneUpdateRestartSentinel;
-    let before: ReturnType<typeof beforeRelease> | undefined;
+    let before: Awaited<ReturnType<typeof beforeRelease>> | undefined;
     let afterRelease: ReturnType<typeof releasedState> | undefined;
     let injectionFailure: unknown;
     let injected = false;
@@ -228,7 +223,7 @@ it.skipIf(process.platform === "win32").each([
         injected = true;
         // Retiring the journal must not admit a successor before terminal release.
         try {
-          before = beforeRelease(run, fixture, anchor, await readRestartSentinelReadOnly(run.env));
+          before = await beforeRelease(run, fixture, anchor);
           contenderFailure = await publishNext().catch((error: unknown) => error);
         } catch (error) {
           // Sentinel notification is best-effort; surface fixture failures outside that catch.
@@ -255,9 +250,7 @@ it.skipIf(process.platform === "win32").each([
             ledger.finishUpdateRun(
               run.runId,
               { status: "succeeded", after: { version: "2.0.0" } },
-              {
-                env: run.env,
-              },
+              { env: run.env },
             );
           }
           await finishSuccessfulPackageSwitch(
@@ -333,23 +326,20 @@ it.skipIf(process.platform === "win32").each([
       leaseKind: "current",
       originalJournalRetired: true,
     });
+    const recorded = readRun(run);
     if (cancel) {
       expect(failure).toBeInstanceOf(results.UpdateCommandPendingRecoveryFailure);
       expect(collectNestedErrorCandidates(failure)).toContain(cancellation);
       expectUnpublished(onResult);
       expect(afterRelease?.run).toEqual(before?.run);
       expect(afterRelease?.report).toBeUndefined();
+      expect(recorded).toEqual(afterRelease?.run);
+      expect(postReleaseReadOwners).toEqual([]);
     } else {
       expect(failure).toBeUndefined();
       expectPublished(onResult, { status: "ok" });
       expect(afterRelease?.run?.status).toBe("succeeded");
       expect(afterRelease?.report).toBeDefined();
-    }
-    const recorded = readRun(run);
-    if (cancel) {
-      expect(recorded).toEqual(afterRelease?.run);
-      expect(postReleaseReadOwners).toEqual([]);
-    } else {
       assert(recorded && afterRelease?.run);
       expect(postReleaseReadOwners.length).toBeGreaterThan(0);
       expect(postReleaseReadOwners.every((role) => role === "agent-embedded")).toBe(true);

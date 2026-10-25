@@ -360,8 +360,6 @@ async function fixture() {
   return {
     root,
     env,
-    file,
-    displaced,
     run,
     opts,
     windows,
@@ -418,11 +416,7 @@ describe("pending recovery finalizer", () => {
   it("preserves a missing canonical database without live context", async () => {
     const f = await fixture();
     f.opts.recovery = undefined;
-    const failure = await f.invoke().then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({
+    await expect(f.invoke()).rejects.toMatchObject({
       name: "UpdateCommandPendingRecoveryFailure",
       result: {
         reason: "candidate-failed",
@@ -480,13 +474,12 @@ describe("pending recovery finalizer", () => {
       });
       f.expectRetained();
       expect(fs.readFileSync(context, "utf8")).toBe("unchanged");
-      expect(f.windows.restore).not.toHaveBeenCalled();
+      expectNoCalls(f.rollback, f.complete, f.windows.restore);
       if (f.opts.recovery) {
         expect(f.windows.complete).not.toHaveBeenCalled();
       } else {
         expect(f.windows.complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
       }
-      expectNoCalls(f.rollback, f.complete);
     },
   );
 });
