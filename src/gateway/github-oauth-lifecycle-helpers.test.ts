@@ -7,10 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearGitHubCredentialVerificationCache } from "../agents/github-oauth-client.js";
 import * as githubOAuthRecords from "../agents/github-oauth-records.js";
 import {
-  inspectGitHubOAuthRecord,
-  writeGitHubOAuthRecord,
-} from "../agents/github-oauth-records.js";
-import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
@@ -20,7 +16,6 @@ import { resolveRequestUrl } from "../plugin-sdk/request-url.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as userGitHubConnections from "../state/user-github-connections.js";
-import { readUserGitHubConnectionAsync } from "../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -81,23 +76,19 @@ describe("GitHub OAuth maintenance inventory", () => {
 });
 
 it("never captures a GitHub App signing key in OAuth device authorization state", () => {
-  const config: OpenClawConfig = {
-    tools: {
-      github: {
-        kind: "app-installation",
-        profileId: OLD_PROFILE,
-        app: {
-          appId: 1,
-          installationId: 2,
-          accountId: 3,
-          repositories: [{ id: 4, fullName: "example/project" }],
-          permissions: { contents: "read" },
-          privateKey: "synthetic-signing-key",
-          keyVersion: "synthetic-v1",
-        },
-      },
+  const config = configForScope("system", {
+    kind: "app-installation",
+    profileId: OLD_PROFILE,
+    app: {
+      appId: 1,
+      installationId: 2,
+      accountId: 3,
+      repositories: [{ id: 4, fullName: "example/project" }],
+      permissions: { contents: "read" },
+      privateKey: "synthetic-signing-key",
+      keyVersion: "synthetic-v1",
     },
-  };
+  });
   expect(() =>
     captureGitHubOAuthAuthorizationIdentity(config, { scope: "system", agentId: "main" }),
   ).toThrow("before connecting an OAuth identity");
@@ -154,7 +145,7 @@ describe("GitHub OAuth real refresh boundary", () => {
         () => {},
       );
     } else {
-      await writeGitHubOAuthRecord(
+      await githubOAuthRecords.writeGitHubOAuthRecord(
         oauthRecord(OLD_PROFILE, { ...common, createdAtMs: now - 60_000 }),
       );
     }
@@ -188,9 +179,9 @@ describe("GitHub OAuth real refresh boundary", () => {
     };
     const read = async () => {
       if (owner) {
-        return (await readUserGitHubConnectionAsync(owner))?.selection;
+        return (await userGitHubConnections.readUserGitHubConnectionAsync(owner))?.selection;
       }
-      const row = await inspectGitHubOAuthRecord(OLD_PROFILE);
+      const row = await githubOAuthRecords.inspectGitHubOAuthRecord(OLD_PROFILE);
       return row.state === "valid" ? row.record : undefined;
     };
     return { open, read, dir };

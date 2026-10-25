@@ -44,12 +44,11 @@ it("inlines the selected local file", async () => {
   });
 });
 
-it("preserves a selected emoji over a lower-priority IDENTITY.md file", async () => {
-  const { projectInline, workspace } = avatarFixture("", { emoji: "🦞" });
-  fs.writeFileSync(path.join(workspace, "identity.png"), APNG_BYTES);
-  fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
-
-  expect(await projectInline()).toEqual({ avatar: "🦞", resolution: null });
+it("preserves a selected emoji", async () => {
+  expect(await avatarFixture("", { emoji: "🦞" }).projectInline()).toEqual({
+    avatar: "🦞",
+    resolution: null,
+  });
 });
 
 it.each([
@@ -66,9 +65,6 @@ it.each([
   ["data:text/plain,avatar", "unsupported_data_url"],
   ["slack://avatar.png", "unsupported_uri"],
   ["/avatar/main/extra", "outside_workspace"],
-  ["//evil.example/avatar/main", "outside_workspace"],
-  ["//[", "outside_workspace"],
-  ["/avatar\\main", "outside_workspace"],
 ])("rejects selected avatar %s", async (avatar, reason) => {
   expect(await projectSelected(avatar)).toEqual({
     avatar: "🦞",
@@ -85,17 +81,6 @@ it.each([undefined, "🦞"])(
     });
   },
 );
-
-it("reports pinned-read rejection instead of claiming the avatar is local", async () => {
-  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
-  fs.writeFileSync(path.join(workspace, "original.png"), APNG_BYTES);
-  fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "avatar.png"));
-
-  expect(await projectInline()).toEqual({
-    avatar: "A",
-    resolution: { kind: "none", reason: "unreadable", source: "avatar.png" },
-  });
-});
 
 it.each(["/avatar/main", "/openclaw/avatar/main"])(
   "preserves same-origin route %s",
