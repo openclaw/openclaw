@@ -104,7 +104,10 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   toolMatcherForEvent: (event: NativeHookRelayEvent) => readonly string[] | undefined;
   commandForEvent: (
     event: NativeHookRelayEvent,
-    options?: NativeHookRelayCommandForEventOptions,
+    options?: {
+      timeoutMs?: number;
+      remoteCredentialPath?: string;
+    },
   ) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
@@ -131,24 +134,17 @@ export type RegisterNativeHookRelayParams = {
   /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
   requirePreToolUse?: boolean;
   ttlMs?: number;
-  command?: NativeHookRelayCommandOptions;
+  command?: {
+    executable?: string;
+    nice?: number | false;
+    nodeExecutable?: string;
+    timeoutMs?: number;
+  };
   signal?: AbortSignal;
   runBeforeToolCall?: NativeHookRelayRegistration["runBeforeToolCall"];
   assertActive?: NativeHookRelayRegistration["assertActive"];
   assertActiveAsync?: NativeHookRelayRegistration["assertActiveAsync"];
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
-};
-
-type NativeHookRelayCommandOptions = {
-  executable?: string;
-  nice?: number | false;
-  nodeExecutable?: string;
-  timeoutMs?: number;
-};
-
-type NativeHookRelayCommandForEventOptions = {
-  timeoutMs?: number;
-  remoteCredentialPath?: string;
 };
 
 export type InvokeNativeHookRelayParams = {
@@ -183,10 +179,8 @@ export type NativeHookRelayInvocationMetadata = Partial<
   >
 >;
 
-type NativeHookRelayPermissionDecision = "allow" | "deny";
-
 export type NativeHookRelayPermissionApprovalResult =
-  | NativeHookRelayPermissionDecision
+  | ("allow" | "deny")
   | "allow-always"
   | "timed-out"
   | "defer";
