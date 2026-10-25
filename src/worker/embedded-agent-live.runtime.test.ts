@@ -43,6 +43,7 @@ function liveFixture(preview = true) {
       }),
     end: (message: Message) =>
       runtime.handleSessionEvent({ type: "agent_end", messages: [message], willRetry: false }),
+    fail: (error: Error, aborted = false) => runtime.enqueueRunFailure({ error, aborted }),
   };
 }
 
@@ -250,7 +251,7 @@ describe("createWorkerLiveRuntime", () => {
   ] as const)(
     "preserves deferred $stopReason terminal after preview loss (cleanup failure: $cleanupFailed)",
     async ({ stopReason, cleanupFailed, expectedStopReason }) => {
-      const { emitted, runtime, send, end } = liveFixture(false);
+      const { emitted, runtime, send, end, fail } = liveFixture(false);
       send({ type: "agent_start" });
       end(
         makeAgentAssistantMessage({
@@ -260,10 +261,7 @@ describe("createWorkerLiveRuntime", () => {
         }),
       );
       if (cleanupFailed) {
-        runtime.enqueueRunFailure({
-          aborted: false,
-          error: new Error("cleanup failed data:video/mp4;base64,QUJDRA=="),
-        });
+        fail(new Error("cleanup failed data:video/mp4;base64,QUJDRA=="));
       }
       expect(emitted).toEqual([]);
       await runtime.emitTerminal();
@@ -292,17 +290,14 @@ describe("createWorkerLiveRuntime", () => {
   ])(
     "retains only recorded replay stops across terminal merges ($recordedStop, $aborted)",
     async ({ recordedStop, aborted }) => {
-      const { emitted, runtime, end } = liveFixture(false);
+      const { emitted, runtime, end, fail } = liveFixture(false);
       const failure = Object.freeze(new Error("request timed out"));
       if (recordedStop) {
         recordModelFallbackStop(failure);
       }
-      runtime.enqueueRunFailure({
-        aborted: false,
-        error: new AggregateError([failure], "wrapper"),
-      });
+      fail(new AggregateError([failure], "wrapper"));
       end(makeAgentAssistantMessage({ content: [], stopReason: aborted ? "aborted" : "stop" }));
-      runtime.enqueueRunFailure({ aborted: false, error: new Error("later provider failure") });
+      fail(new Error("later provider failure"));
       await runtime.emitTerminal();
 
       expect(emitted).toHaveLength(1);
@@ -319,15 +314,15 @@ describe("createWorkerLiveRuntime", () => {
     },
   );
   it("retains and redacts interruption errors before terminal cloud egress", async () => {
-    const { emitted, runtime } = liveFixture(false);
+    const { emitted, runtime, fail } = liveFixture(false);
 
-    runtime.enqueueRunFailure({
-      aborted: true,
-      error: new AggregateError(
+    fail(
+      new AggregateError(
         [new Error(`native close failed data:video/mp4;base64,QUJDRA== ${"x".repeat(8_000)}`)],
         "Runtime-local inference lost Gateway admission",
       ),
-    });
+      true,
+    );
     await runtime.emitTerminal();
 
     expect(emitted).toHaveLength(1);

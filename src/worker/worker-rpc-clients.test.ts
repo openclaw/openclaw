@@ -12,7 +12,8 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { WorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
@@ -185,16 +186,13 @@ const INFERENCE_REQUEST: WorkerInferenceStartParams = {
 
 const TERMINAL_OUTCOME: WorkerInferenceTerminalOutcome = {
   type: "done",
-  message: {
-    role: "assistant",
+  message: makeAgentAssistantMessage({
     content: [{ type: "text", text: "done" }],
-    api: "openai-responses",
     provider: "provider-1",
     model: "model-1",
-    stopReason: "stop",
-    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
+    usage: createUsageFixture(1, 1, 2),
     timestamp: 2,
-  },
+  }),
 };
 
 it("rejects a message beyond the frame byte ceiling before submitting it", async () => {
