@@ -395,20 +395,6 @@ describe("models.list plugin metadata handoff", () => {
     });
   });
 
-  it("projects a prepared owner's Claude CLI route with that owner's plugin registry", async () => {
-    const result = await listClaudeModels({
-      catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
-      cfg: { agents: { defaults: { model: { primary: CLAUDE_MODEL }, models: claudeModels() } } },
-    });
-    expect(
-      result.models.map((model) => [
-        `${model.provider}/${model.id}`,
-        model.agentRuntime?.id,
-        model.available,
-      ]),
-    ).toEqual([["anthropic/claude-opus-5", "claude-cli", true]]);
-  });
-
   it.each([
     { view: "configured", cliOnly: undefined },
     { view: "default", cliOnly: undefined },
@@ -458,6 +444,9 @@ describe("models.list plugin metadata handoff", () => {
         ["claude-cli/claude-haiku-4-5", "claude-cli"],
         ...(cliOnly ? [["claude-cli/claude-opus-5", "claude-cli"]] : []),
       ]);
+      expect(
+        result.models.find((model) => `${model.provider}/${model.id}` === CLAUDE_MODEL)?.available,
+      ).toBe(true);
     },
   );
 

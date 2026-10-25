@@ -56,8 +56,7 @@ const managed: OpenClawConfig = {
 const commandRestricted: OpenClawConfig = {
   tools: {
     gatewayPolicy: {
-      allow: ["automations"],
-      actions: managed.tools?.gatewayPolicy?.actions,
+      ...managed.tools?.gatewayPolicy,
       automations: { allowCommandJobs: false },
     },
   },
@@ -72,6 +71,27 @@ const jobInput: CronJobCreate = {
   payload: { kind: "agentTurn", message: "Read the workspace", toolsAllow: [] },
   delivery: { mode: "none" },
 };
+const commandJob: CronJobCreate = {
+  ...jobInput,
+  payload: { kind: "command", argv: ["fixture-command"] },
+};
+const addOwnedJob = (cron: CronService) =>
+  cron.add(
+    {
+      ...jobInput,
+      owner: { sessionKey: "agent:main:main", agentId: "main", accountId: "default" },
+    },
+    {
+      scheduledToolPolicy: createAccountCronScheduledToolPolicy({
+        ownerSessionKey: "agent:main:main",
+        ownerAccountId: "default",
+      }),
+    },
+  );
+function expectDenied(response: Parameters<RespondFn>, message: string) {
+  expect(response[0]).toBe(false);
+  expect(response[2]?.message).toContain(message);
+}
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -123,7 +143,7 @@ async function withCron(
       identity?: AgentRuntimeIdentity,
       commitGuard?: () => void,
       scopes?: string[],
-    ) => Promise<ReturnType<typeof vi.fn<RespondFn>>>;
+    ) => Promise<Parameters<RespondFn>>;
     tool: (identity: AgentRuntimeIdentity) => ReturnType<typeof createCronTool>;
   }) => Promise<void>,
 ) {
@@ -181,7 +201,7 @@ async function withCron(
             : handler,
         },
       });
-      return respond;
+      return expectDefined(respond.mock.calls[0], "cron response");
     };
     try {
       await cron.start();
@@ -198,7 +218,7 @@ async function withCron(
                 ...identity,
                 ...caller,
               });
-              const [ok, value, error] = response.mock.calls[0]!;
+              const [ok, value, error] = response;
               if (!ok) {
                 throw new Error(error?.message ?? "cron request denied");
               }
@@ -224,18 +244,7 @@ describe("Gateway automation policy", () => {
     "keeps %s model calls scoped and preserves ordinary updates",
     async (source) => {
       await withCron(async ({ cron, tool, invoke, readJobs }) => {
-        const owned = await cron.add(
-          {
-            ...jobInput,
-            owner: { sessionKey: "agent:main:main", agentId: "main", accountId: "default" },
-          },
-          {
-            scheduledToolPolicy: createAccountCronScheduledToolPolicy({
-              ownerSessionKey: "agent:main:main",
-              ownerAccountId: "default",
-            }),
-          },
-        );
+        const owned = await addOwnedJob(cron);
         const foreign = await cron.add({
           ...jobInput,
           agentId: "other",
@@ -261,12 +270,11 @@ describe("Gateway automation policy", () => {
           );
           for (const method of ["cron.run", "cron.remove"]) {
             const denied = await invoke(method, { id: foreign.id }, identity);
-            expect(denied.mock.calls[0]?.[0]).toBe(false);
-            expect(denied.mock.calls[0]?.[2]?.message).toContain("Automation not found");
+            expectDenied(denied, "Automation not found");
             const allowed = await invoke(method, { id: owned.id }, identity);
-            expect(allowed.mock.calls[0]?.[0]).toBe(true);
+            expect(allowed[0]).toBe(true);
             if (method === "cron.run") {
-              expect(allowed.mock.calls[0]?.[1]).toMatchObject({ ok: true, enqueued: true });
+              expect(allowed[1]).toMatchObject({ ok: true, enqueued: true });
             }
           }
         });
@@ -296,8 +304,8 @@ describe("Gateway automation policy", () => {
               undefined,
               [scenario === "read-only runtime" ? "operator.read" : "operator.write"],
             );
-            expect(response.mock.calls[0]?.[0]).toBe(false);
-            expect(response.mock.calls[0]?.[2]?.message).toBe("missing scope: operator.admin");
+            expect(response[0]).toBe(false);
+            expect(response[2]?.message).toBe("missing scope: operator.admin");
           }
         });
         expect(await readJobs()).toEqual(before);
@@ -309,18 +317,7 @@ describe("Gateway automation policy", () => {
     "rejects %s when the admitted caller is revoked before commit",
     async (method) => {
       await withCron(async ({ cron, invoke, readJobs }) => {
-        const job = await cron.add(
-          {
-            ...jobInput,
-            owner: { sessionKey: "agent:main:main", agentId: "main", accountId: "default" },
-          },
-          {
-            scheduledToolPolicy: createAccountCronScheduledToolPolicy({
-              ownerSessionKey: "agent:main:main",
-              ownerAccountId: "default",
-            }),
-          },
-        );
+        const job = await addOwnedJob(cron);
         const before = await readJobs();
         setRuntimeConfigSnapshot(managed);
         await withModelTurn("channel-owner", async (identity) => {
@@ -333,8 +330,7 @@ describe("Gateway automation policy", () => {
             identity,
             () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority),
           );
-          expect(response.mock.calls[0]?.[0]).toBe(false);
-          expect(response.mock.calls[0]?.[2]?.message).toContain("authority is no longer active");
+          expectDenied(response, "authority is no longer active");
         });
         expect(await readJobs()).toEqual(before);
       });
@@ -355,10 +351,7 @@ describe("Gateway automation policy", () => {
     "blocks command %s without changing persisted jobs",
     async (_name, command, patch) => {
       await withCron(async ({ cron, invoke, readJobs }) => {
-        const job = await cron.add({
-          ...jobInput,
-          ...(command ? { payload: { kind: "command" as const, argv: ["fixture-command"] } } : {}),
-        });
+        const job = await cron.add(command ? commandJob : jobInput);
         const before = await readJobs();
         // Keep admin grants to prove command policy independently of caller-scope filtering.
         setRuntimeConfigSnapshot(commandRestricted);
@@ -372,8 +365,7 @@ describe("Gateway automation policy", () => {
             { id: job.id, patch },
             { ...identity, cronManagementGrant: grant },
           );
-          expect(response.mock.calls[0]?.[0]).toBe(false);
-          expect(response.mock.calls[0]?.[2]?.message).toContain("command automations");
+          expectDenied(response, "command automations");
         });
         expect(await readJobs()).toEqual(before);
       });
@@ -382,10 +374,7 @@ describe("Gateway automation policy", () => {
 
   it("blocks kindless model updates after resolving the stored command payload", async () => {
     await withCron(async ({ cron, tool, readJobs }) => {
-      const job = await cron.add({
-        ...jobInput,
-        payload: { kind: "command", argv: ["fixture-command"] },
-      });
+      const job = await cron.add(commandJob);
       const before = await readJobs();
       setRuntimeConfigSnapshot(commandRestricted);
       await withModelTurn("control-ui-admin", async (identity) => {
@@ -404,32 +393,29 @@ describe("Gateway automation policy", () => {
 
   it("blocks model command creation and runs while direct human administration succeeds", async () => {
     await withCron(async ({ cron, tool, invoke, readJobs, commandRunner }) => {
-      const command = {
-        ...jobInput,
-        payload: { kind: "command" as const, argv: ["fixture-command"] },
-      };
-      const job = await cron.add(command);
+      const job = await cron.add(commandJob);
       setRuntimeConfigSnapshot(commandRestricted);
       await withModelTurn("control-ui-admin", async (identity) => {
-        const create = await invoke("cron.add", command, identity, undefined, ["operator.admin"]);
-        expect(create.mock.calls[0]?.[0]).toBe(false);
-        expect(create.mock.calls[0]?.[2]?.message).toContain("command automations");
+        const create = await invoke("cron.add", commandJob, identity, undefined, [
+          "operator.admin",
+        ]);
+        expectDenied(create, "command automations");
         await expect(
           tool(identity).execute("run", { action: "run", jobId: job.id }),
         ).rejects.toThrow("command automations");
       });
       expect((await readJobs()).jobs).toHaveLength(1);
       expect(commandRunner).not.toHaveBeenCalled();
-      const create = await invoke("cron.add", { ...command, name: "human-created command" });
-      expect(create.mock.calls[0]?.[0]).toBe(true);
+      const create = await invoke("cron.add", { ...commandJob, name: "human-created command" });
+      expect(create[0]).toBe(true);
       expect((await readJobs()).jobs).toHaveLength(2);
       const update = await invoke("cron.update", {
         id: job.id,
         patch: { description: "human edit" },
       });
-      expect(update.mock.calls[0]?.[0]).toBe(true);
+      expect(update[0]).toBe(true);
       const run = await invoke("cron.run", { id: job.id, mode: "force", waitTimeoutMs: 10_000 });
-      expect(run.mock.calls[0]?.[0]).toBe(true);
+      expect(run[0]).toBe(true);
       expect(commandRunner).toHaveBeenCalledOnce();
     });
   });

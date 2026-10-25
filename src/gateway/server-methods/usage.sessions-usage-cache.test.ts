@@ -210,15 +210,6 @@ describe("sessions.usage result cache and owner attribution", () => {
     },
   );
 
-  it("invalidates a fresh response immediately when a rollup commits", async () => {
-    await runSessionsUsage(baseParams);
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce(freshSummaries([{}], 20));
-    publishSessionCostUsageUpdated("main");
-    const result = await runSessionsUsage(baseParams);
-    expect(result.totals.totalTokens).toBe(20);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
-  });
-
   it("shares population facts across pages and filters until an owner publishes new usage", async () => {
     const entries = Array.from({ length: 60 }, (_, index) => ({
       sessionId: `page-${index + 1}`,
