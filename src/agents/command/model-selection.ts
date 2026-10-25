@@ -195,7 +195,12 @@ export async function resolveEmbeddedModelSelection(params: {
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
       }).updated;
     let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
-    const repaired = repairProviderWrappedModelOverride({ entry, defaultProvider, defaultModel });
+    const repaired = repairProviderWrappedModelOverride({
+      entry,
+      defaultProvider,
+      defaultModel,
+      isKnownRoute: (ref) => Boolean(findModelInCatalog(modelCatalog, ref.provider, ref.model)),
+    });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({
       sessionEntry: entry,

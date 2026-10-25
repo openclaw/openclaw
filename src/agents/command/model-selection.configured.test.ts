@@ -487,6 +487,33 @@ describe("command selection with configured model facts", () => {
     }
   });
 
+  it.each([
+    { cataloged: true, expected: expectedRoute("opus", "direct") },
+    { cataloged: false, expected: expectedRoute("direct/opus", "router") },
+  ])(
+    "repairs a user route that spells the wrapped default only when uncataloged ($cataloged)",
+    async ({ cataloged, expected }) => {
+      const fixture = createFixture();
+      fixture.defaults.model = { primary: "router/direct/opus" };
+      delete fixture.defaults.modelPolicy;
+      fixture.inventory.mockReturnValue([
+        catalogEntry("router", "direct/opus"),
+        ...(cataloged ? [catalogEntry("direct", "opus")] : []),
+      ]);
+      fixture.userSelection("opus", "direct", { modelOverrideRouteResolution: "resolved" });
+      const before = structuredClone(fixture.entry());
+
+      expect(await fixture.select()).toMatchObject(expected);
+      if (cataloged) {
+        expect(fixture.entry()).toEqual(before);
+        expect(sessionPersistence.persistAgentSession).not.toHaveBeenCalled();
+      } else {
+        expect(fixture.entry().providerOverride).toBeUndefined();
+        expect(fixture.entry().modelOverride).toBeUndefined();
+      }
+    },
+  );
+
   it("keeps a literal catalog model over its alias", async () => {
     const fixture = createFixture();
     fixture.defaults.modelPolicy = { allow: ["custom/base", "custom/alias", "custom/actual"] };
