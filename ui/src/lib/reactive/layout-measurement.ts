@@ -10,6 +10,8 @@ export function createLayoutMeasurement<T>(
     targets: () => readonly Element[];
     mutations?: () => Node;
     fonts?: boolean;
+    /** Admit a known empty layout before a measurable element exists. */
+    measureWithoutTarget?: boolean;
     /** Keyboard and disclosure commits need geometry before the next animation frame. */
     changeTiming?: "sync";
   },
@@ -22,7 +24,7 @@ export function createLayoutMeasurement<T>(
   const read = () => {
     const targets = options.targets();
     if (!targets[0]?.isConnected) {
-      return;
+      return options.measureWithoutTarget ? measure(invalidation) : undefined;
     }
     const next = new Set(targets);
     for (const target of observed) {

@@ -149,12 +149,9 @@ async function prepareHealthAgentSummaries(
       .toReversed()
       .map((job) => [job.agentId, job]),
   );
-  const prepared = await prepareStatusSessionStores(
+  const sessionStores = await prepareStatusSessionStores(
     cfg,
-    ordered.map((agent) => ({
-      ...agent,
-      heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
-    })),
+    ordered,
     HEALTH_RECENT_SESSION_LIMIT,
     {
       projection,
@@ -163,14 +160,13 @@ async function prepareHealthAgentSummaries(
         if (!isTransientSqliteError(error)) {
           throw error;
         }
-        // Health is best-effort for transient locks; unrelated failures still surface.
         return { count: 0, recent: [], byAgent: new Map() };
       },
     },
   );
   return {
     publish() {
-      const stores = prepared.publish();
+      const stores = sessionStores.publish();
       // A deleted configured default hands the display flag to the first surviving row.
       const displayDefaultId =
         defaultAgentId && !stores.byAgent.some(({ agent }) => agent.id === defaultAgentId)
@@ -180,7 +176,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: agent.heartbeat,
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {
@@ -318,31 +314,26 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  if (params.runtimeOnly && runtimeAccount) {
-    const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeAccount);
-    const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-      channelId: params.plugin.id,
-      accountId: params.accountId,
-      runtime: snapshot,
-    });
-    if (unavailable) {
-      return unavailable;
-    }
-    const healthState = resolveChannelHealthState(snapshot, {
+  const runtimeOnlySnapshot =
+    params.runtimeOnly && runtimeAccount
+      ? buildChannelAccountSnapshotFromRuntime(runtimeAccount)
+      : undefined;
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeOnlySnapshot ?? runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  if (runtimeOnlySnapshot) {
+    const healthState = resolveChannelHealthState(runtimeOnlySnapshot, {
       channelId: params.plugin.id,
       now: Date.now(),
       staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
       channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     });
-    return { ...snapshot, ...(healthState !== undefined ? { healthState } : {}) };
-  }
-  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-    channelId: params.plugin.id,
-    accountId: params.accountId,
-    runtime: runtimeSnapshot,
-  });
-  if (unavailable) {
-    return unavailable;
+    return { ...runtimeOnlySnapshot, ...(healthState !== undefined ? { healthState } : {}) };
   }
   const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({

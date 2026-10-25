@@ -50,9 +50,6 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
 export const loadCodexSettledFinalizerTestFixture = () =>
   import("./src/app-server/settled-turn-finalizer.test-support.js");
 
-export const loadCodexNativeSubagentMonitorTestFixture = () =>
-  import("./src/app-server/native-subagent-monitor.test-support.js");
-
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 

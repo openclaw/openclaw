@@ -189,7 +189,7 @@ it.each([
     scrollHeight: { get: () => scrollHeight },
   });
   element.scrollTop = 600;
-  const anchor = new TranscriptEndAnchor();
+  const anchor = new TranscriptEndAnchor(() => {});
   anchor.capture(element);
   if (cancelled) {
     anchor.clear();

@@ -9,6 +9,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.tsx",
   "ui/src/components/app-sidebar-native-gateways.test.ts",
+  // The cold-view proof holds imports that other sidebar suites already load.
+  "ui/src/components/app-sidebar-lazy-views.test.tsx",
   // Captured native frame functions must belong to this file's JSDOM window.
   "ui/src/components/app-sidebar.catalog-events.test.ts",
   // The catalog suite exceeds the CI deadline in a shared Bun worker.
@@ -57,6 +59,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
+  // Holds the editor import before first use; other comment suites load it eagerly.
+  "ui/src/pages/chat/components/chat-annotation-lazy.test.ts",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",

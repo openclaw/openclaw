@@ -114,7 +114,8 @@ it("enters the registered owner's scopes and retains the execution cancellation 
     expect(tool.prepareArguments?.(args)).toBe(args);
     await tool.execute("probe", args);
     expect(observed).toEqual(["probe", "probe", "probe"]);
-    expect(frames).toHaveBeenCalledTimes(4);
+    // Each of the four async resources installs both invocation and recovery stores.
+    expect(frames).toHaveBeenCalledTimes(8);
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   } finally {
     frames.mockRestore();

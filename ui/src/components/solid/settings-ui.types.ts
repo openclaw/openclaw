@@ -7,19 +7,17 @@ export type SettingsToggleControl = {
   onAct?: (checked: boolean) => void;
 };
 
-type SettingsSegmentedOption<T extends string, Label> = {
-  value: T;
-  label: Label;
-  title?: string;
-  testId?: string;
-  disabled?: boolean;
-  compactLabel?: string;
-  ariaLabel?: string;
-};
-
 export type SettingsSegmentedProps<T extends string, Label> = {
   value: T;
-  options: ReadonlyArray<SettingsSegmentedOption<T, Label>>;
+  options: ReadonlyArray<{
+    value: T;
+    label: Label;
+    title?: string;
+    testId?: string;
+    disabled?: boolean;
+    compactLabel?: string;
+    ariaLabel?: string;
+  }>;
   inputRef?: (value: T, element: HTMLInputElement) => void;
   disabled?: boolean;
   /** Block activation during a save without removing keyboard focus. Native disabled wins. */

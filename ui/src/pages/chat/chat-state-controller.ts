@@ -81,7 +81,6 @@ export function createChatState<TState extends ChatPageHost>(
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
   let publishedAttachmentReads: ChatAttachmentReadLifecycle | undefined;
-  let publishedAttachmentReadRevision: number | undefined;
   const composerPersistence = new ChatComposerPersistence(
     () => stateValue,
     () => {
@@ -326,7 +325,6 @@ export function createChatState<TState extends ChatPageHost>(
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
     publishedAttachmentReads = attachmentReadsValue;
-    publishedAttachmentReadRevision = attachmentReadsValue.revision;
     composerDraft.publish();
   }
 
@@ -475,7 +473,6 @@ export function createChatState<TState extends ChatPageHost>(
     if (
       !publishedDraft ||
       attachmentReadsValue !== publishedAttachmentReads ||
-      attachmentReadsValue.revision !== publishedAttachmentReadRevision ||
       draft.draft !== publishedDraft.draft ||
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||
@@ -576,10 +573,19 @@ export function createChatState<TState extends ChatPageHost>(
     const loadingChanged = previousChatLoading !== state.chatLoading;
     const loadFinished = previousChatLoading && !state.chatLoading;
     const streamStarted = previousChatStream == null && typeof stream === "string";
+    const streamEnded = previousChatStream !== null && stream === null;
     previousTranscriptSources = sources;
     previousChatLoading = state.chatLoading;
     previousChatStream = stream;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
+      return;
+    }
+    if (!messagesChanged && !loadingChanged && !streamStarted && !streamEnded) {
+      // Row ResizeObserver owns end-follow when text actually changes its height.
+      // Same-height arrivals still light the affordance for a departed reader.
+      if (state.chatFollowLocked) {
+        state.chatNewMessagesBelow = true;
+      }
       return;
     }
     pendingScroll = {

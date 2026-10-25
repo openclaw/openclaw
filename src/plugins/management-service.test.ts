@@ -11,6 +11,7 @@ import {
   configSnapshot,
   emptyMetadataSnapshot,
   metadataSnapshot,
+  mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -105,15 +106,6 @@ const { listManagedPlugins } = await import("./management-service.js");
 const { setManagedPluginEnabled, reloadManagedPlugin } = await import("./management-mutations.js");
 const { uninstallManagedPlugin } = await import("./management-uninstall.js");
 
-function mockHostedOfficialCatalog(entries: unknown[]) {
-  mocks.officialCatalog.mockResolvedValue({
-    source: "hosted",
-    entries,
-    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
-  });
-}
-
 describe("plugin management service", () => {
   beforeEach(() => {
     clearManagedPluginCatalogCache();
@@ -131,7 +123,7 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
-    mockHostedOfficialCatalog([]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
   it.each(["batch", "cross-owner"] as const)(

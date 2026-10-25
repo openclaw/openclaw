@@ -1,12 +1,12 @@
 // Control UI test helper supports control ui e2e setup.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HelloOk, MessageReactionSummary } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.ts";
@@ -25,12 +25,15 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
-import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
 import { buildControlUiMockBootstrapConfig } from "./control-ui-bootstrap-fixture.ts";
-import { createControlUiE2eBuildPublication } from "./control-ui-e2e-build-publication.ts";
+import {
+  createControlUiE2eBuildPublication,
+  controlUiE2eBuildPlugins,
+  type ControlUiE2eBuildOptions,
+} from "./control-ui-e2e-build-publication.ts";
 import type {
   ControlUiMockGateway,
   ControlUiMockPresenceUser,
@@ -81,75 +84,13 @@ export {
   installControlUiRpcDiagnostics,
 } from "./control-ui-e2e-diagnostics.ts";
 export { controlUiE2eWaitTimeoutMs, waitForConfirmModal } from "./control-ui-e2e-readiness.ts";
-
-export function controlUiSessionPath(
-  sessionKey: string,
-  basePath = "",
-  namespace: "chat" | "dashboard" = "chat",
-): string {
-  const pathname = buildControlUiSessionPath({
-    namespace,
-    sessionKey,
-    fallbackAgentId: sessionKey.split(":")[1] || "main",
-    basePath,
-    shortIdLength: 32,
-  });
-  return pathname ?? `${basePath}/chat`;
-}
-
-export function controlUiSessionUrl(
-  baseUrl: string,
-  sessionKey: string,
-  namespace: "chat" | "dashboard" = "chat",
-): string {
-  const url = new URL(baseUrl);
-  // Cold fixture navigation knows the exact key; it must not depend on a warm
-  // short-reference cache or a separately mocked sessions.resolve response.
-  url.pathname =
-    buildControlUiSessionPath({
-      namespace,
-      sessionKey,
-      basePath: url.pathname,
-      fallbackAgentId: sessionKey.split(":")[1] || "main",
-      exactKey: true,
-    }) ?? controlUiSessionPath(sessionKey, url.pathname, namespace);
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
-  // The hook loads its readiness module on first read, so the first read can be undefined.
-  await page.waitForFunction(() => window.openclawControlUi !== undefined);
-  const expectedPathname = await page.evaluate((sessionPath) => {
-    const app: ControlUiReadiness["hook"] | undefined = window.openclawControlUi;
-    if (!app) {
-      throw new Error("Control UI readiness hook is unavailable");
-    }
-    const pathname = `${app.snapshot().basePath}${sessionPath}`;
-    const url = new URL(window.location.href);
-    url.pathname = pathname;
-    app.navigate("chat", { pathname });
-    return url.pathname;
-  }, controlUiSessionPath(sessionKey));
-  await page.waitForURL((url) => url.pathname === expectedPathname);
-  await page.waitForFunction(
-    (targetSessionKey) =>
-      window.openclawControlUi?.snapshot().routeReady === true &&
-      window.openclawControlUi.snapshot().sessionKey === targetSessionKey,
-    sessionKey,
-  );
-}
-
-export function controlUiBundledGatewayUrl(baseUrl: string): string {
-  const url = new URL(baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.origin;
-}
-
-export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
-  return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
-}
+export {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  navigateToControlUiSession,
+} from "./control-ui-e2e-session-urls.ts";
 
 export function createControlUiMockSameOriginGatewayScript(): string {
   return `;(${installControlUiMockSameOriginGateway.toString()})();`;
@@ -358,6 +299,8 @@ export type ControlUiMockGatewayScenario = {
   omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
+  /** Role-limited access to other people's sessions, as a configured Gateway role reports it. */
+  operatorSessionCap?: "write" | "suggest" | "view" | "none" | null;
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
   sessionScope?: AgentsListResult["scope"];
@@ -551,15 +494,30 @@ export async function startControlUiE2eServer(
 // document reloaded on a deep link like /chat/research requests
 // /chat/assets/*.js; without this contract Vite's SPA fallback answers with
 // index.html and the module never executes, bricking the page.
-function controlUiE2eGatewayAssetPathPlugin(): Plugin {
+function controlUiE2eGatewayAssetPathPlugin(outDir: string): Plugin {
+  const assetRoot = `${path.resolve(outDir, "assets")}${path.sep}`;
   return {
     name: "control-ui-e2e-gateway-asset-paths",
     configurePreviewServer(server) {
-      server.middlewares.use((req, _res, next) => {
+      server.middlewares.use((req, res, next) => {
         const url = req.url ?? "";
         const assetsIndex = url.indexOf("/assets/");
         if (assetsIndex > 0) {
           req.url = url.slice(assetsIndex);
+        }
+        const assetPath = path.resolve(outDir, `.${(req.url ?? "").split("?")[0]}`);
+        if (assetPath.startsWith(assetRoot)) {
+          // Match bundled Gateway assets without caching missing files or SPA fallbacks.
+          void stat(assetPath).then(
+            (file) => {
+              if (file.isFile()) {
+                res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+              }
+              next();
+            },
+            () => next(),
+          );
+          return;
         }
         next();
       });
@@ -607,26 +565,6 @@ function createBundledControlUiE2eConfig(
   };
 }
 
-type ControlUiE2eBuildOptions = { includeBootGroups?: boolean };
-
-async function controlUiE2eBootGroupPlugins(options: ControlUiE2eBuildOptions): Promise<Plugin[]> {
-  if (options.includeBootGroups !== false) {
-    return [];
-  }
-  const { createControlUiCodeSplitting } = await import("../../config/control-ui-chunking.ts");
-  return [
-    {
-      name: "control-ui-e2e-individual-boot-modules",
-      outputOptions(output) {
-        return {
-          ...output,
-          codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
-        };
-      },
-    },
-  ];
-}
-
 export async function buildProductionControlUiE2e(
   outDir: string,
   buildId: string,
@@ -655,6 +593,9 @@ export async function buildProductionControlUiE2e(
       "--production-build",
       outDir,
       ...(options.includeBootGroups === false ? ["--individual-boot-modules"] : []),
+      ...(options.protocolVersion === undefined
+        ? []
+        : [`--protocol-version=${options.protocolVersion}`]),
     ],
     {
       cwd: uiRoot,
@@ -672,6 +613,49 @@ export async function buildProductionControlUiE2e(
   }
 }
 
+export async function refreshProductionControlUiE2e(
+  outDir: string,
+  buildId: string,
+): Promise<void> {
+  // Refresh release identity in a caller-owned copy without recompiling its assets.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_ENV: "production",
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+  };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("VITEST")) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      `const { refreshControlUiBuildOutput, resolveControlUiBuildInfo } =
+await import(process.argv[1]);
+await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());`,
+      new URL("../../vite.config.ts", import.meta.url).href,
+      outDir,
+    ],
+    {
+      cwd: path.join(resolveRepoRoot(), "ui"),
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "inherit", "pipe"],
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Production Control UI identity refresh failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
+    );
+  }
+}
+
 async function runProductionControlUiBuild(
   outDir: string,
   options: ControlUiE2eBuildOptions = {},
@@ -683,7 +667,7 @@ async function runProductionControlUiBuild(
   const config = controlUiViteConfig({ outDir });
   await build({
     ...config,
-    plugins: [config.plugins, ...(await controlUiE2eBootGroupPlugins(options))],
+    plugins: [config.plugins, ...(await controlUiE2eBuildPlugins(options))],
     configFile: false,
     logLevel: "info",
     root: path.join(resolveRepoRoot(), "ui"),
@@ -706,7 +690,7 @@ export async function startBuiltControlUiE2eServer(
     plugins: [
       publication.plugin,
       ...(sharedConfig.plugins ?? []),
-      controlUiE2eGatewayAssetPathPlugin(),
+      controlUiE2eGatewayAssetPathPlugin(outDir),
       controlUiE2ePreviewConfigPlugin(bootstrapConfig),
     ],
     preview: {
@@ -836,6 +820,7 @@ function normalizeScenario(
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
+    operatorSessionCap: scenario.operatorSessionCap ?? null,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -1658,6 +1643,10 @@ function installControlUiMockGateway(
           })
         : configuredValue;
     }
+    const sessionResponse = sessions.readResponse(method, params, scenario);
+    if (sessionResponse !== undefined) {
+      return sessionResponse;
+    }
     switch (method) {
       case "session.reactions.list":
         return reactionFixtures.list(params);
@@ -1685,6 +1674,9 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
+                  ...(scenario.operatorSessionCap
+                    ? { sessionCap: scenario.operatorSessionCap }
+                    : {}),
                 },
               }),
           features: {
@@ -1863,10 +1855,6 @@ function installControlUiMockGateway(
         return { artifacts: [] };
       case "artifacts.download":
         return null;
-      case "sessions.resolve":
-      case "sessions.describe":
-      case "session.members.listEvidence":
-        return sessions.readResponse(method, params, scenario);
       case "chat.history":
       case "chat.startup": {
         const resolution =
@@ -2721,17 +2709,23 @@ export async function installMockGateway(
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [command, outDir, moduleMode, ...extra] = process.argv.slice(2);
+  const [command, outDir, ...flags] = process.argv.slice(2);
+  const protocolFlag = flags.find((flag) => flag.startsWith("--protocol-version="));
   if (
     command !== "--production-build" ||
     !outDir ||
-    extra.length > 0 ||
-    (moduleMode !== undefined && moduleMode !== "--individual-boot-modules")
+    flags.some(
+      (flag) =>
+        flag !== "--individual-boot-modules" && !/^--protocol-version=[1-9]\d*$/u.test(flag),
+    )
   ) {
     throw new Error(
-      "Usage: control-ui-e2e.ts --production-build <out-dir> [--individual-boot-modules]",
+      "Usage: control-ui-e2e.ts --production-build <out-dir> [--individual-boot-modules] [--protocol-version=N]",
     );
   }
-  await runProductionControlUiBuild(outDir, { includeBootGroups: moduleMode === undefined });
+  await runProductionControlUiBuild(outDir, {
+    includeBootGroups: !flags.includes("--individual-boot-modules"),
+    protocolVersion: protocolFlag ? Number(protocolFlag.split("=")[1]) : undefined,
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,7 +5,6 @@ export type MobileDetailsRoute =
   | {
       kind:
         | "task-progress"
-        | "context"
         | "pull-requests"
         | "goal"
         | "publication"

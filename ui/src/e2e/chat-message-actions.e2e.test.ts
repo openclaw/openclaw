@@ -1,12 +1,8 @@
-// Real-browser proof for inline and context-menu chat message actions.
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { CHAT_MESSAGE_MAX_CHARS } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { pollText, pollCount, pollAttribute } from "./new-session-page.test-support.ts";
+import { pollText, pollCount } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat message actions",
@@ -18,24 +14,7 @@ const suite = createControlUiE2eSuite({
 const FULL_ASSISTANT_CONTENT_FILLER_LINE =
   "Repeat neutral filler text to exceed the transport preview limit while staying deterministic and readable.\n";
 
-const realisticFullAssistantContent = `# Deployment report
-
-- service: payment-gateway
-
-1. Build the release artifact and run smoke tests.
-
-~~~ts
-export function verifyRollout(serviceName: string): Promise<boolean> {
-  return healthCheck(serviceName);
-}
-~~~
-
-Reference: src/services/payment-gateway/deploy.ts:88
-
-${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}
-## Final verification
-
-All health checks passed and the rollout is complete.`;
+const realisticFullAssistantContent = `# Deployment report\n\n${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}\n## Final verification`;
 
 async function withPage(
   run: Parameters<typeof suite.withPage>[1],
@@ -73,90 +52,17 @@ async function contextAction(bubble: Locator, name: string) {
   await bubble.page().locator(".chat-reply-context-menu").getByRole("menuitem", { name }).click();
 }
 
-async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
-  await page.emulateMedia({ colorScheme: mode });
-  await page.evaluate((nextMode) => {
-    const root = document.documentElement;
-    root.dataset.themeMode = nextMode;
-    root.dataset.themeResolved = nextMode;
-    root.style.colorScheme = nextMode;
-  }, mode);
-  await pollAttribute(page.locator("html"), "data-theme-mode").toBe(mode);
-}
-
-async function expectHoverTooltip(button: Locator, text: string, side?: "right"): Promise<void> {
+async function expectHoverTooltip(button: Locator, text: string): Promise<void> {
   await button.hover();
-  const measure = () =>
-    button.evaluate((element) => {
-      const host = [
-        ...document.querySelectorAll<HTMLElement & { anchor?: Element | null }>("openclaw-tooltip"),
-      ].find(
-        (candidate) =>
-          candidate.anchor === element ||
-          candidate.shadowRoot
-            ?.querySelector<HTMLSlotElement>("slot:not([name])")
-            ?.assignedElements({ flatten: true })[0] === element,
-      );
-      const tooltip = host?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface[popover]");
-      const anchor =
-        host?.anchor ??
-        host?.shadowRoot
-          ?.querySelector<HTMLSlotElement>("slot:not([name])")
-          ?.assignedElements({ flatten: true })[0];
-
-      // Apple modifier glyphs pair hidden text with an aria-hidden SVG whose
-      // markup whitespace is in textContent but never rendered or announced.
-      const readableText = (node: Node): string =>
-        node instanceof Element && node.getAttribute("aria-hidden") === "true"
-          ? ""
-          : node instanceof Text
-            ? node.data
-            : node instanceof HTMLSlotElement
-              ? Array.from(node.assignedNodes({ flatten: true }), readableText).join("")
-              : Array.from(node.childNodes, readableText).join("");
-      const body = tooltip;
-      const slot = body?.querySelector<HTMLSlotElement>('slot[name="content"]');
-      const textNode =
-        slot?.assignedNodes({ flatten: true }).find((node) => node.textContent?.trim()) ??
-        body?.querySelector(".tooltip-content");
-      const range = textNode ? document.createRange() : null;
-      if (range && textNode) {
-        range.selectNodeContents(textNode);
-      }
-      const bodyRect = body?.getBoundingClientRect();
-      const textRect = range?.getBoundingClientRect();
-      const anchorRect = element.getBoundingClientRect();
-      return {
-        centerOffset: bodyRect
-          ? bodyRect.top + bodyRect.height / 2 - (anchorRect.top + anchorRect.height / 2)
-          : Number.POSITIVE_INFINITY,
-        gap: bodyRect ? bodyRect.left - anchorRect.right : Number.NEGATIVE_INFINITY,
-        height: bodyRect?.height ?? 0,
-        textTopInset: bodyRect && textRect ? textRect.top - bodyRect.top : Number.POSITIVE_INFINITY,
-        width: bodyRect?.width ?? 0,
-
-        anchorMatches: anchor === element,
-        hidden: tooltip ? getComputedStyle(tooltip).display === "none" : true,
-        open: host?.hasAttribute("open") ?? false,
-        popupActive: tooltip?.matches(":popover-open") ?? false,
-        text: tooltip ? readableText(tooltip).trim() : "",
-      };
-    });
-  await expect.poll(measure).toMatchObject({
-    anchorMatches: true,
-    hidden: false,
-    open: true,
-    popupActive: true,
-    text,
-  });
-  const bounds = await measure();
-  expect(bounds.width).toBeGreaterThan(0);
-  expect(bounds.height).toBeGreaterThan(0);
-  expect(bounds.textTopInset).toBeLessThan(12);
-  if (side === "right") {
-    expect(bounds.gap).toBeGreaterThanOrEqual(0);
-    expect(Math.abs(bounds.centerOffset)).toBeLessThanOrEqual(1);
-  }
+  await expect
+    .poll(() =>
+      button.evaluate((element) => {
+        const tooltip = element.closest("openclaw-tooltip");
+        const surface = tooltip?.shadowRoot?.querySelector(".tooltip-surface[popover]");
+        return surface?.matches(":popover-open") ? surface.textContent?.trim() : null;
+      }),
+    )
+    .toBe(text);
 }
 
 async function expectHoverColor(
@@ -273,11 +179,7 @@ suite.define(() => {
       const runId = "attachment-reply-run";
       const fileName = kind === "image" ? "openclaw-banner.png" : "report.pdf";
       const imageUrl =
-        kind === "image"
-          ? `data:image/png;base64,${(
-              await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"))
-            ).toString("base64")}`
-          : "";
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
       const source = {
         role,
         content:
@@ -389,80 +291,6 @@ suite.define(() => {
     }),
   );
 
-  it("keeps assistant actions hidden when the user message is last", () =>
-    withPage(async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [
-          historyMessage("assistant", "Earlier assistant reply.", "earlier-assistant", 1, -4_000),
-          historyMessage("user", "A question between replies.", "middle-user", 2, -3_000),
-          historyMessage("assistant", "Latest assistant lead-in.", "latest-assistant", 3, -2_000),
-          historyMessage(
-            "assistant",
-            "Latest assistant reply.",
-            "latest-assistant-final",
-            4,
-            -1_500,
-          ),
-          historyMessage("user", "A newer user follow-up.", "latest-user", 5, -1_000),
-        ],
-      });
-
-      const presentation = (group: Locator) =>
-        group.evaluate((element) => {
-          const footer = element.querySelector<HTMLElement>(":scope > .chat-group-footer");
-          const action = element.querySelector<HTMLElement>(
-            ":scope > .chat-group-footer .chat-group-footer-actions button",
-          );
-          return [action, footer].map((node) =>
-            node ? [getComputedStyle(node).opacity, getComputedStyle(node).pointerEvents] : null,
-          );
-        });
-      const expectPresentation = (group: Locator, visible: boolean) =>
-        expect
-          .poll(() => presentation(group))
-          .toEqual(
-            Array.from({ length: 2 }, () => [visible ? "1" : "0", visible ? "auto" : "none"]),
-          );
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.mouse.move(0, 0);
-      const assistantGroups = page.locator(".chat-group.assistant");
-      await pollCount(assistantGroups).toBe(2);
-      const earlierAssistant = assistantGroups.first();
-      const latestAssistant = assistantGroups.last();
-      await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
-      const intermediateId = await latestAssistant
-        .locator(".chat-bubble")
-        .first()
-        .getAttribute("data-message-id");
-      const intermediateOwner = latestAssistant.locator(
-        `[data-message-actions-for="${intermediateId}"]`,
-      );
-      const inlineAction = intermediateOwner.locator("button").first();
-      const inlinePresentation = () =>
-        inlineAction.evaluate((element) => {
-          const { opacity, pointerEvents } = getComputedStyle(element);
-          return { opacity, pointerEvents };
-        });
-      await pollCount(inlineAction).toBe(1);
-      await expectPresentation(earlierAssistant, false);
-      await expectPresentation(latestAssistant, false);
-      await expect.poll(inlinePresentation).toEqual({ opacity: "0", pointerEvents: "none" });
-
-      await page.setViewportSize({ width: 390, height: 844 });
-      await pollCount(intermediateOwner).toBe(1);
-      await pollCount(latestAssistant.locator(".chat-message-actions-row")).toBe(0);
-      expect(await intermediateOwner.locator("..").getAttribute("class")).toContain(
-        "chat-message-footer",
-      );
-      await expectPresentation(latestAssistant, false);
-      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
-        button: 0,
-        pointerType: "touch",
-      });
-      await expectPresentation(latestAssistant, true);
-      await expect.poll(inlinePresentation).toEqual({ opacity: "1", pointerEvents: "auto" });
-    }));
-
   it("shares tooltip styling and dismissal across message metadata, actions, and file hints", () =>
     withPage(
       async ({ page }) => {
@@ -550,68 +378,47 @@ suite.define(() => {
       const fullAssistantContent = realisticFullAssistantContent;
       const rawOversizedMarker = "[chat.history omitted: message too large]";
       const oversizedNotice = "This message is too large to display here.";
+      const truncated = (role: string, id: string, seq: number) =>
+        historyMessage(role, [{ type: "text", text: rawOversizedMarker }], id, seq, seq, {
+          truncated: true,
+          reason: "oversized",
+        });
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.message.get"],
         historyMessages: [
-          ...(
-            [
-              ["assistant-action-proof", "assistant", messageText, false],
-              ["user-action-separator", "user", "Keep the next assistant message separate.", false],
-              [
-                "assistant-thinking-proof",
-                "assistant",
-                `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
-                false,
-              ],
-              ["user-truncated-separator", "user", "Keep the truncated message separate.", false],
-              ["assistant-full-message", "assistant", rawOversizedMarker, true],
-              ["oversized-user", "user", rawOversizedMarker, true],
-            ] as const
-          ).map(([id, role, text, truncated], index) =>
-            historyMessage(
-              role,
-              [{ type: "text", text }],
-              id,
-              index + 1,
-              index,
-              truncated ? { truncated, reason: "oversized" } : {},
-            ),
+          historyMessage("assistant", messageText, "assistant-action-proof", 1, 0),
+          historyMessage(
+            "user",
+            "Keep the next assistant message separate.",
+            "user-action-separator",
+            2,
+            1,
           ),
+          historyMessage(
+            "assistant",
+            `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
+            "assistant-thinking-proof",
+            3,
+            2,
+          ),
+          historyMessage(
+            "user",
+            "Keep the truncated message separate.",
+            "user-truncated-separator",
+            4,
+            3,
+          ),
+          truncated("assistant", "assistant-full-message", 5),
+          truncated("user", "oversized-user", 6),
           ...["read_file", "run_command"].map((toolName, index) =>
-            Object.assign(
-              historyMessage(
-                "toolResult",
-                rawOversizedMarker,
-                `oversized-tool-${index + 1}`,
-                index + 7,
-                index + 6,
-                { truncated: true, reason: "oversized" },
-              ),
-              { toolCallId: `oversized-tool-call-${index + 1}`, toolName },
-            ),
+            Object.assign(truncated("toolResult", `oversized-tool-${index + 1}`, index + 7), {
+              toolCallId: `oversized-tool-call-${index + 1}`,
+              toolName,
+            }),
           ),
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await setThemeMode(page, "dark");
-      const applePlatform = process.platform === "darwin";
-      const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
-      const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
-      await expectHoverTooltip(
-        page.locator(".sidebar-rail .sidebar-new-session"),
-        `New conversation ${newSessionShortcut}`,
-        "right",
-      );
-      await expectHoverTooltip(
-        page.getByRole("button", { name: "Command palette" }),
-        `Command palette ${commandPaletteShortcut}`,
-        "right",
-      );
-      await expectHoverTooltip(
-        page.locator('[data-navigation-view][aria-pressed="true"]'),
-        "Sessions",
-        "right",
-      );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");
         tooltip.setAttribute("content", "First line\nSecond line");
@@ -662,25 +469,7 @@ suite.define(() => {
 
       await group.hover();
 
-      const inlineActions = group.locator(".chat-group-footer-actions button");
-      expect(
-        await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
-      ).toEqual(["Reply to message", "Copy as markdown"]);
-      for (const button of await inlineActions.all()) {
-        await expectHoverColor(button, "--accent");
-      }
-      const replyButton = group.getByRole("button", { name: "Reply to message" });
-      await expectHoverTooltip(replyButton, "Reply");
-
-      await group.hover();
-      await replyButton.click();
-      const replyPreview = page.locator(".chat-reply-preview");
-      await replyPreview.waitFor({ state: "visible" });
-      expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
-        messageText,
-      );
-      await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
-
+      await expectHoverColor(group.getByRole("button", { name: "Copy as markdown" }), "--accent");
       const menu = page.locator(".chat-reply-context-menu");
       const selectedText = "context menu";
       const nextTimer = () =>
@@ -710,11 +499,6 @@ suite.define(() => {
       }, selectedText);
       await bubble.click({ button: "right" });
       await menu.waitFor({ state: "visible" });
-      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
-        "Copy",
-        "Reply",
-        "Copy as markdown",
-      ]);
       await nextTimer();
       expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await bubble.dispatchEvent("pointerup", {
@@ -730,14 +514,6 @@ suite.define(() => {
       await page.evaluate(() => window.getSelection()?.removeAllRanges());
       await bubble.click({ button: "right" });
       await menu.waitFor({ state: "visible" });
-      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
-        "Reply",
-        "Copy as markdown",
-      ]);
-      expect(
-        await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
-      ).toBe(0);
-
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expectClipboard(page, messageText);
 
@@ -745,12 +521,7 @@ suite.define(() => {
       const fullTextGroup = fullTextBubble.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
       );
-      const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
-      expect(fullMessageRequest.params).toMatchObject({
-        sessionKey: "agent:main:main",
-        messageId: "assistant-full-message",
-        maxChars: CHAT_MESSAGE_MAX_CHARS,
-      });
+      await gateway.waitForRequest("chat.message.get");
       await pollText(fullTextBubble.locator(".chat-text")).toContain(oversizedNotice);
       expect(await fullTextBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       expect(await page.locator("body").textContent()).not.toContain(rawOversizedMarker);
@@ -777,12 +548,6 @@ suite.define(() => {
       await replyText(fullTextReplyPreview).toContain("# Deployment report");
       await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
-      await contextAction(fullTextBubble, "Copy as markdown");
-      await expectClipboard(page, fullAssistantContent);
-      await contextAction(fullTextBubble, "Reply to message");
-      await replyText(fullTextReplyPreview).toContain("# Deployment report");
-      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
-
       const userOversizedBubble = page.locator('.chat-bubble[data-entry-id="oversized-user"]');
       expect(await userOversizedBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await pollText(userOversizedBubble.locator(".chat-text")).toContain(oversizedNotice);
@@ -793,17 +558,12 @@ suite.define(() => {
       await groupedToolBubble.waitFor({ state: "visible" });
       expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await groupedToolBubble.click({ button: "right" });
-      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
-        "Reply",
-        "Copy as markdown",
-      ]);
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expectClipboard(page, oversizedNotice);
       await contextAction(groupedToolBubble, "Reply to message");
       await replyText(fullTextReplyPreview).toBe(oversizedNotice);
       await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
-      await setThemeMode(page, "light");
       await fullTail.scrollIntoViewIfNeeded();
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
     }));

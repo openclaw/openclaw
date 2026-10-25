@@ -31,6 +31,7 @@ const operatorScratch = "Operator-owned checklist.\n";
 type Scenario = {
   name: string;
   scratch: string;
+  source?: string;
   invalidSource?: boolean;
   message?: string;
 };
@@ -53,7 +54,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
   if (scenario.invalidSource) {
     fs.mkdirSync(sourcePath);
   } else {
-    fs.writeFileSync(sourcePath, source);
+    fs.writeFileSync(sourcePath, scenario.source ?? source);
   }
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -151,6 +152,11 @@ it.each<Scenario>([
   },
   { name: "matching operator scratch", scratch: source },
   {
+    name: "incomplete tasks in a retained source beside operator scratch",
+    scratch: operatorScratch,
+    source: "tasks:\n- name: retained\n  interval: 1h\n",
+  },
+  {
     name: "unreadable source shape",
     scratch: operatorScratch,
     invalidSource: true,
@@ -189,7 +195,7 @@ it.each<Scenario>([
       retireHeartbeatWithDoctor(f.config),
     );
     expect(next.agents?.entries?.main?.heartbeat).toBeUndefined();
-    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(source));
+    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(scenario.source ?? source));
     const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
     try {
       expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
@@ -304,3 +310,41 @@ it.each([
   expect(f.snapshot()).toEqual(before);
   expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
 });
+
+it.each([
+  ["file", false],
+  ["imported scratch", false],
+  ["file", true],
+  ["imported scratch", true],
+] as const)(
+  "checks task conversion in %s (incomplete: %s) before activation without mutating the source",
+  async (location, incomplete) => {
+    const content = incomplete
+      ? "tasks:\n- name: inbox\n  interval: 1h\n"
+      : "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
+    const f = fixture({ name: location, scratch: content }, location === "imported scratch");
+    if (location === "file") {
+      fs.writeFileSync(f.sourcePath, content);
+    } else {
+      fs.unlinkSync(f.sourcePath);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: incomplete ? "refuse" : "admit",
+      reasons: incomplete
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("no complete name/interval/prompt entries"),
+            }),
+          ]
+        : [],
+    });
+    expect(process.exitCode).toBe(incomplete ? 3 : 0);
+    expect(f.snapshot()).toEqual(before);
+  },
+);

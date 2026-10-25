@@ -87,15 +87,17 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function mergePluginRecords(
-  installed: readonly PluginHealthRecord[],
-  runtime: readonly PluginHealthRecord[],
-): PluginHealthRecord[] {
+export function mergeStatusPluginHealthSnapshots(
+  installed: StatusPluginHealthSnapshot,
+  runtime: StatusPluginHealthSnapshot,
+): StatusPluginHealthSnapshot {
+  const installedPlugins = installed.plugins;
+  const runtimePlugins = runtime.plugins;
   const merged = new Map<string, PluginHealthRecord>();
-  for (const plugin of installed) {
+  for (const plugin of installedPlugins) {
     merged.set(plugin.id, plugin);
   }
-  for (const plugin of runtime) {
+  for (const plugin of runtimePlugins) {
     const existing = merged.get(plugin.id);
     // Field-wise merge: runtime facts win, but a runtime record missing a
     // field never erases what the installed scan knew.
@@ -108,15 +110,8 @@ function mergePluginRecords(
       failurePhase: plugin.failurePhase ?? existing?.failurePhase,
     });
   }
-  return [...merged.values()];
-}
-
-export function mergeStatusPluginHealthSnapshots(
-  installed: StatusPluginHealthSnapshot,
-  runtime: StatusPluginHealthSnapshot,
-): StatusPluginHealthSnapshot {
   return {
-    plugins: mergePluginRecords(installed.plugins, runtime.plugins),
+    plugins: [...merged.values()],
     diagnostics: dedupePluginDiagnostics([...installed.diagnostics, ...runtime.diagnostics]),
     contextEngineQuarantines: [
       ...installed.contextEngineQuarantines,

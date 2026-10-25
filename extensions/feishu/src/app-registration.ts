@@ -149,9 +149,9 @@ export async function pollAppRegistration(params: {
 
   const expireInMs =
     finiteSecondsToTimerSafeMilliseconds(expireIn) ?? DEFAULT_REGISTRATION_EXPIRE_SECONDS * 1_000;
-  const deadline = Date.now() + expireInMs;
+  const deadline = performance.now() + expireInMs;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (abortSignal?.aborted) {
       return { status: "timeout" };
     }

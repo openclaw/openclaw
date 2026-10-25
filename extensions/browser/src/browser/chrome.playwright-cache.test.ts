@@ -29,6 +29,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function mockExecutableFiles(installed: ReadonlySet<string>) {
+  vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+    if (!installed.has(String(candidate))) {
+      throw new Error("ENOENT");
+    }
+    return { isFile: () => true } as fs.Stats;
+  });
+  vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+}
+
 function installFullChromium(cache: string): string {
   const directory = path.join(
     cache,
@@ -85,13 +95,7 @@ it("discovers full Chromium from the hermetic Playwright cache", () => {
   vi.spyOn(fs, "readdirSync").mockImplementation((directory) => {
     return (String(directory) === cache ? ["chromium-100"] : []) as never;
   });
-  vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-    if (String(candidate) !== executable) {
-      throw new Error("ENOENT");
-    }
-    return { isFile: () => true } as fs.Stats;
-  });
-  vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+  mockExecutableFiles(new Set([executable]));
   expect(findPlaywrightChromiumExecutable("linux")).toEqual({ kind: "chromium", path: executable });
 });
 
@@ -134,13 +138,7 @@ it.each([
       "chromium_headless_shell-100",
       "chromium-100",
     ] as never);
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (String(candidate) !== installedExecutable) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+    mockExecutableFiles(new Set([installedExecutable]));
     for (const headless of [false, true]) {
       expect(
         resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
@@ -188,13 +186,7 @@ it.each([
   ] as never);
   const installed = new Set([fullPath, shellPath]);
   vi.mocked(os.cpus).mockReturnValue([{ ...cpu, model: cpuModel }]);
-  vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-    if (!installed.has(String(candidate))) {
-      throw new Error("ENOENT");
-    }
-    return { isFile: () => true } as fs.Stats;
-  });
-  vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+  mockExecutableFiles(installed);
   for (const headless of [false, true]) {
     expect(
       resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
@@ -250,13 +242,7 @@ it.each([
       }
       return ["chromium_headless_shell-100", "chromium-100"] as never;
     });
-    vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
-      if (!installed.has(String(candidate))) {
-        throw new Error("ENOENT");
-      }
-      return { isFile: () => true } as fs.Stats;
-    });
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {});
+    mockExecutableFiles(installed);
     expect(findPlaywrightChromiumExecutable(platform)).toEqual({
       kind: "chromium",
       path: fullPath(configuredFull ? configured : fallback),

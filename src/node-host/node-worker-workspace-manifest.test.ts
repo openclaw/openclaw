@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
@@ -204,14 +205,7 @@ describe("resident node manifest capture", () => {
         });
         entered.resolve();
         await release.promise;
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult();
       },
     );
     let settled = false;

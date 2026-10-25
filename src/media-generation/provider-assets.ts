@@ -2,15 +2,20 @@
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readProviderBinaryResponse } from "../agents/provider-http-errors.js";
+import {
+  assertOkOrThrowHttpError,
+  readProviderBinaryResponse,
+} from "../agents/provider-http-errors.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
-  fetchProviderDownloadResponse,
+  fetchWithTimeoutGuarded,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "../media-understanding/shared.js";
+import { executeProviderOperationWithRetry } from "../provider-runtime/operation-retry.js";
 import type { GeneratedVideoAsset } from "../video-generation/types.js";
 
 type GeneratedVideoResponseHandle = {
@@ -91,16 +96,30 @@ export async function downloadGeneratedVideoAsset(params: {
   });
   const handle = params.fetchResponse
     ? await params.fetchResponse({ deadline, timeoutMs })
-    : {
-        response: await fetchProviderDownloadResponse({
-          url: params.url,
-          init: { method: "GET" },
-          deadline,
-          fetchFn: params.fetchFn,
-          provider: params.provider,
-          requestFailedMessage: params.requestFailedMessage,
-        }),
-      };
+    : await executeProviderOperationWithRetry({
+        provider: params.provider,
+        stage: "download",
+        operation: async () => {
+          // Keep result DNS checks strict while retaining environment-proxy transport.
+          const result = await fetchWithTimeoutGuarded(
+            params.url,
+            { method: "GET" },
+            timeoutMs(),
+            params.fetchFn,
+            { mode: "strict", dispatcherPolicy: { mode: "env-proxy" } },
+          );
+          try {
+            await assertOkOrThrowHttpError(result.response, params.requestFailedMessage, {
+              bodyTimeoutMs: timeoutMs,
+              onBodyTimeout: () => createProviderOperationTimeoutError(deadline),
+            });
+            return result;
+          } catch (error) {
+            await result.release();
+            throw error;
+          }
+        },
+      });
   try {
     const asset = await readGeneratedVideoAsset(handle.response, {
       label: params.label,

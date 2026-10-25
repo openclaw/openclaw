@@ -16,6 +16,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
   flattenCodexDynamicToolFunctions,
@@ -45,14 +46,7 @@ function callTool(
   return harness.handleServerRequest({
     id: requestId,
     method: "item/tool/call",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId,
-      namespace: null,
-      tool,
-      arguments: args,
-    },
+    params: createDynamicToolCall(tool, args, callId),
   });
 }
 

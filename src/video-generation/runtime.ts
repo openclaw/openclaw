@@ -194,14 +194,14 @@ async function runVideoGeneration(
       const inputImageCount = params.inputImages?.length ?? 0;
       const inputVideoCount = params.inputVideos?.length ?? 0;
       const inputAudioCount = params.inputAudios?.length ?? 0;
+      const { mode, capabilities: modeCapabilities } = resolveVideoGenerationModeCapabilities({
+        provider: activeProvider,
+        model: candidate.model,
+        inputImageCount,
+        inputVideoCount,
+      });
       const buildCapabilityFailure = (): string | undefined => {
         const label = `${candidate.provider}/${candidate.model}`;
-        const { mode, capabilities } = resolveVideoGenerationModeCapabilities({
-          provider: activeProvider,
-          model: candidate.model,
-          inputImageCount,
-          inputVideoCount,
-        });
         const catalogModes = activeProvider.catalogByModel?.[candidate.model]?.modes;
         if (mode && catalogModes && !catalogModes.includes(mode)) {
           const modeLabel =
@@ -220,7 +220,7 @@ async function runVideoGeneration(
               : inputImageCount > 0
                 ? "reference image inputs"
                 : "reference video inputs";
-          if (!capabilities || !("enabled" in capabilities) || !capabilities.enabled) {
+          if (!modeCapabilities || !("enabled" in modeCapabilities) || !modeCapabilities.enabled) {
             return `${label} does not support ${visualLabel}; skipping to avoid silent reference drop`;
           }
         }
@@ -229,7 +229,7 @@ async function runVideoGeneration(
           ["video", inputVideoCount, "maxInputVideos"],
           ["audio", inputAudioCount, "maxInputAudios"],
         ] as const) {
-          const limit = capabilities?.[limitKey] ?? activeProvider.capabilities[limitKey] ?? 0;
+          const limit = modeCapabilities?.[limitKey] ?? activeProvider.capabilities[limitKey] ?? 0;
           if (count > 0 && count > limit) {
             return limit === 0
               ? `${label} does not support reference ${kind} inputs; skipping to avoid silent ${kind} drop`
@@ -244,12 +244,6 @@ async function runVideoGeneration(
         return capabilityMismatch;
       }
 
-      const { capabilities: modeCapabilities } = resolveVideoGenerationModeCapabilities({
-        provider: activeProvider,
-        model: candidate.model,
-        inputImageCount,
-        inputVideoCount,
-      });
       if (params.providerOptions) {
         const declaredOptions =
           modeCapabilities?.providerOptions ?? activeProvider.capabilities.providerOptions;

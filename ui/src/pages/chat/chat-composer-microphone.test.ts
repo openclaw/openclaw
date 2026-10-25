@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
@@ -92,6 +93,37 @@ function catalogClient(realtime: boolean, transcription: boolean) {
   });
   return { request, gatewayClient: { request } as unknown as GatewayBrowserClient };
 }
+
+it("keeps the microphone trigger and keyboard focus while its menu code loads", async () => {
+  const ready = createDeferred();
+  const started = createDeferred();
+  vi.doMock(import("./components/chat-composer-microphone-menu.tsx"), async (importOriginal) => {
+    started.resolve();
+    await ready.promise;
+    return importOriginal();
+  });
+  onTestFinished(() => {
+    ready.resolve();
+    vi.doUnmock("./components/chat-composer-microphone-menu.tsx");
+  });
+  discover.mockResolvedValue({ devices: [studio], issue: null });
+  const v = await mountPicker();
+  const trigger = button(v.root, copy("microphoneInput"));
+  trigger.focus();
+  trigger.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  await started.promise;
+  await v.expectOpen(true);
+  expect(v.items()).toHaveLength(0);
+  expect(v.part("trigger")).toBe(trigger);
+  ready.resolve();
+  await v.count(2);
+  await waitForSolid(() => expect(document.activeElement).toBe(v.items()[0]));
+  expect(v.part("trigger")).toBe(trigger);
+  await v.escape();
+  expect(document.activeElement).toBe(trigger);
+});
 
 it("persists microphone selection and preserves focused items across redraws", async () => {
   discover.mockResolvedValue({ devices: [studio, headset], issue: null });

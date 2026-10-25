@@ -1,4 +1,3 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   ArtifactSessionResolutionError,
@@ -31,13 +30,7 @@ export async function prepareArtifactSessionRead(
       current.target?.entry.sessionId !== sessionId ||
       current.target?.entry.lifecycleRevision !== lifecycleRevision
     ) {
-      throw new ArtifactSessionResolutionError(
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "session changed while reading artifact; reload the conversation",
-          { retryable: true },
-        ),
-      );
+      throw new ArtifactSessionResolutionError();
     }
   };
   if (!sessionId || !storePath) {

@@ -118,22 +118,49 @@ export function SessionGlyph(props: SessionGlyphOptions) {
     >
       <span class="session-glyph__content">{props.content}</span>
       <Show when={props.running && (props.runVisibility ?? true)} keyed>
-        {(createVisibility) =>
-          renderSessionGlyphRun(
-            {
-              get pair() {
-                return props.ring === "pair";
-              },
-              get queued() {
-                return props.queued;
-              },
-              get label() {
-                return label();
-              },
-            },
-            typeof createVisibility === "function" ? createVisibility : undefined,
-          )
-        }
+        {(createVisibility) => {
+          const [offscreen, setOffscreen] = createSignal(false);
+          const observe = (typeof createVisibility === "function" ? createVisibility : undefined)?.(
+            setOffscreen,
+          );
+          return (
+            <Show
+              when={props.ring === "pair"}
+              fallback={
+                <span
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__ring",
+                    {
+                      "session-glyph__ring--queued": props.queued,
+                      "session-run-indicator--offscreen": offscreen(),
+                    },
+                  ]}
+                  role="img"
+                  aria-label={label()}
+                />
+              }
+            >
+              <svg
+                class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
+                viewBox="-16 -11 32 22"
+                role="img"
+                aria-label={label()}
+              >
+                <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
+                <path
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__trace-run",
+                    { "session-run-indicator--offscreen": offscreen() },
+                  ]}
+                  d={PAIR_TRACE_PATH}
+                  pathLength="100"
+                />
+              </svg>
+            </Show>
+          );
+        }}
       </Show>
       {props.badge}
     </span>
@@ -143,48 +170,6 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       <openclaw-tooltip prop:content={props.runningLabel} prop:describe={false}>
         {glyph()}
       </openclaw-tooltip>
-    </Show>
-  );
-}
-
-function renderSessionGlyphRun(
-  props: { pair: boolean; queued?: boolean; label: string },
-  createVisibility: SessionRunVisibility | undefined,
-) {
-  const [offscreen, setOffscreen] = createSignal(false);
-  const observe = createVisibility?.(setOffscreen);
-  return (
-    <Show
-      when={props.pair}
-      fallback={
-        <span
-          ref={(element) => observe?.(element)}
-          class={[
-            "session-glyph__ring",
-            {
-              "session-glyph__ring--queued": props.queued,
-              "session-run-indicator--offscreen": offscreen(),
-            },
-          ]}
-          role="img"
-          aria-label={props.label}
-        />
-      }
-    >
-      <svg
-        class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
-        viewBox="-16 -11 32 22"
-        role="img"
-        aria-label={props.label}
-      >
-        <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
-        <path
-          ref={(element) => observe?.(element)}
-          class={["session-glyph__trace-run", { "session-run-indicator--offscreen": offscreen() }]}
-          d={PAIR_TRACE_PATH}
-          pathLength="100"
-        />
-      </svg>
     </Show>
   );
 }

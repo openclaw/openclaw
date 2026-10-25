@@ -8,6 +8,7 @@ import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/g
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { createDevicePlacementDemandReader } from "../worker-environments/device-placement-demand.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
@@ -159,13 +160,10 @@ async function withDemandFixture(
     });
     const client: GatewayClient = {
       connId: "demand-operator",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write", "operator.admin"],
-        client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      },
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        id: "cli",
+        mode: "cli",
+      }),
     };
     const heldTurns = new Map<string, HeldTurn>();
     // Preserve the real admission/ACK; the simulated node has not published a physical launch yet.

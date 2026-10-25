@@ -319,6 +319,8 @@ export async function executePreparedReplyRun(
       }),
       sessionKey,
       operatorProfileId: opts?.operatorAuthority?.profileId,
+      // Linked channel identity establishes the initiator even without operator authority.
+      delegatedCreatorProfileId: getRequesterProfile(ctx)?.id,
     });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0

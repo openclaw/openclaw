@@ -54,7 +54,7 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     fixtures.seedPortSqlite(
       workboard,
       `${metadata.sqlite};
-      INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+      INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 17);
       INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('mixed-board', 'retained board', 1, 2)`,
     );
     client = new Client({ connectionString: fixtures.connection });

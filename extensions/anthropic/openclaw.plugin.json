@@ -37,6 +37,7 @@
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
         "defaultUtilityModel": "claude-haiku-5-5",
+        "family": "anthropic",
         "models": [
           {
             "id": "claude-haiku-5-5",

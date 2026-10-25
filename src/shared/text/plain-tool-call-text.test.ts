@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as toolCallRepair from "../../../packages/tool-call-repair/src/index.js";
+import * as toolCallRepair from "../../../packages/tool-call-repair/src/payload.js";
 import { assistantVisibleTextFilters, plainToolCallTextFilter } from "./assistant-visible-text.js";
 import * as codeRegions from "./code-regions.js";
 import { findCodeRegions } from "./code-regions.js";

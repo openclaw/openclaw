@@ -109,6 +109,16 @@ describe("createOAuthManager settlement credential validation", () => {
     return Promise.all([createPeer(0), createPeer(1)]);
   }
 
+  async function startPeerRefresh() {
+    const original = expiredStore("original", { email: "shared@example.test" });
+    const peers = await createPeers(original);
+    const refresh = holdRefresh();
+    const validatedWorkspaceIds: Array<string | undefined> = [];
+    const resolving = resolve(peers[0], workspaceValidator(validatedWorkspaceIds));
+    await refresh.started;
+    return { peers, refresh, validatedWorkspaceIds, resolving };
+  }
+
   it.each([{ storage: "fresh" as const }, { storage: "upgraded" as const }])(
     "preserves an independent local rotation with $storage shared storage",
     async ({ storage }) => {
@@ -241,14 +251,7 @@ describe("createOAuthManager settlement credential validation", () => {
   });
 
   it("preserves an upgraded local owner and fences its historical peer beside another account", async () => {
-    const original = expiredStore("original", { email: "shared@example.test" });
-    const peers = await createPeers(original);
-
-    const refresh = holdRefresh();
-
-    const validatedWorkspaceIds: Array<string | undefined> = [];
-    const resolving = resolve(peers[0], workspaceValidator(validatedWorkspaceIds));
-    await refresh.started;
+    const { peers, refresh, validatedWorkspaceIds, resolving } = await startPeerRefresh();
     await publish(
       createWorkspaceCredential("workspace-b", "relogin", {
         refresh: "relogin-other-workspace-refresh",
@@ -286,14 +289,7 @@ describe("createOAuthManager settlement credential validation", () => {
   });
 
   it("does not recover a conflicting owner after provider refresh failure", async () => {
-    const original = expiredStore("original", { email: "shared@example.test" });
-    const peers = await createPeers(original);
-
-    const refresh = holdRefresh();
-
-    const validatedWorkspaceIds: Array<string | undefined> = [];
-    const resolving = resolve(peers[0], workspaceValidator(validatedWorkspaceIds));
-    await refresh.started;
+    const { peers, refresh, validatedWorkspaceIds, resolving } = await startPeerRefresh();
     const conflictingOwner = createWorkspaceCredential("workspace-b", "relogin", {
       refresh: "relogin-other-workspace-refresh",
       email: "shared@example.test",

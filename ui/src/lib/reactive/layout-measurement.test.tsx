@@ -1,6 +1,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createLayoutMeasurement } from "./layout-measurement.ts";
 
 const cleanup: Array<() => void> = [];
@@ -12,11 +13,7 @@ it.each([false, true])("remeasures when fonts settle unless disposed: %s", (disp
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
   onTestFinished(() => {
-    if (previousFonts) {
-      Object.defineProperty(document, "fonts", previousFonts);
-    } else {
-      Reflect.deleteProperty(document, "fonts");
-    }
+    restorePropertyDescriptor(document, "fonts", previousFonts);
   });
   let element!: HTMLDivElement;
   let width = 10;

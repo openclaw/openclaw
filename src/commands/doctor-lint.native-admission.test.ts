@@ -32,7 +32,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createTestModelDefinition, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const contributions = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("../flows/doctor-health-contributions.js", () => ({
@@ -116,15 +116,11 @@ export default {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
               models: [
-                {
-                  id: "local",
+                createTestModelDefinition("local", {
                   name: "Local fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128000,
                   maxTokens: 8192,
-                },
+                }),
               ],
             },
           },

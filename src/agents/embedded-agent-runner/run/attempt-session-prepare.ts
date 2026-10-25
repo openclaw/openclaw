@@ -47,6 +47,7 @@ import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
@@ -294,8 +295,6 @@ type SessionBoundaryAttempt = Pick<
   | "userTurnTranscriptRecorder"
 >;
 
-type LlmBoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
-
 type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserTimestampOverride"]>;
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
@@ -343,7 +342,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           ? undefined
           : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
             input.preparedUserTurnMessage);
-        // Both paths below keep other live requests' inputs out of this attempt.
         foreignInputs = reconcileForeign?.(activeSession, currentUserTurnMessage?.idempotencyKey);
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
         if (
@@ -360,6 +358,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         // Speech can advance the transcript while this repair waits for write admission.
         await sessionManager.reloadPersistedTranscriptAsync(input.abortSignal);
         input.abortSignal?.throwIfAborted();
+        foreignInputs = reconcileForeign?.(activeSession, currentUserTurnMessage?.idempotencyKey);
         const candidate = resolveOrphanRepairPlan({
           sessionManager,
           prompt: attempt.prompt,

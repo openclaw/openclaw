@@ -53,7 +53,7 @@ export function admitStoreSearchExtension(
     );
   }
   db.runTransaction(() => {
-    admitPostgresSearch(db, definition, facts.namespace);
+    admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
     const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
       (item) => item !== undefined,
     );
@@ -69,12 +69,18 @@ export function admitStoreSearchExtension(
       searchExtensions: { ...base.searchExtensions, [name]: definition },
     };
     db.exec(
-      postgresSearchSql(definition, facts.namespace, {
-        text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
-        vector: existing.some(
-          (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
-        ),
-      }),
+      postgresSearchSql(
+        definition,
+        facts.namespace,
+        {
+          text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
+          vector: existing.some(
+            (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
+          ),
+        },
+        base.postgresVectorDecoderVersion,
+        base.postgresVectorSearchVersion,
+      ),
     );
     if (!Object.keys(base.searchExtensions ?? {}).length) {
       // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.
@@ -96,7 +102,7 @@ export function admitStoreSearchExtension(
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,
     )) {
-      publishPostgresSearch(db, item);
+      publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
     }
   });
   return bindStoreSearch(db, definition);

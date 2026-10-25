@@ -98,7 +98,7 @@ type AgentRuntimeResolvedRef = {
   transport?: AgentRuntimeTransport;
 };
 
-export type AgentRuntimeAuthModelRoute = {
+type AgentRuntimeAuthModelRoute = {
   provider: string;
   modelId: string;
   api: ModelApi;

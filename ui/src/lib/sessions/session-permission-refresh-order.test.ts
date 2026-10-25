@@ -19,12 +19,17 @@ function harness(
   list: (call: number) => Promise<SessionsListResult>,
 ) {
   let listCalls = 0;
+  const patchRequested = createDeferred();
   const capability = sessionRpcHarness({
-    "sessions.patch": () => patchReply,
+    "sessions.patch": () => {
+      patchRequested.resolve();
+      return patchReply;
+    },
     "sessions.list": () => (++listCalls === 1 ? initial : list(listCalls)),
   });
   return {
     ...capability,
+    patchRequested: patchRequested.promise,
     calls: () => listCalls,
     mode: () => capability.sessions.state.result?.sessions[0]?.permissionMode,
     message: (
@@ -57,11 +62,16 @@ it.each(["workspace", "full", "failure"] as const)(
     const initial = sessionsResult([row(key, sessionId)], 1);
     const read = createDeferred<SessionsListResult>();
     const reply = createDeferred<unknown>();
-    const { sessions, calls, message, mode } = harness(initial, reply.promise, () => read.promise);
+    const { sessions, calls, message, mode, patchRequested } = harness(
+      initial,
+      reply.promise,
+      () => read.promise,
+    );
     let patch: ReturnType<typeof sessions.patch> | undefined;
     try {
       await sessions.refresh({ force: true });
       patch = sessions.patch(key, { permissionMode: "workspace" });
+      await patchRequested;
       message(key, sessionId, 2);
       reply.resolve(acknowledgment(key, sessionId));
       await vi.waitFor(() => expect(calls()).toBe(2));

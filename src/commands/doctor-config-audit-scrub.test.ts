@@ -69,7 +69,6 @@ describe("detectConfigAuditScrubIssue", () => {
       kind: "file",
       action: "would-scrub-config-audit-log",
       target: auditPath,
-      dryRunSafe: false,
     });
   });
 });

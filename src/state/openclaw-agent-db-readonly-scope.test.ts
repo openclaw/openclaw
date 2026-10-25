@@ -29,7 +29,12 @@ import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly as readAgentDb,
 } from "./openclaw-agent-db-readonly.js";
-import { releaseOpenClawAgentDatabaseReadValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  captureOpenClawAgentDatabaseReadValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  releaseOpenClawAgentDatabaseReadValidation,
+  setOpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import {
   openOpenClawAgentDatabase as openAgentDb,
   runOpenClawAgentWriteTransaction,
@@ -184,6 +189,65 @@ it("keeps one connection while nested reads retain independent committed snapsho
   scope.close();
   expect(retained?.isOpen).toBe(false);
 });
+
+it.each(["successor", "omitted"] as const)(
+  "reopens a reader with revoked admission when its next receipt is %s",
+  (nextReceipt) => {
+    const options = { agentId: "main", env: state.env };
+    const owner = openAgentDb(options);
+    const target = { agentId: owner.agentId, path: owner.path };
+    const initial = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!initial) {
+      throw new Error("Expected the owner's initial read validation");
+    }
+    const scope = newScope();
+    const read = vi.fn((db: EngineConnection) => {
+      expect(
+        db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({
+        agent_id: "main",
+      });
+      return db;
+    });
+    const first = scope.run({ ...target, validation: initial.validation }, () =>
+      scope.read(({ db }) => read(db), options),
+    );
+    if (!first.found) {
+      throw new Error("Expected the admitted reader");
+    }
+    expect(first.value.isOpen).toBe(true);
+    expect(first.value).not.toBe(owner.db);
+
+    invalidateOpenClawAgentDatabaseValidation(owner.path);
+    expect(Atomics.load(new Int32Array(initial.validation.valid), 0)).toBe(0);
+    setOpenClawAgentDatabaseValidation(owner);
+    const successor = captureOpenClawAgentDatabaseReadValidation(owner);
+    if (!successor) {
+      throw new Error("Expected the owner's successor read validation");
+    }
+    const nextTarget = {
+      ...target,
+      ...(nextReceipt === "successor" ? { validation: successor.validation } : {}),
+    };
+    read.mockClear();
+    const recovered = scope.run(nextTarget, () =>
+      scope.read(({ db }) => {
+        expect(first.value.isOpen).toBe(false);
+        expect(db === first.value).toBe(false);
+        return read(db);
+      }, options),
+    );
+    if (!recovered.found) {
+      throw new Error("Expected a new admitted reader");
+    }
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(Atomics.load(new Int32Array(successor.validation.valid), 0)).toBe(1);
+    expect(Atomics.load(new Int32Array(successor.validation.canonicalReady), 0)).toBe(1);
+    const reused = scope.run(nextTarget, () => scope.read(({ db }) => read(db), options));
+    expect(reused.found && reused.value).toBe(recovered.value);
+    expect(read).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
   const { options, path } = await closedDatabase();

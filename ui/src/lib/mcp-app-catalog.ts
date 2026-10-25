@@ -37,10 +37,7 @@ export function createMcpAppCatalog(
   let targetRequest = new AbortController();
   const available = () => {
     const snapshot = gateway.read().snapshot;
-    return (
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
-    );
+    return canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write");
   };
   const discoveryIdentity = createMemo(() => {
     gateway.read();

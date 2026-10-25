@@ -4,7 +4,10 @@ import type { WorktreesGcResult } from "../../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { WorktreesModel } from "../../pages/worktrees/worktrees-model.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGatewaySnapshot,
+  createApplicationGateway,
+} from "../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -41,17 +44,14 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
     }
     throw new Error(`Unexpected worktrees method: ${args[0]}`);
   });
-  const source = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: gatewayHelloForMethods(["worktrees.list", "worktrees.gc"]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(["worktrees.list", "worktrees.gc"]),
+      sessionKey: "main",
+    }),
+  );
   const context = { gateway: source.gateway } as ApplicationContext;
   let retireBeforeEnqueue = false;
   const reconnect = () => {

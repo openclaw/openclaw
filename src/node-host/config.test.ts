@@ -151,12 +151,12 @@ describe("node-host SQLite config", () => {
         },
       },
     } satisfies NodeHostConfig;
+    vi.spyOn(Date, "now").mockReturnValue(1_234);
     const configured = await configure({
       nodeId: expected.nodeId,
       displayName: expected.displayName,
       gateway: structuredClone(expected.gateway),
       fallbackDisplayName: "fallback",
-      nowMs: 1_234,
     });
     expect(configured).toEqual(expected);
     expect(readConfigMachineStateWithMetadata(NODE_HOST_CONFIG_KEY, { env })?.updatedAtMs).toBe(
@@ -171,8 +171,10 @@ describe("node-host SQLite config", () => {
 
   it("persists an explicit installed-app sharing enable", async () => {
     const { configure, load } = makeTestEnv();
-    await configure({ nowMs: 1 });
-    const enabled = await configure({ installedAppsSharing: true, nowMs: 2 });
+    vi.spyOn(Date, "now").mockReturnValue(1);
+    await configure();
+    vi.spyOn(Date, "now").mockReturnValue(2);
+    const enabled = await configure({ installedAppsSharing: true });
     expect(enabled.installedAppsSharing).toBe(true);
     await closeOpenClawStateDatabaseAsync();
     await expect(load()).resolves.toMatchObject({ installedAppsSharing: true });
@@ -242,6 +244,7 @@ describe("node-host SQLite config", () => {
 
   it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
     const { configure, load } = makeTestEnv();
+    vi.spyOn(Date, "now").mockReturnValue(20);
     await configure({
       nodeId: "first-custom-id",
       gateway: {
@@ -251,12 +254,11 @@ describe("node-host SQLite config", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/old",
       },
-      nowMs: 20,
     });
+    vi.spyOn(Date, "now").mockReturnValue(21);
     const configured = await configure({
       nodeId: "custom id with spaces inside",
       gateway: { host: "new.example", port: 18789, tls: false },
-      nowMs: 21,
     });
 
     expect(configured).toMatchObject({
@@ -295,6 +297,7 @@ describe("node-host SQLite config", () => {
     },
   );
   function seed(env: NodeJS.ProcessEnv) {
+    vi.spyOn(Date, "now").mockReturnValue(1234);
     return configureNodeHost({
       env,
       nodeId: "fixture-node",
@@ -303,7 +306,6 @@ describe("node-host SQLite config", () => {
       gateway: { host: "gateway.example", port: 18443, tls: true, contextPath: "/gateway" },
       commands: ["fixture.read", "fixture.list"],
       installedAppsSharing: true,
-      nowMs: 1234,
     });
   }
 
@@ -371,11 +373,11 @@ describe("node-host SQLite config", () => {
         gateway: { host: "new.gateway.example", port: 19443, tls: true },
         commands: ["fixture.updated"],
       };
+      vi.spyOn(Date, "now").mockReturnValue(5678);
       const configured = await configureNodeHost({
         ...update,
         env,
         fallbackDisplayName: "fallback",
-        nowMs: 5678,
       });
       expect(configured).toMatchObject({
         ...update,

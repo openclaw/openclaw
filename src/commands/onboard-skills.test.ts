@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
@@ -150,25 +151,20 @@ function createPrompter(params: {
   const confirmAnswers: boolean[] = [];
   confirmAnswers.push(params.configure ?? true);
 
-  const prompter: WizardPrompter = {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
+  const prompter: WizardPrompter = makePrompter({
     note: vi.fn(async (message: string, title?: string) => {
       notes.push({ title, message });
     }),
-    select: vi.fn(async () => "npm") as unknown as WizardPrompter["select"],
     multiselect: vi.fn(
       async () => params.multiselect ?? ["__skip__"],
     ) as unknown as WizardPrompter["multiselect"],
-    text: vi.fn(async () => ""),
     confirm: vi.fn(async ({ message }) => {
       if (message === "Show Homebrew install command?") {
         return params.showBrewInstall ?? false;
       }
       return confirmAnswers.shift() ?? false;
     }),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  };
+  });
 
   return { prompter, notes };
 }

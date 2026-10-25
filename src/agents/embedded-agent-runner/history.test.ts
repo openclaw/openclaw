@@ -5,24 +5,26 @@ import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 
+function expectHistoryLimit(...args: Parameters<typeof getHistoryLimitFromSessionKey>) {
+  return expect(getHistoryLimitFromSessionKey(...args));
+}
+
 describe("getHistoryLimitFromSessionKey", () => {
   it("does not match channel history limits across provider id variants", () => {
     // Channel ids and provider ids are not normalized across spelling variants;
     // guessing here could apply the wrong retention policy.
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:z-ai:channel:general", {
-        channels: {
-          "z.ai": {
-            historyLimit: 17,
-          },
+    expectHistoryLimit("agent:main:z-ai:channel:general", {
+      channels: {
+        "z.ai": {
+          historyLimit: 17,
         },
-      }),
-    ).toBeUndefined();
+      },
+    }).toBeUndefined();
   });
 
   it("returns undefined when sessionKey or config is undefined", () => {
-    expect(getHistoryLimitFromSessionKey(undefined, {})).toBeUndefined();
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123", undefined)).toBeUndefined();
+    expectHistoryLimit(undefined, {}).toBeUndefined();
+    expectHistoryLimit("telegram:dm:123", undefined).toBeUndefined();
   });
 
   it("keeps backward compatibility for dm and direct session kinds", () => {
@@ -30,10 +32,10 @@ describe("getHistoryLimitFromSessionKey", () => {
       channels: { telegram: { dmHistoryLimit: 10 } },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(10);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
-    expect(getHistoryLimitFromSessionKey("telegram:direct:123", config)).toBe(10);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:direct:123", config)).toBe(10);
+    expectHistoryLimit("telegram:dm:123", config).toBe(10);
+    expectHistoryLimit("agent:main:telegram:dm:123", config).toBe(10);
+    expectHistoryLimit("telegram:direct:123", config).toBe(10);
+    expectHistoryLimit("agent:main:telegram:direct:123", config).toBe(10);
   });
 
   it("strips numeric thread and topic suffixes from direct message session keys", () => {
@@ -43,9 +45,9 @@ describe("getHistoryLimitFromSessionKey", () => {
       channels: { telegram: { dmHistoryLimit: 10, dms: { "123": { historyLimit: 7 } } } },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:123:thread:999", config)).toBe(7);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:123:topic:555", config)).toBe(7);
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123:thread:999", config)).toBe(7);
+    expectHistoryLimit("agent:main:telegram:dm:123:thread:999", config).toBe(7);
+    expectHistoryLimit("agent:main:telegram:dm:123:topic:555", config).toBe(7);
+    expectHistoryLimit("telegram:dm:123:thread:999", config).toBe(7);
   });
 
   it("resolves account-scoped direct session keys", () => {
@@ -61,10 +63,10 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:work:direct:456", config)).toBe(11);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:work:direct:123", config)).toBe(22);
+    expectHistoryLimit("agent:main:telegram:work:direct:456", config).toBe(11);
+    expectHistoryLimit("agent:main:telegram:work:direct:123", config).toBe(22);
     // A key without the account segment still resolves the root value.
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:direct:456", config)).toBe(4);
+    expectHistoryLimit("agent:main:telegram:direct:456", config).toBe(4);
   });
 
   it("uses observed peer identity rather than the account name to resolve ambiguous keys", () => {
@@ -78,18 +80,14 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:telegram:direct:direct:peer", config, {
-        accountId: "direct",
-        peerId: "peer",
-      }),
-    ).toBe(41);
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:telegram:direct:direct:peer", config, {
-        accountId: "direct",
-      }),
-    ).toBe(12);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:direct:direct:peer", config)).toBe(4);
+    expectHistoryLimit("agent:main:telegram:direct:direct:peer", config, {
+      accountId: "direct",
+      peerId: "peer",
+    }).toBe(41);
+    expectHistoryLimit("agent:main:telegram:direct:direct:peer", config, {
+      accountId: "direct",
+    }).toBe(12);
+    expectHistoryLimit("agent:main:telegram:direct:direct:peer", config).toBe(4);
   });
 
   it("does not read a root peer id beginning with direct as an account segment", () => {
@@ -105,12 +103,10 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:telegram:direct:direct:peer", config, {
-        peerId: "direct:peer",
-      }),
-    ).toBe(31);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:dm:peer", config)).toBe(4);
+    expectHistoryLimit("agent:main:telegram:direct:direct:peer", config, {
+      peerId: "direct:peer",
+    }).toBe(31);
+    expectHistoryLimit("agent:main:telegram:dm:dm:peer", config).toBe(4);
   });
 
   it("preserves a linked DM peer when its first segment matches the routed account", () => {
@@ -141,13 +137,11 @@ describe("getHistoryLimitFromSessionKey", () => {
       identityLinks: config.session.identityLinks,
     });
 
-    expect(
-      getHistoryLimitFromSessionKey(sessionKey, config, {
-        accountId: "direct",
-        peerId: "123",
-        chatType: "direct",
-      }),
-    ).toBe(31);
+    expectHistoryLimit(sessionKey, config, {
+      accountId: "direct",
+      peerId: "123",
+      chatType: "direct",
+    }).toBe(31);
   });
 
   it("lets an account dms map replace the root map instead of merging per entry", () => {
@@ -163,19 +157,15 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:telegram:direct:123", config, {
-        accountId: "work",
-      }),
-    ).toBe(22);
+    expectHistoryLimit("agent:main:telegram:direct:123", config, {
+      accountId: "work",
+    }).toBe(22);
     // 456 exists only in the root map, so the account default wins over it.
-    expect(
-      getHistoryLimitFromSessionKey("agent:main:telegram:direct:456", config, {
-        accountId: "work",
-      }),
-    ).toBe(11);
+    expectHistoryLimit("agent:main:telegram:direct:456", config, {
+      accountId: "work",
+    }).toBe(11);
     // With no account, the root map still applies.
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:direct:456", config)).toBe(98);
+    expectHistoryLimit("agent:main:telegram:direct:456", config).toBe(98);
   });
 
   it.each(["direct", "dm", "group", "channel"])(
@@ -205,8 +195,8 @@ describe("getHistoryLimitFromSessionKey", () => {
         peerId: route.peerId,
         dmScope: "per-account-channel-peer",
       });
-      expect(getHistoryLimitFromSessionKey(sessionKey, config, route)).toBe(41);
-      expect(getHistoryLimitFromSessionKey(`${sessionKey}:thread:99`, config, route)).toBe(41);
+      expectHistoryLimit(sessionKey, config, route).toBe(41);
+      expectHistoryLimit(`${sessionKey}:thread:99`, config, route).toBe(41);
       const sharedKey = buildAgentPeerSessionKey({
         agentId: "main",
         channel: "telegram",
@@ -214,7 +204,7 @@ describe("getHistoryLimitFromSessionKey", () => {
         peerId: route.peerId,
         dmScope: "main",
       });
-      expect(getHistoryLimitFromSessionKey(sharedKey, config, route)).toBeUndefined();
+      expectHistoryLimit(sharedKey, config, route).toBeUndefined();
       const groupKey = buildAgentPeerSessionKey({
         agentId: "main",
         channel: "telegram",
@@ -222,16 +212,12 @@ describe("getHistoryLimitFromSessionKey", () => {
         peerKind: "group",
         peerId: "direct:peer",
       });
-      expect(getHistoryLimitFromSessionKey(groupKey, config, { ...route, chatType: "group" })).toBe(
-        9,
-      );
-      expect(
-        getHistoryLimitFromSessionKey(groupKey, config, {
-          ...route,
-          accountId: "other",
-          chatType: "group",
-        }),
-      ).toBe(8);
+      expectHistoryLimit(groupKey, config, { ...route, chatType: "group" }).toBe(9);
+      expectHistoryLimit(groupKey, config, {
+        ...route,
+        accountId: "other",
+        chatType: "group",
+      }).toBe(8);
     },
   );
 
@@ -259,19 +245,15 @@ describe("getHistoryLimitFromSessionKey", () => {
       dmScope: "per-channel-peer",
       identityLinks: config.session.identityLinks,
     });
-    expect(getHistoryLimitFromSessionKey(sessionKey, config, route)).toBe(31);
-    expect(
-      getHistoryLimitFromSessionKey(
-        sessionKey,
-        { ...config, session: { identityLinks: { changed: ["telegram:123"] } } },
-        route,
-      ),
+    expectHistoryLimit(sessionKey, config, route).toBe(31);
+    expectHistoryLimit(
+      sessionKey,
+      { ...config, session: { identityLinks: { changed: ["telegram:123"] } } },
+      route,
     ).toBe(12);
-    expect(getHistoryLimitFromSessionKey(sessionKey, { ...config, session: {} }, route)).toBe(12);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:direct:another", config, route)).toBe(
-      12,
-    );
-    expect(getHistoryLimitFromSessionKey("agent:main:main", config, route)).toBeUndefined();
+    expectHistoryLimit(sessionKey, { ...config, session: {} }, route).toBe(12);
+    expectHistoryLimit("agent:main:telegram:direct:another", config, route).toBe(12);
+    expectHistoryLimit("agent:main:main", config, route).toBeUndefined();
     const overrideKey = buildAgentPeerSessionKey({
       agentId: "main",
       channel: "telegram",
@@ -280,16 +262,12 @@ describe("getHistoryLimitFromSessionKey", () => {
       dmScope: "per-account-channel-peer",
       identityLinks: config.session.identityLinks,
     });
-    expect(
-      getHistoryLimitFromSessionKey(overrideKey, config, { ...route, accountId: "personal" }),
-    ).toBe(23);
-    expect(
-      getHistoryLimitFromSessionKey(overrideKey, config, {
-        ...route,
-        accountId: "personal",
-        peerId: "456",
-      }),
-    ).toBe(19);
+    expectHistoryLimit(overrideKey, config, { ...route, accountId: "personal" }).toBe(23);
+    expectHistoryLimit(overrideKey, config, {
+      ...route,
+      accountId: "personal",
+      peerId: "456",
+    }).toBe(19);
   });
 
   it("keeps non-numeric thread markers in direct message ids", () => {
@@ -299,7 +277,7 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:user:thread:abc", config)).toBe(9);
+    expectHistoryLimit("agent:main:telegram:dm:user:thread:abc", config).toBe(9);
   });
 
   it.each(["a::b", "alice:thread:123", "alice:topic:123"])(
@@ -331,11 +309,9 @@ describe("getHistoryLimitFromSessionKey", () => {
         dmScope: "per-account-channel-peer",
         identityLinks: config.session.identityLinks,
       });
-      expect(getHistoryLimitFromSessionKey(sessionKey, config, { peerId: "123" })).toBe(31);
-      expect(
-        getHistoryLimitFromSessionKey(`${sessionKey}:thread:99`, config, { peerId: "123" }),
-      ).toBe(31);
-      expect(getHistoryLimitFromSessionKey(sessionKey, config, { peerId: "changed" })).toBe(12);
+      expectHistoryLimit(sessionKey, config, { peerId: "123" }).toBe(31);
+      expectHistoryLimit(`${sessionKey}:thread:99`, config, { peerId: "123" }).toBe(31);
+      expectHistoryLimit(sessionKey, config, { peerId: "changed" }).toBe(12);
     },
   );
 
@@ -353,10 +329,10 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
-    expect(getHistoryLimitFromSessionKey("telegram:dm:456", config)).toBe(15);
-    expect(getHistoryLimitFromSessionKey("telegram:dm:789", config)).toBe(0);
-    expect(getHistoryLimitFromSessionKey("telegram:dm:other", config)).toBe(15);
+    expectHistoryLimit("telegram:dm:123", config).toBe(5);
+    expectHistoryLimit("telegram:dm:456", config).toBe(15);
+    expectHistoryLimit("telegram:dm:789", config).toBe(0);
+    expectHistoryLimit("telegram:dm:other", config).toBe(15);
   });
 
   it("returns historyLimit for channel and group sessions", () => {
@@ -367,9 +343,9 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("agent:beta:slack:channel:c1", config)).toBe(10);
-    expect(getHistoryLimitFromSessionKey("discord:channel:123456", config)).toBe(8);
-    expect(getHistoryLimitFromSessionKey("discord:group:123", config)).toBe(8);
+    expectHistoryLimit("agent:beta:slack:channel:c1", config).toBe(10);
+    expectHistoryLimit("discord:channel:123456", config).toBe(8);
+    expectHistoryLimit("discord:group:123", config).toBe(8);
   });
 
   it("returns undefined for unsupported session kinds, unknown providers, and missing limits", () => {
@@ -380,10 +356,10 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
-    expect(getHistoryLimitFromSessionKey("unknown:dm:123", config)).toBeUndefined();
-    expect(getHistoryLimitFromSessionKey("discord:channel:123", config)).toBeUndefined();
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
+    expectHistoryLimit("telegram:slash:123", config).toBeUndefined();
+    expectHistoryLimit("unknown:dm:123", config).toBeUndefined();
+    expectHistoryLimit("discord:channel:123", config).toBeUndefined();
+    expectHistoryLimit("telegram:dm:123", config).toBeUndefined();
   });
 
   it("prefers account-scoped limits over the channel root for that account", () => {
@@ -449,14 +425,12 @@ describe("getHistoryLimitFromSessionKey", () => {
     } as unknown as OpenClawConfig;
 
     for (const accountId of ["work-team", "Work Team", "WORK TEAM"]) {
-      expect(getHistoryLimitFromSessionKey("telegram:channel:c1", config, { accountId })).toBe(40);
-      expect(getHistoryLimitFromSessionKey("telegram:dm:999", config, { accountId })).toBe(41);
-      expect(getHistoryLimitFromSessionKey("telegram:dm:123", config, { accountId })).toBe(42);
+      expectHistoryLimit("telegram:channel:c1", config, { accountId }).toBe(40);
+      expectHistoryLimit("telegram:dm:999", config, { accountId }).toBe(41);
+      expectHistoryLimit("telegram:dm:123", config, { accountId }).toBe(42);
     }
     // An unrelated account still falls back to the root.
-    expect(
-      getHistoryLimitFromSessionKey("telegram:channel:c1", config, { accountId: "other" }),
-    ).toBe(10);
+    expectHistoryLimit("telegram:channel:c1", config, { accountId: "other" }).toBe(10);
   });
 
   it("treats an explicit account limit of 0 as a real override", () => {
@@ -470,8 +444,8 @@ describe("getHistoryLimitFromSessionKey", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(getHistoryLimitFromSessionKey("slack:channel:c1", config, { accountId: "off" })).toBe(0);
-    expect(getHistoryLimitFromSessionKey("slack:dm:u1", config, { accountId: "off" })).toBe(0);
+    expectHistoryLimit("slack:channel:c1", config, { accountId: "off" }).toBe(0);
+    expectHistoryLimit("slack:dm:u1", config, { accountId: "off" }).toBe(0);
   });
 });
 

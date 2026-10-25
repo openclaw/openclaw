@@ -4,11 +4,11 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
+  isTestCliProvider,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
@@ -108,14 +108,7 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        normalized === "claude-cli" ||
-        normalized === "google-gemini-cli" ||
-        normalized === "codex-cli"
-      );
-    },
+    isCliProvider: isTestCliProvider,
   };
 });
 

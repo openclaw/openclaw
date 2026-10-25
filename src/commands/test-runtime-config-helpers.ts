@@ -3,9 +3,17 @@
 
 import { vi } from "vitest";
 import type { ConfigMutationResult } from "../config/mutate.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+
+export const MACOS_APP_INSTALL_OWNER_MARKER = JSON.stringify({
+  schemaVersion: 1,
+  owner: "macos-app",
+  displayName: "OpenClaw.app",
+  updateHint: "Update OpenClaw.app to update this Gateway.",
+});
 
 export const baseConfigSnapshot = {
   path: "/tmp/openclaw.json",
@@ -17,6 +25,22 @@ export const baseConfigSnapshot = {
   issues: [],
   legacyIssues: [],
 };
+
+export function createTestModelDefinition(
+  id: string,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+    ...overrides,
+  };
+}
 
 /** Builds a complete config snapshot while preserving distinct authored and runtime fixtures. */
 export function createTestConfigSnapshot(
@@ -121,5 +145,20 @@ export function createThrowingTestRuntime(): RuntimeEnv {
     exit: vi.fn(() => {
       throw new Error("exit");
     }),
+  };
+}
+
+export function createTestConfigReadMocks<TKey extends string, TArgs extends unknown[], TResult>(
+  owner: Record<TKey, (...args: TArgs) => TResult>,
+  key: TKey,
+) {
+  const loadConfig = owner[key];
+  return {
+    getRuntimeConfig: loadConfig,
+    loadConfig,
+    captureRuntimeConfigAsyncReader:
+      (...args: TArgs) =>
+      async () =>
+        owner[key](...args),
   };
 }

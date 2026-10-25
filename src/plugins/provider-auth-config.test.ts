@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeProviderAuthConfig } from "./provider-auth-config.js";
 
@@ -22,26 +23,18 @@ it.each([
           headers: { "x-route": "keep-request-header" },
         },
         models: [
-          {
-            id: "local-qwen",
+          buildCatalogModel("local-qwen", {
             name: "Configured local model",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 8192,
             maxTokens: 2048,
             headers: { "x-model": "keep-model-header" },
             params: { temperature: 0.2 },
-          },
-          {
-            id: "retained-model",
+          }),
+          buildCatalogModel("retained-model", {
             name: "Retained model",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 8192,
             maxTokens: 2048,
-          },
+          }),
         ],
       };
       await state.writeConfig({ models: { providers: { [sourceKey]: provider } } });

@@ -28,6 +28,7 @@ import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-ident
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { PluginInlineView } from "../../../plugins/control-ui-inline-view.tsx";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import "../../../components/solid/person-reference.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
@@ -328,6 +329,7 @@ function AssistantViews(props: ContentProps) {
                     return Boolean(rawToggle && open);
                   },
                   canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
+                  mediaReadAllowed: props.options.mediaReadAllowed,
                   boardProvider: props.options.boardProvider,
                   widgetLayout: props.options.widgetLayout,
                   embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
@@ -525,6 +527,16 @@ function BubbleContents(props: ContentProps) {
           </div>
         </Show>
       </Show>
+      <For each={props.state().inlineViewBlocks} keyed={(block) => block.toolCallId}>
+        {(block) => (
+          <PluginInlineView
+            block={block()}
+            sessionKey={props.options.sessionKey ?? ""}
+            agentId={props.options.agentId}
+            presented={props.options.mediaReadAllowed !== false && props.options.presented}
+          />
+        )}
+      </For>
       <Show when={props.state().hasToolCards}>
         <Show
           when={
@@ -649,6 +661,7 @@ function ToolMessage(props: ContentProps) {
                 expanded: props.state().toolMessageExpanded,
               })}
               presented={props.options.presented ?? true}
+              enabled={props.options.mediaReadAllowed !== false}
               renderDefault={() => <ToolMessageFallback {...props} />}
             />
           )}

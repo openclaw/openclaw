@@ -194,10 +194,7 @@ function resolvePluginToolLoadState(params: {
 export function ensureStandalonePluginToolRegistryLoaded(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
-  toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
-  env?: NodeJS.ProcessEnv;
 }): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {

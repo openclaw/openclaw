@@ -30,8 +30,7 @@ import { createChatRunState } from "../server-chat-state.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
-import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { createProjectedSessionEventPredicate } from "../session-sharing.test-utils.js";
 import {
   adminRequestClient,
   broadcast,
@@ -205,31 +204,7 @@ it("scopes requested and resolved questions to operators allowed to see their se
         viewerClient.client,
         guestClient.client,
       ]),
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({
-          cfg,
-          client,
-          sessionKeys,
-          agentId,
-          event,
-          payload,
-          prepared: {
-            sharing: prepareProjectedSessionSharing({
-              cfg,
-              client,
-              isMember: (target, identityId) =>
-                projection.hasMembership(target.storePath, target.storeKey, identityId),
-            }),
-            target: (key, targetAgentId) => {
-              const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
-                cfg,
-                sessionKey: key,
-                agentId: targetAgentId,
-              });
-              return projection.sharingTarget({ key, agentId: ownerAgentId });
-            },
-          },
-        }),
+      canReceiveSessionEvent: createProjectedSessionEventPredicate(cfg, projection),
     });
     broadcast.mockImplementation(gatewayBroadcaster.broadcast);
 

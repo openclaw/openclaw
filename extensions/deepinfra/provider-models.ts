@@ -37,15 +37,13 @@ type DeepInfraDiscoveredModel = Pick<
   "id" | "name" | "tags" | "contextWindow" | "maxTokens"
 >;
 
-interface DeepInfraAgentModelMetadata {
-  context_length?: number | null;
-  max_tokens?: number | null;
-  tags?: string[];
-}
-
 interface DeepInfraAgentModelEntry {
   id: string;
-  metadata: DeepInfraAgentModelMetadata | null;
+  metadata: {
+    context_length?: number | null;
+    max_tokens?: number | null;
+    tags?: string[];
+  } | null;
 }
 
 interface DeepInfraDiscoveredCatalog {

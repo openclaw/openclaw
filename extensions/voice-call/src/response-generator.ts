@@ -265,7 +265,12 @@ export async function generateVoiceResponse(
           sessionKey: resolvedSessionKey,
         });
 
-        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const { provider, model } = resolveVoiceResponseModel({
+          cfg,
+          agentId,
+          voiceConfig,
+          agentRuntime,
+        });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {

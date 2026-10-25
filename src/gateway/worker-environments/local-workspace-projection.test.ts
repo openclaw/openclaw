@@ -708,7 +708,13 @@ it.for([false, true])(
       containerName: entry.containerName,
       containerId: "a".repeat(64),
       configHash: "checkpoint-fixture-config",
-      mountPlan: { binds: [], skippedBinds: [], readOnlyWorkspaceSkillMounts: [], tmpfs: [] },
+      mountPlan: {
+        binds: [],
+        protectedTargets: [],
+        skippedBinds: [],
+        readOnlyWorkspaceSkillMounts: [],
+        tmpfs: [],
+      },
       currentConfig: true,
     });
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {

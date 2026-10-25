@@ -112,6 +112,9 @@ export function updateChatRunProgressSnapshot(
   mode: "full" | "summary" = "full",
 ): ChatRunProgressSnapshot | undefined {
   const data = event.data ?? {};
+  if ((event.stream === "tool" || event.stream === "item") && data.display === false) {
+    return snapshot;
+  }
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;

@@ -18,7 +18,7 @@ export async function reloadProvisionedCronJobs(
   if (state.stopped || state.lifecycleGeneration !== generation || !state.schedulerStarted) {
     return;
   }
-  await ensureLoaded(state, { forceReload: true });
+  await ensureLoaded(state);
   if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
   }

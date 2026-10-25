@@ -51,7 +51,13 @@ async function setup(page: Page) {
         ],
       },
     ],
-    featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
+    featureMethods: [
+      "board.get",
+      "chat.metadata",
+      "chat.startup",
+      "sessions.companion.state",
+      "terminal.open",
+    ],
     terminalEnabled: true,
     methodResponses: {
       "cron.list": {

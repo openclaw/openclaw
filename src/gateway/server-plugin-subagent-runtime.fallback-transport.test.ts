@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   resetConfigRuntimeState,
@@ -26,6 +27,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const HOST_PLUGIN_ID = "test-completion";
 const PINNED_KEY = "sk-pinned-primary";
@@ -35,15 +37,7 @@ type RecordedHit = {
 };
 
 function providerModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 1024,
-  };
+  return modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 });
 }
 
 async function waitForHit(arrival: Promise<void>, work: Promise<unknown>, label: string) {
@@ -233,12 +227,7 @@ describe("plugin background completion transport", () => {
       let pending: Promise<{ text: string }> | undefined;
       await inProcessDispatch.withOperatorToolGatewayAuthority(
         {
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: "Completion operator",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profile.id, "Completion operator"),
           scopes: ["operator.write"],
         },
         async () => {

@@ -238,8 +238,7 @@ export async function resolveSlackThreadHistory(params: {
         retained.splice(0, retained.length - maxMessages);
       }
 
-      const next = response.response_metadata?.next_cursor;
-      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
+      cursor = normalizeOptionalString(response.response_metadata?.next_cursor);
       if (response.has_more && !cursor) {
         params.onOmission?.("Slack returned an incomplete thread page without a cursor");
         return [];

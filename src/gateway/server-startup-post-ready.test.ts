@@ -1,9 +1,21 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { GatewaySchedulerClock } from "../infra/gateway-scheduler.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import {
+  createPluginNativeCaptureRoot,
+  retainPluginNativeCapturePath,
+} from "../plugins/plugin-source-capture-directory.js";
+import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clock.js";
 import { getFreePort } from "../test-utils/ports.js";
 import type { GatewayServer } from "./server-public.js";
+import * as retiredArtifacts from "./server-retained-plugin-cleanup.js";
 import * as fixture from "./server-startup-state.test-support.js";
 
 const schedulerClock = vi.hoisted(() => ({
@@ -36,6 +48,7 @@ it.each(["settles", "closes", "repair-closes"] as const)(
     const repairRelease = createDeferred();
     const resumed = vi.fn<(closing: boolean) => void>();
     const startMaintenance = vi.fn(async () => null);
+    const cleanup = vi.spyOn(retiredArtifacts, "cleanupGatewayRetiredPluginArtifacts");
     let server: GatewayServer | undefined;
     let realStartup: Promise<void> | undefined;
     let postReadyWork: Promise<void> | undefined;
@@ -129,6 +142,90 @@ it.each(["settles", "closes", "repair-closes"] as const)(
         if (outcome === "settles") {
           // Failed optional repair must not suppress the periodic maintenance owner.
           expect(startMaintenance).toHaveBeenCalledOnce();
+          // A separate producer must release custody before the Gateway can reclaim captures.
+          const captureModule = resolveRuntimeWorkerUrl(
+            pluginProcessRuntimeEntrypoints.captureDirectory,
+          );
+          const produceCaptures = async <T extends string>(names: T[]) => {
+            const producer = await runNodeScript(
+              (argv) => [
+                ...argv(captureModule).slice(0, -1),
+                "--input-type=module",
+                "-e",
+                `import fs from "node:fs";
+               import path from "node:path";
+               import { createPluginNativeCaptureRoot } from ${JSON.stringify(captureModule.href)};
+               const fixtures = {};
+               for (const name of ${JSON.stringify(names)}) {
+                 const root = createPluginNativeCaptureRoot();
+                 const file = path.join(root.directory, name + ".node");
+                 fs.writeFileSync(file, "synthetic " + name);
+                 root.commit();
+                 await root.disposeAsync();
+                 fixtures[name] = { directory: root.directory, file };
+               }
+               process.stdout.write(JSON.stringify(fixtures));`,
+              ],
+              process.env,
+              undefined,
+              { requireProcessTreeExit: true },
+            );
+            expect(producer.error).toBeUndefined();
+            expect(producer.status, producer.stderr).toBe(0);
+            return JSON.parse(producer.stdout) as Record<T, { directory: string; file: string }>;
+          };
+          const { installed, retained } = await produceCaptures(["installed", "retained"]);
+          const releaseRetained = retainPluginNativeCapturePath(retained.file);
+          const live = createPluginNativeCaptureRoot(state.stateDir);
+          const liveFile = path.join(live.directory, "live.node");
+          fs.writeFileSync(liveFile, "synthetic live");
+          const expectProtectedCaptures = () => {
+            for (const [file, name] of [
+              [liveFile, "live"],
+              [installed.file, "installed"],
+              [retained.file, "retained"],
+            ]) {
+              expect(fs.readFileSync(file!, "utf8")).toBe(`synthetic ${name}`);
+            }
+          };
+          try {
+            const index = createInstalledPluginIndex();
+            index.plugins[0]!.sourceAdmissions = {
+              fixture: {
+                signature: "fixture",
+                sourceDigest: "a".repeat(64),
+                nativeArtifacts: {
+                  native: {
+                    sourceIdentity: "fixture",
+                    contentHash: "b".repeat(64),
+                    sizeBytes: 19,
+                    capturedPath: installed.file,
+                    namespace: installed.directory,
+                    capturedIdentity: "fixture",
+                  },
+                },
+                nativeNamespaces: {},
+              },
+            };
+            await writePersistedInstalledPluginIndex(index, { stateDir: state.stateDir });
+            await clock.advanceBy(30_000);
+            expect(cleanup).toHaveBeenCalledOnce();
+            expectProtectedCaptures();
+            const { orphan } = await produceCaptures(["orphan"]);
+            expect(fs.readFileSync(orphan.file, "utf8")).toBe("synthetic orphan");
+            await clock.advanceBy(60 * 60_000);
+            // Other due Gateway work can occupy the hourly wake; allow its idle retry.
+            await clock.advanceBy(30_000);
+            expect(fs.existsSync(orphan.file)).toBe(false);
+            expectProtectedCaptures();
+            expect(cleanup).toHaveBeenCalledTimes(2);
+            await server.close();
+            await clock.advanceBy(60 * 60_000);
+            expect(cleanup).toHaveBeenCalledTimes(2);
+          } finally {
+            releaseRetained();
+            await live.disposeAsync();
+          }
         }
       }
     } finally {

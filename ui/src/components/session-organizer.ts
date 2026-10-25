@@ -17,7 +17,7 @@ import {
   categoryClearReturnsToGroups,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
-import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
+import { isSessionDeferredPatch } from "../lib/sessions/patch.ts";
 import type { runSessionNavigationAction } from "../lib/sessions/session-menu-navigation.ts";
 import {
   loadStoredCollapsedSessionSections,
@@ -109,7 +109,7 @@ export class SessionOrganizer {
     patch: SidebarSessionPatch,
     options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
-    const scope = this.deps.sessionData.beginSessionMutation(isSessionDisplayMetadataPatch(patch));
+    const scope = this.deps.sessionData.beginSessionMutation(isSessionDeferredPatch(patch));
     if (!scope) {
       return "stale";
     }
@@ -161,35 +161,40 @@ export class SessionOrganizer {
           ? this.patchSession(session, { archived: false }, { sessionScope: true })
           : this.archiveSessionWithUndo(session);
       default:
-        return this.runOperation((operations, scope) => {
-          switch (action.kind) {
-            case "rename":
-              return operations.renameSession(this.deps, session, scope);
-            case "assign-owner":
-              return operations.assignSessionOwner(this.deps, session, action.owner, scope);
-            case "fork":
-              return operations.forkSession(this.deps, session, scope);
-            case "snooze":
-              return operations.snoozeSessionWithUndo(this.deps, session, action, scope);
-            case "stop-cloud-worker":
-              return operations.stopCloudWorker(this.deps, session, scope);
-            case "delete":
-              // Only the sidebar offers the delete-confirm opt-out.
-              return operations.deleteSession(this.deps, session, scope, { offerSkip: true });
-            default:
-              return action satisfies never;
-          }
-        }, action.kind === "rename");
+        return this.runOperation(
+          (operations, scope) => {
+            switch (action.kind) {
+              case "rename":
+                return operations.renameSession(this.deps, session, scope);
+              case "assign-owner":
+                return operations.assignSessionOwner(this.deps, session, action.owner, scope);
+              case "fork":
+                return operations.forkSession(this.deps, session, scope);
+              case "snooze":
+                return operations.snoozeSessionWithUndo(this.deps, session, action, scope);
+              case "stop-cloud-worker":
+                return operations.stopCloudWorker(this.deps, session, scope);
+              case "delete":
+                // Only the sidebar offers the delete-confirm opt-out.
+                return operations.deleteSession(this.deps, session, scope, { offerSkip: true });
+              default:
+                return action satisfies never;
+            }
+          },
+          action.kind === "rename" || action.kind === "delete",
+        );
     }
   }
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(
-        this.deps,
-        { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
-        scope,
-      ),
+    return this.runOperation(
+      (operations, scope) =>
+        operations.archiveSessionWithUndo(
+          this.deps,
+          { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
+          scope,
+        ),
+      true,
     );
   }
 
@@ -208,8 +213,10 @@ export class SessionOrganizer {
       await this.createSessionGroup(rows);
       return;
     }
-    await this.runOperation((operations, scope) =>
-      operations.runBatchSessionAction(this.deps, action, rows, allUnread, scope),
+    await this.runOperation(
+      (operations, scope) =>
+        operations.runBatchSessionAction(this.deps, action, rows, allUnread, scope),
+      action.kind === "toggle-archived" || action.kind === "delete",
     );
   }
 

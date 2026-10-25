@@ -111,7 +111,11 @@ export type MemoryPublicationOperations = {
     output: ReturnType<typeof readMemorySourceChunks>;
   };
   "cache.prune": {
-    input: { maxEntries: number; unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference };
+    input: {
+      maxEntries: number;
+      unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
+      recount?: boolean;
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "cache.stage.start": {

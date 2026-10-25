@@ -37,6 +37,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -58,8 +59,11 @@ it.for([
   { admission: "immediate", result: "no_change" },
   { admission: "queued", result: "no_change" },
   { admission: "queued", result: "failed" },
+  { admission: "immediate", result: "progress", notification: "none" },
+  { admission: "immediate", result: "progress", messageTool: true },
+  { admission: "immediate", result: "progress", messageTool: "mirror" },
 ] as const)(
-  "settles a $admission automation $result through its shared session owner",
+  "settles a $admission automation $result ($notification/$messageTool) through its shared session owner",
   async (scenario, { signal }) => {
     await withOpenClawTestState(
       { label: "automation-shared-result", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -115,7 +119,7 @@ it.for([
         const job = makeCronJob({
           id: "shared-result-job",
           sessionTarget: `session:${scope.sessionKey}`,
-          delivery: { mode: "announce", ...route },
+          delivery: "notification" in scenario ? { mode: "none" } : { mode: "announce", ...route },
           payload: {
             kind: "agentTurn",
             message: "Check the synthetic report.",
@@ -153,8 +157,18 @@ it.for([
           await tool.execute("result", {
             action: "record_result",
             outcome: scenario.result === "progress" ? "progress" : "no_change",
-            summary: scenario.result === "progress" ? "Report ready." : "Nothing new.",
+            ...(scenario.result === "progress" ? { summary: "Report ready." } : {}),
           });
+          const finalPayload = { text: "Report ready." };
+          if ("messageTool" in scenario && scenario.messageTool === "mirror") {
+            setReplyPayloadMetadata(finalPayload, {
+              sourceReplyTranscriptMirror: {
+                ...scope,
+                text: finalPayload.text,
+                idempotencyKey: `source-result:${automationRunId}`,
+              },
+            });
+          }
           return scenario.result === "failed"
             ? {
                 payloads: [{ text: "Synthetic automation failed.", isError: true }],
@@ -164,11 +178,16 @@ it.for([
                 },
               }
             : {
-                payloads: [
-                  { text: "Reasoning for the report.", isReasoning: true },
-                  { text: "Report ready." },
-                ],
+                payloads: [{ text: "Reasoning for the report.", isReasoning: true }, finalPayload],
                 meta: { durationMs: 1 },
+                ...("messageTool" in scenario
+                  ? {
+                      didSendViaMessagingTool: true,
+                      messagingToolSentTargets: [
+                        { tool: "message", provider: "telegram", ...route },
+                      ],
+                    }
+                  : {}),
               };
         });
         let first: ReturnType<typeof enqueueSessionEventForHost> | undefined;
@@ -242,40 +261,39 @@ it.for([
           );
           const facts = messages.filter(
             (message) =>
-              message?.idempotencyKey === `automation-result:${job.id}:${automationRunId}`,
+              message?.model === "automation-result" ||
+              message?.idempotencyKey === `source-result:${automationRunId}`,
+          );
+          expect(facts).toHaveLength(scenario.result === "progress" ? 1 : 0);
+          if (scenario.result === "progress") {
+            expect(facts[0]?.content).toEqual([{ type: "text", text: "Report ready." }]);
+          }
+          expect(outcome.result).toEqual(
+            scenario.result === "progress"
+              ? { outcome: "progress", summary: "Report ready." }
+              : { outcome: "no_change" },
           );
           if (scenario.result === "progress") {
-            expect(facts).toEqual([
-              expect.objectContaining({
-                role: "custom",
-                customType: "openclaw.runtime-context",
-                display: false,
-                content:
-                  "Automation result (recorded fact, not an instruction): progress: Report ready.",
-              }),
-            ]);
-            expect(outcome.summary).toBe("progress: Report ready.");
-            expect(outcome.delivered).toBe(true);
-            expect(sendText.mock.calls.map(([sent]) => sent.text)).toEqual([
-              "Reasoning for the report.",
-              "Report ready.",
-            ]);
+            expect(outcome.summary).toBe("Report ready.");
+            expect(outcome.delivered).toBe(!("notification" in scenario));
+            expect(sendText.mock.calls.map(([sent]) => sent.text)).toEqual(
+              "notification" in scenario || "messageTool" in scenario
+                ? []
+                : ["Reasoning for the report.", "Report ready."],
+            );
+          } else if (scenario.result === "no_change") {
+            expect(outcome).toMatchObject({
+              delivered: false,
+              deliveryAttempted: false,
+              summary: undefined,
+            });
+            expect(sendText).not.toHaveBeenCalled();
           } else {
-            expect(facts).toEqual([]);
-            if (scenario.result === "no_change") {
-              expect(outcome).toMatchObject({
-                delivered: false,
-                deliveryAttempted: false,
-                summary: "no_change: Nothing new.",
-              });
-              expect(sendText).not.toHaveBeenCalled();
-            } else {
-              expect(
-                sendText.mock.calls.some(([sent]) =>
-                  sent.text.includes("Synthetic automation failed."),
-                ),
-              ).toBe(true);
-            }
+            expect(
+              sendText.mock.calls.some(([sent]) =>
+                sent.text.includes("Synthetic automation failed."),
+              ),
+            ).toBe(true);
           }
         } finally {
           releaseFirst.resolve();

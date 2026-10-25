@@ -473,28 +473,34 @@ function PublicationEffect(props: {
   );
 }
 
-// One short status line; server prose, account, and effects stay one click away.
-function publicationHeadline(publication: GitHubPublicationView, busy: boolean) {
-  const { result, error, locked } = publication;
-  if (error) {
-    return { text: t("githubPublication.statusUnavailable"), alert: true };
+export function githubPublicationState(publication: GitHubPublicationView) {
+  if (publication.error) {
+    return "unavailable";
   }
-  switch (result?.status) {
+  return (
+    publication.result?.status ??
+    (publication.locked ? (publication.activity !== null ? "active" : "unknown") : undefined)
+  );
+}
+
+// One short status line; server prose, account, and effects stay one click away.
+function publicationHeadline(publication: GitHubPublicationView) {
+  switch (githubPublicationState(publication)) {
+    case "unavailable":
+      return { text: t("githubPublication.statusUnavailable"), alert: true };
     case "failed":
       return { text: t("githubPublication.statusFailed"), alert: true };
     case "needs_confirmation":
       return { text: t("githubPublication.statusConfirm"), alert: false };
+    case "active":
     case "publishing":
       return { text: t("githubPublication.statusPublishing"), alert: false };
     case "requested":
       return { text: t("githubPublication.statusRequested"), alert: false };
+    case "unknown":
+      return { text: t("githubPublication.statusUnknown"), alert: true };
     default:
-      if (!locked) {
-        return null;
-      }
-      return busy
-        ? { text: t("githubPublication.statusPublishing"), alert: false }
-        : { text: t("githubPublication.statusUnknown"), alert: true };
+      return null;
   }
 }
 
@@ -550,7 +556,7 @@ export function GitHubPublicationDetails(props: {
       Boolean(result || confirmation || error || locked || personalUnavailable() || noAccount())
     );
   };
-  const headline = () => publicationHeadline(props.publication, busy());
+  const headline = () => publicationHeadline(props.publication);
   const refresh = () =>
     !busy() &&
     (props.publication.error ||

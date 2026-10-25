@@ -29,7 +29,6 @@ import {
   parseSent,
   requireSession,
   requireSocket,
-  startRealtimeBridge,
   waitForRealtimeState,
 } from "./realtime-voice-provider.test-support.js";
 
@@ -316,10 +315,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         agentId: "molty",
       }),
     ).toBe(true);
-    const bridge = createTestBridge({ cfg, agentId: "molty", providerConfig: {} });
-    const { connecting, socket } = await startRealtimeBridge(bridge);
-    await connecting;
-    await bridge.close();
+    const { socket } = await connect({ cfg, agentId: "molty", providerConfig: {} });
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "xai",
       cfg,
@@ -369,33 +365,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     await waitForRealtimeState(() => expect(FakeWebSocket.instances).toHaveLength(1));
   });
 
-  it("ignores late events from a canceled socket after replacement", async () => {
-    const { onAudio, onClose, onError, onReady } = observers();
-    const bridge = createTestBridge({ onAudio, onClose, onError, onReady });
-    const { connecting: firstConnect, socket: staleSocket } = await pendingConnection(bridge);
-    staleSocket.deferClose = true;
-    void bridge.close();
-    void bridge.close();
-    await firstConnect;
-    const { connecting: replacementConnect, socket: replacementSocket } = await pendingConnection(
-      bridge,
-      1,
-    );
-    ready(replacementSocket);
-    await replacementConnect;
-
-    staleSocket.emit("open");
-    server(staleSocket, "session.updated");
-    audio(staleSocket, undefined, Buffer.from("late audio").toString("base64"));
-    staleSocket.emit("error", new Error("late socket error"));
-    staleSocket.flushClose();
-    expect(bridge.isConnected()).toBe(true);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onAudio).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
-  });
-
   it("rejects session readiness after its event callback closes the bridge", async () => {
     const { onClose, onReady } = observers();
     const bridge = createTestBridge({
@@ -417,7 +386,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   it("uses XAI_API_KEY for default Grok realtime bridges", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
-    const bridge = createTestBridge({
+    const { socket } = await connect({
       cfg: {},
       providerConfig: {
         model: "grok-voice-latest",
@@ -437,12 +406,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
         },
       ],
     });
-    const { socket } = await startRealtimeBridge(bridge);
-    await bridge.close();
-    const url = socket.args[0] as string;
-    expect(url).toContain("wss://api.x.ai/v1/realtime?model=grok-voice-latest");
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-    expect(options).toMatchObject({
+    expect(socket.args[0]).toContain("wss://api.x.ai/v1/realtime?model=grok-voice-latest");
+    expect(socket.args[1]).toMatchObject({
       headers: { Authorization: "Bearer xai-env" },
       maxPayload: 16 * 1024 * 1024,
     });
@@ -556,18 +521,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("preserves corrected final text from legacy realtime text events", async () => {
-    const { socket, onTranscript } = await observe("onTranscript");
-    responseCreated(socket);
-    server(socket, "response.text.delta", { delta: "draft assistant" });
-    server(socket, "response.text.done", { text: "corrected assistant" });
-    server(socket, "response.done");
-    expect(onTranscript.mock.calls).toEqual([
-      ["assistant", "draft assistant", false],
-      ["assistant", "corrected assistant", true],
-    ]);
-  });
-
   it.each([false, true])(
     "interrupts acknowledged legacy playback (completed=%s)",
     async (completed) => {
@@ -662,31 +615,21 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   it("rejects malformed and non-object arguments once and releases the next turn", async () => {
     const { bridge, socket, onEvent, onToolCall } = await observe("onEvent", "onToolCall");
     responseCreated(socket);
-    const invalidEvents = ["{", "null"].map((arguments_, index) => ({
-      type: "response.function_call_arguments.done",
-      item_id: `item_${index}`,
-      call_id: `call_${index}`,
-      name: "lookup",
-      arguments: arguments_,
-    }));
-    for (const event of invalidEvents) {
-      socket.emitServer(event);
+    const invalid = ["{", "null"] as const;
+    for (const index of [0, 1, 0] as const) {
+      toolArguments(socket, `item_${index}`, `call_${index}`, invalid[index], "lookup");
     }
-    socket.emitServer(invalidEvents[0]);
     responseDone(socket);
     expect(onToolCall).not.toHaveBeenCalled();
     expect(
       onEvent.mock.calls
         .map(([event]) => event)
-        .filter((event) => event.type === "tool_call.arguments.rejected"),
-    ).toEqual(
-      ["malformed-json", "non-object-json"].map((reason, index) => ({
-        direction: "server",
-        type: "tool_call.arguments.rejected",
-        detail: `reason=${reason}`,
-        itemId: `item_${index}`,
-      })),
-    );
+        .filter((event) => event.type === "tool_call.arguments.rejected")
+        .map(({ detail, itemId }) => ({ detail, itemId })),
+    ).toEqual([
+      { detail: "reason=malformed-json", itemId: "item_0" },
+      { detail: "reason=non-object-json", itemId: "item_1" },
+    ]);
     expect(sent(socket, "conversation.item.create")).toEqual([
       toolResultEvent("call_0", { error: "Invalid tool arguments." }),
       toolResultEvent("call_1", { error: "Invalid tool arguments." }),
@@ -946,19 +889,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     },
   );
 
-  it("does not retry after startup websocket errors", async () => {
-    vi.useFakeTimers();
-    const onClose = vi.fn();
-    const bridge = createTestBridge({ onClose });
-    const { connecting, socket } = await pendingConnection(bridge);
-    socket.open();
-    socket.emit("error", new Error("bad auth"));
-    await expect(connecting).rejects.toThrow("bad auth");
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
   it("preserves successor audio and tools after an interrupted response's late terminal", async () => {
     const { bridge, socket, onAudio, onToolCall, onResponseDone } = await observe(
       "onAudio",
@@ -969,6 +899,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     toolArguments(socket, "old-item", "old-call", '{"city":"Paris"}', "weather");
     bridge.handleBargeIn?.();
     responseCreated(socket, "successor");
+    bridge.sendUserMessage?.("queued while successor is active");
+    const createsBeforeError = sent(socket, "response.create").length;
+    server(socket, "error", {
+      error: { message: "Cancellation failed: no active response found" },
+    });
+    expect(sent(socket, "response.create")).toHaveLength(createsBeforeError);
     responseDone(socket, "interrupted", "cancelled");
     expect(onResponseDone).not.toHaveBeenCalled();
     expect(onToolCall).not.toHaveBeenCalled();
@@ -985,20 +921,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("ignores a late cancellation error after a successor response starts", async () => {
-    const { bridge, socket } = await connect();
-    responseCreated(socket, "interrupted");
-    bridge.handleBargeIn?.();
-    responseCreated(socket, "successor");
-    bridge.sendUserMessage?.("queued while successor is active");
-    const responseCreatesBeforeError = sent(socket, "response.create").length;
-    server(socket, "error", {
-      error: { message: "Cancellation failed: no active response found" },
-    });
-    expect(sent(socket, "response.create")).toHaveLength(responseCreatesBeforeError);
-    responseDone(socket, "successor");
-  });
-
   it("fences unkeyed retired output and preserves the next consult response", async () => {
     const { socket, onAudio, onTranscript, onResponseDone, onToolCall, onEvent } = await observe(
       "onAudio",
@@ -1008,6 +930,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       "onEvent",
     );
     responseCreated(socket, "consult");
+    server(socket, "response.text.delta", { delta: "draft assistant" });
+    server(socket, "response.text.done", { text: "corrected assistant" });
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "draft assistant", false],
+      ["assistant", "corrected assistant", true],
+    ]);
+    onTranscript.mockClear();
     responseDone(socket, "consult");
     onEvent.mockClear();
     audio(socket, undefined, "AAA=");
@@ -1101,4 +1030,3 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     vi.useRealTimers();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

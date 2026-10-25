@@ -11,12 +11,6 @@ export type ModelProviderRefreshReason = "publication" | "replacement" | "forced
 
 export type ModelProviderCatalogReceipt = { promise: Promise<string | null> };
 
-type CoreLoadOptions = {
-  onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
-  onCatalogComplete: (result: ModelCatalogResult) => void;
-};
-
 async function loadConnectedProviderData(
   client: GatewayBrowserClient,
   agentId: string,
@@ -61,7 +55,11 @@ export class ModelProviderCoreLoader {
 
   constructor(
     private readonly notify: () => void,
-    private readonly options: CoreLoadOptions,
+    private readonly options: {
+      onStart: (reason: ModelProviderRefreshReason) => void;
+      onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
+      onCatalogComplete: (result: ModelCatalogResult) => void;
+    },
   ) {}
 
   get loading(): boolean {

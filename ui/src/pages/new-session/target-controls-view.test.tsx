@@ -7,6 +7,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 
@@ -44,13 +45,7 @@ it("retains catalog retry readiness through coalesced requests and host completi
   const first = createDeferred();
   const second = createDeferred();
   const rendered = createDeferred();
-  const data: NewSessionRouteData = {
-    agentId: "main",
-    requestedAgentId: "main",
-    catalogId: "terminal",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+  const data: NewSessionRouteData = { ...createNewSessionRouteData(), catalogId: "terminal" };
   const [revision, setRevision] = createSignal(0);
   const updateComplete = vi.fn(() => rendered.promise);
   const f = createDraftFixture({

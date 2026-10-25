@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
@@ -102,48 +103,6 @@ function classifyJsonValue(
   return null;
 }
 
-function findBalancedJsonEnd(text: string, start: number): number | null {
-  const stack = [text[start] === "{" ? "}" : "]"];
-  let inString = false;
-  let escaped = false;
-  for (let index = start + 1; index < text.length; index += 1) {
-    // Cap candidate size so diagnostic scans cannot spend unbounded time on prose
-    // that happens to contain many braces.
-    if (index - start > MAX_JSON_CANDIDATE_CHARS) {
-      return null;
-    }
-    const ch = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === "{" || ch === "[") {
-      stack.push(ch === "{" ? "}" : "]");
-      continue;
-    }
-    if (ch === "}" || ch === "]") {
-      if (stack.at(-1) !== ch) {
-        return null;
-      }
-      stack.pop();
-      if (stack.length === 0) {
-        return index + 1;
-      }
-    }
-  }
-  return null;
-}
-
 function* iterateJsonCandidates(text: string): Generator<string> {
   // Fenced candidates take precedence even when balanced JSON appears earlier.
   const fenceRe = /```(?:json|tool|tool_call|function_call)?[^\n\r]*[\r\n]([\s\S]*?)```/gi;
@@ -160,16 +119,19 @@ function* iterateJsonCandidates(text: string): Generator<string> {
     if (ch !== "{" && ch !== "[") {
       continue;
     }
-    const end = findBalancedJsonEnd(text, index);
-    if (end === null) {
+    // Bound each diagnostic scan even when prose contains many unmatched braces.
+    const fragment = extractBalancedJsonPrefix(
+      text.slice(index, index + MAX_JSON_CANDIDATE_CHARS + 1),
+    );
+    if (!fragment) {
       continue;
     }
-    const candidate = text.slice(index, end).trim();
+    const candidate = fragment.json;
     if (candidate.length > 1) {
       count += 1;
       yield candidate;
     }
-    index = end - 1;
+    index += fragment.endIndex;
   }
 }
 

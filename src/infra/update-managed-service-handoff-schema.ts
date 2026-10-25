@@ -169,6 +169,14 @@ export type HandoffNativeLifetime = z.infer<typeof nativeLifetimeSchema>;
 export type ManagedHandoffLeaseAction = z.infer<typeof actionSchema>;
 export type ManagedHandoffLeasePayload = z.infer<typeof payloadSchema>;
 
+export function isHandoffProcessIdentity(value: unknown): value is HandoffProcessIdentity {
+  return processIdentitySchema.safeParse(value).success;
+}
+
+export function isManagedHandoffLeasePayload(value: unknown): value is ManagedHandoffLeasePayload {
+  return payloadSchema.safeParse(value).success;
+}
+
 // A retired v1 record names one process. It predates both the executor/helper
 // split and native custody, so it can never carry a v3 borrower.
 const retiredPayloadSchema = z.strictObject({

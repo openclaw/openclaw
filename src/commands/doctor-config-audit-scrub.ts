@@ -53,7 +53,6 @@ export function configAuditScrubToRepairEffect(
     kind: "file",
     action: "would-scrub-config-audit-log",
     target: result.auditPath,
-    dryRunSafe: false,
   };
 }
 

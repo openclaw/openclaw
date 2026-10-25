@@ -14,6 +14,7 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -132,15 +133,12 @@ it("chat.send replays synthetic repairs through session history and the register
             baseUrl: `http://127.0.0.1:${address.port}`,
             apiKey: "synthetic-replay-provider-key",
             models: [
-              {
-                id: model,
+              modelDefinition(model, {
                 name: "Replay proof",
                 reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 64000,
                 maxTokens: 256,
-              },
+              }),
             ],
           },
         },

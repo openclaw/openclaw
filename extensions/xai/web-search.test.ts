@@ -5,6 +5,7 @@ import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
+import { xaiPluginConfig } from "./plugin-config.test-support.js";
 import { createXaiFetchInspectors } from "./responses-http.test-support.js";
 import { defineSearchContracts } from "./search-cache.test-support.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
@@ -78,17 +79,6 @@ function authorizationHeaders(mockFetch: { mock: { calls: unknown[][] } }) {
   return mockFetch.mock.calls.map(([, init]) =>
     new Headers((init as RequestInit | undefined)?.headers).get("Authorization"),
   );
-}
-
-function xaiPluginConfig(options: {
-  enabled?: boolean;
-  webSearch?: Record<string, unknown>;
-  xSearch?: Record<string, unknown>;
-  codeExecution?: Record<string, unknown>;
-}) {
-  const { enabled, ...config } = options;
-  const xai = { ...(enabled === undefined ? {} : { enabled }), config };
-  return { plugins: { entries: { xai } } };
 }
 
 function requireXaiWebSearchTool(

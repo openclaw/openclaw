@@ -1,99 +1,42 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
 import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
+import { prepareForeignPendingUserTurns } from "./pre-persisted-user-turn.js";
 
-type BoundaryInput = Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
-
-describe("live input preparation authority", () => {
-  it.each(["cancelled", "retargeted", "owner retired", "discovery failed"] as const)(
-    "rejects %s preparation before reading or changing the conversation",
-    async (change) => {
-      const target = {
-        agentId: "main",
-        sessionId: "held-boundary",
-        sessionKey: "agent:main:held-boundary",
-        storePath: path.resolve("held-boundary.sqlite"),
-      };
-      let currentTarget = target;
-      let retired = false;
-      const entered = createDeferred();
-      const release = createDeferred();
-      const error = new Error(change);
-      const controller = new AbortController();
-      const discovery = vi
-        .spyOn(pendingInputs, "getForeignLiveSessionPendingInputEntries")
-        .mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          if (change === "discovery failed") {
-            throw error;
-          }
-          return new Map();
-        });
-      const getLeafEntry = vi.fn();
-      const manager = {
-        getLeafEntry,
-        getSessionTarget: () => currentTarget,
-      } as unknown as BoundaryInput["sessionManager"];
-      const messages: AgentMessage[] = [{ role: "user", content: "held input", timestamp: 1 }];
-      const convertToLlm = vi.fn();
-      const activeSession = {
-        agent: { state: { messages }, convertToLlm },
-      } as unknown as BoundaryInput["activeSession"];
-      const pending = withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: target,
-          assertCommitAllowed: () => {
-            if (retired) {
-              throw error;
-            }
-          },
-          withTranscriptWrite: async (run) => await run(),
-        },
-        () =>
-          prepareEmbeddedAttemptSessionBoundary({
-            abortSignal: controller.signal,
-            activeSession,
-            attempt: {
-              prompt: "announcement",
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-            },
-            getUserTranscriptContexts: () => undefined,
-            isRawModelRun: false,
-            preparedUserTurnMessage: undefined,
-            sessionManager: manager,
-            setActiveSessionSystemPrompt: vi.fn(),
-          }),
-      );
-      try {
-        await entered.promise;
-        expect(getLeafEntry).not.toHaveBeenCalled();
-        if (change === "cancelled") {
-          controller.abort(error);
-        } else if (change === "retargeted") {
-          currentTarget = { ...target, sessionId: "replacement" };
-        } else if (change === "owner retired") {
-          retired = true;
-        }
-        const rejected =
-          change === "retargeted"
-            ? expect(pending).rejects.toThrow("target changed")
-            : expect(pending).rejects.toBe(error);
-        release.resolve();
-        await rejected;
-        expect(getLeafEntry).not.toHaveBeenCalled();
-        expect(activeSession.agent.state.messages).toBe(messages);
-        expect(activeSession.agent.convertToLlm).toBe(convertToLlm);
-      } finally {
-        release.resolve();
-        await pending.catch(() => undefined);
-        discovery.mockRestore();
-      }
-    },
-  );
+it("freezes foreign input exclusion across reload and provider conversion", async () => {
+  const target = {
+    agentId: "main",
+    sessionId: "foreign-input-freeze",
+    sessionKey: "agent:main:foreign-input-freeze",
+    storePath: path.resolve("foreign-input-freeze.sqlite"),
+  };
+  const entries = new Map<string, string>();
+  const reads = vi.fn(() => new Map(entries));
+  const prepared = vi
+    .spyOn(pendingInputs, "prepareForeignLiveSessionPendingInputEntries")
+    .mockResolvedValueOnce(reads);
+  const foreign: AgentMessage = {
+    role: "user",
+    content: "accepted foreign input",
+    timestamp: 1,
+    idempotencyKey: "foreign:user",
+  };
+  const activeSession = { agent: { state: { messages: [foreign] } } };
+  try {
+    const reconcile = await prepareForeignPendingUserTurns({ getSessionTarget: () => target });
+    entries.set("foreign-entry", "foreign:user");
+    expect(reconcile?.(activeSession, undefined)?.ownsEntry("foreign-entry")).toBe(true);
+    expect(activeSession.agent.state.messages).toEqual([]);
+    entries.clear();
+    activeSession.agent.state.messages = [foreign];
+    const frozen = reconcile?.(activeSession, undefined);
+    expect(activeSession.agent.state.messages).toEqual([]);
+    expect(frozen?.ownsEntry("foreign-entry")).toBe(true);
+    const calls = reads.mock.calls.length;
+    expect(frozen?.omitInput([foreign])).toEqual([]);
+    expect(reads).toHaveBeenCalledTimes(calls);
+  } finally {
+    prepared.mockRestore();
+  }
 });

@@ -83,7 +83,8 @@ Local image and video references are supported via data URIs.
 Task submission and polling honor `models.providers.runway.request`, including
 custom headers, proxy settings, and private-network policy. Polling enforces
 private-network restrictions even without a proxy override. Generated video
-downloads do not inherit task credentials or private-network trust.
+downloads do not inherit task credentials or private-network trust. Their URLs
+and redirects are checked for private-network targets before connecting.
 
 <AccordionGroup>
   <Accordion title="Environment variable aliases">

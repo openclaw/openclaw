@@ -14,12 +14,13 @@ import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
 import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
-import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
+import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import * as records from "./session-row-projection-record.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createFixture>>;
@@ -126,6 +127,8 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
   const reads = vi.spyOn(projection, "selectEntries");
+  const captures = vi.spyOn(projection, "capture");
+  const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
       agentId: "main",
@@ -136,29 +139,78 @@ it("shares lineage work across audiences without sharing visibility or stale des
     }));
   const allowsAll = () => true;
   const allowsShared = (row: { key: string }) => row.key !== hidden;
-  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+  const selected = prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions;
+  expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
+  selected.reverse();
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   const firstReads = reads.mock.calls.length;
+  const firstCaptures = captures.mock.calls.length;
   expect(firstReads).toBeGreaterThan(0);
-  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
-  expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(firstReads);
+  expect(captures).toHaveBeenCalledTimes(firstCaptures);
+  expect(resolveParent).not.toHaveBeenCalled();
+
+  let allows: typeof allowsShared = allowsAll;
+  const retained = prepareTaskPublicationSessions(projection, root, () => allows);
+  retained.assertCurrent();
+  allows = allowsShared;
+  expect(() => retained.assertCurrent()).toThrow("Task pull-request audience changed");
+  const restricted = prepareTaskPublicationSessions(projection, root, () => allows);
+  allows = allowsAll;
+  expect(() => restricted.assertCurrent()).toThrow("Task pull-request audience changed");
+  retained.assertCurrent();
+
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  prepareTaskPublicationSessions(projection, root, () => allowsAll);
+  const afterCreation = reads.mock.calls.length;
+  await fixture.seed("agent:main:unrelated", fixture.profile.id, {
+    label: "Updated",
+    updatedAt: 2,
+  });
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
+  await projection.ensureMaterialized();
+  expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
+  retained.assertCurrent();
+
+  // Permissions consume the replacement row even when lineage itself is unchanged.
+  await fixture.seed(hidden, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    visibility: "shared",
+  });
+  await projection.ensureMaterialized();
+  expect(
+    prepareTaskPublicationSessions(
+      projection,
+      root,
+      () => (row) => row.entry.visibility !== "draft",
+    ).sessions,
+  ).toEqual(expected([child, hidden, leaf, sessionKey]));
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
-  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+  resolveParent.mockClear();
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
-  expect(selectTaskPublicationSessions(projection, current, allowsAll)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
+  expect(resolveParent).not.toHaveBeenCalled();
 
   const runId = "task-pr-registry-lineage";
   subagentRuns.set(
@@ -174,14 +226,14 @@ it("shares lineage work across audiences without sharing visibility or stale des
   try {
     publishSubagentRunChanges();
     // No intervening describe/read may prepare the registry's deferred parent indexes.
-    expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
-      expected([child, leaf, sessionKey]),
-    );
+    expect(
+      prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions,
+    ).toEqual(expected([child, leaf, sessionKey]));
   } finally {
     subagentRuns.delete(runId);
     publishSubagentRunChanges();
   }
-  expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
+  expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
 });

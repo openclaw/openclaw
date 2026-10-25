@@ -57,10 +57,6 @@ type ChatRefreshOptions = {
   startup?: boolean;
 };
 
-type ChatStartupMetadataHandler = (
-  metadata: Partial<ChatMetadataResult> | undefined,
-) => void | Promise<void>;
-
 type ChatMetadataBinding = {
   client: GatewayBrowserClient;
   sessions: ChatPageHost["sessions"];
@@ -546,29 +542,50 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   }
 }
 
-async function refreshChat(
-  host: ChatPageHost,
-  opts: ChatRefreshOptions,
-  onStartupMetadata: ChatStartupMetadataHandler,
-) {
+export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
+  const binding = opts?.startup ? bindChatMetadata(host) : undefined;
+  const publication = binding
+    ? beginChatMetadataPublication(binding.client, binding.scope)
+    : undefined;
+  if (binding) {
+    void refreshChatMetadata(host, { startup: true });
+  }
+  const refreshOptions = { ...opts };
+  const onStartupMetadata = async (metadata: Partial<ChatMetadataResult> | undefined) => {
+    // The publication belongs to the shared scope, not the pane that started history.
+    // Final subscriber release or invalidation retires it; one pane closing must not.
+    if (!binding || !publication?.isCurrent()) {
+      return;
+    }
+    if (metadata) {
+      publication.publish(metadata);
+    } else {
+      // Startup can omit its bounded projection. Read the same session scope without history.
+      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
+        kind: "metadata",
+        revalidateMetadata: () => publication.isCurrent(),
+      });
+      await fallback.completed;
+    }
+  };
   const refreshedSessions = host.sessions;
-  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const refreshConnectionIsCurrent = captureChatConnectionOwner(host);
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const ownsRefresh = () =>
-    connectionIsCurrent() &&
+    refreshConnectionIsCurrent() &&
     host.sessions === refreshedSessions &&
     host.sessionKey === refreshedSessionKey &&
     resolveAgentIdForSession(host) === refreshedAgentId;
   const previousSessionsResult = host.sessionsResult;
   const historyLoad =
-    opts?.historyLoad ??
+    refreshOptions?.historyLoad ??
     loadChatHistory(host, {
-      deferBranches: opts?.deferBranches === true,
-      startup: opts?.startup === true,
+      deferBranches: refreshOptions?.deferBranches === true,
+      startup: refreshOptions?.startup === true,
     });
   const historyRefresh = historyLoad.finally(() => {
-    if (opts?.scheduleScroll !== false) {
+    if (refreshOptions?.scheduleScroll !== false) {
       scheduleChatScroll(host);
     }
   });
@@ -658,7 +675,7 @@ async function refreshChat(
     }
   });
   const startupMetadataRefresh =
-    opts.startup === true
+    refreshOptions.startup === true
       ? historyLoad.then(
           (history) => onStartupMetadata(history?.metadata),
           () => onStartupMetadata(undefined),
@@ -673,36 +690,7 @@ async function refreshChat(
     () => void flushChatQueueForEvent(host),
   );
   void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]);
-  if (opts?.awaitHistory === true) {
-    await historyRefresh;
-  }
-}
 
-export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
-  const binding = opts?.startup ? bindChatMetadata(host) : undefined;
-  const publication = binding
-    ? beginChatMetadataPublication(binding.client, binding.scope)
-    : undefined;
-  if (binding) {
-    void refreshChatMetadata(host, { startup: true });
-  }
-  const refresh = refreshChat(host, { ...opts }, async (metadata) => {
-    // The publication belongs to the shared scope, not the pane that started history.
-    // Final subscriber release or invalidation retires it; one pane closing must not.
-    if (!binding || !publication?.isCurrent()) {
-      return;
-    }
-    if (metadata) {
-      publication.publish(metadata);
-    } else {
-      // Startup can omit its bounded projection. Read the same session scope without history.
-      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
-        kind: "metadata",
-        revalidateMetadata: () => publication.isCurrent(),
-      });
-      await fallback.completed;
-    }
-  });
   const sessionKey = host.sessionKey;
   const connectionIsCurrent = captureChatConnectionOwner(host);
   scheduleChatMetadataRefresh(() => {
@@ -714,5 +702,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
       ...(!opts?.startup ? [refreshChatMetadata(host)] : []),
     ]);
   });
-  return refresh;
+  if (refreshOptions.awaitHistory === true) {
+    await historyRefresh;
+  }
 }

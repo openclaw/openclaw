@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
+import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
 import {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
@@ -29,12 +30,13 @@ registerAgentSessionLoopTestLifecycle();
 
 describe("live pending inputs at the attempt boundary", () => {
   it.each([
-    { metadata: true, collected: true, excluded: false, custody: "live" },
-    { metadata: false, collected: false, excluded: true, custody: "live" },
-    { metadata: true, collected: true, excluded: false, custody: "revoked" },
+    { metadata: true, collected: true, excluded: false, custody: "live", latePromotion: false },
+    { metadata: true, collected: true, excluded: false, custody: "live", latePromotion: true },
+    { metadata: false, collected: false, excluded: true, custody: "live", latePromotion: false },
+    { metadata: true, collected: true, excluded: false, custody: "revoked", latePromotion: false },
   ])(
-    "keeps announcement effects separate from $custody input (metadata=$metadata, collected=$collected, excluded=$excluded)",
-    async ({ metadata, collected, excluded, custody }) => {
+    "keeps announcement effects separate from $custody input (metadata=$metadata, collected=$collected, excluded=$excluded, latePromotion=$latePromotion)",
+    async ({ metadata, collected, excluded, custody, latePromotion }) => {
       await withOpenClawTestState({ label: "live-input-orphan" }, async (state) => {
         const target = {
           agentId: "main",
@@ -86,12 +88,15 @@ describe("live pending inputs at the attempt boundary", () => {
           updateMode: "none",
         });
         try {
-          const promoted = expectDefined(
-            await receipt.run(() => recorder.persistApproved()),
-            "Expected promoted input",
-          );
-          expect(promoted).toMatchObject({ appended: true });
-          expect((await listSessionPendingInputs(target)).items).toEqual([]);
+          let persisted: Awaited<ReturnType<typeof recorder.persistApproved>> | undefined;
+          const promote = async () => {
+            persisted = await receipt.run(() => recorder.persistApproved());
+            expect(persisted).toMatchObject({ appended: true });
+            expect((await listSessionPendingInputs(target)).items).toEqual([]);
+          };
+          if (!latePromotion) {
+            await promote();
+          }
           const announce = guardSessionManager(
             await SessionManager.openBoundedAsync(target, { maxBytes: 8192, maxEvents: 30 }),
             { runId: "announce-run" },
@@ -122,7 +127,23 @@ describe("live pending inputs at the attempt boundary", () => {
               sessionManager: session.sessionManager,
               setActiveSessionSystemPrompt: vi.fn(),
             });
-          const boundary = await prepareAnnouncement(activeSession, "announce child result");
+          const prepare = pendingInputs.prepareForeignLiveSessionPendingInputEntries;
+          const held = latePromotion
+            ? vi
+                .spyOn(pendingInputs, "prepareForeignLiveSessionPendingInputEntries")
+                .mockImplementationOnce(async (...args) => {
+                  const read = await prepare(...args);
+                  await promote();
+                  return read;
+                })
+            : undefined;
+          let boundary: Awaited<ReturnType<typeof prepareAnnouncement>>;
+          try {
+            boundary = await prepareAnnouncement(activeSession, "announce child result");
+          } finally {
+            held?.mockRestore();
+          }
+          const promoted = expectDefined(persisted, "Expected promoted input");
           expect(activeSession.agent.state.messages).toMatchObject([prior]);
           streamMocks.streamSimple.mockImplementation((replyModel) =>
             createAssistantResultStream(

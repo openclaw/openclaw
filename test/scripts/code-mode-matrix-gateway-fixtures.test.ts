@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
@@ -14,6 +14,9 @@ import {
 } from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
 import { runGatewayMatrixCell } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import * as performanceFixtures from "../../scripts/lib/code-mode-matrix-performance-fixtures.js";
+import { prepareGatewayMatrixProcessOwner } from "../../scripts/lib/code-mode-matrix-process-owner.js";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -395,6 +398,10 @@ it.each([
 ] as const)(
   "routes %s and preserves failure evidence (modelError=%s, capture=%s, wrongActivation=%s)",
   async (executor, modelError, capture, wrongActivation) => {
+    const builtOwner = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
+    expect(builtOwner.pathname).toMatch(/\.js$/u);
+    // The fake Gateway owns fixture data; supervision still needs the prepared runtime.
+    const runtimeRoot = path.resolve(path.dirname(fileURLToPath(builtOwner)), "../../..");
     const root = tempDirs.make("openclaw-matrix-producer-");
     const runtime = path.join(root, "fake-gateway.mjs");
     const fixture = createGatewayMatrixFixture("partial-failure", 1);
@@ -434,7 +441,11 @@ it.each([
           task: capture ? "repo-invoice-repair" : "partial-failure",
           repetition: 1,
         },
-        runtime: { args: [runtime], cwd: root },
+        runtime: {
+          args: [runtime],
+          cwd: runtimeRoot,
+          processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(runtimeRoot, root),
+        },
         repoRoot: root,
         outputDir: root,
         keepState: false,

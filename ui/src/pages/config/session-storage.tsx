@@ -304,17 +304,17 @@ export function SessionStorageSettings(props: SettingsProps) {
         {inventoryProps.status.agents.length > 1 ? (
           <details class="settings-row settings-row--stacked">
             <summary>{t("configView.sessionStorage.byAgent")}</summary>
-            <For each={inventoryProps.status.agents}>
+            <For each={inventoryProps.status.agents} keyed={(agent) => agent.agentId}>
               {(agent) => (
                 <SettingsRow
-                  title={agent.agentId}
+                  title={agent().agentId}
                   description={t("configView.sessionStorage.agentCounts", {
-                    hot: String(agent.hotTranscripts),
-                    cold: String(agent.coldTranscripts),
-                    database: storageSize(agent.databaseBytes),
-                    wal: storageSize(agent.walBytes),
-                    archives: storageSize(agent.archiveBytes),
-                    embedded: storageSize(agent.embeddedArchiveBytes),
+                    hot: String(agent().hotTranscripts),
+                    cold: String(agent().coldTranscripts),
+                    database: storageSize(agent().databaseBytes),
+                    wal: storageSize(agent().walBytes),
+                    archives: storageSize(agent().archiveBytes),
+                    embedded: storageSize(agent().embeddedArchiveBytes),
                   })}
                 />
               )}
@@ -405,7 +405,6 @@ export function SessionStorageSettings(props: SettingsProps) {
               >
                 <Show
                   when={readStatus()?.status}
-                  keyed
                   fallback={
                     <SettingsEmpty
                       message={t(
@@ -418,7 +417,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                     />
                   }
                 >
-                  {(currentStatus) => <StorageInventory status={currentStatus} />}
+                  {(currentStatus) => <StorageInventory status={currentStatus()} />}
                 </Show>
               </Loading>
             </Errored>

@@ -2,7 +2,7 @@ import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/stri
 import { For, Show, createMemo, createSignal, merge, onSettled } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
+import type { ModelPickerOption } from "./model-picker-options.ts";
 import { createOverlayAnchor } from "./overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -13,7 +13,22 @@ import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
 import "../styles/multi-select.css";
 
-type MultiSelectRow = MultiSelectOption & { custom?: boolean };
+type MultiSelectProps = {
+  options: readonly ModelPickerOption[];
+  /** Current values in display order. Controlled: the host owns them. */
+  value: readonly string[];
+  isExcluded: (value: string) => boolean;
+  /** The caller owns value identity; search remains case-insensitive. */
+  getValueKey: (value: string) => string;
+  placeholder: string;
+  accessibleLabel: string;
+  allowCustom: boolean;
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+  onOpen: () => void;
+};
+
+type MultiSelectRow = ModelPickerOption & { custom?: boolean };
 let instanceCounter = 0;
 
 function providerFromValue(value: string): string | undefined {

@@ -150,13 +150,7 @@ async function runClientCredentialTaskAsync(
             const lease = maintenance ? maintenance.run(acquire) : acquire();
             schemaLease = lease;
             maintenance?.own(lease, "shared-resources", () => lease.release());
-            return {
-              assertCurrent() {
-                assertAccess();
-                lease.assertCurrent();
-              },
-              release: () => lease.release(),
-            };
+            return lease;
           },
         });
         const releaseService = retainSqliteWriteAdmissionService([databasePath], () =>

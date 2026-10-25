@@ -12,18 +12,13 @@ import { resolveConversationCapabilityProfile } from "./conversation-capability-
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const parentKey = "agent:main:dashboard:parent";
 const childKey = "agent:main:dashboard:child";
 const allowed = ["sessions_spawn", "github_publish", "github_identity_status"];
-const plan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
+const plan = createOpenClawOnlyToolConstructionPlan();
 
 describe("publication policy inherited by a managed child", () => {
   afterEach(() => clearRuntimeConfigSnapshot());

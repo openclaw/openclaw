@@ -5,6 +5,10 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { describe, expect, it, vi } from "vitest";
 import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
@@ -109,16 +113,9 @@ async function startProvider() {
       response.end();
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Provider did not bind");
-  }
+  const origin = await listenLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `${origin}/v1`,
     requests,
     errors,
     armNoticeObservation() {
@@ -129,10 +126,7 @@ async function startProvider() {
       return spawn;
     },
     async stop() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }

@@ -18,6 +18,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
@@ -89,6 +90,7 @@ export async function startGatewayPostAttachRuntime(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
+  trackInputRecovery?: (progress: Promise<AgentRecoveryProgress>) => Promise<void>;
   loadStartupPlugins?: () => Awaitable<{
     pluginRegistry: PluginRegistry;
     gatewayMethods: string[];
@@ -496,6 +498,7 @@ export async function startGatewayPostAttachRuntime(params: {
         isClosing: params.isClosing,
         onSubagentRecoverySettled: subagentRecoverySettled.resolve,
         unlockStartupMethods: params.unlockStartupMethods,
+        trackInputRecovery: params.trackInputRecovery,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,

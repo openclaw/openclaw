@@ -101,4 +101,9 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
   );
   noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  const { noteScheduledContextReport } =
+    await import("../commands/doctor/cron/execution-context-check.js");
+  await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>
+    noteScheduledContextReport({ cfg: ctx.cfg, env: ctx.env }),
+  );
 }

@@ -8,6 +8,11 @@ export type PluginRequesterModelCatalog = {
     id: string;
     provider: string;
     name: string;
+    /**
+     * Canonical developer lineage from provider or catalog metadata, such as `anthropic` on
+     * every route serving a Claude model. Compare by equality; absent means unknown.
+     */
+    family?: string;
     thinkingLevels?: string[];
     fastModes?: (boolean | "auto")[];
   }[];

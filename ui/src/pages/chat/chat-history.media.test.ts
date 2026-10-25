@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { projectMessageMedia } from "./components/chat-message-media.ts";
 
 const UUID = "43007e90-2ade-43f2-a781-42b843e9eca3";
@@ -7,20 +8,17 @@ const userMedia = (media: unknown[]) => ({ role: "user", content: "", __openclaw
 
 it("renders safe media-only history and filters empty or metadata-only user rows", () => {
   const safeRef = "media://inbound/safe-history-image.png";
-  const items = buildChatItems({
-    paneId: "media-history",
-    sessionKey: "main",
-    messages: [
-      userMedia([{}, { url: safeRef, kind: "image" }]),
-      userMedia([{ contentType: "image/png", fileName: "metadata-only-local.png" }]),
-      { role: "user", content: "" },
-    ],
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-  });
+  const items = buildChatItems(
+    createProps({
+      paneId: "media-history",
+      sessionKey: "main",
+      messages: [
+        userMedia([{}, { url: safeRef, kind: "image" }]),
+        userMedia([{ contentType: "image/png", fileName: "metadata-only-local.png" }]),
+        { role: "user", content: "" },
+      ],
+    }),
+  );
   expect(items).toHaveLength(1);
   expect(JSON.stringify(items)).toContain(safeRef);
   expect(JSON.stringify(items)).not.toContain("metadata-only-local.png");

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { engineUnboundedRowLimit } from "../../infra/database-engine/row-limit.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -534,7 +535,7 @@ export function pruneChannelIngressInDatabase(
       .where("status", "=", policy.status)
       .orderBy("updated_at", "desc")
       .orderBy("event_id", "desc")
-      .limit(-1)
+      .limit(engineUnboundedRowLimit(db))
       .offset(Math.max(0, Math.floor(policy.max)));
     let candidates = kysely.selectFrom(overflow.as("overflow")).select("event_id").limit(500);
     if (protectedMaxIds.length) {

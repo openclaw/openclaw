@@ -30,6 +30,7 @@ import { createSessionCompoundWorkerFixture } from "./session-compound-worker.te
 
 type Fault = {
   reply: "normal" | "lost" | "unknown" | "unknown-result";
+  beforeAdmissionError?: Error;
   replyError?: Error;
   transactionError?: Error;
   settlementLost?: boolean;
@@ -99,6 +100,7 @@ function createFixture() {
     );
   let kernel = createKernel();
   const transport: SessionActorTransport = {
+    agentId: options.agentId,
     run(operation, authorize) {
       return runOpenClawAgentWorkerWrite(options, async () => {
         async function execute<Key extends keyof SessionActorOperations>(command: {
@@ -111,6 +113,9 @@ function createFixture() {
           let admittedOutcomeDataFrames = 0;
           let interruptedOutcomeTransferFrame = false;
           commands.push(command.type);
+          if (fault.beforeAdmissionError) {
+            throw fault.beforeAdmissionError;
+          }
           const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
           const retained = { settled: completion.promise };
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {

@@ -146,6 +146,32 @@ function observedInstaller() {
 
 describe("Gateway node worker bundle installer", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each([false, true])(
+    "negotiates archive-only prefetch while preserving session install (supported=%s)",
+    async (supported) => {
+      const current = nodeProof("node-prefetch", 1);
+      if (supported) {
+        current.workerHost.bundlePrefetch = 1;
+      }
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+        ok: true,
+        payload: receipt,
+      }));
+      const { ensure } = installerFixture(invoke, [current]);
+      const pending = ensure({ deviceId: current.nodeId, artifact, reason: "prefetch" });
+      if (supported) {
+        await expect(pending).resolves.toEqual(receipt);
+        expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ prefetch: 1 });
+        expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundlePrewarm");
+      } else {
+        await expect(pending).rejects.toThrow("does not support bundle prefetch");
+        expect(invoke).not.toHaveBeenCalled();
+      }
+      await expect(ensure(installRequest(current))).resolves.toEqual(receipt);
+      expect(invoke.mock.lastCall?.[0].params).not.toHaveProperty("prefetch");
+    },
+  );
+
   it("publishes install phases and throttles byte notices and logs with its clock", async () => {
     const h = observedInstaller();
     const call = await h.start();

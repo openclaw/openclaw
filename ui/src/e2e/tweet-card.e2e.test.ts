@@ -1,6 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { recordedToolCall } from "./recorded-tool.test-support.ts";
@@ -15,8 +14,6 @@ const imageData = (file: string) =>
 
 suite.define(() => {
   it.each([
-    { width: 1280, height: 900, colorScheme: "dark" as const, state: "text" },
-    { width: 390, height: 844, colorScheme: "light" as const, state: "text" },
     { width: 1280, height: 900, colorScheme: "dark" as const, state: "media" },
     { width: 390, height: 844, colorScheme: "dark" as const, state: "unavailable" },
     { width: 390, height: 844, colorScheme: "light" as const, state: "long" },
@@ -88,18 +85,6 @@ suite.define(() => {
             ),
           ).toBeGreaterThan(0);
         }
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          card,
-          [card.locator(".tweet-author"), open],
-          {
-            elements: [card],
-            scrollTo: card,
-            animations: "disabled",
-          },
-        );
-        writeFileSync(suite.artifactDir + "/chat.png", frame.png);
-        writeFileSync(suite.artifactDir + "/card.png", frame.elements[0]!.png);
         expect(await card.locator(".tweet-handle").textContent()).toBe("@openclaw");
         const body = card.locator(".tweet-text");
         expect(await body.count()).toBe(state === "unavailable" ? 0 : 1);

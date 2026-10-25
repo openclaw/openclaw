@@ -18,6 +18,7 @@ import {
 import { authorizeIncognitoSessionTarget } from "../session-sharing.js";
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -28,11 +29,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
     async ({ params, client, context, respond }) => {
       const service = context.sessionActivitySummaries;
       if (!service) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Activity recaps are unavailable."),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "Activity recaps are unavailable.");
         return;
       }
       const cfg = context.getRuntimeConfig();
@@ -118,11 +115,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
             (hasOperatorBoundary(client, currentCfg) &&
               sharing.entryFilter?.(target.canonicalKey, target.entry) === false)
           ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "Session is unavailable."),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "Session is unavailable.");
             return;
           }
           const error =

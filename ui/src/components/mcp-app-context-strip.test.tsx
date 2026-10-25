@@ -33,7 +33,7 @@ function mountStrip(context: ApplicationContext) {
   );
   return { ...mounted, selectSession };
 }
-function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ state }))) {
+async function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ state }))) {
   const client = createTestGatewayClient(request);
   const application = createApplicationGateway();
   application.publish({ ...application.gateway.snapshot, client, phase: "connected" });
@@ -46,7 +46,7 @@ function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ stat
     gateway: application.gateway,
   } as ApplicationContext);
   flush();
-  expect(strip.textContent).toContain("Hex bolt");
+  await waitForSolid(() => expect(strip.textContent).toContain("Hex bolt"));
   return {
     client,
     strip,
@@ -60,8 +60,8 @@ function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ stat
   };
 }
 
-it("clears consumed context immediately", () => {
-  const { strip, emit } = mountContext();
+it("clears consumed context immediately", async () => {
+  const { strip, emit } = await mountContext();
   emit({ viewId: "another-view", modelContext: null, updateId: "revision-one" });
   expect(strip.textContent).toContain("Hex bolt");
   emit({ viewId: "view-one", modelContext: null, updateId: "earlier-revision" });
@@ -81,7 +81,7 @@ it("retains accepted context after a failed refresh and accepts the next update"
         content: [{ type: "text", text: "socket", _meta: { "openai/title": "Socket" } }],
       },
     });
-  const { strip, emit } = mountContext(request);
+  const { strip, emit } = await mountContext(request);
   emit({ viewId: binding.viewId });
   failed.reject(new Error("Context temporarily unavailable"));
   await failed.promise.catch(() => {});
@@ -98,7 +98,7 @@ it("retains accepted context after a failed refresh and accepts the next update"
 it("lets the latest event refresh own the next context publication", async () => {
   const first = createDeferred<{ state: typeof state }>();
   const second = createDeferred<{ state: typeof state }>();
-  const { strip, emit } = mountContext(
+  const { strip, emit } = await mountContext(
     vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
   );
   emit({ viewId: binding.viewId });
@@ -126,7 +126,7 @@ it.each(["clear", "newer context", "client", "session", "unmount"] as const)(
   "does not republish a held refresh after %s retires its entry",
   async (retirement) => {
     const pending = createDeferred<{ state: typeof state }>();
-    const { client, strip, emit, selectSession, application, unmount } = mountContext(
+    const { client, strip, emit, selectSession, application, unmount } = await mountContext(
       vi.fn(() => pending.promise),
     );
     emit({ viewId: binding.viewId });
@@ -168,7 +168,7 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
   const removal = createDeferred<{ state: null }>();
   const retry = createDeferred<{ state: null }>();
   const request = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
-  const { client, strip } = mountContext(request);
+  const { client, strip } = await mountContext(request);
   const remove = strip.querySelector<HTMLButtonElement>("button")!;
   remove.click();
   await waitForSolid(() => expect(remove.disabled).toBe(true));
@@ -197,7 +197,7 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
 });
 
 it("leaves a failed removal behind when the visible session changes", async () => {
-  const { client, strip, selectSession } = mountContext(
+  const { client, strip, selectSession } = await mountContext(
     vi.fn(async () => {
       throw new Error("Removal unavailable");
     }),
@@ -226,7 +226,7 @@ it.each(["client", "session"] as const)(
     const first = createDeferred<{ state: null }>();
     const second = createDeferred<{ state: null }>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const { client, strip, application, selectSession, unmount } = mountContext(request);
+    const { client, strip, application, selectSession, unmount } = await mountContext(request);
     try {
       strip.querySelector<HTMLButtonElement>("button")!.click();
       await waitForSolid(() =>
@@ -281,7 +281,7 @@ it.each(["client", "session"] as const)(
 
 it("retires a held removal and its event listener when the strip unmounts", async () => {
   const removal = createDeferred<{ state: null }>();
-  const { client, strip, emit, unmount } = mountContext(vi.fn(() => removal.promise));
+  const { client, strip, emit, unmount } = await mountContext(vi.fn(() => removal.promise));
   strip.querySelector<HTMLButtonElement>("button")!.click();
   await waitForSolid(() =>
     expect(strip.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true),
@@ -296,7 +296,7 @@ it("retires a held removal and its event listener when the strip unmounts", asyn
   expect(readMcpAppContexts(client, binding.sessionKey, binding.agentId)[0]?.state).toEqual(state);
 });
 
-it("releases each context subscription when its client is replaced or the strip unmounts", () => {
+it("releases each context subscription when its client is replaced or the strip unmounts", async () => {
   const subscribe = mcpContexts.subscribeMcpAppContexts;
   const releases: Mock<() => void>[] = [];
   const releaseCounts = () => releases.map((release) => release.mock.calls.length);
@@ -307,7 +307,7 @@ it("releases each context subscription when its client is replaced or the strip 
       releases.push(release);
       return release;
     });
-  const { application, unmount } = mountContext();
+  const { application, unmount } = await mountContext();
   const secondClient = createTestGatewayClient(async () => ({}));
   try {
     expect(releaseCounts()).toEqual([0]);

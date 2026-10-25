@@ -10,6 +10,26 @@ import {
   startSelectedLogin,
 } from "./model-providers-page.test-support.tsx";
 
+export function museCodeCapability(): NonNullable<
+  ModelAuthStatusResult["providerCapabilities"]
+>[number] {
+  return {
+    provider: "meta",
+    apiKeySupported: true,
+    quickApiKeySetup: true,
+    loginOptions: [
+      {
+        id: "meta/muse-code",
+        brandId: "meta",
+        label: "Muse Code",
+        kind: "device-code",
+        featured: true,
+        requiresSetup: true,
+      },
+    ],
+  };
+}
+
 export function loginHarness(
   options: {
     capabilities?: ModelAuthStatusResult["providerCapabilities"];

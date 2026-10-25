@@ -126,8 +126,6 @@ export async function restartSystemdService(
 type LegacySystemdUnit = {
   name: string;
   unitPath: string;
-  enabled: boolean;
-  exists: boolean;
 };
 
 async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
@@ -145,7 +143,7 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
       enabled = res.code === 0;
     }
     if (exists || backupExists || enabled) {
-      results.push({ name, unitPath, enabled, exists });
+      results.push({ name, unitPath });
     }
   }
   return results;

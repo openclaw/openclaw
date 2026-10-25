@@ -177,6 +177,32 @@ When a task session has someone to credit, its system prompt lists the exact tra
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
 
+## Optional OpenClaw pull request attribution
+
+Open **Settings → Profile → Identity** and enable **Add OpenClaw attribution to
+pull requests** to mark new PRs requested from your profile. This preference is
+off by default and is separate from **Git co-author credit**. It does not require
+a verified GitHub account or change commit authorship.
+
+When enabled, new pull request descriptions include this footer:
+
+> 🦞 Made with [OpenClaw](https://openclaw.ai)
+
+The Gateway publisher applies your preference when creating a PR. It does not
+add branding when reviewing, editing, or publishing more changes to an existing
+PR, and it does not restore a footer removed on GitHub. The preference does not
+share a session or add a conversation link; session sharing remains separate.
+
+For one PR without attribution, ask the agent to omit the marker. For managed
+publication, include `<!-- openclaw:attribution=off -->` in that PR’s description.
+Turning the profile preference off affects future PRs, not already published
+ones. Incognito sessions do not automatically add attribution.
+
+For PRs created through ordinary GitHub CLI or shell commands, the agent follows
+attribution instructions rather than a Git hook or wrapper. That path is
+best-effort; the Gateway can apply the footer directly only to its managed
+publication flow.
+
 ## Merging duplicate profiles
 
 The Gateway directory method `users.list` requires `operator.read`. Its optional
@@ -272,7 +298,10 @@ Link the sender to their existing profile with `users.linkChannelIdentity`. For
 Slack, use `channelId: "slack"`, the configured account ID, and the exact
 native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
 signature-verified HTTP delivery authenticate that sender; relay delivery does
-not. Discord's verified native senders use the same profile resolution.
+not. Discord's verified native senders use the same profile resolution. X uses
+`channelId: "x"`, the configured account ID, and the immutable API `author_id`;
+its authenticated polling and Activity streams establish the native sender, not
+a matching handle or allowlist entry.
 
 The next verified message turn includes the primary profile ID and current display
 label as host-generated fields in the per-turn conversation info. The system
@@ -287,8 +316,11 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-When a newly spawned visible session starts agent-owned, the agent can assign it
-to the trusted requester profile and verify the stored owner with `sessions_list`.
+New visible sessions default to the trusted requester when the parent has no
+different human owner; this includes agent-owned and channel-originated parents.
+Without a trusted requester, they remain agent-owned. The agent can assign an
+existing session to the trusted requester profile and verify the stored owner
+with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
 rather than guessing from a name or pasted ID. An owner-authorized agent can use

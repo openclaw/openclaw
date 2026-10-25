@@ -222,28 +222,20 @@ export async function compactEmbeddedAgentSession(
             spawnedBy: normalizeOptionalString(params.spawnedBy) ?? entry?.spawnedBy,
             contextEngineAgentId,
           };
-          if (resolvedParams.trigger !== "manual") {
-            return await withQueuedCompactionCancellationResult(resolvedParams, () =>
-              compactEmbeddedAgentSessionImpl(
-                resolvedParams,
-                expectedEntry,
-                host,
-                contextEngineSessionKey,
-              ),
-            );
+          let activeParams = resolvedParams;
+          if (resolvedParams.trigger === "manual") {
+            // The native compactor borrows this turn and must not overlap its attached writer.
+            const attachment = operation
+              ? getSessionControllerEntryForOperation(operation).attachment
+              : undefined;
+            if (attachment && "handle" in attachment) {
+              return manualCompactionActiveRunFailure();
+            }
+            activeParams = {
+              ...resolvedParams,
+              abortSignal: attachManualCompactionRun(resolvedParams, operation, onSettled),
+            };
           }
-          // The native compactor borrows this turn and must not overlap its attached writer.
-          const attachment = operation
-            ? getSessionControllerEntryForOperation(operation).attachment
-            : undefined;
-          if (attachment && "handle" in attachment) {
-            return manualCompactionActiveRunFailure();
-          }
-
-          const activeParams = {
-            ...resolvedParams,
-            abortSignal: attachManualCompactionRun(resolvedParams, operation, onSettled),
-          };
           return await withQueuedCompactionCancellationResult(activeParams, () =>
             compactEmbeddedAgentSessionImpl(
               activeParams,

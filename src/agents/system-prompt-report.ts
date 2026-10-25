@@ -32,8 +32,13 @@ const toolSchemaStatsCache = new WeakMap<
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
   return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
     const block = match[0];
-    const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
-    return { name, blockChars: block.length };
+    const nameStart = block.search(/<name>\s*[^<]+?\s*<\/name>/i);
+    const name =
+      nameStart < 0
+        ? "(unknown)"
+        : block.slice(nameStart + 6, block.indexOf("<", nameStart + 6)).trim() || "(unknown)";
+    // Flatten a name-sized string before slicing so captures cannot retain the whole catalog.
+    return { name: ` ${name}`.slice(1), blockChars: block.length };
   });
 }
 

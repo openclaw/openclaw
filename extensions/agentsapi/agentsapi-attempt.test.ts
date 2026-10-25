@@ -23,6 +23,7 @@ import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-test
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -437,11 +438,9 @@ it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revo
   "handles %s after steering without widening retry prompt history",
   async (retryScope, { signal }) => {
     const fixture = await createAttempt();
-    await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync({
-      role: "user",
-      content: "Earlier request.",
-      timestamp: 1,
-    });
+    await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync(
+      makeUserMessage("Earlier request.", 1),
+    );
     const foreground = await fixture.recorder(fixture.params.prompt, "foreground-user");
     await foreground.persistApproved();
     fixture.params.userTurnTranscriptRecorder = foreground;

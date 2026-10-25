@@ -80,9 +80,10 @@ do not yield expecting one.
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-Creation is exposed only with live admitted `operator.sessions.write` authority.
-The existing `sessions` management tool does not create sessions, and senderless
-runs do not gain the separate creation capability. The default sandbox surface for an
+The `sessions_create` definition stays in the session's tool catalog across turns;
+execution requires live admitted `operator.sessions.write` authority. The existing
+`sessions` management tool does not create sessions, and senderless runs do not
+gain creation authority. The default sandbox surface for an
 admitted non-owner with session-write authority includes creation and renaming.
 Tool policy and execution-time authority checks still apply.
 
@@ -250,13 +251,19 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
-Waiting sends recover long inline replies from the accepted run's stored answer instead
-of returning its 4,096-character lifecycle preview. If that answer is unavailable,
-`replyTruncated: true` and a note identify the possibly incomplete reply. The normal
-model tool-result budget still applies and reports truncation explicitly. Ask the
-target for the missing section or a file containing the full reply; `sessions_history`
-also caps individual messages and cannot always recover their tail. Delayed
-inter-session replies still use the bounded lifecycle preview.
+Waiting and delayed inter-session replies recover the accepted run's full answer
+instead of returning its 4,096-character lifecycle preview. If the full answer is
+unavailable under the requester's current access, inline results include
+`replyTruncated: true` and a note; delayed replies include the same guidance for the
+requesting agent. The normal model tool-result budget still applies and reports
+truncation explicitly. Ask the target for the missing section or a file containing
+the full reply; `sessions_history` also caps individual messages and cannot always
+recover their tail.
+
+[Swarm collector children](/tools/swarm#how-collector-children-behave) (spawned with
+`collect: true`) are one-shot and do not accept `sessions_send`, including after they
+finish or time out. The send fails with an error explaining how to collect the result
+with `agents_wait` or start a new child, and no run starts.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
@@ -527,6 +534,21 @@ cross-agent access or use `allow` to restrict permitted agent pairs; requester-o
 access, or `tree` for current plus spawned scope; its primary main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.
+
+A retained native child keeps its verified parent relationship after its run
+finishes, including beyond the 30-minute recent-run display window. Under `tree`,
+that relationship supports listing, history, transcript search, status, and
+follow-up messages without making unrelated sessions visible. Recency filters and
+active-run status remain separate from this durable relationship. Archiving still
+hides a child from ordinary lists; it does not erase its parent relationship.
+
+Current execution control is not inherited from old run records. A parent cannot
+steer, resume, or continue a child controlled by another active session. Modern
+explicit parent lineage remains readable during that work; a legacy
+`spawnedBy`-only link yields to the verified active controller. When that work
+ends, the retained parent can continue the child under its current authority.
+Incognito, sharing revocation, sandbox, agent-policy, and exact-session identity
+checks still apply. Watching requires status visibility independently of send access.
 
 These scopes remain the read and control boundary. An explicit per-agent
 `tools.agentToAgent.send` match can permit only cross-agent sends under `self`,

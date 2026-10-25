@@ -44,7 +44,6 @@ import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-ima
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
-import { resolveChatSwarmParent } from "./components/chat-swarm-progress-parent.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
@@ -66,9 +65,6 @@ const ChatSessionSuggestions = lazy(
     export: "ChatSessionSuggestions",
   },
 );
-const ChatSwarmProgress = lazy(() => import("./components/chat-swarm-progress.solid.tsx"), {
-  export: "ChatSwarmProgress",
-});
 const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggestions.tsx"), {
   export: "ChatTaskSuggestionTray",
 });
@@ -100,12 +96,6 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
-  const swarm = createMemo(() => {
-    const progress = input.props.swarm;
-    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
-      ? progress
-      : undefined;
-  });
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -198,13 +188,6 @@ function ChatFooterContent(
             }
           />
         </ChatLazyBoundary>
-      </Show>
-      <Show when={swarm()}>
-        {(progress) => (
-          <ChatLazyBoundary>
-            <ChatSwarmProgress {...progress()} />
-          </ChatLazyBoundary>
-        )}
       </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions

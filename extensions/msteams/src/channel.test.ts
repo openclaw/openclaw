@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
-import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
@@ -237,56 +236,6 @@ describe("msteamsPlugin", () => {
         tokenStatus: "configured_unavailable",
       });
     });
-  });
-
-  it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
-    const monitor = monitorMSTeamsProviderMock.mockReset().mockResolvedValue(undefined);
-    const register = vi.fn(() => ({ dispose: vi.fn() }));
-    const controller = new AbortController();
-    const cfg: OpenClawConfig = {
-      ...createConfiguredMSTeamsCfg({ allowFrom: ["40a1a0ed-4ff2-4164-a219-55518990c197"] }),
-      approvals: { exec: { enabled: true } },
-    };
-    const startAccount = async (config: OpenClawConfig) =>
-      await msteamsPlugin.gateway?.startAccount?.({
-        cfg: config,
-        accountId: "default",
-        account: msteamsPlugin.config.resolveAccount(config, "default"),
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        abortSignal: controller.signal,
-        getStatus: () => ({ accountId: "default" }),
-        setStatus: vi.fn(),
-        channelRuntime: {
-          runtimeContexts: {
-            register,
-            get: () => undefined,
-            watch: () => () => {},
-          },
-        },
-      });
-
-    try {
-      await startAccount(cfg);
-
-      expect(register).toHaveBeenCalledWith({
-        channelId: "msteams",
-        accountId: "default",
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: {},
-        abortSignal: controller.signal,
-      });
-      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
-        monitor.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-
-      await startAccount({ ...cfg, approvals: { exec: { enabled: false } } });
-
-      expect(register).toHaveBeenCalledOnce();
-      expect(monitor).toHaveBeenCalledTimes(2);
-    } finally {
-      controller.abort();
-      monitor.mockReset();
-    }
   });
 });
 

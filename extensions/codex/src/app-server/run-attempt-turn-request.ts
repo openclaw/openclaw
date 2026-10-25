@@ -27,7 +27,7 @@ import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
@@ -40,7 +40,7 @@ export type CodexStartedTurn = {
 };
 
 export async function prepareCodexAttemptTurnRequest(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   ensureCurrentThreadRoute: () => Promise<
     Pick<CodexThreadRouteReservation, "armTurn" | "cancelTurn">
@@ -222,7 +222,7 @@ export async function prepareCodexAttemptTurnRequest(
       }
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
-      const registration = inferenceRoute.context.register({
+      const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
         text: joinPresentSections(
           usesSupervisionConnection

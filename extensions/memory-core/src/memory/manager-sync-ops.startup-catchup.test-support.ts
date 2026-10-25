@@ -52,31 +52,7 @@ async function createStartupHarnessDatabase(
   }
   return database;
 }
-export abstract class SessionSyncHarness extends MemorySyncTestHarness {
-  protected readonly createProvider = (): never => {
-    throw new Error("Session sync harness does not acquire embedding providers");
-  };
-  protected readonly agentId = "main";
-  protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
-  protected readonly batch = {
-    enabled: false,
-    wait: false,
-    concurrency: 1,
-    pollIntervalMs: 0,
-    timeoutMs: 0,
-  };
-  protected readonly cache = { enabled: false };
-  protected providerUnavailableReason?: string;
-  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected computeProviderKey = () => "test";
-  protected resolveProviderIndexIdentities = () => [];
-  protected withTimeout = async <T>(promise: Promise<T>): Promise<T> => await promise;
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
-  protected resetProviderInitializationForRetry(): void {}
-  protected assertRequiredProviderAvailable(): void {}
-}
-
-export class SessionStartupCatchupHarness extends SessionSyncHarness {
+export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly settings = {
     chunking: { overlap: 0, tokens: 256 },
     extraPaths: [],

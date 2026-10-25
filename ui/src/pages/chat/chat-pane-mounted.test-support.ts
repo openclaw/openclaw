@@ -16,6 +16,7 @@ import { refreshPageChat } from "./chat-state-refresh.ts";
 
 const responseMethods = [
   "chat.history",
+  "chat.send",
   "chat.startup",
   "models.authStatus",
   "models.list",

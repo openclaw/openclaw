@@ -301,7 +301,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["agents-home", "agents", "config"],
     ["ui/src/components/agent-select-registration.ts"],
   ),
-  pageWatch("ui/src/e2e/agent-selection-persistence.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/agent-switch-roster.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/app-chrome-interaction.e2e.test.ts", ["chat", "config", "usage"]),
   pageWatch("ui/src/e2e/appearance-accent-selection.e2e.test.ts", ["config"]),
@@ -416,7 +415,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/login-gate-solid.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-cli-history-redaction.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-collaborator-scroll.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
     "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
     ["chat"],
@@ -497,12 +495,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/chat-error-details.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-external-pending-input.e2e.test.ts", ["chat", "profile"]),
-  pageWatch(
-    "ui/src/e2e/chat-file-copy-retirement.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/components/chat-detail-panel.ts"],
-  ),
   pageWatch(
     "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts",
     ["chat"],
@@ -590,11 +582,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-header-owner-presence.capture.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/chat-header-session-lineage.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
-  pageWatch(
-    "ui/src/e2e/chat-header-session-outcomes.e2e.test.ts",
-    ["chat", "sessions"],
-    ["ui/src/components/session-menu-solid.tsx"],
-  ),
   pageWatch("ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-history-loading.e2e.test.ts", ["chat"]),
   pageWatch(
@@ -605,7 +592,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/chat-image-loading.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-image-virtual-remount.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-interrupted-reply.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-live-final-order.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-markdown-alignment.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-mention-cache.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/chat-mention-popover.e2e.test.ts", ["chat", "new-session", "profile"]),
@@ -653,11 +639,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/pages/chat/chat-pane.ts",
       "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
-  ),
-  pageWatch(
-    "ui/src/e2e/chat-panel-reflow.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
   ),
   pageWatch(
     "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
@@ -932,9 +913,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/pages/chat/components/session-diff-menus.tsx",
     ],
   ),
-  pageWatch("ui/src/e2e/child-session-load-errors.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/chrome-extension-status.e2e.test.ts", ["config", "device"]),
-  pageWatch("ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/cloud-session-placement-identity.e2e.test.ts",
     ownerRoots: [
@@ -1019,29 +998,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/route-draft-focus-handoff.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/cron-agent-ownership.e2e.test.ts",
-    ["cron"],
-    [
-      "ui/src/components/agent-select-registration.ts",
-      "ui/src/components/select-picker.ts",
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.tsx",
-      "ui/src/pages/cron/cron-page-controller.ts",
-    ],
-    ["ui/src/styles/select-picker.css"],
-  ),
   pageWatch("ui/src/e2e/cron-descriptions.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch(
     "ui/src/e2e/cron-filters.e2e.test.ts",
     ["cron"],
     ["ui/src/components/select-picker.ts", "ui/src/lib/cron/types.ts"],
     ["ui/src/styles/select-picker.css"],
-  ),
-  pageWatch(
-    "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts",
-    ["cron"],
-    ["ui/src/lib/cron/types.ts"],
   ),
   pageWatch("ui/src/e2e/cron-remove.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-completion.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
@@ -1219,11 +1181,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/link-favicons.e2e.test.ts", ["chat"]),
   pageWatch(
-    "ui/src/e2e/lobster-pet-dismiss-menu-overflow.e2e.test.ts",
-    ["chat", "new-session"],
-    ["ui/src/components/lobster-pet.tsx", "ui/src/components/menu-surface.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/lobster-pet.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/components/lobster-pet-plans.ts", "ui/src/components/lobster-pet.tsx"],
@@ -1309,11 +1266,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/modal-dialog.tsx", "ui/src/pages/model-setup/model-setup-page.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/model-setup-llamacpp.e2e.test.ts",
-    ["config", "model-providers", "model-setup"],
-    ["ui/src/components/modal-dialog.tsx", "ui/src/components/select-picker.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/model-setup-lmstudio.e2e.test.ts",
     ["config", "model-providers", "model-setup"],
     ["ui/src/components/modal-dialog.tsx", "ui/src/components/select-picker.ts"],
@@ -1349,7 +1301,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       ...pageStyles["chat"],
     ],
   },
-  pageWatch("ui/src/e2e/native-gateway-health.e2e.test.ts", ["new-session"]),
   pageWatch("ui/src/e2e/native-session-discovery-settings.e2e.test.ts", [
     "chat",
     "config",
@@ -1581,11 +1532,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/components/chat-question-card.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/question-progress.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/scroll.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/resize-handles.e2e.test.ts",
     ["chat"],
     [
@@ -1725,11 +1671,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/session-management.optimistic-pin.e2e.test.ts",
-    ["chat"],
-    sessionMenuOwnerRoots,
-  ),
-  pageWatch(
     "ui/src/e2e/session-management.queue.e2e.test.ts",
     ["chat"],
     ["ui/src/components/app-sidebar.ts", "ui/src/components/session-glyph.ts"],
@@ -1791,7 +1732,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/session-owner-filter-header.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/session-owner-first.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/session-owner-warm-refresh.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/session-placement.move.e2e.test.ts",
     ["chat", "device", "profile"],
@@ -1925,11 +1865,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/styles/sidebar-update-card.css"],
   ),
   pageWatch(
-    "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
-    ["chat"],
-    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/sidebar-cron-inventory.e2e.test.ts",
     ["chat"],
     ["ui/src/lib/cron/types.ts"],
@@ -1956,7 +1891,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     sessionMenuOwnerRoots,
   ),
-  pageWatch("ui/src/e2e/sidebar-plugin-order.e2e.test.ts", ["chat", "workboard"]),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
   pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
@@ -2007,14 +1941,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/subagent-task-notice.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
-  ),
-  pageWatch(
-    "ui/src/e2e/terminal-open.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/terminal/terminal-panel-registration.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
   ),
   pageWatch(
     "ui/src/e2e/terminal-page.e2e.test.ts",

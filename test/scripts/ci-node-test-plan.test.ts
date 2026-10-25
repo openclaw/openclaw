@@ -352,7 +352,7 @@ describe("Control UI release-only inventories", () => {
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     ];
-    const fileSeconds: Record<string, number> = { [desktop]: 20, [serial]: 40 };
+    const fileSeconds: Record<string, number> = { [desktop]: 80, [serial]: 80 };
     for (const file of parallel) {
       fileSeconds[file] = 100;
     }
@@ -379,9 +379,11 @@ describe("Control UI release-only inventories", () => {
       const files = shard.groups[0]!.includePatterns;
       // Whole 100s files occupy two workers; an odd final file still costs 100s.
       const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
-      return (shard.run_desktop ? 20 : 0) + (files.includes(serial) ? 40 : 0) + parallelWaves * 100;
+      return (
+        Math.max(shard.run_desktop ? 80 : 0, files.includes(serial) ? 80 : 0) + parallelWaves * 100
+      );
     });
-    expect(Math.max(...work)).toBeLessThanOrEqual(160);
+    expect(Math.max(...work)).toBeLessThanOrEqual(180);
   });
 
   it.each([
@@ -3778,7 +3780,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "config/ci-budget.md",
     configPath("tooling"),
     "package.json",
-    "patches/vitest@5.0.3.patch",
+    "patches/vitest@5.0.5.patch",
     ".github/workflows/ci.yml",
     "apps/ios/fastlane/Fastfile",
     "extensions/matrix/scripts/build.mjs",

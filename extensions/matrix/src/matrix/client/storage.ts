@@ -389,7 +389,6 @@ export async function writeStorageMeta(params: {
   userId: string;
   accountId?: string | null;
   deviceId?: string | null;
-  currentTokenStateClaimed?: boolean;
 }): Promise<boolean> {
   return mutateStorageMeta(params.storagePaths.rootDir, {
     kind: "initialize",
@@ -399,7 +398,6 @@ export async function writeStorageMeta(params: {
       accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
       accessTokenHash: params.storagePaths.tokenHash,
       deviceId: params.deviceId ?? null,
-      currentTokenStateClaimed: params.currentTokenStateClaimed,
     },
   });
 }
@@ -427,16 +425,14 @@ export async function repairCurrentTokenStorageMetaDeviceId(params: {
   accountId?: string | null;
   deviceId: string;
   env?: NodeJS.ProcessEnv;
-  stateDir?: string;
 }): Promise<boolean> {
-  const { homeserver, userId, accessToken, accountId, deviceId, env, stateDir } = params;
+  const { homeserver, userId, accessToken, accountId, deviceId, env } = params;
   const storagePaths = await resolveMatrixStoragePaths({
     homeserver,
     userId,
     accessToken,
     accountId,
     env,
-    stateDir,
   });
   return writeStorageMeta({
     storagePaths,

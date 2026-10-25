@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import * as media from "../media-generation-task-status.js";
 import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
 import type { CliReusableSession } from "./types.js";
@@ -58,23 +57,19 @@ it("keeps a transient session notice at the top of the native user prompt", () =
   expect(createCliCurrentPromptRenderer({}, session)(prompt)).toBe(prompt);
 });
 
-const preservedTurnsContext = "Recorded completion: CHILD_RESULT; reply: Relayed.";
-const historyWriter = {} as CliHistoryWriter;
 const inboundPrompt = "Conversation info\n\nask";
 const drift = buildCliSessionDriftNote(["system-prompt"]);
-it.each<[CliReusableSession, CliHistoryWriter | undefined, string]>([
+it.each<[CliReusableSession, string]>([
   [
     { mode: "reuse-with-drift", sessionId: "native-bound", drift: { reasons: ["system-prompt"] } },
-    historyWriter,
-    [drift, preservedTurnsContext, inboundPrompt].join("\n\n"),
+    [drift, inboundPrompt].join("\n\n"),
   ],
-  [{ mode: "invalidate", invalidatedReason: "mcp" }, historyWriter, inboundPrompt],
-  [{ mode: "reuse", sessionId: "native-bound" }, undefined, inboundPrompt],
-])("renders saved CLI context for %j", (session, writer, expected) => {
+  [{ mode: "invalidate", invalidatedReason: "mcp" }, inboundPrompt],
+  [{ mode: "reuse", sessionId: "native-bound" }, inboundPrompt],
+])("renders saved CLI context for %j", (session, expected) => {
   const render = createCliCurrentPromptRenderer(
     { currentInboundContext: { text: "Conversation info" } },
     session,
-    { preservedTurnsContext, writer },
   );
   expect(render("ask")).toBe(expected);
 });

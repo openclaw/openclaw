@@ -41,8 +41,10 @@ function createHandoffEnv(): NodeJS.ProcessEnv {
   };
 }
 
-const consumeHandoff = (env: NodeJS.ProcessEnv, expectedPid = 12_345) =>
-  consumeGatewayRestartHandoffSync({ env, expectedPid });
+const consumeHandoff = (env: NodeJS.ProcessEnv, expectedPid = 12_345) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  return consumeGatewayRestartHandoffSync({ expectedPid });
+};
 
 function readHandoffRow(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
@@ -116,7 +118,6 @@ function spawnHandoffConsumer(params: {
     Date.now = () => ${params.now};
     const result = mod.consumeGatewayRestartHandoffSync({
       expectedPid: ${params.expectedPid},
-      env: process.env,
     });
     process.stdout.write(JSON.stringify(result) + "\\n");
   `;

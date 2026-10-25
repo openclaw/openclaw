@@ -12,11 +12,6 @@ import {
   readSessionEntryCount,
   writeArchivedSessionEntries,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  collectProjectedReferencedSessionIds,
-  collectSessionStateIdsForEntry,
-  readSessionGenerationIdsForKeys,
-} from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
@@ -36,6 +31,11 @@ import {
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import {
+  collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
+  readSessionGenerationIdsForKeys,
+} from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readTranscriptContextVersionsInTransaction } from "./session-transcript-context-versions.js";

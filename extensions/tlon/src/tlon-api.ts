@@ -30,12 +30,6 @@ type StorageCredentials = {
   secretAccessKey: string;
 };
 
-type UploadFileParams = {
-  blob: Blob;
-  fileName?: string;
-  contentType?: string;
-};
-
 const MEMEX_BASE_URL = "https://memex.tlon.network";
 
 /** Max bytes to read from the Memex upload JSON response. */
@@ -169,7 +163,11 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
 }
 
 export async function uploadFile(
-  params: UploadFileParams,
+  params: {
+    blob: Blob;
+    fileName?: string;
+    contentType?: string;
+  },
   clientConfig: ClientConfig,
 ): Promise<{ url: string }> {
   const config: ClientConfig = {

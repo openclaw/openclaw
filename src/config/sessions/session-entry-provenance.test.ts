@@ -49,7 +49,7 @@ it("resolves personal profiles from assigned humans or authenticated creators on
   }
 });
 
-it("inherits only the requesting human's current owner, including canonical profile aliases", () => {
+it("defaults visible work to its verified requester without replacing another human's ownership", () => {
   type Resolve = Parameters<typeof inheritSpawnSessionOwner>[4];
   const cases: Array<[Source, string | undefined, SessionActor, number?, Resolve?]> = [
     [created(creator), creator.id, human(creator.id), 42],
@@ -63,12 +63,14 @@ it("inherits only the requesting human's current owner, including canonical prof
       42,
       (id) => (id === "profile-before-merge" ? "profile-after-merge" : id),
     ],
-    [owned({ type: "agent", id: "another-agent" }), creator.id, spawningAgent],
+    [owned({ type: "agent", id: "another-agent" }), creator.id, human(creator.id)],
     [
-      created({ type: "human", source: "channel", id: "discord-user" }),
-      "discord-user",
-      spawningAgent,
+      created({ type: "human", source: "channel", id: "channel-sender" }),
+      creator.id,
+      human(creator.id),
     ],
+    [owned(human(undefined)), creator.id, spawningAgent],
+    [created({ type: "human", source: "channel", id: "discord-user" }), undefined, spawningAgent],
   ];
   for (const [source, requester, actor, now, resolve] of cases) {
     expect(inheritSpawnSessionOwner(source, spawningAgent, requester, now, resolve)).toEqual({

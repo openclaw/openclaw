@@ -5,7 +5,7 @@ import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
-type CommandPaletteInputProps = {
+export function CommandPaletteInput(props: {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -22,9 +22,7 @@ type CommandPaletteInputProps = {
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-};
-
-export function CommandPaletteInput(props: CommandPaletteInputProps) {
+}) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
   let widthReference!: HTMLDivElement;

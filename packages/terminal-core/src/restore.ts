@@ -3,16 +3,6 @@ import { clearActiveProgressLine } from "./progress-line.js";
 const RESET_SEQUENCE =
   "\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[>4;0m";
 
-function reportRestoreFailure(scope: string, err: unknown, reason?: string): void {
-  const suffix = reason ? ` (${reason})` : "";
-  const message = `[terminal] restore ${scope} failed${suffix}: ${String(err)}`;
-  try {
-    process.stderr.write(`${message}\n`);
-  } catch (writeErr) {
-    console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
-  }
-}
-
 export function restoreTerminalState(
   reason?: string,
   options: {
@@ -49,7 +39,13 @@ export function restoreTerminalState(
     try {
       action();
     } catch (err) {
-      reportRestoreFailure(scope, err, reason);
+      const suffix = reason ? ` (${reason})` : "";
+      const message = `[terminal] restore ${scope} failed${suffix}: ${String(err)}`;
+      try {
+        process.stderr.write(`${message}\n`);
+      } catch (writeErr) {
+        console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
+      }
     }
   };
   restore("progress line", clearActiveProgressLine);

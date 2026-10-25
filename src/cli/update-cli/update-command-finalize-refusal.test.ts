@@ -55,6 +55,7 @@ const native = vi.hoisted(() => ({
   root: "",
   absent: false,
   realOwner: false,
+  blockCode: undefined as string | undefined,
 }));
 vi.mock("../../config/paths.js", async (original) => ({
   ...(await original<typeof import("../../config/paths.js")>()),
@@ -119,6 +120,14 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
         };
       }
       if (params.phase !== "inspect") {
+        if (native.blockCode) {
+          return {
+            stopped: false,
+            inspected: true,
+            blockMessage: "Synthetic managed-service refusal before stopping the Gateway.",
+            blockFailureFacts: [{ check: "managed-service", code: native.blockCode }],
+          };
+        }
         if (native.failStop) {
           throw new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.");
         }
@@ -225,6 +234,7 @@ beforeEach(async () => {
   native.root = path.join(base, "package");
   native.absent = false;
   native.realOwner = false;
+  native.blockCode = undefined;
   await fs.mkdir(native.root);
   await prepareFinalizationPackage(native.root);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, ".openclaw"));
@@ -427,6 +437,43 @@ it.each(["coordinator-contention", "admission-unavailable"] as const)(
     expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  "inside-gateway-process-tree",
+  "inside-gateway-service",
+  "service-membership-unverified",
+  "service-ancestry-unverified",
+  "inside-triage-process-tree",
+  "service-definition-changed",
+])("retains the managed-service refusal through repair history and reports (%s)", async (code) => {
+  native.blockCode = code;
+  await expect(updateRepairCommand({ json: true, yes: true })).rejects.toMatchObject({
+    failureFacts: [{ check: "managed-service", code }],
+  });
+  const run = listUpdateRuns()[0]!;
+  expect(run).toMatchObject({ status: "failed", reason: code });
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({
+      step: "update",
+      failureFacts: [{ check: "managed-service", code }],
+      exitCode: 1,
+    }),
+  );
+  const report = await prepareUpdateFailureReport({
+    attemptId: run.runId,
+    recordedRun: run,
+    result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
+  });
+  expect(report.body).toContain(`Reason code: ${code}`);
+  if (code !== "service-definition-changed") {
+    expect(renderUpdateRunReport(run).markdown).toContain("terminal outside");
+    expect(renderUpdateRunReport(run).markdown).toContain("openclaw update repair");
+    expect(renderUpdateRunReport(run).markdown).not.toContain("Run openclaw triage");
+  }
+  expect(native.events).toEqual(["running-holder"]);
+  expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+  expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
+});
 
 it.each([
   ["stop", false],

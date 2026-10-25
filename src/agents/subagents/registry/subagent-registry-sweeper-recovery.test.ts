@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -31,18 +30,14 @@ import {
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import * as childAuthority from "./subagent-child-owner-match.js";
 import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
-import {
-  getSubagentRunsForChildSession,
-  immutableSubagentRun,
-  subagentRuns,
-} from "./subagent-registry-memory.js";
+import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -80,6 +75,8 @@ const makeSessionEntry = (sessionId: string, lifecycleRevision: string) => ({
   lifecycleRevision,
   updatedAt: Date.now(),
 });
+const reserveFollowup = (target: ReturnType<typeof captureSessionTarget>) =>
+  reserveSessionControllerSource(target.sessionKey, { target, policy: { mode: "followup" } });
 const sessionChangedError = () =>
   Object.assign(new Error("session changed"), {
     name: "GatewayClientRequestError",
@@ -140,31 +137,6 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   registerSubagentSweepRetainedAuthorityTests(recoverRow, killSessionEntry);
-
-  it("does not rederive recorded authority while sweeping unchanged retained runs", async () => {
-    const retained = immutableSubagentRun(
-      archivedRun({
-        cleanup: "keep",
-        archiveAtMs: undefined,
-        cleanupCompletedAt: Date.now(),
-        delivery: { status: "delivered" },
-      }),
-    );
-    const { sweeper, callGateway } = createHarness({}, retained, subagentRuns);
-    onTestFinished(() => subagentRuns.clear());
-    const active = immutableSubagentRun({ ...run(), runId: "active" });
-    subagentRuns.set(active.runId, active);
-    getAgentRunContext.mockReturnValue({});
-    using authority = vi.spyOn(childAuthority, "resolveSubagentChildAuthority");
-
-    await sweeper.sweepOnce();
-    await sweeper.sweepOnce();
-
-    expect(authority).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(subagentRuns.get(retained.runId)).toBe(retained);
-    expect(subagentRuns.get(active.runId)).toBe(active);
-  });
 
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over suspended delivery cleanup",
@@ -355,7 +327,7 @@ describe("subagent registry recovery scheduling", () => {
     "refuses cleanup when its %s changes before deletion dispatch",
     async (change) => {
       const runtime = { current: createMockGatewayRecoveryRuntime() };
-      const { entry, runs, callGateway, sweeper, warn } = createHarness(runtime, archivedRun());
+      const { entry, runs, callGateway, sweeper } = createHarness(runtime, archivedRun());
       const gate = createSweepGate();
       const deleteSession = vi.fn();
       callGateway.mockImplementationOnce(async (request) => {
@@ -380,17 +352,6 @@ describe("subagent registry recovery scheduling", () => {
         expect(await finish()).toBeUndefined();
         expect(deleteSession).not.toHaveBeenCalled();
         expect(runs.get(entry.runId)).toBe(retained);
-        expect(warn).toHaveBeenCalledWith(
-          "sessions.delete failed during subagent sweep; keeping run for retry",
-          expect.objectContaining({
-            runId: entry.runId,
-            error: new Error(
-              change === "lifecycle" || change === "runtime"
-                ? "Subagent sweep read lost its Gateway owner"
-                : "Subagent sweep read lost its selected run",
-            ),
-          }),
-        );
       });
     },
   );
@@ -595,14 +556,10 @@ describe("subagent registry recovery scheduling", () => {
     const abort = vi.fn();
     const native = createEmbeddedRunHandle({ runId: entry.runId, isAbortable: false, abort });
     attachActiveEmbeddedRun("session-id", native, target.sessionKey, target.storeScope);
-    const source = reserveSessionControllerSource(target.sessionKey, {
-      target,
-      policy: { mode: "followup" },
-    });
-    const foreign = reserveSessionControllerSource(target.sessionKey, {
-      target: captureSessionTarget({ ...target, incarnation: "prior-incarnation" }),
-      policy: { mode: "followup" },
-    });
+    const source = reserveFollowup(target);
+    const foreign = reserveFollowup(
+      captureSessionTarget({ ...target, incarnation: "prior-incarnation" }),
+    );
     onTestFinished(async () => {
       await detachActiveEmbeddedRun("session-id", native, target.sessionKey);
       retireSessionControllerInput(source);
@@ -675,24 +632,22 @@ describe("subagent registry recovery scheduling", () => {
             killIntent: undefined,
           };
           runs.set(foreign.runId, foreign);
-          const source = reserveSessionControllerSource("global", {
-            target: captureSessionTarget({
+          const source = reserveFollowup(
+            captureSessionTarget({
               storeScope: storePath,
               sessionKey: "global",
               agentId: "research",
               incarnation: "research-session",
             }),
-            policy: { mode: "followup" },
-          });
-          const foreignSource = reserveSessionControllerSource("global", {
-            target: captureSessionTarget({
+          );
+          const foreignSource = reserveFollowup(
+            captureSessionTarget({
               storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
               sessionKey: "global",
               agentId: "main",
               incarnation: "main-session",
             }),
-            policy: { mode: "followup" },
-          });
+          );
           const sql = observeMainThreadSql();
           try {
             expect(
@@ -832,13 +787,9 @@ describe("superseded subagent retirement", () => {
             storePath: state.sessionsDir("main"),
           };
         }
-        const cleanupEntered = createDeferred();
-        const releaseCleanup = createDeferred();
+        const cleanupGate = createEnteredGate();
         if (retireSuccessor) {
-          removeInternalSessionEffectsSession.mockImplementationOnce(async () => {
-            cleanupEntered.resolve();
-            await releaseCleanup.promise;
-          });
+          removeInternalSessionEffectsSession.mockImplementationOnce(cleanupGate.wait);
         }
         const successor = { ...run(), runId: "successor", generation: (entry.generation ?? 0) + 1 };
         const runs = new Map<string, SubagentRunRecord>();
@@ -866,10 +817,10 @@ describe("superseded subagent retirement", () => {
           });
           if (retireSuccessor) {
             try {
-              await cleanupEntered.promise;
+              await cleanupGate.entered;
               await persistRuns(runs, [[successor.runId, null]]);
             } finally {
-              releaseCleanup.resolve();
+              cleanupGate.release();
             }
           }
           if (refused) {

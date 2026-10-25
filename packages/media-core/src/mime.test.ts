@@ -99,7 +99,7 @@ describe("mime detection", () => {
   );
 
   it.each([
-    ["a2ui.bundle.js", "text/javascript"],
+    ["widget.bundle.js", "text/javascript"],
     ["config.yml", "application/yaml"],
     ["config.yaml", "application/yaml"],
     ["report.html", "text/html"],

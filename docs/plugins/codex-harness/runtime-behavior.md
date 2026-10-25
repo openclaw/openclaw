@@ -338,8 +338,14 @@ with room for 16 pending or closing admissions. It retains up to 64 usable
 WebSockets and reclaims the oldest completed idle connection when either
 transport needs room. Active responses and newly opened connections awaiting
 their first request are not evicted. HTTP connections close after each response;
-native WebSocket reuse remains intact. The separate limit of 64 admitted root
-contexts is unchanged; transport capacity is not a count of saved conversations.
+native WebSocket reuse remains intact. Separately, each inference relay admits at
+most 64 active root contexts. Additional turns wait in arrival order for a root
+to be released; cancellation removes a waiting turn, and relay shutdown rejects
+its waiters. Admission rechecks the turn and transport ownership before starting.
+Debug logs identify the root limit and waiting count. A completed, failed,
+aborted, or yielded turn releases its root; retained parent subscriptions and
+prepared context do not occupy active roots. Transport capacity is not a count
+of saved conversations.
 
 A new WebSocket waits before opening its upstream connection; admission and its
 handshake share a 10-second deadline. HTTP admission and queued WebSocket

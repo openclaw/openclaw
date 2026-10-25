@@ -308,24 +308,19 @@ describe("handlePendingApprovalRequest", () => {
   });
 
   it("targets requested approval events to visible approval clients when available", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
+    const { manager, record, pending } = await createPendingFixture(
+      testContext,
       "approval-visible",
+      undefined,
+      (pendingRecord) => {
+        pendingRecord.requestedByDeviceId = "device-owner";
+      },
     );
-    record.requestedByDeviceId = "device-owner";
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const visibleConnIds = new Set(["conn-owner-approval"]);
     const requestPromise = handlePendingApprovalRequest({
-      manager,
-      record,
-      respond,
+      ...pending,
       context: {
         getRuntimeConfig: () => ({}),
         broadcast,
@@ -349,9 +344,6 @@ describe("handlePendingApprovalRequest", () => {
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
-      requestEventName: "exec.approval.requested",
-      requestEvent: requestedEvent(record),
-      twoPhase: true,
       deliverRequest: () => false,
     });
 
@@ -427,26 +419,21 @@ describe("handlePendingApprovalRequest", () => {
   });
 
   it("targets requester-bound approval events to gateway-client approval runtimes", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
+    const { manager, record, pending } = await createPendingFixture(
+      testContext,
       "approval-delivery-runtime",
+      undefined,
+      (pendingRecord) => {
+        pendingRecord.requestedByDeviceId = "device-owner";
+        pendingRecord.requestedByConnId = "conn-owner";
+        pendingRecord.requestedByClientId = "client-owner";
+      },
     );
-    record.requestedByDeviceId = "device-owner";
-    record.requestedByConnId = "conn-owner";
-    record.requestedByClientId = "client-owner";
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const visibleConnIds = new Set(["conn-delivery-runtime"]);
     const requestPromise = handlePendingApprovalRequest({
-      manager,
-      record,
-      respond,
+      ...pending,
       context: {
         getRuntimeConfig: () => ({}),
         broadcast,
@@ -470,9 +457,6 @@ describe("handlePendingApprovalRequest", () => {
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-owner",
-      requestEventName: "exec.approval.requested",
-      requestEvent: requestedEvent(record),
-      twoPhase: true,
       deliverRequest: () => false,
     });
 
@@ -705,25 +689,20 @@ describe("handlePendingApprovalRequest", () => {
 
   it("does not target no-device approvals by self-declared client id", async (testContext) => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
+    const { manager, record, respond, pending } = await createPendingFixture(
+      testContext,
       "approval-no-device",
+      undefined,
+      (pendingRecord) => {
+        pendingRecord.requestedByConnId = "conn-requester";
+        pendingRecord.requestedByClientId = "client-owner";
+      },
     );
-    record.requestedByConnId = "conn-requester";
-    record.requestedByClientId = "client-owner";
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const visibleConnIds = new Set<string>();
     const requestPromise = handlePendingApprovalRequest({
-      manager,
-      record,
-      respond,
+      ...pending,
       context: {
         getRuntimeConfig: () => ({}),
         broadcast,
@@ -749,9 +728,6 @@ describe("handlePendingApprovalRequest", () => {
         }),
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
-      requestEventName: "exec.approval.requested",
-      requestEvent: requestedEvent(record),
-      twoPhase: true,
       deliverRequest: () => false,
     });
 
@@ -925,19 +901,16 @@ describe("handlePendingApprovalRequest", () => {
   });
 
   it("does not allow approval-scoped clients to resolve device-bound gateway-client approvals from another device", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
+    const { manager, record, respond } = await createPendingFixture(
+      testContext,
       "approval-gateway-device-resolve",
+      undefined,
+      (pendingRecord) => {
+        pendingRecord.requestedByDeviceId = "device-gateway";
+        pendingRecord.requestedByConnId = "conn-gateway";
+        pendingRecord.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+      },
     );
-    record.requestedByDeviceId = "device-gateway";
-    record.requestedByConnId = "conn-gateway";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
 
@@ -1060,17 +1033,14 @@ describe("handlePendingApprovalRequest", () => {
   });
 
   it("targets resolved approval events to visible approval clients when available", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
+    const { manager, record, respond } = await createPendingFixture(
+      testContext,
       "approval-resolved-visible",
+      undefined,
+      (pendingRecord) => {
+        pendingRecord.requestedByDeviceId = "device-owner";
+      },
     );
-    record.requestedByDeviceId = "device-owner";
-    await manager.register(record, 60_000);
-    const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const visibleConnIds = new Set(["conn-owner-approval"]);

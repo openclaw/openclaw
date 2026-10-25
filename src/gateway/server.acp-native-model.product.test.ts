@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -10,11 +11,7 @@ import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -56,7 +53,7 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
   let rejectNativeRequest = false;
   const providerServer = createServer((request, response) => {
     void (async () => {
-      const body = JSON.parse(await readProviderBody(request)) as (typeof requests)[number];
+      const body = JSON.parse(await readRequestText(request)) as (typeof requests)[number];
       requests.push(body);
       if (rejectNativeRequest) {
         response.writeHead(400, { "content-type": "application/json" }).end(

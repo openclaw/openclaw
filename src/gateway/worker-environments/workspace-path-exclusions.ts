@@ -28,7 +28,7 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",
 ] as const;
-const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock"] as const;
+const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"] as const;
 
 const DERIVED_WORKSPACE_FILE_NAMES = [".DS_Store"] as const;
 const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"] as const;

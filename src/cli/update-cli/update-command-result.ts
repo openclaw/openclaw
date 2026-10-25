@@ -21,6 +21,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
+import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
@@ -289,6 +290,7 @@ export function createUpdateCommandFailureResult(
           ? "managed-service-preflight"
           : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
+  const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
     name:
       preMutationFailure || pkgOwnershipFailure || admissionFailure ? reason : (phase ?? "update"),
@@ -303,7 +305,9 @@ export function createUpdateCommandFailureResult(
     failureFacts:
       preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
         ? cause.failureFacts
-        : [createUpdateErrorFact(phase ?? "update", failure.cause)],
+        : doctorFailureFacts.length
+          ? doctorFailureFacts
+          : [createUpdateErrorFact(phase ?? "update", failure.cause)],
   };
   if (refusal.kind === "data-at-risk") {
     result.recovery = {

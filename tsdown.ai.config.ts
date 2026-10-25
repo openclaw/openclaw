@@ -35,6 +35,7 @@ const config = {
     "provider-types": "packages/ai/src/provider-types.ts",
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
+    "internal/google": "packages/ai/src/internal/google.ts",
     "internal/google-model-family": "packages/ai/src/internal/google-model-family.ts",
     "internal/model-request-body": "packages/ai/src/transports/model-request-body.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
@@ -42,6 +43,9 @@ const config = {
     "internal/openai-responses-payload-policy":
       "packages/ai/src/internal/openai-responses-payload-policy.ts",
     "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
+    // Keep namespace helpers out of the deferred parser's entry chunk.
+    "internal/reasoning-tag-text-partitioner":
+      "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
@@ -49,6 +53,7 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
+
   copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
   platform: "node",
   target: "node22",

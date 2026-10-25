@@ -16,7 +16,6 @@ import { createControlUiPublicSessionRequestGate } from "./control-ui-public-ses
 import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
 import type { PublicSessionCardRenderer } from "./control-ui-public-session-card.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
-import { PUBLIC_SESSION_CONTENT_SECURITY_POLICY } from "./control-ui-public-session-render.js";
 import { controlUiSessionEntryPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -119,6 +118,8 @@ export function createControlUiSessionRoutes(options: {
       }
       if (isControlUiPublicSessionPath(pathname, basePath)) {
         const requestGate = publicGate();
+        const { PUBLIC_SESSION_CONTENT_SECURITY_POLICY, servePublicSessionRepresentation } =
+          await import("./control-ui-public-session.runtime.js");
         const card = {
           pullRequests: options.getGatewayRequestContext?.()?.controlUiSessionPullRequests,
           render: async (cardInput: Parameters<PublicSessionCardRenderer["render"]>[0]) => {
@@ -233,8 +234,6 @@ export function createControlUiSessionRoutes(options: {
               token: publicShare.token,
             });
           }
-          const { servePublicSessionRepresentation } =
-            await import("./control-ui-public-session-response.js");
           const latestUrl = buildControlUiPublicSessionSharePath({
             basePath,
             token: publicShare.token,
@@ -266,7 +265,7 @@ export function createControlUiSessionRoutes(options: {
         }
       }
       if (pathname !== controlUiSessionEntryPath(basePath)) {
-        return (await import("./control-ui-public-chat.js")).serveControlUiPublicChat({
+        return (await import("./control-ui-public-session.runtime.js")).serveControlUiPublicChat({
           ...params,
           basePath,
           projection,

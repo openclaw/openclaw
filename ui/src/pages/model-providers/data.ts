@@ -174,22 +174,6 @@ function addLogoutTarget(
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
-function collectProviderUsage(
-  summary: UsageSummary | null,
-): Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }> {
-  const result = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();
-  for (const snapshot of summary?.providers ?? []) {
-    const id = canonicalModelAuthProviderId(snapshot.provider);
-    if (id) {
-      result.set(id, {
-        displayName: result.get(id)?.displayName ?? snapshot.displayName,
-        snapshot,
-      });
-    }
-  }
-  return result;
-}
-
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
  * has model-provider auth, catalog models (the default models.list view only contains
@@ -370,7 +354,17 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
-  for (const [id, { displayName, snapshot }] of collectProviderUsage(input.providerUsage)) {
+  const providerUsage = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();
+  for (const snapshot of input.providerUsage?.providers ?? []) {
+    const id = canonicalModelAuthProviderId(snapshot.provider);
+    if (id) {
+      providerUsage.set(id, {
+        displayName: providerUsage.get(id)?.displayName ?? snapshot.displayName,
+        snapshot,
+      });
+    }
+  }
+  for (const [id, { displayName, snapshot }] of providerUsage) {
     // Live usage includes cost history and errors omitted by auth-status embeds.
     ensureDraft(drafts, id, displayName || providerDisplayLabel(id)).card.usage = snapshot;
   }
@@ -436,32 +430,13 @@ export function resolveDefaultModelPresentation(
     };
   }
   const defaults = draft ?? configured;
-  return {
-    defaults,
-    configuredModels: buildSelectableDefaultModels(
-      catalog.hasSnapshot ? catalog.models : null,
-      defaults,
-    ),
-  };
-}
-
-export function modelCatalogRef(model: ModelPickerEntry): string {
-  if (model.selectionRef !== undefined) {
-    return model.selectionRef;
-  }
-  return model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
-}
-
-function buildSelectableDefaultModels(
-  models: ModelCatalogEntry[] | null,
-  selection: DefaultModelSelection,
-): ModelPickerEntry[] {
+  const models = catalog.hasSnapshot ? catalog.models : null;
   const selected = new Set<string>(
     [
-      selection.primary,
-      ...selection.fallbacks,
-      modelSettingPrimary(selection.utilityModel),
-      ...modelSettingFallbacks(selection.utilityModel),
+      defaults.primary,
+      ...defaults.fallbacks,
+      modelSettingPrimary(defaults.utilityModel),
+      ...modelSettingFallbacks(defaults.utilityModel),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const selectable: ModelPickerEntry[] = (models ?? []).filter(
@@ -516,7 +491,17 @@ function buildSelectableDefaultModels(
       ...availability,
     });
   }
-  return selectable;
+  return {
+    defaults,
+    configuredModels: selectable,
+  };
+}
+
+export function modelCatalogRef(model: ModelPickerEntry): string {
+  if (model.selectionRef !== undefined) {
+    return model.selectionRef;
+  }
+  return model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
 }
 
 export function readModelProviderConfig(config: Record<string, unknown> | null): {

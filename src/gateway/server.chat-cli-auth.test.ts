@@ -13,7 +13,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
-import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
+import {
+  createClaudeAuthFixture,
+  createClaudeCliGatewayConfig,
+  createClaudeCliGatewayEnv,
+} from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
@@ -125,28 +129,7 @@ async function prepareCliAuthFixture(
   // Each case changes startup auth configuration and owns an empty native-login root.
   const state = await createOpenClawTestState({
     label: "chat-cli-auth",
-    env: {
-      PATH: undefined,
-      OPENCLAW_PATH_BOOTSTRAPPED: "1",
-      CLAUDE_CONFIG_DIR: undefined,
-      ANTHROPIC_API_KEY: undefined,
-      ANTHROPIC_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
-      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: createClaudeCliGatewayEnv(),
   });
   let gateway: CliAuthGateway | undefined;
   try {
@@ -207,23 +190,7 @@ async function prepareCliAuthFixture(
     const token = "chat-cli-auth-test";
     const cfg = {
       ...(order ? { auth: { order } } : {}),
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          skipBootstrap: true,
-          utilityModel: "",
-          model: { primary: modelRef },
-          models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-      plugins: {
-        enabled: true,
-        allow: ["anthropic"],
-        entries: { anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } } },
-        slots: { memory: "none" },
-      },
-      tools: { profile: "minimal" },
-      gateway: { auth: { mode: "token", token } },
+      ...createClaudeCliGatewayConfig(workspaceDir, modelRef, token),
     } satisfies OpenClawConfig;
     signal.throwIfAborted();
     expect(resolveExecutablePath("claude")).toBe(executable);

@@ -252,10 +252,6 @@ function recordModelStarted(
       sessionKey: event.sessionKey,
       sequence: event.seq,
       requestTimeoutMs: provenance.requestTimeoutMs,
-      deadlineAtMs:
-        provenance.requestTimeoutMs === undefined
-          ? undefined
-          : (event.ts ?? Date.now()) + provenance.requestTimeoutMs,
     });
     activity.activeCoreModelCalls.set(provenance.generation, calls);
     touchSessionActivity(activity, "model_call:started");
@@ -629,6 +625,7 @@ export function startDiagnosticRunActivityTracking(): void {
       }
     },
     {
+      includePromptStats: false,
       include: [
         "tool.execution.started",
         "tool.execution.completed",

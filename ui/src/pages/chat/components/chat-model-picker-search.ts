@@ -1,6 +1,7 @@
 import {
   createContext,
   createMemo,
+  createProjection,
   createSignal,
   createStore,
   createUniqueId,
@@ -186,19 +187,25 @@ export function createChatModelSearch() {
       );
       const providerOpen = (provider: string) =>
         disclosure.groups[provider]?.open ?? disclosure.active === provider;
-      const matches = createMemo(() => {
-        const term = query().trim().toLocaleLowerCase();
-        return read()
-          .rows.flatMap((row, index) => {
-            const visible = row.provider
-              ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
-              : row.visible !== false;
-            const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
-            return score === null ? [] : [{ row, score, index }];
-          })
-          .toSorted((a, b) => a.score - b.score || a.index - b.index)
-          .map(({ row }, rank): SearchMatch => ({ row, rank }));
-      });
+      const matches = createMemo(
+        () => {
+          const term = query().trim().toLocaleLowerCase();
+          return read()
+            .rows.flatMap((row, index) => {
+              const visible = row.provider
+                ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
+                : row.visible !== false;
+              const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
+              return score === null ? [] : [{ row, score, index }];
+            })
+            .toSorted((a, b) => a.score - b.score || a.index - b.index)
+            .map(({ row }, rank): SearchMatch => ({ row, rank }));
+        },
+        {
+          equals: (a, b) =>
+            a.length === b.length && a.every((match, index) => match.row === b[index]!.row),
+        },
+      );
       const selectable = createMemo(() => matches().filter(({ row }) => !row.disabled));
       // Keep a surviving choice on refresh; a removed choice adopts the current fallback.
       const [highlighted, highlight] = createSignal<string | undefined>((previous) => {
@@ -209,30 +216,30 @@ export function createChatModelSearch() {
           rows[0]?.row.key
         );
       });
-      const byKey = createMemo(() => new Map(matches().map((match) => [match.row.key, match])));
-      const shortcuts = createMemo(
-        () =>
-          new Map(
-            selectable()
-              .slice(0, 9)
-              .flatMap(({ row }, index) =>
-                row.hasShortcut ? [[row.key, index + 1] as const] : [],
-              ),
-          ),
-      );
-      const positions = createMemo(() => {
+      const rowStates = createProjection<Record<string, ReturnType<SearchView["row"]>>>(() => {
+        const states: Record<string, ReturnType<SearchView["row"]>> = {};
         const lists = new Map<string | undefined, string[]>();
-        for (const { row } of matches()) {
+        let selectableIndex = 0;
+        for (const { row, rank } of matches()) {
+          const shortcut = !row.disabled ? ++selectableIndex : undefined;
+          states[row.key] = {
+            hidden: false,
+            rank,
+            shortcut: row.hasShortcut && shortcut && shortcut <= 9 ? shortcut : undefined,
+          };
           const list = lists.get(row.list) ?? [];
           list.push(row.key);
           lists.set(row.list, list);
         }
-        return new Map(
-          [...lists.values()].flatMap((keys) =>
-            keys.map((key, index) => [key, { position: index + 1, size: keys.length }] as const),
-          ),
-        );
+        for (const keys of lists.values()) {
+          keys.forEach((key, index) => {
+            states[key]!.position = index + 1;
+            states[key]!.size = keys.length;
+          });
+        }
+        return states;
       });
+      const filtering = createMemo(() => Boolean(query().trim()));
       const view = {
         matches,
         selectable,
@@ -241,17 +248,11 @@ export function createChatModelSearch() {
         highlight,
         providerOpen,
         moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,
-        filtering: () => Boolean(query().trim()),
+        filtering,
         empty: () => Boolean(query().trim()) && matches().length === 0,
         controls: () => read().lists.map(listId).join(" "),
         row(key: string) {
-          const match = byKey().get(key);
-          return {
-            hidden: !match,
-            rank: match?.rank,
-            shortcut: shortcuts().get(key),
-            ...positions().get(key),
-          };
+          return rowStates[key] ?? { hidden: true, rank: undefined, shortcut: undefined };
         },
         toggleProvider(provider: string) {
           const next = !providerOpen(provider);

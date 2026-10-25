@@ -15,6 +15,7 @@ import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -239,14 +240,11 @@ function inspectionResult(
   value: unknown,
   error?: string,
 ): Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> {
-  return {
+  return createCommandResult({
     stdout: error ? "" : JSON.stringify(value),
     stderr: error ?? "",
     code: error ? 1 : 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ legacy, expires }))))(

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -13,6 +12,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -27,9 +27,8 @@ import {
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import {
-  assertLiveSessionPendingInputLifetimeCurrent,
+  collectForeignLiveSessionPendingInputEntries,
   copySessionPendingInputWorkerFacts,
-  prepareForeignLiveSessionPendingInputEntries,
   publishConsumedSessionPendingInputSources,
   publishSessionPendingInputWorkerReceipt,
 } from "./session-pending-input-live-owner.js";
@@ -57,15 +56,11 @@ export type {
   SessionPendingInputAppend,
 } from "./session-pending-input.types.js";
 
-const workerCustody = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPendingInputWorkerCustody"),
-  () =>
-    new AsyncLocalStorage<{
-      owner: SessionPendingInputOwner;
-      assertCurrent(): void;
-      consumed: Set<string>;
-    }>(),
-);
+const workerCustody = new AsyncContext<{
+  owner: SessionPendingInputOwner;
+  assertCurrent(): void;
+  consumed: Set<string>;
+}>(Symbol.for("openclaw.sessionPendingInputWorkerCustody"));
 
 export function captureSessionPendingInputWorkerCustody() {
   const owner = owners.current.getStore();
@@ -136,11 +131,13 @@ export function readSessionPendingInputWorkerReceipt(
 
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
   live: new Map<string, SessionPendingInputOwner>(),
-  current: new AsyncLocalStorage<SessionPendingInputOwner>(),
-  relocation: new AsyncLocalStorage<{
+  current: new AsyncContext<SessionPendingInputOwner>(
+    Symbol.for("openclaw.sessionPendingInputOwners.current"),
+  ),
+  relocation: new AsyncContext<{
     owner: SessionPendingInputOwner;
     sourceInputId: string;
-  }>(),
+  }>(Symbol.for("openclaw.sessionPendingInputOwners.relocation")),
   transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 
@@ -174,6 +171,12 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+  // Timers can retain this owner through their async frame after settlement.
+  // Keep replay facts, but release the admission and staging closures.
+  owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.finish = () => {};
+  owner.authority = undefined;
+  owner.promotedOwner = undefined;
 }
 
 export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
@@ -222,21 +225,26 @@ function assertPendingInputOwnerCurrent(
 }
 
 export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingInputOwner): void {
-  assertLiveSessionPendingInputLifetimeCurrent(owner, assertPendingInputOwnerActive);
+  if (owner.sources) {
+    for (const source of owner.sources) {
+      assertSessionPendingInputLifetimeCurrent(source);
+    }
+    return;
+  }
+  assertPendingInputOwnerActive(owner);
+  (owner.authority?.assertLifetimeCurrent ?? owner.assertCurrent)();
 }
 
-export function getForeignLiveSessionPendingInputEntriesInScope(
-  scope: ResolvedTranscriptScope,
-  signal?: AbortSignal,
-): Promise<ReadonlyMap<string, string>> {
-  return prepareForeignLiveSessionPendingInputEntries({
-    scope,
-    liveOwners: () => owners.live.values(),
-    currentOwner: owners.current.getStore(),
-    assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
-    assertCurrent: assertPendingInputOwnerCurrent,
-    signal,
-  });
+/** Capture the calling owner before physical database discovery yields. */
+export function captureForeignLiveSessionPendingInputReader() {
+  const currentOwner = owners.current.getStore();
+  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
+    collectForeignLiveSessionPendingInputEntries({
+      scope,
+      liveOwners: owners.live.values(),
+      currentOwner,
+      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
+    });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {

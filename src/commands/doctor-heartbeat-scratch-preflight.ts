@@ -12,14 +12,20 @@ import {
   selectDoctorHeartbeatMonitor,
 } from "./doctor-heartbeat-monitors.js";
 import { collectHeartbeatScratchMigrationFindings } from "./doctor-heartbeat-scratch-migration.js";
+import { collectHeartbeatTaskMigrationFindings } from "./doctor-heartbeat-task-migration.js";
 
-/** Validate source safety and monitor ownership without entering repair. */
+/** Validate source safety, task conversion, and monitor ownership without entering repair. */
 export async function assertHeartbeatScratchMigrationUnambiguous(
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
-  const findings = await collectHeartbeatScratchMigrationFindings(cfg, env);
+  const findings = (
+    await Promise.all([
+      collectHeartbeatScratchMigrationFindings(cfg, env),
+      collectHeartbeatTaskMigrationFindings(cfg, env),
+    ])
+  ).flat();
   if (findings.length === 0) {
     return;
   }

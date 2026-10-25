@@ -13,33 +13,21 @@ vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOrigin
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
   plugins: [
-    {
+    fixture.createPluginManifestRecordFixture({
       id: "firecrawl",
-      channels: [],
-      cliBackends: [],
-      hooks: [],
-      manifestPath: "/virtual/firecrawl/openclaw.plugin.json",
-      origin: "bundled",
-      providers: [],
       rootDir: "/virtual/firecrawl",
-      skills: [],
       source: "/virtual/firecrawl/index.ts",
+      manifestPath: "/virtual/firecrawl/openclaw.plugin.json",
       contracts: {
         tools: ["firecrawl_search", "firecrawl_scrape"],
       },
-    },
-    {
+    }),
+    fixture.createPluginManifestRecordFixture({
       id: "lobster",
-      channels: [],
-      cliBackends: [],
-      hooks: [],
-      manifestPath: "/virtual/lobster/openclaw.plugin.json",
-      origin: "bundled",
-      providers: [],
       rootDir: "/virtual/lobster",
-      skills: [],
       source: "/virtual/lobster/index.ts",
-    },
+      manifestPath: "/virtual/lobster/openclaw.plugin.json",
+    }),
   ],
 };
 

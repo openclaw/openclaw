@@ -9,10 +9,10 @@ process.send!("ready");
 await start;
 
 mock.method(crypto, "randomUUID", () => candidateNodeId, { times: 1 });
+mock.method(Date, "now", () => Number(nowMs), { times: 1 });
 const config = await configureNodeHost({
   fallbackDisplayName: "node",
   gateway: {},
-  nowMs: Number(nowMs),
 });
 await new Promise<void>((resolve, reject) => {
   process.send!(config, (error) => (error ? reject(error) : resolve()));

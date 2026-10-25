@@ -1,13 +1,11 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import {
-  inspectTlsCertificateError,
-  matchesContextOverflowMessage,
-} from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "../../../packages/ai/src/utils/overflow.js";
+import { inspectTlsCertificateError } from "../../../packages/ai/src/utils/tls-certificate-errors.js";
 import {
   extractLeadingHttpStatus,
   isGenericProviderInternalError,

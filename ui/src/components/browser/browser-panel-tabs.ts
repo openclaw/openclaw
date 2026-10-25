@@ -6,14 +6,10 @@ import type { BrowserPanelTab } from "./browser-client.ts";
 
 registerBrowserEnglish();
 
-function tabLabel(tab: BrowserPanelTab): string {
-  return tab.title.trim() || (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab");
-}
-
 export function browserPanelHostedTabs(tabs: BrowserPanelTab[], ownerDocument: Document) {
   return tabs.map((tab) => ({
     id: tab.id,
-    label: tabLabel(tab),
+    label: tab.title.trim() || (URL.parse(tab.url)?.host ?? tab.url) || t("browser.untitledTab"),
     url: tab.url,
     favicon: tab.favicon,
     icon: createIconElement(tab.kind === "native" ? "monitor" : "globe", ownerDocument),

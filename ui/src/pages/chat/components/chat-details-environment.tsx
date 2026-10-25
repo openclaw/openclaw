@@ -1,28 +1,30 @@
 import type { JSX } from "@solidjs/web";
-import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
+import { Show, onSettled, createMemo, createSignal, lazy, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
-import { ChatBranchActions } from "./chat-branch-actions.tsx";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
-import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
 import "./chat-details-environment-desktop.css";
+import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
 import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
-type Props = { details: ChatDetailsProps; presented: boolean };
+const ChatBranchActions = lazy(() => import("./chat-branch-actions.tsx"), {
+  export: "ChatBranchActions",
+});
 
 export function EnvironmentAction(props: {
   presented: boolean;
@@ -109,7 +111,15 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const published = () => props.work?.publication?.result?.status === "published";
   const work = () => {
     const candidate = props.work;
-    if (!candidate || published()) {
+    // The Gateway omits branch facts when this checkout has a live PR. Keep
+    // uncertain attempts recoverable; a completed failure is not another publish offer.
+    if (
+      !candidate ||
+      published() ||
+      (!candidate.branch &&
+        !candidate.publication?.locked &&
+        candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
+    ) {
       return undefined;
     }
     const publication = candidate.publication;
@@ -121,18 +131,11 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   };
   const branchName = () => workspace()?.branch ?? work()?.branch?.branch;
   const diff = () => {
-    const result = published() ? undefined : (work()?.branch ?? changes());
+    const result = work()?.branch ?? changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(
-      machineMenu() ||
-      host() ||
-      branchName() ||
-      work() ||
-      session()?.worktree ||
-      (!published() && changes()),
-    ),
+    Boolean(machineMenu() || host() || branchName() || work() || session()?.worktree || changes()),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -263,14 +266,16 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                       </Show>
                       <Show when={work()}>
                         {(value) => (
-                          <ChatBranchActions
-                            branch={value().branch}
-                            branchName={branchName() ?? t("chat.pullRequests.publishPr")}
-                            status={value().status}
-                            publication={value().publication}
-                            presented={props.presented && expanded()}
-                            onDismiss={value().onDismissBranch}
-                          />
+                          <ChatLazyBoundary>
+                            <ChatBranchActions
+                              branch={value().branch}
+                              branchName={branchName() ?? t("chat.pullRequests.publishPr")}
+                              status={value().status}
+                              publication={value().publication}
+                              presented={props.presented && expanded()}
+                              onDismiss={value().onDismissBranch}
+                            />
+                          </ChatLazyBoundary>
                         )}
                       </Show>
                     </div>
@@ -283,11 +288,13 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                   <span>{t("chat.sessionDetails.worktree")}</span>
                 </div>
               </Show>
-              <Show when={!published() && !branchName() && !work() && changes()}>
+              <Show when={!branchName() && !work() && changes()}>
                 <div class="chat-details__row chat-environment__row">
-                  <Show
-                    when={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
-                    fallback={
+                  <EnvironmentAction
+                    presented={props.presented}
+                    onOpen={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
+                  >
+                    {() => (
                       <>
                         <Icon name="diff" />
                         <span>{t("chat.sessionDetails.changes")}</span>
@@ -295,25 +302,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                           {(result) => <EnvironmentChangeCounts result={result()} />}
                         </Show>
                       </>
-                    }
-                  >
-                    <button
-                      class="chat-environment__action"
-                      type="button"
-                      onClick={() => {
-                        if (props.presented) {
-                          (props.onOpenUncommitted ?? props.work?.onOpenSessionDiff)?.();
-                        }
-                      }}
-                    >
-                      <Icon name="diff" />
-                      <span>{t("chat.sessionDetails.changes")}</span>
-                      <Show when={changes()}>
-                        {(result) => <EnvironmentChangeCounts result={result()} />}
-                      </Show>
-                      <Icon name="chevronRight" />
-                    </button>
-                  </Show>
+                    )}
+                  </EnvironmentAction>
                 </div>
               </Show>
             </ChatDetailsDesktopSection>
@@ -327,27 +317,4 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       }}
     </Show>,
   ];
-}
-
-export function ChatDetailsContext(props: Props) {
-  const context = createMemo(() => getContextNoticeViewModel(props.details.selectedSession));
-  const [expanded, setExpanded] = createSignal(false);
-  return (
-    <Show when={context()}>
-      <details
-        class="chat-details__group chat-details__context"
-        onToggle={(event) => setExpanded(event.currentTarget.open)}
-      >
-        <summary class="chat-details__caption">
-          {t("chat.sessionDetails.context")}
-          <ChatDetailsContextSummary details={props.details} />
-          <Icon name="chevronDown" />
-        </summary>
-        <ChatDetailsContextContent
-          details={props.details}
-          presented={props.presented && expanded()}
-        />
-      </details>
-    </Show>
-  );
 }

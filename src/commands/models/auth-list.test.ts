@@ -118,6 +118,26 @@ describe("modelsAuthListCommand", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("escapes profile labels, model blocks and store paths only in terminal output", async () => {
+    const profileId = "openai:café\x1b[31m\nforged\tprofile\r\x00\x85";
+    const model = "café\x1b[2J\nforged-model";
+    setOAuthProfile(
+      profileId,
+      "openai",
+      subscriptionBlock(1_900_000_100_000, "wham", model, "model"),
+    );
+    mocks.resolveAuthStatePathForDisplay.mockReturnValue("/tmp/café\x1b[31m\nstore.sqlite");
+    const { text, json } = await listBoth();
+
+    expect(text[1]).toBe("Auth state store: /tmp/café\\nstore.sqlite");
+    expect(text.at(-1)).toContain("- openai:café\\nforged\\tprofile\\r [openai/oauth;");
+    expect(text.at(-1)).toContain("for model café\\nforged-model until");
+    expect(text.join("")).not.toMatch(/\p{Cc}/u);
+    expectProfile(json, { id: profileId, label: profileId, blockedModel: model });
+    expect(json).toMatchObject({ authStatePath: "/tmp/café\x1b[31m\nstore.sqlite" });
+    expect(mocks.ensureAuthProfileStore().profiles).toHaveProperty(profileId);
+  });
+
   it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
     setOAuthProfile("anthropic:claude-cli", "claude-cli", {
       cooldownUntil: 1_900_000_100_000,

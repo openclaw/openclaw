@@ -47,6 +47,7 @@ import {
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 function modelRef(model: string) {
   return { provider: "fixture", model };
@@ -132,24 +133,8 @@ function roleFixture() {
 
 function identifiedClient(profileId: string): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(profileId),
   };
 }
 

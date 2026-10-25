@@ -11,6 +11,7 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
@@ -55,6 +56,7 @@ type DiagnosticSupportExportOptions = {
   stabilityBundle?: string | false;
   readStatusSnapshot?: SupportSnapshotReader;
   readHealthSnapshot?: SupportSnapshotReader;
+  readGatewayCapabilities?: SupportSnapshotReader;
 };
 
 type ConfigShape = {
@@ -125,20 +127,6 @@ function safeScalar(value: unknown): unknown {
     return redacted === value && /^[A-Za-z0-9_.:-]{1,120}$/u.test(value) ? value : "<redacted>";
   }
   return undefined;
-}
-
-function resolveBonjourEnvOverride(
-  env: NodeJS.ProcessEnv,
-): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
-  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
-  if (!raw) {
-    return "unset";
-  }
-  const disabled = parseBooleanValue(raw);
-  if (disabled === true) {
-    return "force-disabled";
-  }
-  return disabled === false ? "force-enabled" : "unrecognized";
 }
 
 function sortedConfigEntryKeys(value: unknown): string[] {
@@ -219,7 +207,15 @@ function readConfigExport(configPath: string, options: SupportRedactionContext):
       };
     }
 
-    const bonjourEnvOverride = resolveBonjourEnvOverride(env);
+    const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
+    const disabled = raw ? parseBooleanValue(raw) : undefined;
+    const bonjourEnvOverride = !raw
+      ? "unset"
+      : disabled === true
+        ? "force-disabled"
+        : disabled === false
+          ? "force-enabled"
+          : "unrecognized";
     if (mdns || bonjourEnvOverride !== "unset") {
       shape.discovery = {
         mdnsMode: safeScalar(mdns?.mode),
@@ -428,62 +424,30 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
   return summary;
 }
 
-function describeStabilityForDiagnostics(
-  stability: ReadDiagnosticStabilityBundleResult,
-  redaction: SupportRedactionContext,
-) {
-  if (stability.status === "found") {
-    return {
-      status: "found" as const,
-      path: redactPathForSupport(stability.path, redaction),
-      mtimeMs: stability.mtimeMs,
-      eventCount: stability.bundle.snapshot.count,
-      reason: stability.bundle.reason,
-      generatedAt: stability.bundle.generatedAt,
-    };
-  }
-
-  if (stability.status === "missing") {
-    return {
-      status: "missing" as const,
-      dir: redactPathForSupport(stability.dir, redaction),
-    };
-  }
-
-  return {
-    status: "failed" as const,
-    path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
-    error: redactErrorForSupport(stability.error, redaction),
-  };
-}
-
-function resolveOutputPath(options: { outputPath?: string; stateDir: string; now: Date }): string {
-  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
-  const raw = options.outputPath?.trim();
-  if (!raw) {
-    return path.join(options.stateDir, "logs", "support", filename);
-  }
-  const resolved =
-    path.isAbsolute(raw) || raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
-  try {
-    if (fs.statSync(resolved).isDirectory()) {
-      return path.join(resolved, filename);
-    }
-  } catch {
-    // Non-existing output paths are treated as files.
-  }
-  return resolved;
-}
-
 export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
   const env = process.env;
   const stateDir = resolveStateDir(env);
   const now = new Date();
-  const outputPath = resolveOutputPath({
-    outputPath: options.outputPath,
-    stateDir,
-    now,
-  });
+  const configuredOutputPath = options.outputPath;
+  const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
+  const raw = configuredOutputPath?.trim();
+  let outputPath: string;
+  if (!raw) {
+    outputPath = path.join(stateDir, "logs", "support", filename);
+  } else {
+    const resolved =
+      path.isAbsolute(raw) || raw.startsWith("~")
+        ? resolveHomeRelativePath(raw)
+        : path.resolve(raw);
+    outputPath = resolved;
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        outputPath = path.join(resolved, filename);
+      }
+    } catch {
+      // Non-existing output paths are treated as files.
+    }
+  }
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
@@ -499,20 +463,33 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     logTail = failedLogTail(error, redaction);
   }
   const config = readConfigExport(configPath, redaction);
-  const [statusSnapshot, healthSnapshot] = await Promise.all([
-    collectSupportSnapshot({
-      path: "status/gateway-status.json",
-      reader: options.readStatusSnapshot,
-      generatedAt,
-      redaction,
-    }),
-    collectSupportSnapshot({
-      path: "health/gateway-health.json",
-      reader: options.readHealthSnapshot,
-      generatedAt,
-      redaction,
-    }),
-  ]);
+  const [statusSnapshot, healthSnapshot, runtimeCapabilities, gatewayCapabilities] =
+    await Promise.all([
+      collectSupportSnapshot({
+        path: "status/gateway-status.json",
+        reader: options.readStatusSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "health/gateway-health.json",
+        reader: options.readHealthSnapshot,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/capabilities.json",
+        reader: collectRuntimeCapabilities,
+        generatedAt,
+        redaction,
+      }),
+      collectSupportSnapshot({
+        path: "runtime/gateway-capabilities.json",
+        reader: options.readGatewayCapabilities,
+        generatedAt,
+        redaction,
+      }),
+    ]);
   const diagnostics = {
     generatedAt,
     openclawVersion: VERSION,
@@ -532,10 +509,31 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
       truncated: logTail.truncated,
       reset: logTail.reset,
     },
-    stability: describeStabilityForDiagnostics(stability, redaction),
+    stability:
+      stability.status === "found"
+        ? {
+            status: "found" as const,
+            path: redactPathForSupport(stability.path, redaction),
+            mtimeMs: stability.mtimeMs,
+            eventCount: stability.bundle.snapshot.count,
+            reason: stability.bundle.reason,
+            generatedAt: stability.bundle.generatedAt,
+          }
+        : stability.status === "missing"
+          ? {
+              status: "missing" as const,
+              dir: redactPathForSupport(stability.dir, redaction),
+            }
+          : {
+              status: "failed" as const,
+              path: stability.path ? redactPathForSupport(stability.path, redaction) : undefined,
+              error: redactErrorForSupport(stability.error, redaction),
+            },
     bonjour: summarizeBonjourLogs(logTail),
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
+    runtimeCapabilities: runtimeCapabilities.summary,
+    gatewayCapabilities: gatewayCapabilities.summary,
   };
   const files: DiagnosticSupportBundleFile[] = [
     jsonSupportBundleFile("diagnostics.json", diagnostics),
@@ -546,7 +544,12 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
       logTail.lines.map((line) => JSON.stringify(line)),
     ),
   ];
-  for (const snapshot of [statusSnapshot, healthSnapshot]) {
+  for (const snapshot of [
+    statusSnapshot,
+    healthSnapshot,
+    runtimeCapabilities,
+    gatewayCapabilities,
+  ]) {
     if (snapshot.file) {
       files.push(snapshot.file);
     }
@@ -593,6 +596,8 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     `- ${configLine}`,
     `- ${supportSnapshotLine("gateway status", statusSnapshot.summary)}`,
     `- ${supportSnapshotLine("gateway health", healthSnapshot.summary)}`,
+    `- ${supportSnapshotLine("exporting process capabilities", runtimeCapabilities.summary)}`,
+    `- ${supportSnapshotLine("gateway capabilities", gatewayCapabilities.summary)}`,
     "",
     "## Maintainer Quick Read",
     "",
@@ -601,6 +606,8 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
     "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
     "- `health/gateway-health.json`: sanitized Gateway health snapshot",
+    "- `runtime/capabilities.json`: exporting process capabilities and build identity",
+    "- `runtime/gateway-capabilities.json`: serving Gateway capabilities, when reachable",
     "- `logs/openclaw-sanitized.jsonl`: sanitized log summaries and metadata",
     "- `stability/latest.json`: newest payload-free stability bundle, when available",
     "",
@@ -608,7 +615,7 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
     "",
     "- raw chat text, webhook bodies, tool outputs, tokens, cookies, and secrets are not included intentionally",
     "- log records keep operational summaries and safe metadata fields",
-    "- status and health snapshots redact secret fields, payload-like fields, and account/message identifiers",
+    "- status, health, and capability snapshots redact secret fields, payload-like fields, and account/message identifiers",
     "- config output keeps useful settings but redacts secrets, private identifiers, and prompt text",
   ].join("\n");
   files.push(textSupportBundleFile("summary.md", summary));

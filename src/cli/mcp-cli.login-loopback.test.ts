@@ -1,65 +1,17 @@
-import fs from "node:fs/promises";
 import { createServer } from "node:net";
-import os from "node:os";
-import path from "node:path";
-import { Command } from "commander";
+import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { registerMcpCli } from "./mcp-cli.js";
+import {
+  cleanupMcpCliTestState,
+  createMcpProgram,
+  createWorkspace,
+  mcpCliMocks as mocks,
+  resetMcpCliTestState,
+} from "./mcp-cli.test-harness.js";
 
-type CreateSessionMcpRuntime =
-  typeof import("../agents/agent-bundle-mcp-runtime.js").createSessionMcpRuntime;
-
-const mocks = vi.hoisted(() => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-    writeJson: vi.fn(),
-  };
-  return {
-    runtime,
-    completeMcpOAuthAuthorization: vi.fn(),
-    startMcpOAuthAuthorization: vi.fn(),
-    readMcpOAuthCredentialsStatus: vi.fn(),
-    createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
-  };
-});
-
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: mocks.runtime,
-}));
-vi.mock("../mcp/channel-server.js", () => ({ serveOpenClawChannelMcp: vi.fn() }));
-vi.mock("../agents/mcp-oauth.js", () => ({
-  clearMcpOAuthCredentials: vi.fn(),
-  clearMcpOAuthRequesters: vi.fn(),
-  clearMcpOAuthServer: vi.fn(),
-  completeMcpOAuthAuthorization: mocks.completeMcpOAuthAuthorization,
-  countMcpOAuthPrincipals: vi.fn(async () => 0),
-  readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
-  startMcpOAuthAuthorization: mocks.startMcpOAuthAuthorization,
-}));
-vi.mock("../agents/agent-bundle-mcp-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/agent-bundle-mcp-runtime.js")>();
-  return {
-    ...actual,
-    createSessionMcpRuntime: (params: Parameters<CreateSessionMcpRuntime>[0]) =>
-      mocks.createSessionMcpRuntimeOverride?.(params) ?? actual.createSessionMcpRuntime(params),
-  };
-});
-
-const tempDirs: string[] = [];
 let program: Command;
-
-async function createWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-loopback-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function waitForLog(text: string): Promise<void> {
   return new Promise((resolve) => {
@@ -72,7 +24,7 @@ function waitForLog(text: string): Promise<void> {
 }
 
 async function configureServer(): Promise<void> {
-  vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
+  vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace("openclaw-cli-mcp-loopback-"));
   await program.parseAsync(
     [
       "mcp",
@@ -100,20 +52,14 @@ function mockRedirectFlow(redirectUrl: string): void {
 
 describe("mcp login loopback callback", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.runtime.log.mockReset();
-    program = new Command().exitOverride();
-    registerMcpCli(program);
-    mocks.readMcpOAuthCredentialsStatus.mockResolvedValue({
-      state: "unauthenticated",
-    });
+    resetMcpCliTestState();
+    vi.spyOn(mocks.runtime, "log").mockReset();
+    vi.spyOn(mocks.runtime, "writeJson").mockImplementation(() => {});
+    program = createMcpProgram();
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await cleanupMcpCliTestState();
   });
 
   it("binds the final redirect before printing it and exchanges the captured code", async () => {
