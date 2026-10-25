@@ -5,9 +5,6 @@ import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 const clientMocks = vi.hoisted(() => ({
   createMattermostClient: vi.fn(),
-  fetchMattermostChannel: vi.fn(async () => {
-    throw new Error("channel lookup intentionally unavailable in token validation tests");
-  }),
 }));
 
 vi.mock("./client.js", async () => {
@@ -15,7 +12,6 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createMattermostClient: clientMocks.createMattermostClient,
-    fetchMattermostChannel: clientMocks.fetchMattermostChannel,
   };
 });
 
@@ -23,16 +19,8 @@ import {
   MATTERMOST_SLASH_POST_METHOD,
   type MattermostCommandResponse,
   type MattermostRegisteredCommand,
-  type MattermostSlashCommandPayload,
 } from "./slash-commands.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
-
-function createRequest(body: string, method = "POST") {
-  const req = createMockIncomingRequest([body]);
-  req.method = method;
-  req.headers = { "content-type": "application/x-www-form-urlencoded" };
-  return req;
-}
 
 const accountFixture: ResolvedMattermostAccount = {
   accountId: "default",
@@ -61,15 +49,6 @@ function createCurrentCommand(
     ...overrides,
   };
 }
-
-const slashPayload: MattermostSlashCommandPayload = {
-  token: "valid-token",
-  team_id: "t1",
-  channel_id: "c1",
-  user_id: "u1",
-  command: "/oc_status",
-  text: "",
-};
 
 let slashTestSequence = 0;
 let slashTestAccountId = "";
@@ -145,11 +124,16 @@ async function runSlashRequest(params: {
   registeredCommands?: MattermostRegisteredCommand[];
   body: string;
   method?: string;
+  accountId?: string;
+  log?: (message: string) => void;
+  onAuthenticated?: () => void;
 }) {
-  const handler = createHandler(params.registeredCommands ?? []);
-  const req = createRequest(params.body, params.method);
+  const handler = createHandler(params.registeredCommands ?? [], params.accountId, params.log);
+  const req = createMockIncomingRequest([params.body]);
+  req.method = params.method ?? "POST";
+  req.headers = { "content-type": "application/x-www-form-urlencoded" };
   const response = createMockServerResponse();
-  await handler(req, response);
+  await handler(req, response, undefined, params.onAuthenticated);
   return response;
 }
 
@@ -164,28 +148,25 @@ async function expectTokenValidation(
 ) {
   const registeredCommand = params.registeredCommand ?? createRegisteredCommand();
   clientMocks.createMattermostClient.mockReturnValue(client);
-  const handler = createHandler(
-    [registeredCommand],
-    `${slashTestAccountId}:${params.accountId ?? "default"}`,
-    params.log,
+  const authenticated = Symbol("authenticated");
+  const result = await runSlashRequest({
+    registeredCommands: [registeredCommand],
+    accountId: `${slashTestAccountId}:${params.accountId ?? "default"}`,
+    log: params.log,
+    body: `token=${encodeURIComponent(registeredCommand.token)}&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=`,
+    onAuthenticated: () => {
+      throw authenticated;
+    },
+  }).then(
+    (response) => response.statusCode,
+    (error: unknown) => {
+      if (error !== authenticated) {
+        throw error;
+      }
+      return 200;
+    },
   );
-  const req = createRequest(
-    new URLSearchParams(
-      Object.entries({ ...slashPayload, token: registeredCommand.token }),
-    ).toString(),
-  );
-  const response = createMockServerResponse();
-  let authenticated = false;
-  try {
-    await handler(req, response);
-  } catch (error) {
-    if (error instanceof Error && error.message === "Mattermost runtime not initialized") {
-      authenticated = true;
-    } else {
-      throw error;
-    }
-  }
-  expect(authenticated || response.statusCode !== 401).toBe(expected);
+  expect(result).toBe(expected ? 200 : 401);
 }
 
 async function expectValidationLog(client: MattermostClient, expected: boolean, message: string) {
@@ -200,7 +181,6 @@ describe("slash-http", () => {
     slashTestAccountId = `slash-test-${++slashTestSequence}`;
     accountFixture.accountId = slashTestAccountId;
     clientMocks.createMattermostClient.mockReset();
-    clientMocks.fetchMattermostChannel.mockClear();
   });
 
   it("rejects non-POST methods", async () => {
@@ -298,47 +278,40 @@ describe("slash-http", () => {
     }
   });
 
-  it("logs only the lookup status when falling back to the team command list", async () => {
-    const client = createCommandLookupClient({
-      commandLookupError: new Error(
-        "Mattermost API 404 Not Found: private-message token=secret-token https://user:pass@chat.example.com/api?access_token=secret-access&client_secret=secret-client",
-      ),
-      listCommands: [createCurrentCommand()],
-    });
-    await expectValidationLog(
-      client,
+  const privateFailure = (status?: number) =>
+    new Error(
+      `${status ? `Mattermost API ${status}: ` : ""}private-message token=secret-token botToken: secret-bot https://user:pass@chat.example.com/api?access_token=secret-access&client_secret=secret-client`,
+    );
+  it.each([
+    [
+      404,
+      undefined,
       true,
-      "mattermost: slash command lookup by id failed for /oc_status; using team list fallback (status=404)",
-    );
-    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
-  });
-
-  it("retains both failure statuses without upstream error content", async () => {
-    const client = createCommandLookupClient({
-      commandLookupError: new Error(
-        "Mattermost API 404 Not Found: private-message token=secret-token",
-      ),
-      listLookupError: new Error(
-        "Mattermost API 503 Unavailable: private-message botToken: secret-bot https://user:pass@chat.example.com/hooks?token=secret-query",
-      ),
-    });
-    await expectValidationLog(
-      client,
+      "slash command lookup by id failed for /oc_status; using team list fallback (status=404)",
+    ],
+    [
+      404,
+      503,
       false,
-      "mattermost: slash command registration check failed for /oc_status (status=503); command lookup status=404",
-    );
-    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
-  });
-
-  it("omits arbitrary non-provider failure prose", async () => {
-    const client = createCommandLookupClient({
-      commandLookupError: new Error("primary failure"),
-      listLookupError: new Error("private-message 😀 token=secret-token"),
-    });
-    await expectValidationLog(
-      client,
+      "slash command registration check failed for /oc_status (status=503); command lookup status=404",
+    ],
+    [
+      undefined,
+      undefined,
       false,
-      "mattermost: slash command registration check failed for /oc_status (status=unknown); command lookup status=unknown",
-    );
-  });
+      "slash command registration check failed for /oc_status (status=unknown); command lookup status=unknown",
+    ],
+  ] as const)(
+    "redacts fallback failures (%s, %s, accepted=%s)",
+    async (idStatus, listStatus, accepted, message) => {
+      const client = createCommandLookupClient({
+        commandLookupError: privateFailure(idStatus),
+        ...(accepted
+          ? { listCommands: [createCurrentCommand()] }
+          : { listLookupError: privateFailure(listStatus) }),
+      });
+      await expectValidationLog(client, accepted, `mattermost: ${message}`);
+      expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
+    },
+  );
 });

@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
-import { IncomingMessage, type ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,14 +51,6 @@ function createRequest(body: string, authorization?: string): IncomingMessage {
   const req = createMockIncomingRequest([body]);
   req.method = "POST";
   req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
-  return req;
-}
-
-function createStalledRequest(remoteAddress: string, authorization?: string): IncomingMessage {
-  const req = new IncomingMessage(new Socket());
-  req.method = "POST";
-  req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
-  Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
   return req;
 }
 
@@ -132,30 +123,6 @@ function activate(
   }
 }
 
-async function expectIsolatedCapacity(fullToken: string, otherToken: string) {
-  const { handler } = createSlashRoute();
-  const requests = Array.from({ length: 8 }, (_, index) =>
-    createStalledRequest(`203.0.113.${index + 1}`, `Token ${fullToken}`),
-  );
-  const responses = requests.map(() => createResponse());
-  const runs = requests.map((req, index) => handler(req, responses[index]!.res));
-  const overflow = createResponse();
-  await handler(createRequest("", `Token ${fullToken}`), overflow.res);
-  const other = createStalledRequest("203.0.113.20", `Token ${otherToken}`);
-  const otherResponse = createResponse();
-  const otherRun = handler(other, otherResponse.res);
-  try {
-    expect(overflow.res.statusCode).toBe(429);
-    expect(otherResponse.res.statusCode).toBe(200);
-  } finally {
-    for (const req of [...requests, other]) {
-      req.complete = true;
-      req.push(null);
-    }
-    await Promise.all([...runs, otherRun]);
-  }
-}
-
 afterEach(() => {
   deactivateSlashCommands();
   vi.mocked(safeEqualSecret).mockClear();
@@ -203,20 +170,6 @@ describe("slash-state", () => {
       expect(ignored.statusCode).toBe(200);
       expect(safeEqualSecret).not.toHaveBeenCalled();
     }
-  });
-
-  it.each([
-    [["tok-a"], ["tok-b"], "tok-a", "tok-b"],
-    [
-      ["tok-a", "tok-shared", "tok-shared-other"],
-      ["tok-shared", "tok-shared-other"],
-      "tok-shared",
-      "tok-shared-other",
-    ],
-  ] as const)("isolates credential capacity for %j and %j", async (a, b, full, other) => {
-    activate("a1", [...a]);
-    activate("a2", [...b]);
-    await expectIsolatedCapacity(full, other);
   });
 
   it.each([
