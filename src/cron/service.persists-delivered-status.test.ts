@@ -56,6 +56,7 @@ const noFailureNotification = {
 const destination = { channel: "forum", to: "123" };
 const commandOk = { status: "ok", summary: "HOOKSCHED_PAYLOAD" } as const;
 const commandError = { status: "error", error: "command exited with code 1" } as const;
+const failureAlert = { after: 1, channel: "telegram", to: "123" };
 const deliveryRejected = {
   status: "ok",
   delivered: false,
@@ -138,7 +139,7 @@ async function createCommandWebhook(
     ...(options.oneShot
       ? {
           schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
-          failureAlert: { after: 1, channel: "telegram", to: "123" },
+          failureAlert,
         }
       : {}),
     payload: {
@@ -295,7 +296,7 @@ describe("CronService persists delivered status", () => {
       });
       await h.cron.update(h.job.id, {
         state: { consecutiveErrors },
-        failureAlert: { after: 1, channel: "telegram", to: "123" },
+        failureAlert,
       });
       h.clock.setTime(h.job.state.nextRunAtMs!);
       const run = h.run("due");
@@ -465,22 +466,19 @@ describe("CronService persists delivered status", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(expected);
       return expected;
     };
+    const convert = async (payload: CronJob["payload"], expected = payload) => {
+      expect((await cron.update(job.id, { payload })).payload).toEqual(
+        await expectPayload(expected),
+      );
+    };
     const command = { kind: "command" as const, argv: ["echo", "ready"] };
-    const updated = await cron.update(job.id, {
-      payload: { ...command, env: undefined },
-    });
-    expect(updated.payload).toEqual(await expectPayload(command));
-
-    await cron.update(job.id, { payload: { kind: "script", script: "return {};" } });
-    await expectPayload({
-      kind: "script",
-      script: "return {};",
-      timeoutSeconds: 300,
-      toolBudget: 50,
-    });
+    await convert({ ...command, env: undefined }, command);
+    await convert(
+      { kind: "script", script: "return {};" },
+      { kind: "script", script: "return {};", timeoutSeconds: 300, toolBudget: 50 },
+    );
     const agent = { kind: "agentTurn", message: "after" } as const;
-    await cron.update(job.id, { payload: agent });
-    await expectPayload(agent);
+    await convert(agent);
 
     expect(() =>
       normalizeCronJobPatch({
@@ -489,21 +487,16 @@ describe("CronService persists delivered status", () => {
     ).toThrow("command env");
     await expectPayload(agent);
 
-    const configured = { kind: "command", argv: ["echo"], env: { MODE: "test" } } as const;
-    await cron.update(job.id, { payload: { ...configured, argv: [...configured.argv] } });
-    await expectPayload({ ...configured, argv: [...configured.argv] });
+    await convert({ kind: "command", argv: ["echo"], env: { MODE: "test" } });
   });
   it("persists scheduled suppression in state, history, and events and clears it after delivery", async () => {
-    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
-    runIsolatedAgentJob.mockResolvedValue({
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>().mockResolvedValue({
       status: "ok",
       delivered: false,
       deliveryAttempted: true,
       deliverySuppressionReason: "channel_transform",
     });
-    await using h = await createScheduledService({
-      runIsolatedAgentJob,
-    });
+    await using h = await createScheduledService({ runIsolatedAgentJob });
     const { cron, storePath, clock, tick, events, finished } = h;
     const job = await cron.add(agentJob("suppression-readback"));
     const readHistory = () =>

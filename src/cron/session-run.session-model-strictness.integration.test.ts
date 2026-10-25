@@ -135,19 +135,22 @@ afterEach(async () => {
 });
 
 describe("stored session model selections in scheduled session turns", () => {
+  const userSelection = { modelOverrideSource: "user" } as const;
+  const pinned = { provider: "pinned", model: "model-x" };
+  const primary = { provider: "primary", model: "model-a" };
+  function expectPinnedFailure(result: Awaited<ReturnType<typeof runCronSessionTurn>> | undefined) {
+    expect(result?.status).toBe("error");
+    expect(result?.error).toContain("Couldn't sign in to the AI service");
+  }
   async function runWithFailingPinnedModel(params: {
     storedSelection: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
-    /** A system-event job carries text only: no job model, fallbacks or model policy. */
     payloadKind?: "systemEvent";
     storedPin?: { provider: string; model: string } | null;
     defaultPrimary?: string;
     modelAllow?: string[];
-    /**
-     * Queue the scheduled turn behind an active turn, then commit a sessions.patch model change
-     * while the drained turn waits in admission.
-     */
+    // Commit a sessions.patch model change while a queued turn waits in admission.
     retargetWhileAdmitting?: { pin: { provider: string; model: string } | null };
   }) {
     return await withOpenClawTestState({ label: "cron-session-turn-model" }, async (state) => {
@@ -335,45 +338,22 @@ describe("stored session model selections in scheduled session turns", () => {
   }
 
   it.each([
-    {
-      name: "user",
-      target: "session" as const,
-      storedSelection: { modelOverrideSource: "user" as const },
-    },
-    { name: "legacy", target: "session" as const, storedSelection: {} },
-    {
-      name: "user",
-      target: "main" as const,
-      storedSelection: { modelOverrideSource: "user" as const },
-    },
-    { name: "legacy", target: "main" as const, storedSelection: {} },
-  ])(
-    "reports a failed $name selection in a $target turn instead of answering from a configured fallback",
-    async ({ storedSelection, target }) => {
-      const { result, requests } = await runWithFailingPinnedModel({ storedSelection, target });
-
-      expect(requests).toEqual(["pinned/model-x"]);
-      expect(result.status).toBe("error");
-      // Session turns report the pinned model's 401 through the ordinary reply failure text.
-      expect(result.error).toContain("Couldn't sign in to the AI service");
-    },
-  );
-
-  it.each([
-    { name: "user", storedSelection: { modelOverrideSource: "user" as const } },
-    { name: "legacy", storedSelection: {} },
-  ])(
-    "reports a failed $name selection in a main system-event turn instead of answering from a configured fallback",
-    async ({ storedSelection }) => {
+    ["user", "session", undefined, userSelection],
+    ["legacy", "session", undefined, {}],
+    ["user", "main", undefined, userSelection],
+    ["legacy", "main", undefined, {}],
+    ["user", "main", "systemEvent", userSelection],
+    ["legacy", "main", "systemEvent", {}],
+  ] as const)(
+    "reports a failed %s selection in a %s/%s turn without fallback",
+    async (_name, target, payloadKind, storedSelection) => {
       const { result, requests } = await runWithFailingPinnedModel({
         storedSelection,
-        target: "main",
-        payloadKind: "systemEvent",
+        target,
+        payloadKind,
       });
-
       expect(requests).toEqual(["pinned/model-x"]);
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("Couldn't sign in to the AI service");
+      expectPinnedFailure(result);
     },
   );
 
@@ -427,8 +407,8 @@ describe("stored session model selections in scheduled session turns", () => {
     it("falls back once the user pin is cleared", async () => {
       // The answering pin is cleared, so the failing default runs with its configured fallback.
       const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: { modelOverrideSource: "user" },
-        storedPin: { provider: "primary", model: "model-a" },
+        storedSelection: userSelection,
+        storedPin: primary,
         defaultPrimary: "pinned/model-x",
         retargetWhileAdmitting: { pin: null },
       });
@@ -438,30 +418,22 @@ describe("stored session model selections in scheduled session turns", () => {
       expect(result.status, result.error).toBe("ok");
     });
 
-    it("stays strict once the user pins a model", async () => {
-      const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: {},
-        storedPin: null,
-        retargetWhileAdmitting: { pin: { provider: "pinned", model: "model-x" } },
-      });
-
-      expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("Couldn't sign in to the AI service");
-    });
-
-    it("keeps a queued main system-event turn strict once the user pins a model", async () => {
-      const { result, requests } = await runWithFailingPinnedModel({
-        storedSelection: {},
-        storedPin: null,
-        target: "main",
-        payloadKind: "systemEvent",
-        retargetWhileAdmitting: { pin: { provider: "pinned", model: "model-x" } },
-      });
-
-      expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("Couldn't sign in to the AI service");
-    });
+    it.each([
+      { target: "session", payloadKind: undefined },
+      { target: "main", payloadKind: "systemEvent" },
+    ] as const)(
+      "keeps a queued $target/$payloadKind turn strict after pinning",
+      async ({ target, payloadKind }) => {
+        const { result, requests } = await runWithFailingPinnedModel({
+          storedSelection: {},
+          storedPin: null,
+          target,
+          payloadKind,
+          retargetWhileAdmitting: { pin: pinned },
+        });
+        expect(requests).toEqual(["primary/model-a", "pinned/model-x"]);
+        expectPinnedFailure(result);
+      },
+    );
   });
 });

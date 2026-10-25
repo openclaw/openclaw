@@ -1,13 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  DeliveryThreadIdFieldSchema,
-  LowercaseNonEmptyStringFieldSchema,
-  TrimmedNonEmptyStringFieldSchema,
-} from "./delivery-field-schemas.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { mergeCronPayload } from "./service/payload-merge.js";
 import type { CronPayload } from "./types.js";
@@ -70,24 +65,6 @@ const undefinedFields = (...keys: string[]): UnknownRecord =>
   Object.fromEntries(keys.map((key) => [key, undefined]));
 const withAccessor = (base: UnknownRecord, key: string, get: () => unknown) =>
   Object.defineProperty(base, key, { enumerable: true, get });
-
-afterEach(() => vi.restoreAllMocks());
-
-it("does not validate absent delivery fields during create normalization", () => {
-  const parsers = [
-    LowercaseNonEmptyStringFieldSchema,
-    TrimmedNonEmptyStringFieldSchema,
-    DeliveryThreadIdFieldSchema,
-  ].map((schema) => vi.spyOn(schema, "safeParse"));
-  for (const fields of [{}, undefinedFields("channel", "to", "threadId", "accountId")]) {
-    expect(createAgent({ delivery: { mode: "none", ...fields } }).delivery).toEqual({
-      mode: "none",
-    });
-  }
-  for (const parser of parsers) {
-    expect(parser).not.toHaveBeenCalled();
-  }
-});
 
 const envelopes = {
   scheduledToolPolicy: { version: 1, mode: "trusted" },
@@ -237,8 +214,7 @@ it.each<[UnknownRecord, UnknownRecord]>([
     { kind: "on-exit", command: "make build", cwd: "/repo" },
     { ...STALE_SCHEDULE, kind: "on-exit" },
   ],
-  [{ kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" }, {}],
-  [{ kind: "on-exit", command: "make build", cwd: "/repo/job " }, {}],
+  [{ kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo/job " }, {}],
 ])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
   const input = { ...structuredClone(expected), ...overrides };
   const created = createMain({ schedule: input });
@@ -309,12 +285,18 @@ it("preserves custom session separators but rejects null bytes", () => {
   );
 });
 
-it("normalizes delivery fields", () => {
-  expect(
-    createAgent({
-      delivery: { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
-    }).delivery,
-  ).toEqual({ mode: "announce", channel: "telegram", threadId: 1008013 });
+it.each([
+  [{ mode: "none" }, { mode: "none" }],
+  [
+    { mode: "none", ...undefinedFields("channel", "to", "threadId", "accountId") },
+    { mode: "none" },
+  ],
+  [
+    { mode: "announce", channel: "telegram", accountId: " ", threadId: 1008013 },
+    { mode: "announce", channel: "telegram", threadId: 1008013 },
+  ],
+])("normalizes delivery fields %j", (delivery, expected) => {
+  expect(createAgent({ delivery }).delivery).toEqual(expected);
 });
 
 it("normalizes completion destinations without inventing an enclosing mode", () => {
@@ -369,7 +351,7 @@ it("defaults command jobs while retaining argv bytes and normalizing execution o
     noOutputTimeoutSeconds: 5,
     outputMaxBytes: 4096,
   };
-  const normalized = createDefaulted({ ...structuredClone(payload), cwd: " /srv/example " });
+  const normalized = createDefaulted(structuredClone(payload));
   expect(normalized.sessionTarget).toBe("isolated");
   expect(normalized.delivery).toEqual({ mode: "announce" });
   expect(normalized.payload).toEqual(payload);

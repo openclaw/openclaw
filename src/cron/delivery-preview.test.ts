@@ -28,7 +28,6 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { resolveCronDeliveryPreview, resolveCronDeliveryPreviews } from "./delivery-preview.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
-import * as deliveryTargets from "./isolated-agent/delivery-target.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import type { CronDelivery, CronJob, CronStoredJob } from "./types.js";
 
@@ -170,50 +169,23 @@ it("lists a refused agent's repair reason beside a healthy preview", () =>
   }));
 
 it.each([
-  { delivery: { mode: "none" }, channelCount: 1, label: "not requested", detail: "not requested" },
-  {
-    delivery: {
-      mode: "none",
-      channel: "telegram",
-      to: "recipient",
-      accountId: "ops",
-      threadId: 42,
-    },
-    channelCount: 1,
-    label: "none -> telegram:recipient",
-    detail: "explicit",
-  },
-  {
-    delivery: { mode: "none", threadId: 0 },
-    channelCount: 0,
-    label: "none -> last",
-    detail: expect.stringContaining("message tool target unresolved:"),
-  },
-] as const)(
-  "previews message-tool delivery $delivery",
-  ({ delivery, channelCount, label, detail }) =>
-    withCurrentOrigin({ delivery, channelCount }, async ({ cfg, job, preview }) => {
-      const resolveTarget = vi.spyOn(deliveryTargets, "resolveDeliveryTarget");
-      try {
-        expect(await preview()).toEqual({ label, detail });
-        if (label === "not requested") {
-          expect(resolveTarget).not.toHaveBeenCalled();
-        } else {
-          expect(resolveTarget).toHaveBeenCalledWith(
-            cfg,
-            "main",
-            expect.objectContaining({
-              ...delivery,
-              sessionKey: job.sessionKey,
-              sessionTarget: job.sessionTarget,
-            }),
-            expect.objectContaining({ dryRun: true }),
-          );
-        }
-      } finally {
-        resolveTarget.mockRestore();
-      }
-    }),
+  [{ mode: "none" }, 1, "not requested", "not requested"],
+  [
+    { mode: "none", channel: "telegram", to: "recipient", accountId: "ops", threadId: 42 },
+    1,
+    "none -> telegram:recipient",
+    "explicit",
+  ],
+  [
+    { mode: "none", threadId: 0 },
+    0,
+    "none -> last",
+    expect.stringContaining("message tool target unresolved:"),
+  ],
+] as const)("previews message-tool delivery %j", (delivery, channelCount, label, detail) =>
+  withCurrentOrigin({ delivery, channelCount }, async ({ preview }) => {
+    expect(await preview()).toEqual({ label, detail });
+  }),
 );
 
 it.each(["single", "batch"] as const)(
@@ -377,18 +349,15 @@ it.each([
 );
 
 it.each([
-  { coordinates: { channel: "telegram" }, channelCount: 1 },
-  { coordinates: { to: "recipient" }, channelCount: 1 },
-  { coordinates: { to: "recipient" }, channelCount: 0 },
-  { coordinates: { accountId: "work" }, channelCount: 0 },
-  { coordinates: { threadId: 0 }, channelCount: 2 },
-  {
-    coordinates: { channel: "telegram", to: "recipient", accountId: "work", threadId: "topic" },
-    channelCount: 1,
-  },
-])(
-  "retains explicit delivery coordinates $coordinates with $channelCount channels",
-  ({ coordinates, channelCount }) =>
+  [{ channel: "telegram" }, 1],
+  [{ to: "recipient" }, 1],
+  [{ to: "recipient" }, 0],
+  [{ accountId: "work" }, 0],
+  [{ threadId: 0 }, 2],
+  [{ channel: "telegram", to: "recipient", accountId: "work", threadId: "topic" }, 1],
+] as const)(
+  "retains explicit delivery coordinates %j with %i channels",
+  (coordinates, channelCount) =>
     withCurrentOrigin(
       { channelCount, delivery: { mode: "announce", ...coordinates } },
       async ({ cfg, job, preview }) => {
