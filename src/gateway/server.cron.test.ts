@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
@@ -35,7 +34,6 @@ import {
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { registerCronRepairCases } from "./server.cron-repair.cases.js";
 import {
   expectCronJobIdFromResponse,
@@ -741,6 +739,7 @@ describe("gateway server cron", () => {
     const { request, add, waitForJob } = await startCronClient();
 
     // Minimal Gateway startup skips cron recovery; finish it before the timed requests.
+    const { getGatewayRecoveryRuntime } = await import("./server-recovery-runtime-context.js");
     const runtime = expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime");
     const resolveContext = expectDefined(getGatewayContextResolver(runtime), "Gateway context");
     await expectDefined(resolveContext(), "Gateway context").cron.start();
