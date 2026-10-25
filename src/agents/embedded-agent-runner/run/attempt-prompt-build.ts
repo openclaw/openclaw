@@ -368,10 +368,10 @@ type PromptContextAttempt = Pick<
 > & { runId?: string };
 
 type PromptAssemblyContext = {
-  effectivePrompt: string;
-  effectiveTranscriptPrompt: string;
   promptBuildPrependContext?: string;
   promptBuildAppendContext?: string;
+  effectivePrompt: string;
+  effectiveTranscriptPrompt: string;
   originContext?: ReturnType<typeof buildInterSessionPromptContext>;
 };
 
