@@ -987,7 +987,7 @@ transaction and commit admission. Only an actual scratch write marks its busines
 completion receipt. Unset tombstones, byte limits, source provenance and uncertain
 outcome handling are unchanged. Doctor's migration and compensation keep the same
 synchronous kernel. Ordinary scratch reads use the shared-state reader, with job
-definition and scratch in one native snapshot. The service rejects a changed
+definition and scratch in one joined statement snapshot. The service rejects a changed
 definition, and the Gateway rechecks the caller before returning private content.
 Scratch reads and writes reuse the original projection's creation-time fallback
 for legacy rows missing that metadata; finite persisted values always win.

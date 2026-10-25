@@ -11,6 +11,7 @@ import {
 } from "../../test/helpers/cron/scratch-store.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import {
@@ -20,11 +21,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronAutomationPrompt } from "./isolated-agent/run-automation-context.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
-import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES, type CronScratchReadCommand } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
+import { readCronScratchSnapshotInDatabase } from "./scratch-read.kernel.js";
 import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
@@ -370,6 +373,50 @@ async function createFixture(jobIds = ["job-1"]) {
 }
 
 describe("cron job scratch store", () => {
+  it("reads current job and missing-heartbeat scratch once without read transactions", async () => {
+    const fixture = await createFixture();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(fixture.options).db);
+    const tracker = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
+      /^\s*select\b/i.test(sql) && /\b(?:cron_jobs|cron_job_scratch)\b/i.test(sql) ? "reads" : null,
+    );
+    const exec = vi.spyOn(db, "exec");
+    using _ = {
+      [Symbol.dispose]: () => {
+        tracker.restore();
+        exec.mockRestore();
+      },
+    };
+    const read = (selector: CronScratchReadCommand["selector"]) => {
+      const beforeReads = tracker.counts.reads;
+      const beforeExec = exec.mock.calls.length;
+      const snapshot = readCronScratchSnapshotInDatabase(db, {
+        type: "cron.scratch",
+        storeKey: cronStoreKey(fixture.storePath),
+        selector,
+      });
+      expect.soft(tracker.counts.reads - beforeReads).toBe(1);
+      expect
+        .soft(
+          exec.mock.calls
+            .slice(beforeExec)
+            .filter(([sql]) => /^\s*(?:BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql)),
+        )
+        .toEqual([]);
+      return snapshot;
+    };
+    const readJob = () => {
+      const snapshot = read({ kind: "job", jobId: "job-1", createdAtMsFallback: 1 });
+      expect(snapshot).toMatchObject({ jobId: "job-1", configRevision: expect.any(String) });
+      return snapshot?.state;
+    };
+    expect(readJob()).toEqual(scratchState(null, 0));
+    fixture.write("current scratch", { expectedRevision: 0, nowMs: 10 });
+    expect(readJob()).toEqual(scratchState("current scratch", 1, 10));
+    fixture.write(null, { expectedRevision: 1, nowMs: 20 });
+    expect(readJob()).toEqual(scratchState(null, 2));
+    expect(read({ kind: "heartbeat", agentId: "missing-monitor" })).toBeUndefined();
+  });
+
   it("keeps write guards scoped to the current job and store on a reused connection", async () => {
     const fixture = await createFixture(["job-1", "job-2"]);
     fixture.write("first");
