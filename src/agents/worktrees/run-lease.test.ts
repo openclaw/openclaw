@@ -409,71 +409,62 @@ describe("worktree run lease", () => {
     await expectCustody(false);
   });
 
-  it("retains the lease and git guard across sustained delete failures, freeing on a lifecycle retry", async () => {
-    const lease = await acquire();
-
-    let fail = true;
-    vi.spyOn(runLeaseStore, "releaseWorktreeRunLeaseRowAsync").mockImplementation(
-      async (rowEnv, id, token) => {
-        if (fail) {
-          throw new Error("simulated state database failure");
+  it.each(["retryable", "unknown"] as const)(
+    "retains %s release custody during lifecycle cleanup",
+    async (kind) => {
+      const lease = await acquire();
+      const unknown = kind === "unknown";
+      const failure = unknown
+        ? new SqliteWorkerError("Synthetic release settlement was lost", "outcome-unknown")
+        : new Error("simulated state database failure");
+      let fail = true;
+      const releaseRow = vi
+        .spyOn(runLeaseStore, "releaseWorktreeRunLeaseRowAsync")
+        .mockImplementation(async (rowEnv, id, token) => {
+          if (fail) {
+            throw failure;
+          }
+          releaseWorktreeRunLeaseRow(rowEnv, id, token);
+        });
+      try {
+        vi.useFakeTimers({ toFake: ["setTimeout"] });
+        const rejected = expect(lease.release()).rejects;
+        const release = unknown
+          ? rejected.toBe(failure)
+          : rejected.toThrow("cleanup did not settle");
+        await vi.advanceTimersByTimeAsync(75);
+        await release;
+        vi.useRealTimers();
+        if (unknown) {
+          await runLeaseTesting.drainPendingCleanupsForTest();
+          await expect(lease.release()).rejects.toBe(failure);
+          expect(releaseRow).toHaveBeenCalledOnce();
+        } else {
+          await expect(claim()).rejects.toThrow("worktree is busy");
         }
-        releaseWorktreeRunLeaseRow(rowEnv, id, token);
-      },
-    );
-
-    vi.useFakeTimers({ toFake: ["setTimeout"] });
-    const release = expect(lease.release()).rejects.toThrow("cleanup did not settle");
-    await vi.advanceTimersByTimeAsync(75);
-    await release;
-    vi.useRealTimers();
-    await expectCustody(true);
-    await expect(claim()).rejects.toThrow("worktree is busy");
-
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const closing = prepareWorktreeRunEndClose();
-    closing.beginClose();
-    await expect(closing.drain()).rejects.toThrow("cleanup remains unsettled");
-    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
-
-    fail = false;
-    await runLeaseTesting.drainPendingCleanupsForTest();
-    await expectCustody(false);
-    const successor = prepareWorktreeRunEndClose();
-    await expect(claim()).resolves.toBeUndefined();
-    successor.beginClose();
-    await successor.drain();
-  });
-
-  it("retains an unknown release without replaying it during lifecycle cleanup", async () => {
-    const lease = await acquire();
-    const failure = new SqliteWorkerError(
-      "Synthetic release settlement was lost",
-      "outcome-unknown",
-    );
-    const releaseRow = vi
-      .spyOn(runLeaseStore, "releaseWorktreeRunLeaseRowAsync")
-      .mockRejectedValue(failure);
-    try {
-      vi.useFakeTimers({ toFake: ["setTimeout"] });
-      const release = expect(lease.release()).rejects.toBe(failure);
-      await vi.advanceTimersByTimeAsync(75);
-      await release;
-      vi.useRealTimers();
-      await runLeaseTesting.drainPendingCleanupsForTest();
-      await expect(lease.release()).rejects.toBe(failure);
-      expect(releaseRow).toHaveBeenCalledOnce();
-      expect(live()).toBe(true);
-      expect(await lock()).toEqual({ kind: "live", pid: process.pid });
-      vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-      const closing = prepareWorktreeRunEndClose();
-      closing.beginClose();
-      await expect(closing.drain()).rejects.toThrow("cleanup remains unsettled");
-    } finally {
-      // The fault left this synthetic row untouched; teardown must not replay the release.
-      runLeaseTesting.resetForTest();
-    }
-  });
+        await expectCustody(true);
+        vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+        const closing = prepareWorktreeRunEndClose();
+        closing.beginClose();
+        await expect(closing.drain()).rejects.toThrow("cleanup remains unsettled");
+        if (!unknown) {
+          expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+          fail = false;
+          await runLeaseTesting.drainPendingCleanupsForTest();
+          await expectCustody(false);
+          const successor = prepareWorktreeRunEndClose();
+          await expect(claim()).resolves.toBeUndefined();
+          successor.beginClose();
+          await successor.drain();
+        }
+      } finally {
+        // An uncertain release must never be replayed by fixture teardown.
+        if (unknown) {
+          runLeaseTesting.resetForTest();
+        }
+      }
+    },
+  );
 
   it.each(["unlock", "registry read"])(
     "retains the Git guard when %s fails, releasing it on a lifecycle retry",
