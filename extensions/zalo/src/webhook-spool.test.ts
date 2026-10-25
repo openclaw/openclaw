@@ -76,38 +76,67 @@ afterEach(() => {
 });
 
 describe("Zalo durable webhook ingress", () => {
-  it.each([false, true])(
-    "serializes append retries and fails closed (exhausted=%s)",
-    async (exhausted) => {
-      await withZaloWebhookTestQueue(async (queue) => {
-        const realEnqueue = queue.enqueue.bind(queue);
-        const admissionOrder: string[] = [];
-        const enqueue: typeof queue.enqueue = async (...args) => {
-          admissionOrder.push(args[0]);
-          if (exhausted || admissionOrder.length === 1) {
-            throw new Error("sqlite busy");
-          }
-          return await realEnqueue(...args);
-        };
-        const deliver = vi.fn(async () => {});
-        const ingress = createIngress({ ...queue, enqueue }, deliver);
-        const ids = exhausted ? ["a"] : ["a", "b"];
-        const admitted = Promise.all(
-          ids.map((messageId) => ingress.accept(rawEvent({ messageId }))),
-        );
-        if (exhausted) {
-          await expect(admitted).rejects.toThrow("sqlite busy");
-          expect(admissionOrder).toEqual(["a", "a", "a"]);
-          expect(deliver).not.toHaveBeenCalled();
-        } else {
-          await admitted;
-          expect(admissionOrder).toEqual(["a", "a", "b"]);
-          expect((await queue.listPending({ limit: "all" })).map((entry) => entry.id)).toEqual(ids);
+  it("serializes concurrent admissions across append backoff", async () => {
+    await withZaloWebhookTestQueue(async (queue) => {
+      const realEnqueue = queue.enqueue.bind(queue);
+      const admissionOrder: string[] = [];
+      const enqueue: typeof queue.enqueue = async (...args) => {
+        admissionOrder.push(args[0]);
+        if (admissionOrder.length === 1) {
+          throw new Error("sqlite busy");
         }
-        await ingress.stop();
+        return await realEnqueue(...args);
+      };
+      const ingress = createIngress({ ...queue, enqueue });
+
+      await Promise.all([
+        ingress.accept(rawEvent({ messageId: "admission-a", chatId: "same-chat" })),
+        ingress.accept(rawEvent({ messageId: "admission-b", chatId: "same-chat" })),
+      ]);
+
+      expect(admissionOrder).toEqual(["admission-a", "admission-a", "admission-b"]);
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending.map((entry) => entry.id)).toEqual(["admission-a", "admission-b"]);
+      await ingress.stop();
+    });
+  });
+
+  it("retries a failed append before acknowledging and fails closed after the bound", async () => {
+    await withZaloWebhookTestQueue(async (queue) => {
+      const enqueue = vi.fn(async () => {
+        throw new Error("sqlite unavailable");
       });
-    },
-  );
+      const deliver = vi.fn(async () => {});
+      const ingress = createIngress({ ...queue, enqueue }, deliver);
+
+      await expect(ingress.accept(rawEvent({ messageId: "append-failure" }))).rejects.toThrow(
+        "sqlite unavailable",
+      );
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(deliver).not.toHaveBeenCalled();
+      await ingress.stop();
+    });
+  });
+
+  it("recovers an uncompleted event with a fresh drain and dispatches exactly once", async () => {
+    await withZaloWebhookTestQueue(async (queue) => {
+      const interrupted = createIngress(queue);
+      await interrupted.accept(rawEvent({ messageId: "restart" }));
+      await interrupted.stop();
+
+      const deliver = vi.fn<IngressOptions["deliver"]>(async (_update, life) => {
+        await life.onAdopted();
+      });
+      const recovered = createIngress(queue, deliver);
+      recovered.start();
+      try {
+        await waitForZaloWebhookVerdict(queue, "restart", "completed");
+        expect(deliver).toHaveBeenCalledTimes(1);
+      } finally {
+        await recovered.stop();
+      }
+    });
+  });
 
   it("preserves old replay-guard parity for the same message id with changed payload bytes", async () => {
     const deliver = vi.fn<IngressOptions["deliver"]>(async (_update, life) => {
@@ -143,6 +172,21 @@ describe("Zalo durable webhook ingress", () => {
       expect(deliver).not.toHaveBeenCalled();
       const verdict = await queue.enqueue("malformed", { version: 1, rawEvent: "{}" });
       expect(verdict).toMatchObject({ kind: "failed", record: { reason: "invalid-event" } });
+    });
+  });
+
+  it("retries transient dispatch failures", async () => {
+    const deliver = vi.fn<IngressOptions["deliver"]>(async (_update, lifecycle) => {
+      if (deliver.mock.calls.length === 1) {
+        throw new Error("temporary dispatch outage");
+      }
+      await lifecycle.onAdopted();
+    });
+    await withIngress(deliver, async (ingress, queue) => {
+      ingress.start();
+      await ingress.accept(rawEvent({ messageId: "retry" }));
+      await waitForZaloWebhookVerdict(queue, "retry", "completed");
+      expect(deliver).toHaveBeenCalledTimes(2);
     });
   });
 
