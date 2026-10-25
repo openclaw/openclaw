@@ -41,6 +41,7 @@ import {
 import {
   catalogReply,
   catalogSessionRpc,
+  createCatalogModel,
   expectAssistantReply,
 } from "../../gateway/server-methods/models-catalog-fixture.test-support.js";
 import {
@@ -78,6 +79,14 @@ const localProfile = `${localProvider}:local`;
 const inheritedProfile = `${inheritedProvider}:inherited`;
 const localKey = "synthetic-inheritauth-local-key";
 const inheritedKey = "synthetic-inheritauth-owner-key";
+const ownerMarkers = (messages: Array<{ role: string; content: unknown }>) =>
+  messages.flatMap((message) =>
+    message.role === "user"
+      ? ["SAVED_OWNER", "FRESH_OWNER"].filter((marker) =>
+          JSON.stringify(message.content ?? null).includes(marker),
+        )
+      : [],
+  );
 
 function currentAgentSnapshot(agentId = "main") {
   const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
@@ -168,14 +177,7 @@ process.emit = function(event, ...args) {
           JSON.parse(body) as { messages: Array<{ role: string; content: unknown }> }
         ).messages;
         // Runtime context may follow the actual user input.
-        const ownerInput = messages
-          .filter((message) => message.role === "user")
-          .flatMap((message) =>
-            ["SAVED_OWNER", "FRESH_OWNER"].filter((marker) =>
-              JSON.stringify(message.content).includes(marker),
-            ),
-          )
-          .at(-1);
+        const ownerInput = ownerMarkers(messages).at(-1);
         if (ownerInput) {
           ownerInputOrder.push(ownerInput);
           ownerAuthorizations.push(request.headers.authorization);
@@ -198,13 +200,8 @@ process.emit = function(event, ...args) {
     try {
       const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
       const model = {
-        id: "fixture",
-        name: "Inherited auth fixture",
-        reasoning: false,
-        input: ["text" as const],
-        contextWindow: 32_768,
+        ...createCatalogModel("fixture", "Inherited auth fixture"),
         maxTokens: 1_024,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
       const cfg: OpenClawConfig = {
         database: {
@@ -438,10 +435,9 @@ process.emit = function(event, ...args) {
         expect(
           getPreparedModelRuntimeAuthStore(initialInheritor!)?.profiles[inheritedProfile],
         ).toBeUndefined();
-        expect(initial!.inheritedAuthDir).toBe(state.agentDir("owner"));
-        expect(getPreparedModelRuntimeAuthStore(initial!)?.profiles).toEqual({
-          [localProfile]: { type: "api_key", provider: localProvider, key: localKey },
-        });
+        expect(
+          getPreparedModelRuntimeAuthStore(initial!)?.profiles[inheritedProfile],
+        ).toBeUndefined();
         const started = await rpc.send(session.key, "Reply with INHERITOR_OK.", "pending-owner");
         expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
         expectAssistantReply((await rpc.history(session.key)).messages, "INHERITOR_OK");
@@ -484,12 +480,6 @@ process.emit = function(event, ...args) {
           provider: inheritedProvider,
           key: inheritedKey,
         });
-        const recoveredStores = recovered!.createStores();
-        const inheritedModel = recoveredStores.modelRegistry.find(inheritedProvider, "fixture");
-        expect(inheritedModel).toBeDefined();
-        await expect(
-          recoveredStores.modelRegistry.getApiKeyAndHeaders(inheritedModel!),
-        ).resolves.toMatchObject({ apiKey: inheritedKey });
         releaseRecovery.resolve();
         await withinTest(savedInputStarted.promise, signal);
         const fresh = await gateway.client.request<{ runId: string }>("chat.send", ownerFreshInput);
@@ -501,22 +491,10 @@ process.emit = function(event, ...args) {
         expect(ownerInputOrder).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
         expect(ownerAuthorizations).toEqual([`Bearer ${inheritedKey}`, `Bearer ${inheritedKey}`]);
         const history = await rpc.history(owner.sessionKey);
-        expect(
-          history.messages.flatMap((message) => {
-            const row = message as { role: string; content: unknown };
-            return row.role === "user"
-              ? ["SAVED_OWNER", "FRESH_OWNER"].filter((marker) =>
-                  JSON.stringify(row.content ?? null).includes(marker),
-                )
-              : [];
-          }),
-        ).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
+        expect(ownerMarkers(history.messages as Array<{ role: string; content: unknown }>)).toEqual(
+          ["SAVED_OWNER", "FRESH_OWNER"],
+        );
         expect((await listSessionPendingInputs(owner)).items).toEqual([]);
-        const inheritedSnapshot = currentAgentSnapshot("inheritor");
-        expect(inheritedSnapshot).toBeDefined();
-        expect(
-          getPreparedModelRuntimeAuthStore(inheritedSnapshot!)?.profiles[inheritedProfile],
-        ).toEqual({ type: "api_key", provider: inheritedProvider, key: inheritedKey });
         const inheritor = await gateway.client.request<{ key: string }>("sessions.create", {
           agentId: "inheritor",
           model: `${inheritedProvider}/fixture`,

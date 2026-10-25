@@ -488,7 +488,23 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const manifestPath = recovery.databasePortManifestPath(state.stateDir);
         const saved = await readManifest(manifestPath);
         expect(saved.state).toBe("publishing");
-        expect(saved.targets).toHaveLength(files.length + 1);
+        const shared = state.statePath("state", "openclaw.sqlite");
+        expect(
+          saved.targets
+            .map((target) => {
+              assert(target.original.engine === "sqlite");
+              return target.original.path;
+            })
+            .toSorted(),
+        ).toEqual([...files, shared].toSorted());
+        const targets = files.map((file, index) => {
+          const target = saved.targets.find(
+            (entry) => entry.original.engine === "sqlite" && entry.original.path === file,
+          );
+          assert(target);
+          expect(sqliteEntries(target.originalCapture.path)).toEqual(expected[index]);
+          return target;
+        });
         expect(new Set(files.map((file) => readBackupEngine(file).engine))).toEqual(
           new Set(["sqlite", "postgres"]),
         );
@@ -504,10 +520,25 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         expectCredentials();
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
         if (action === "resume") {
-          expect((await postgresRoots(files)).map((root) => root.entries)).toEqual(expected);
+          const roots = await postgresRoots(files);
+          expect(roots.map((root) => root.entries)).toEqual(expected);
+          expect(roots.map((root) => root.anchor)).toEqual(
+            targets.map((target) => {
+              assert(target.intended.engine === "postgres");
+              return {
+                engine: "postgres",
+                namespace: target.intended.namespace,
+                storeId: target.storeId,
+              };
+            }),
+          );
+          expect(readBackupEngine(shared).engine).toBe("postgres");
+          await expect(fs.stat(manifestPath)).rejects.toMatchObject({ code: "ENOENT" });
           await port({ to: "sqlite" });
         }
         expect(files.map(sqliteEntries)).toEqual(expected);
+        expect(readBackupEngine(shared).engine).toBe("sqlite");
+        await expect(fs.stat(manifestPath)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
     // Green CI runs 39068774273/39071119824 measured p95 at 190s for interrupted-root recovery.
