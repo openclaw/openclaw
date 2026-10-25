@@ -108,6 +108,11 @@ function createSessionEndpoint(
 ) {
   return createFakeEndpoint((request) => {
     if (request.method === "initialize") {
+      expect(request.params).toEqual({
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "openclaw-cua-computer", version: "1" },
+      });
       request.reply({ protocolVersion: "2025-06-18" });
     } else if (request.method === "tools/call" && request.params?.name === "start_session") {
       request.reply(sessionState(scope));

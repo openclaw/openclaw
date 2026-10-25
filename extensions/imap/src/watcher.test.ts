@@ -262,7 +262,10 @@ describe("IMAP watcher protocol boundary", () => {
     };
     const { server, context, state, authenticator, dispatch, waitForCursor } = await startWatcher({
       supportsIdle: scenario.supportsIdle,
-      account: { watch: { mode: "auto", pollSeconds: 0.02 }, ...scenario.account },
+      account: {
+        ...(!scenario.reconnect ? { watch: { mode: "auto", pollSeconds: 0.02 } } : {}),
+        ...scenario.account,
+      },
     });
     if (scenario.reconnect) {
       expect(await state.cursors.lookup("inbox")).toMatchObject({
@@ -645,6 +648,18 @@ describe("IMAP watcher protocol boundary", () => {
     releaseFetch();
     await waitForCursor(3, 5_000);
     expectDispatch(dispatch, 2, "hook:imap:inbox:17:3");
+  });
+
+  it("re-baselines a rotated UIDVALIDITY without replaying existing mail", async () => {
+    const { server, dispatch, waitForCursor } = await startWatcher();
+    server.uidValidity = "18";
+    server.disconnect();
+    server.messages.push({
+      uid: 2,
+      raw: mailText("Old validity", "Never replay"),
+    });
+    await waitForCursor(2, 5_000, "18");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("polls when the IMAP server does not advertise IDLE", () =>

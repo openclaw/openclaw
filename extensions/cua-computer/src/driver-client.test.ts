@@ -186,17 +186,25 @@ describe("CUA Driver direct session", () => {
 
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
     const target = { tag: "Desktop", inner: { displayId: "primary" } };
-    for (const name of ["click", "drag", "moveCursor", "scroll", "typeText", "pressKey"] as const) {
-      expect(mocks[name]).toHaveBeenCalledWith(expect.objectContaining({ target }), undefined);
+    const expectedInputs = [
+      [
+        mocks.click,
+        {
+          position: { tag: "Coordinates", inner: { x: 20, y: 30 } },
+          deliveryMode: 1,
+          button: ClickButton.Left,
+          count: 1,
+        },
+      ],
+      [mocks.drag, { fromX: 1, fromY: 2, toX: 3, toY: 4, durationMs: 5n }],
+      [mocks.moveCursor, { x: 6, y: 7 }],
+      [mocks.scroll, { x: 8, y: 9, direction: ScrollDirection.Down, amount: 3n, by: 0 }],
+      [mocks.typeText, { text: "hello" }],
+      [mocks.pressKey, { key: "a", modifiers: ["cmd"] }],
+    ] as const;
+    for (const [mock, input] of expectedInputs) {
+      expect(mock).toHaveBeenCalledWith({ ...input, target }, undefined);
     }
-    expect(mocks.click).toHaveBeenCalledWith(
-      expect.objectContaining({
-        position: { tag: "Coordinates", inner: { x: 20, y: 30 } },
-        deliveryMode: 1,
-      }),
-      undefined,
-    );
-    expect(mocks.scroll).toHaveBeenCalledWith(expect.objectContaining({ by: 0 }), undefined);
     expectCall("getCursorPosition", { session: sessionOptions.publicSession }, undefined);
     expectCall("getSessionState", { session: sessionOptions.publicSession }, undefined);
   });

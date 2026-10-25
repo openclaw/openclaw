@@ -124,6 +124,10 @@ test.each([
     expect(new Set(requests.map((request) => request.url))).toEqual(
       new Set(expected.split(" ").map((signal) => `/api/public/otel/v1/${signal}`)),
     );
+    for (const request of requests) {
+      expect(request.method).toBe("POST");
+      expect(request.contentType).toBe("application/x-protobuf");
+    }
   },
   30_000,
 );

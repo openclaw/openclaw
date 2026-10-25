@@ -209,7 +209,7 @@ export function beamMirrorTestFixture() {
     } = {},
   ) => {
     const testCatalog = createBeamTestCatalog(catalog);
-    vi.stubGlobal("fetch", async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
       assert(typeof init?.body === "string", "expected Beam JSON request body");
       const payload = JSON.parse(init.body) as BeamUpload;
       const headers = (init.headers ?? {}) as Record<string, string>;
@@ -219,6 +219,7 @@ export function beamMirrorTestFixture() {
         : "{}";
       return new Response(body, { status: response.status?.(payload) ?? 200 });
     });
+    vi.stubGlobal("fetch", fetchFn);
     return { logger, listCatalogs: () => [testCatalog], ...overrides };
   };
   return {
