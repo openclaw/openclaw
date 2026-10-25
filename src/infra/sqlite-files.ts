@@ -4,7 +4,8 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openRootFileSync } from "./boundary-file-read.js";
 import { sha256FileSync } from "./crypto-digest.js";
-import { resolveNodeRuntimeExecutable } from "./node-runtime-executable.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 /** SQLite main database plus every journal-mode sidecar that can contain database pages. */
 const SQLITE_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -41,30 +42,6 @@ export function isAppleDoubleMetadataFile(pathname: string): boolean {
 
 const sqliteFilesLog = createSubsystemLogger("state/sqlite");
 
-// A raw descriptor closed here could release another SQLite connection's POSIX
-// locks on the same inode. Probe in a child that owns no database connections.
-const SQLITE_HEADER_PROBE_SCRIPT = `
-const fs = require("node:fs");
-const magic = Buffer.from("SQLite format 3\\0");
-const results = JSON.parse(fs.readFileSync(0, "utf8")).map((pathname) => {
-  try {
-    if (!fs.lstatSync(pathname).isFile()) return false;
-    const fd = fs.openSync(pathname, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-    try {
-      if (!fs.fstatSync(fd).isFile()) return false;
-      const header = Buffer.alloc(magic.length);
-      return fs.readSync(fd, header, 0, header.length, 0) === header.length && header.equals(magic);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch (error) {
-    if (error.code === "ENOENT" || error.code === "ELOOP") return false;
-    throw error;
-  }
-});
-process.stdout.write(JSON.stringify(results));
-`;
-
 /** Probe one discovery batch without disturbing live SQLite file locks. */
 export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<string, boolean> {
   const paths = [...new Set(pathnames)];
@@ -72,16 +49,20 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
     return new Map();
   }
   try {
-    const executable = resolveNodeRuntimeExecutable();
-    if (!executable) {
-      throw new Error("No Node.js runtime executable could be resolved");
-    }
-    const result = childProcess.spawnSync(executable, ["-e", SQLITE_HEADER_PROBE_SCRIPT], {
-      input: JSON.stringify(paths),
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      timeout: 10_000,
-    });
+    // Closing a raw descriptor could release another connection's POSIX locks
+    // on the same inode. Probe in a child that owns no database connections.
+    const result = childProcess.spawnSync(
+      process.execPath,
+      resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteHeaderProbe),
+      ),
+      {
+        input: JSON.stringify(paths),
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: 10_000,
+      },
+    );
     if (result.error) {
       throw result.error;
     }
@@ -100,7 +81,7 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
   } catch (cause) {
     throw new Error(
       "Could not determine whether backup files are SQLite databases. " +
-        "Check that Node.js can run and the source files are readable, then retry the backup.",
+        "Check that the backup worker can run and the source files are readable, then retry the backup.",
       { cause },
     );
   }
