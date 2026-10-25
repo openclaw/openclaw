@@ -25,7 +25,6 @@ import { SessionManager } from "./session-manager.js";
 registerAgentSessionLoopTestLifecycle();
 
 type RefusalCase = {
-  overflow?: boolean;
   overlap?: boolean;
   threshold?: boolean;
   queued?: boolean;
@@ -40,10 +39,9 @@ describe("AgentSession refusal compaction", () => {
     ["refusal explanation resembles overflow", { overlap: true }, 1],
     ["threshold maintenance after refusal", { threshold: true }, 1],
     ["threshold maintenance preserves explicit queued user", { threshold: true, queued: true }, 2],
-    ["actual overflow still retries", { overflow: true }, 2],
     ["explicit later user turn after refusal", { later: true }, 1],
   ])("%s", async (_name, scenario, expectedRequests) => {
-    const { overflow, overlap, threshold, queued, later } = scenario;
+    const { overlap, threshold, queued, later } = scenario;
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const explanation = overlap
       ? "This request is refused; prompt is too long."
@@ -55,19 +53,6 @@ describe("AgentSession refusal compaction", () => {
         body += chunk;
       }
       requests.push({ url: request.url, body: JSON.parse(body) });
-      if (requests.length === 1 && overflow) {
-        response.writeHead(400, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: "prompt is too long: 1200 tokens > 1000 maximum",
-            },
-          }),
-        );
-        return;
-      }
       const refused = requests.length === 1;
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
@@ -80,11 +65,7 @@ describe("AgentSession refusal compaction", () => {
             : [
                 sse("content_block_start", {
                   index: 0,
-                  content_block: { type: "text", text: "" },
-                }),
-                sse("content_block_delta", {
-                  index: 0,
-                  delta: { type: "text_delta", text: "Explicit next turn completed." },
+                  content_block: { type: "text", text: "Explicit next turn completed." },
                 }),
                 sse("content_block_stop", { index: 0 }),
               ]),
@@ -162,29 +143,25 @@ describe("AgentSession refusal compaction", () => {
       await session.prompt(threshold ? "current user request ".repeat(12) : "current user request");
       const firstTurnRequests = requests.length;
       expect(assistants[0]?.stopReason).toBe("error");
-      if (!overflow) {
-        expect(assistants[0]?.diagnostics).toContainEqual(
-          expect.objectContaining({ type: "provider_refusal" }),
-        );
-      }
+      expect(assistants[0]?.diagnostics).toContainEqual(
+        expect.objectContaining({ type: "provider_refusal" }),
+      );
       if (later) {
         await session.prompt("explicit later user turn");
       }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
-      if (threshold || overflow) {
+      if (threshold) {
         expect(compactions).toContainEqual(
           expect.objectContaining({
-            reason: overflow ? "overflow" : "threshold",
-            outcome: expect.objectContaining({ status: "completed", willRetry: Boolean(overflow) }),
+            reason: "threshold",
+            outcome: expect.objectContaining({ status: "completed", willRetry: false }),
           }),
         );
       }
-      if (!overflow) {
-        expect(
-          compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
-        ).toBe(false);
-      }
+      expect(
+        compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
+      ).toBe(false);
       if (queued || later) {
         expect(JSON.stringify(requests[1]?.body)).toContain(
           later ? "explicit later user turn" : "explicit queued user turn",

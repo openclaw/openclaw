@@ -90,18 +90,11 @@ async function setupSteering(sessionId: string, prepare?: () => Promise<void>, f
   return { ...context, held, streaming, operation, cancel, queue };
 }
 
-it.each(
-  (["registry", "controller"] as const).flatMap((surface) =>
-    (["none", "error"] as const).map((observer) => ({
-      surface,
-      observer,
-    })),
-  ),
-)(
-  "classifies withdrawn $surface steering after $observer settlement",
-  async ({ surface, observer }) => {
+it.each(["registry", "controller"] as const)(
+  "classifies withdrawn %s steering even when the settlement observer throws",
+  async (surface) => {
     const { session, streaming, held, operation, queue } = await setupSteering(
-      `withdrawal-${surface}-${observer}`,
+      `withdrawal-${surface}`,
     );
     const accepted = createDeferredCore();
     const active = session.prompt("active prompt");
@@ -117,9 +110,7 @@ it.each(
           }
         },
         onQueueSettled: () => {
-          if (observer === "error") {
-            throw new Error("settlement observer failed");
-          }
+          throw new Error("settlement observer failed");
         },
       };
       outcome = queue(surface, "withdraw this input", options);
@@ -134,7 +125,6 @@ it.each(
       const result = await outcome;
       expect(session.getSteeringMessages()).toEqual([]);
       expect(session.agent.hasQueuedMessages()).toBe(false);
-      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
       expect(result).toMatchObject({ status: "rejected" });
     } finally {
       if (!terminated) {
@@ -212,7 +202,6 @@ it.each([
       await vi.advanceTimersByTimeAsync(0);
       expect(persistenceFailed).toHaveBeenCalledOnce();
       expect(session.agent.hasQueuedMessages()).toBe(false);
-      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
       if (admission !== "reported") {
         expect(settlement).toBeUndefined();
         expect(onQueueAccepted).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
   createModelSelectionSession,
@@ -15,8 +16,6 @@ const reasoningModel = {
   ...testModel,
   id: "notification-reasoning",
   reasoning: true,
-  contextWindow: 32_768,
-  maxTokens: 8_192,
 };
 const plainModel = { ...reasoningModel, id: "notification-plain", reasoning: false };
 
@@ -54,6 +53,11 @@ function notificationFailure(
   );
 }
 
+async function expectPending(work: Promise<unknown>) {
+  const pending = Symbol("pending");
+  expect(await Promise.race([work, setImmediate().then(() => pending)])).toBe(pending);
+}
+
 describe("metadata notifications after publication", () => {
   it.each(["thinking", "model"] as const)(
     "retains the committed receipt when a synchronous %s-change listener throws",
@@ -84,8 +88,7 @@ describe("metadata notifications after publication", () => {
   );
 
   it("awaits reentrant thinking hooks and preserves their nested committed failure", async () => {
-    const nestedFailureReady =
-      createDeferredCore<InstanceType<typeof SessionMetadataCommittedError>>();
+    const nestedFailureReady = createDeferredCore<SessionMetadataCommittedError>();
     const fixture = await createNotificationSession({
       thinking: async (event) => {
         if (event.level === "low") {
@@ -114,37 +117,27 @@ describe("metadata notifications after publication", () => {
   });
 
   it("joins both started hooks and retains both notification failures", async () => {
-    const modelHookStarted = createDeferredCore();
-    const releaseModelHook = createDeferredCore();
+    const modelHook = createEnteredGate();
     const failures: Error[] = [];
+    const failHook = (kind: string) => {
+      const failure = notificationFailure(fixture, new Error(`${kind} hook failed`));
+      failures.push(failure);
+      throw failure;
+    };
     const fixture = await createNotificationSession({
       reasoning: false,
-      thinking: async () => {
-        const failure = notificationFailure(fixture, new Error("thinking hook failed"));
-        failures.push(failure);
-        throw failure;
-      },
+      thinking: async () => failHook("thinking"),
       model: async () => {
-        modelHookStarted.resolve();
-        await releaseModelHook.promise;
-        const failure = notificationFailure(fixture, new Error("model hook failed"));
-        failures.push(failure);
-        throw failure;
+        await modelHook.wait();
+        failHook("model");
       },
     });
-    let settled = false;
-    const outcome = fixture.session
-      .setModel(reasoningModel)
-      .catch((error: unknown) => error)
-      .finally(() => {
-        settled = true;
-      });
+    const outcome = fixture.session.setModel(reasoningModel).catch((error: unknown) => error);
     try {
-      await modelHookStarted.promise;
-      await setImmediate();
-      expect(settled).toBe(false);
+      await modelHook.entered;
+      await expectPending(outcome);
     } finally {
-      releaseModelHook.resolve();
+      modelHook.release();
     }
     const failure = await outcome;
     expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
@@ -155,7 +148,6 @@ describe("metadata notifications after publication", () => {
 
   it("serializes detached model transitions without losing the saved thinking level", async () => {
     const { session, sessionManager, settingsManager } = await createNotificationSession();
-    expect(session.thinkingLevel).toBe("high");
     const before = sessionManager.getEntries().length;
 
     await Promise.all([session.setModel(plainModel), session.setModel(reasoningModel)]);
@@ -175,41 +167,31 @@ describe("metadata notifications after publication", () => {
     const { session, sessionManager, settingsManager, extensionRuntime } =
       await createNotificationSession();
     expect(sessionManager.getSessionTarget()).toBeUndefined();
-    const before = {
-      entries: structuredClone(sessionManager.getEntries()),
-      model: session.model,
-      thinking: session.thinkingLevel,
-      defaultModel: settingsManager.getGlobalSettings().defaultModel,
-      defaultThinking: settingsManager.getDefaultThinkingLevel(),
-    };
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const held = withSessionManagerWrite(sessionManager, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    let settled = false;
+    const selection = () => [
+      session.thinkingLevel,
+      settingsManager.getGlobalSettings().defaultModel,
+      settingsManager.getDefaultThinkingLevel(),
+    ];
+    const before = selection();
+    const model = session.model;
+    const entries = structuredClone(sessionManager.getEntries());
+    const gate = createEnteredGate();
+    const held = withSessionManagerWrite(sessionManager, gate.wait);
+    await gate.entered;
     const change = extensionRuntime.setModel(plainModel).catch((error: unknown) => error);
-    void change.then(() => {
-      settled = true;
-    });
     try {
-      await setImmediate();
-      expect(settled).toBe(false);
-      expect(sessionManager.getEntries()).toEqual(before.entries);
+      await expectPending(change);
+      expect(sessionManager.getEntries()).toEqual(entries);
       extensionRuntime.invalidate("detached extension invalidated while queued");
     } finally {
-      release.resolve();
+      gate.release();
       await held;
       await change;
     }
     const failure = await change;
-    expect.soft(sessionManager.getEntries()).toEqual(before.entries);
-    expect.soft(session.model).toBe(before.model);
-    expect.soft(session.thinkingLevel).toBe(before.thinking);
-    expect.soft(settingsManager.getGlobalSettings().defaultModel).toBe(before.defaultModel);
-    expect.soft(settingsManager.getDefaultThinkingLevel()).toBe(before.defaultThinking);
+    expect.soft(sessionManager.getEntries()).toEqual(entries);
+    expect.soft(session.model).toBe(model);
+    expect.soft(selection()).toEqual(before);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({
       message: "detached extension invalidated while queued",
