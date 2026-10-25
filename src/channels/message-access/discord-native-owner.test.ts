@@ -55,7 +55,7 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
       if (selected.kind !== "plugin") {
         throw new Error("Expected a plugin dispatch");
       }
-      const execute = vi.fn(selected.execute);
+      const execute = vi.fn(selected.execute.bind(selected));
       const command = { ...candidate, prepareDispatch: () => ({ ...selected, execute }) };
       const interaction = await run({ pluginCommand: command });
       const observed = execute.mock.calls[0]?.[0];
