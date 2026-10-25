@@ -228,7 +228,7 @@ export async function resolveComputerBinding(params: {
     if (gateway.configured || params.target === "gateway") {
       throw new Error(
         (gateway.configured ? gateway.error : undefined) ??
-          "Gateway computer is unavailable; enable its computer provider and desktop session",
+          'Gateway computer is unavailable; omit target for automatic host selection, or retry with target: "node" for a paired node.',
       );
     }
   }

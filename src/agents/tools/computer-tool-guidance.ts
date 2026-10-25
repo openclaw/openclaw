@@ -42,7 +42,10 @@ export function buildComputerToolDescription(
   const target =
     targetScope === "session"
       ? "this session's desktop"
-      : "the Gateway desktop, a paired node (target: gateway or node), or a conversation-attached desktop (environmentId). Use the environmentId returned when opening an environment; later calls retain that desktop";
+      : "the Gateway desktop or a paired node. Omit target for automatic host selection; " +
+        'set target to "gateway" or "node" only when explicitly choosing that host, or use ' +
+        "a conversation-attached desktop (environmentId). Use the environmentId returned " +
+        "when opening an environment; later calls retain that desktop";
   const takeover =
     "For an attached or cloud session desktop, `take_control` switches the human viewer to view-only and returns a fresh screenshot; use it when asked to resume. Ordinary input never takes control automatically.";
   if (!capabilities) {
