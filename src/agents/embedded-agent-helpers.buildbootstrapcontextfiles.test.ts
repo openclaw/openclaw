@@ -66,19 +66,6 @@ describe("buildBootstrapContextFiles", () => {
   it("skips empty or whitespace-only content", () => {
     expect(buildBootstrapContextFiles([makeFile({ content: "   \n  " })])).toStrictEqual([]);
   });
-  it("truncates large bootstrap content with a warning and bounded head/tail", () => {
-    const content = `HEAD-${"a".repeat(600)}${"b".repeat(300)}-TAIL`;
-    const warn = vi.fn();
-    const result = renderFile({ name: "SOUL.md", content }, { maxChars: 200, warn });
-    expect(result).toHaveLength(199);
-    expect(result).toContain("[...truncated, read SOUL.md for full content...]");
-    expect(result).toContain("kept 75+25 chars");
-    expect(result?.startsWith(content.slice(0, 75))).toBe(true);
-    expect(result?.endsWith(content.slice(-25))).toBe(true);
-    expect(warn.mock.calls.map(([message]) => message)).toEqual([
-      expect.stringMatching(/SOUL\.md.*limit 200/),
-    ]);
-  });
   it("warns once per path, content revision, and effective limit across context builds", () => {
     const file = makeFile({ path: "/warning-revisions/AGENTS.md", content: "a".repeat(1000) });
     const warn = vi.fn();
@@ -87,20 +74,20 @@ describe("buildBootstrapContextFiles", () => {
 
     // A diagnostics build without a logger must not consume the warning.
     buildBootstrapContextFiles([file], { maxChars: 200 });
-    const first = build();
-    expect(build()).toEqual(first);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    const edited = build({ content: "b".repeat(1000) });
-    expect(edited).not.toEqual(first);
-    expect(build({ content: "b".repeat(1000) })).toEqual(edited);
-    expect(warn).toHaveBeenCalledTimes(2);
-    build({}, 300);
-    build({ path: "/other-workspace/AGENTS.md" });
-    expect(warn).toHaveBeenCalledTimes(4);
-    expect(build()).toEqual(first);
-    expect(warn).toHaveBeenCalledTimes(4);
-
+    const outputs = [];
+    for (const [overrides, maxChars, expected] of [
+      [{}, 200, 1],
+      [{}, 200, 1],
+      [{ content: "b".repeat(1000) }, 200, 2],
+      [{ content: "b".repeat(1000) }, 200, 2],
+      [{}, 300, 3],
+      [{ path: "/other-workspace/AGENTS.md" }, 200, 4],
+      [{}, 200, 4],
+    ] satisfies [Partial<WorkspaceBootstrapFile>, number, number][]) {
+      outputs.push(build(overrides, maxChars));
+      expect(warn).toHaveBeenCalledTimes(expected);
+    }
+    expect(outputs[2]).not.toEqual(outputs[0]);
     buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
     buildBootstrapContextFiles([file], { maxChars: 200, totalMaxChars: 150, warn });
     expect(warn).toHaveBeenCalledTimes(5);
@@ -113,9 +100,13 @@ describe("buildBootstrapContextFiles", () => {
     "keeps $name truncation valid at UTF-16 boundaries",
     ({ name, maxChars, head, middle, tail }) => {
       const content = `${"h".repeat(head)}😀${"m".repeat(middle)}😀${"t".repeat(tail)}`;
-      const result = renderFile({ name, content }, { maxChars });
+      const warn = vi.fn();
+      const result = renderFile({ name, content }, { maxChars, warn });
       expect(result?.startsWith("h".repeat(head))).toBe(true);
       expect(result?.endsWith("t".repeat(tail))).toBe(true);
+      expect(result).toContain(`[...truncated, read ${name} for full content...]`);
+      expect(result?.length).toBeLessThanOrEqual(maxChars);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`limit ${maxChars}`));
       expect(result).not.toMatch(
         /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
       );

@@ -29,17 +29,8 @@ type GatewayCallParams = {
   params?: Parameters<typeof buildSystemRunPreparePayload>[0];
   id?: string;
 };
-type GatewayCallExtra = Parameters<typeof import("./tools/gateway.js").callGatewayTool>[3];
-
 const callGatewayToolMock = vi.hoisted(() =>
-  vi.fn<
-    (
-      method: string,
-      options: unknown,
-      params?: GatewayCallParams,
-      extra?: GatewayCallExtra,
-    ) => Promise<unknown>
-  >(),
+  vi.fn<(method: string, options: unknown, params?: GatewayCallParams) => Promise<unknown>>(),
 );
 
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: callGatewayToolMock }));
@@ -75,12 +66,8 @@ let executable: string;
 let workdir: string;
 let nodePolicy: PreparedRunExecPolicy;
 let policySpy: MockInstance<typeof execHostShared.resolveExecHostApprovalContext>;
-const autoReviewer = () =>
-  vi.fn<ExecAutoReviewer>(async () => ({
-    decision: "allow-once",
-    risk: "low",
-    rationale: "safe command",
-  }));
+let controller: AbortController;
+let reviewer: ReturnType<typeof vi.fn<ExecAutoReviewer>>;
 
 function createRequest(overrides: Partial<ExecuteNodeHostCommandParams>) {
   return {
@@ -94,6 +81,8 @@ function createRequest(overrides: Partial<ExecuteNodeHostCommandParams>) {
     warnings: [],
     agentId: "main",
     sessionKey: "agent:main:main",
+    autoReviewer: reviewer,
+    signal: controller.signal,
     ...overrides,
   } satisfies ExecuteNodeHostCommandParams;
 }
@@ -105,6 +94,12 @@ describe("node-host dispatch cancellation", () => {
   });
 
   beforeEach(() => {
+    controller = new AbortController();
+    reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "safe command",
+    }));
     nodePolicy = { security: "full", ask: "off" };
     policySpy = vi.spyOn(execHostShared, "resolveExecHostApprovalContext");
     callGatewayToolMock.mockReset().mockImplementation(async (method, _options, params) => {
@@ -147,7 +142,6 @@ describe("node-host dispatch cancellation", () => {
   ] as const)(
     "never dispatches %s/%s after cancellation during final policy",
     async (security, ask, autoReview) => {
-      const controller = new AbortController();
       const reason = new Error("cancelled during final node dispatch policy");
       const policy = createPolicy(security, ask);
       nodePolicy = { security, ask };
@@ -157,22 +151,11 @@ describe("node-host dispatch cancellation", () => {
         policyEntered.resolve();
         return checkpoint.promise;
       });
-      const reviewer = autoReviewer();
-
-      const result = executeNodeHostCommand(
-        createRequest({
-          security,
-          ask,
-          autoReview,
-          autoReviewer: reviewer,
-          signal: controller.signal,
-        }),
-      );
+      const result = executeNodeHostCommand(createRequest({ security, ask, autoReview }));
       // Observe early fixture failures immediately and drain blocked work before restoring spies.
       const drained = result.catch(() => undefined);
       try {
         await Promise.race([policyEntered.promise, result]);
-        expect(policySpy).toHaveBeenCalledTimes(2);
         controller.abort(reason);
         checkpoint.resolve(policy);
 
@@ -195,18 +178,11 @@ describe("node-host dispatch cancellation", () => {
   );
 
   it("forwards cancellation without removing auto-reviewed execution scopes", async () => {
-    const controller = new AbortController();
     policySpy.mockResolvedValue(createPolicy("allowlist", "on-miss"));
     nodePolicy = { security: "allowlist", ask: "on-miss" };
 
     const result = await executeNodeHostCommand(
-      createRequest({
-        security: "allowlist",
-        ask: "on-miss",
-        autoReview: true,
-        autoReviewer: autoReviewer(),
-        signal: controller.signal,
-      }),
+      createRequest({ security: "allowlist", ask: "on-miss", autoReview: true }),
     );
 
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: "ok" });

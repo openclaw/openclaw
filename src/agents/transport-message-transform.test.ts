@@ -21,6 +21,9 @@ const userMessage = (content: string, timestamp = Date.now()) => ({
 });
 const text = (value: string) => ({ type: "text" as const, text: value });
 const openai = makeModel("openai-responses", "openai", "gpt-5.4");
+const anthropic = makeModel("anthropic-messages", "anthropic", "claude-opus-4-6");
+const replay = (messages: Context["messages"], model = openai) =>
+  transformTransportMessages(messages, model);
 function toolResult(
   toolCallId: string,
   output: string,
@@ -36,31 +39,16 @@ function toolResult(
     timestamp: Date.now(),
   };
 }
-function thinkingMessage(
-  overrides: Partial<AssistantMessage>,
-  thinking: string,
-  thinkingSignature: string,
-  visible?: string,
-) {
-  return {
-    ...assistantToolCall("unused"),
-    api: "anthropic-messages" as const,
-    stopReason: "stop" as const,
-    ...overrides,
-    content: [
-      { type: "thinking" as const, thinking, thinkingSignature },
-      ...(visible ? [text(visible)] : []),
-    ],
-  };
-}
+const thinking = { type: "thinking" as const, thinking: "reasoning", thinkingSignature: "sig" };
+const assistant = (overrides: Partial<AssistantMessage> & Pick<AssistantMessage, "content">) =>
+  makeAgentAssistantMessage({ model: "gpt-5.4", ...overrides });
 
 function assistantToolCall(
   id: string,
   name = "read",
   stopReason: AssistantMessage["stopReason"] = "toolUse",
 ): AssistantMessage {
-  return makeAgentAssistantMessage({
-    model: "gpt-5.4",
+  return assistant({
     stopReason,
     content: [{ type: "toolCall", id, name, arguments: {} }],
   });
@@ -68,13 +56,13 @@ function assistantToolCall(
 
 it("compacts sparse history without changing the source or sharing assistant arrays", () => {
   const api = "openai-completions";
-  const assistant = (
+  const completion = (
     content: AssistantMessage["content"],
     stopReason?: AssistantMessage["stopReason"],
   ) => makeAssistantMessageFixture({ api, content, ...(stopReason ? { stopReason } : {}) });
-  const hidden = assistant([{ type: "thinking", thinking: "unfinished reasoning" }]);
-  const failed = assistant([text("unfinished answer")]);
-  const retained = assistant([text("completed answer")], "stop");
+  const hidden = completion([{ type: "thinking", thinking: "unfinished reasoning" }]);
+  const failed = completion([text("unfinished answer")]);
+  const retained = completion([text("completed answer")], "stop");
   const user = userMessage("continue", 1);
   const messages: Context["messages"] = [];
   messages[1] = hidden;
@@ -84,7 +72,7 @@ it("compacts sparse history without changing the source or sharing assistant arr
   messages.length = 8;
   const original = structuredClone(messages);
 
-  const result = transformTransportMessages(messages, makeModel(api, "openai", "test-model"));
+  const result = replay(messages, makeModel(api, "openai", "test-model"));
 
   expect(result).toStrictEqual([
     { ...failed, content: [text(EXPECTED_FAILURE_MARKER)] },
@@ -110,7 +98,7 @@ it("preserves unframed tool results only for a selected compaction replay window
     toolResult("call_before", "real result after compaction"),
   ] as Context["messages"];
 
-  const normal = transformTransportMessages(messages, openai);
+  const normal = replay(messages);
   const compactionReplay = transformTransportMessages(messages, openai, undefined, {
     preserveUnframedToolResults: true,
   });
@@ -124,11 +112,6 @@ it("preserves unframed tool results only for a selected compaction replay window
     ...expected,
     { toolCallId: "call_before", content: [text("real result after compaction")] },
   ]);
-  expect(
-    compactionReplay.filter(
-      (message) => message.role === "toolResult" && message.toolCallId === "call_early",
-    ),
-  ).toHaveLength(1);
 });
 
 // Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
@@ -140,19 +123,21 @@ it.each([
     true,
   ],
 ] as const)("applies thinking binding from %j to %s", (source, target, keepThinking) => {
-  const result = transformTransportMessages(
-    [thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer")],
+  const result = replay(
+    [
+      assistant({
+        api: "anthropic-messages",
+        ...source,
+        stopReason: "stop",
+        content: [thinking, text("visible answer")],
+      }),
+    ],
     makeModel("anthropic-messages", "anthropic", target),
   );
 
   expect(result[0]).toMatchObject({
     role: "assistant",
-    content: [
-      ...(keepThinking
-        ? [{ type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" }]
-        : []),
-      text("visible answer"),
-    ],
+    content: [...(keepThinking ? [thinking] : []), text("visible answer")],
   });
 });
 
@@ -168,37 +153,29 @@ it.each([
     },
     userMessage("continue"),
   ] as unknown as Context["messages"];
-  const result = transformTransportMessages(messages, openai);
+  const result = replay(messages);
   expect(result[0]).toMatchObject({ role: "assistant", content: expected });
   expect(result[1]).toMatchObject({ role: "user" });
 });
 
 it("drops max-token reasoning-only transport assistant turns before replay", () => {
-  const messages: Context["messages"] = [
-    thinkingMessage(
-      {
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        model: "global.anthropic.claude-sonnet-4-6",
-        stopReason: "length",
-      },
-      "partial hidden reasoning",
-      "partial-signature",
+  const model = makeModel("bedrock-converse-stream", "amazon-bedrock", "claude-sonnet-4-6");
+  const user = userMessage("retry after max token thinking");
+  expect(
+    replay(
+      [
+        assistant({
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "length",
+          content: [thinking],
+        }),
+        user,
+      ],
+      model,
     ),
-    userMessage("retry after max token thinking"),
-  ];
-
-  const result = transformTransportMessages(
-    messages,
-    makeModel(
-      "bedrock-converse-stream" as Api,
-      "amazon-bedrock",
-      "global.anthropic.claude-sonnet-4-6",
-    ),
-  );
-
-  expect(result.map((msg) => msg.role)).toEqual(["user"]);
-  expect(JSON.stringify(result)).not.toContain("partial-signature");
+  ).toEqual([user]);
 });
 
 it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
@@ -209,10 +186,7 @@ it("does not reassign a dropped errored turn's repeated-id result to an older tu
     userMessage("retry after error"),
   ];
 
-  const result = transformTransportMessages(
-    messages,
-    makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
-  );
+  const result = replay(messages, anthropic);
 
   expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
   expect(result[1]).toMatchObject({

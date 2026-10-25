@@ -16,6 +16,7 @@ import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const spawn = vi.hoisted(() => vi.fn<ProcessSupervisor["spawn"]>());
+const autoReviewer = vi.fn<ExecAutoReviewer>();
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({ spawn }),
 }));
@@ -54,6 +55,11 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       agents: {},
     });
     vi.mocked(callGatewayTool).mockReset();
+    autoReviewer.mockReset().mockResolvedValue({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "list fixture files",
+    });
     // Substitution cases never dispatch fixture files, including on the unfixed code.
     spawn.mockReset().mockImplementation(async () => ({
       activity: { resultSettled: true, lastOutputAtMs: Date.now() },
@@ -71,7 +77,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
-  function makeTool(mode: "auto" | "ask", autoReviewer: ExecAutoReviewer) {
+  function makeTool(mode: "auto" | "ask") {
     return createExecTool({
       agentId: "main",
       host: "gateway",
@@ -102,11 +108,6 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       }
       const replacement = path.join(binDir, executable);
       const substitute = () => fs.writeFileSync(replacement, "", { mode: 0o755 });
-      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-        decision: "allow-once",
-        risk: "low",
-        rationale: "list fixture files",
-      }));
       let approved = false;
       const unsubscribe = onAgentEvent((event) => {
         if (
@@ -129,7 +130,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
         }
         return { ok: true };
       });
-      const tool = makeTool(approval === "auto" ? "auto" : "ask", autoReviewer);
+      const tool = makeTool(approval === "auto" ? "auto" : "ask");
       try {
         const result = await tool.execute("dispatch-binding-call", { command });
         expect(approved).toBe(true);
@@ -160,21 +161,11 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
 
   it("routes unbindable dispatch to human approval without auto-review", async () => {
     const command = "env FOO=bar ls *.txt";
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "would approve if called",
-    }));
-    const recordedSpawn = spawn.getMockImplementation()!;
-    spawn.mockImplementation(async (...args) => {
-      fs.writeFileSync(path.join(root, "spawn-marker"), "recorded");
-      return recordedSpawn(...args);
-    });
     vi.mocked(callGatewayTool).mockImplementation(async () => {
       fs.writeFileSync(path.join(binDir, "ls"), "", { mode: 0o755 });
       return { decision: "deny" };
     });
-    const result = await makeTool("auto", autoReviewer).execute("dispatch-human-call", {
+    const result = await makeTool("auto").execute("dispatch-human-call", {
       command,
     });
     expect(autoReviewer).not.toHaveBeenCalled();
@@ -191,23 +182,16 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
     );
     expect(result.details.status).toBe("failed");
     expect(spawn.mock.calls.length).toBe(0);
-    expect(fs.existsSync(path.join(root, "spawn-marker"))).toBe(false);
   });
 
   it.each([
-    {
-      name: "opaque interpreter",
-      command: "busybox sh -c 'ls *.txt'",
-      resolved: true,
-      error: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-    },
-    {
-      name: "missing dispatch file",
-      command: "ls *.txt",
-      resolved: false,
-      error: "SYSTEM_RUN_DENIED",
-    },
-  ])("rejects $name before review or dispatch", async ({ command, resolved, error }) => {
+    [
+      "busybox sh -c 'ls *.txt'",
+      true,
+      "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    ],
+    ["ls *.txt", false, "SYSTEM_RUN_DENIED"],
+  ] as const)("rejects %s before review or dispatch", async (command, resolved, error) => {
     const wrapperPath = path.join(resolved ? binDir : path.join(root, "missing"), "busybox");
     if (resolved) {
       fs.copyFileSync("/usr/bin/true", wrapperPath);
@@ -215,8 +199,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
         wrapperPath,
       );
     }
-    const autoReviewer = vi.fn<ExecAutoReviewer>();
-    const result = await makeTool("auto", autoReviewer).execute("dispatch-unresolved-call", {
+    const result = await makeTool("auto").execute("dispatch-unresolved-call", {
       command: resolved ? command : `${wrapperPath} ${command}`,
     });
     expect(result.details.status).toBe("failed");

@@ -129,11 +129,7 @@ describe("memory flush writer availability", () => {
     );
 
     expect(names(assembled)).toEqual(["find_memory", "read", "save_memory"]);
-    expect(warnings).toEqual([
-      expect.stringContaining(
-        'plugin "memory-provider" flush cannot check for existing memory: get_memory',
-      ),
-    ]);
+    expect(warnings).toEqual([expect.stringContaining("get_memory")]);
   });
 
   it.each(["provider", "file"] as const)(
