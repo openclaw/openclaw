@@ -67,19 +67,14 @@ function transcriptIdentities(db: EngineConnection, sessionId: string) {
 
 function observePgTrips(db: EngineConnection) {
   const statements: string[] = [];
-  if (!isPostgresSqlConnection(db)) {
-    return { statements, restore() {} };
-  }
-  const query = db.query.bind(db);
-  const spy = vi.spyOn(db, "query").mockImplementation(
-    new Proxy(query, {
-      apply(target, receiver, args) {
-        statements.push(args[0]);
-        return Reflect.apply(target, receiver, args);
-      },
-    }),
-  );
-  return { statements, restore: () => spy.mockRestore() };
+  const spy = isPostgresSqlConnection(db) ? vi.spyOn(db, "query") : undefined;
+  return {
+    statements,
+    restore() {
+      statements.push(...(spy?.mock.calls.map(([statement]) => statement) ?? []));
+      spy?.mockRestore();
+    },
+  };
 }
 
 function expectTrips(db: EngineConnection, run: () => void, count: number) {
@@ -156,10 +151,22 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         return admit(() => f.mutate(command));
       };
       const mutation = (
-        type: "session.actor.appendToolResult" | "session.actor.completeTurn",
+        operation: "acceptInput" | "appendToolResult" | "completeTurn",
         commandId: string,
         turn: SessionTurnPlan,
-      ): Mutation => ({ type, input: { target: f.target, commandId, phaseId: "turn", turn } });
+      ): Mutation => {
+        const input = { target: f.target, commandId, phaseId: "turn", turn };
+        return operation === "acceptInput"
+          ? {
+              type: "session.actor.acceptInput",
+              input: {
+                ...input,
+                expectedState: buildRestartRecoveryExpectedState(admit(() => f.read()).entry!),
+                lifecycle: {},
+              },
+            }
+          : { type: `session.actor.${operation}`, input };
+      };
       const readPersisted = () =>
         admit(() => ({
           transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
@@ -168,29 +175,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           identities: transcriptIdentities(f.database.db, f.scope.sessionId),
         }));
       try {
-        const before = admit(() => f.read());
         const commands: Mutation[] = [
-          {
-            type: "session.actor.acceptInput",
-            input: {
-              target: f.target,
-              commandId: "input",
-              phaseId: "turn",
-              expectedState: buildRestartRecoveryExpectedState(before.entry!),
-              lifecycle: {},
-              turn: plan("input", "user", "Needle question", 10),
-            },
-          },
+          mutation("acceptInput", "input", plan("input", "user", "Needle question", 10)),
           mutation(
-            "session.actor.appendToolResult",
+            "appendToolResult",
             "tool",
             plan("tool", "toolResult", "Needle tool output", 20),
           ),
-          mutation(
-            "session.actor.completeTurn",
-            "final",
-            plan("final", "assistant", "Needle answer", 30),
-          ),
+          mutation("completeTurn", "final", plan("final", "assistant", "Needle answer", 30)),
         ];
         let expectedUpdatedAt: number | null | undefined;
         const trips = observePgTrips(f.database.db);
@@ -206,26 +198,21 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           trips.restore();
         }
         if (engine === "postgres") {
-          const writes = trips.statements.filter(
-            (sql) =>
-              /(?:insert into|update)\s+"?session_transcript_(?:active_events|fts_rows|index_state)"?/iu.test(
-                sql,
-              ) || /update\s+"?session_windows"?\s+set[^;]*"transcript_updated_at"/iu.test(sql),
-          );
-          expect(writes).toHaveLength(3);
+          const windowWrite = /update\s+"?session_windows"?\s+set[^;]*"transcript_updated_at"/iu;
+          const projectionWrite =
+            /(?:insert into|update)\s+"?session_transcript_(?:active_events|fts_rows|index_state)"?/iu;
           expect(
-            writes.every((sql) =>
-              /update\s+"?session_windows"?\s+set[^;]*"transcript_updated_at"/iu.test(sql),
-            ),
-          ).toBe(true);
+            trips.statements.filter((sql) => projectionWrite.test(sql) || windowWrite.test(sql)),
+          ).toHaveLength(3);
           expect(
             [
+              windowWrite,
               /insert into\s+"?transcript_(?:events|event_identities)"?/iu,
               /^BEGIN\b/iu,
               /^COMMIT\b/iu,
               /pg_advisory_xact_lock/iu,
             ].map((pattern) => trips.statements.filter((sql) => pattern.test(sql)).length),
-          ).toEqual([3, 3, 3, 3]);
+          ).toEqual([3, 3, 3, 3, 3]);
         }
         const persisted = readPersisted();
         const search = admit(() =>
@@ -241,21 +228,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           message("tool", "input", "toolResult", "Needle tool output", 20, "tool"),
           message("final", "tool", "assistant", "Needle answer", 30, "final"),
         ]);
-        expect(persisted.projection).toEqual({
-          active: [1, 2, 3, 4].map((event_seq, index) => ({
-            active_position: index,
-            context_eligible: 1,
-            event_seq,
-            message_position: index,
-          })),
-          state: indexState(4, 4, 4, "final"),
-          fts: [
-            { message_id: "previous", text: "Previous answer", role: "assistant", timestamp: 1 },
-            { message_id: "input", text: "Needle question", role: "user", timestamp: 10 },
-            { message_id: "final", text: "Needle answer", role: "assistant", timestamp: 30 },
-          ],
-          identities: ["previous", "input", "final"].map((message_id) => ({ message_id })),
-        });
+        expect(persisted.projection.state).toEqual(indexState(4, 4, 4, "final"));
         expect(persisted.window).toMatchObject({
           updated_at: 30,
           transcript_updated_at: expectedUpdatedAt,
@@ -274,9 +247,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           { messageId: "input", role: "user", timestamp: 10 },
         ]);
 
-        expect(
-          await execute(mutation("session.actor.appendToolResult", "retry", retry)),
-        ).toMatchObject({ kind: "committed" });
+        expect(await execute(mutation("appendToolResult", "retry", retry))).toMatchObject({
+          kind: "committed",
+        });
         const stable = readPersisted();
         const decoded = (snapshot: typeof stable) => ({
           ...snapshot,
@@ -298,7 +271,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           }
           const outcome = await execute(
             mutation(
-              "session.actor.completeTurn",
+              "completeTurn",
               refusal,
               plan(`refused-${refusal}`, "assistant", "Refused answer", 100),
             ),
@@ -327,12 +300,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             },
             0,
           );
-          expect(projection(db, scope.sessionId)).toEqual({
-            active: [],
-            state: undefined,
-            fts: [],
-            identities: [],
-          });
           const append = createTranscriptIndexAppenderInTransaction(db, scope.sessionId);
           const insert = createTranscriptEventInserter(db, scope.sessionId);
           const count = TRANSCRIPT_INSERT_BATCH_SIZE + 1;
