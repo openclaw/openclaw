@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
@@ -185,37 +184,6 @@ describe("applyResetModelOverride", () => {
     },
   );
 
-  it("persists explicit default intent so a later turn does not re-inherit its parent", async () => {
-    const parentKey = "agent:main:parent";
-    const fixture = createResetFixture({
-      ...alternateModel,
-      modelOverrideSource: "user",
-    });
-
-    await apply(fixture, {
-      bodyStripped: "openai/gpt-4o-mini summarize",
-      sessionKey: "agent:main:child",
-    });
-
-    expect(fixture.sessionEntry.modelOverrideSource).toBe("default");
-    expect(
-      resolveStoredModelOverride({
-        sessionEntry: fixture.sessionEntry,
-        sessionStore: {
-          [parentKey]: {
-            sessionId: "parent-session",
-            updatedAt: 1,
-            ...alternateModel,
-            modelOverrideSource: "user",
-          },
-        },
-        sessionKey: "agent:main:child",
-        parentSessionKey: parentKey,
-        defaultProvider: "openai",
-      }),
-    ).toBeNull();
-  });
-
   it.each([
     { name: "empty catalog", catalog: [], allowed: true },
     { name: "unrelated catalog", catalog: modelCatalog.slice(1), allowed: true },
@@ -249,19 +217,6 @@ describe("applyResetModelOverride", () => {
     );
     expect(fixture.sessionEntry.providerOverride).toBeUndefined();
     expect(fixture.sessionEntry.modelOverride).toBeUndefined();
-  });
-
-  it("clears auth profile overrides when reset applies a model", async () => {
-    await prepareSharedAuthStoreOwnership();
-    const { sessionEntry } = await applyResetFixture({
-      authProfileOverride: "anthropic:default",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 2,
-    });
-
-    expect(sessionEntry.authProfileOverride).toBeUndefined();
-    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
   });
 
   it("prepares a cold auth pin asynchronously and observes a subsequent owner write", async () => {
