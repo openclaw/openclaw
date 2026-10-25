@@ -104,7 +104,7 @@ export function hydrateSessionActorState(
               "session_key",
             ])
             .where("session_participants.session_key", "=", eb.ref("session_nodes.session_key"))
-            .orderBy("first_prompted_at")
+            .orderBy("first_prompted_at", (order) => order.asc().nullsFirst())
             .orderBy("actor_id")
             .orderBy("identity_namespace"),
           ["first_prompted_at", "actor_id", "identity_namespace"],
