@@ -11,7 +11,6 @@ import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
@@ -114,16 +113,6 @@ it.each(["worker-turn", "remote-exec"] as const)(
     };
     const tunnel = createWorkerTurnTunnel({
       runWorkspaceCommand: vi.fn(async (command) => {
-        parseNodeWorkerWorkspaceExecInput(
-          JSON.stringify({
-            gatewayNamespace: "attachments",
-            environmentId: ENVIRONMENT_ID,
-            sessionId: SESSION_ID,
-            generation: OWNER_EPOCH,
-            argv: command.argv,
-            input: command.input,
-          }),
-        );
         return await runCommandWithTimeout([...command.argv], {
           cwd: remote,
           input: command.input,

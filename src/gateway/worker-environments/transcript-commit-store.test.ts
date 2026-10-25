@@ -102,38 +102,27 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("requires a reservation, recovers pending work, and preserves the first terminal result across reopen", async () => {
+it("persists an ordered, payload-bound sequence and its first terminal outcome across reopen", async () => {
+  const second = { ...input, seq: 2, requestHash: "b".repeat(64) };
+  const third = { ...input, seq: 3, requestHash: "c".repeat(64) };
+  const conflicting = { ...input, requestHash: second.requestHash };
   await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
     "must begin before terminal completion",
   );
+  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
   expect(await store.begin(input)).toEqual(CLAIMED);
   expect(await store.begin(input)).toEqual(RECOVER);
-
+  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
   expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
   expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
   expect(await store.begin(input)).toEqual(REPLAY);
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
+  expect(await store.begin({ ...input, environmentId: "worker-b" })).toEqual(CONFLICT);
 
   await closeStateDatabaseForTest();
   store = openStore();
   expect(await store.begin(input)).toEqual(REPLAY);
-});
-
-it("rejects a tuple replayed with a different payload or environment", async () => {
-  expect(await store.begin(input)).toEqual(CLAIMED);
-  expect(await store.begin({ ...input, requestHash: "b".repeat(64) })).toEqual(CONFLICT);
-  await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
-  expect(await store.begin({ ...input, requestHash: "b".repeat(64) })).toEqual(CONFLICT);
-  expect(await store.begin({ ...input, environmentId: "worker-b" })).toEqual(CONFLICT);
-});
-
-it("advances one ordered sequence only after terminal completion", async () => {
-  const second = { ...input, seq: 2, requestHash: "b".repeat(64) };
-  const third = { ...input, seq: 3, requestHash: "c".repeat(64) };
-
-  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
-  expect(await store.begin(input)).toEqual(CLAIMED);
-  expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
-  await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
   expect(await store.begin(third)).toEqual({ ...OUT_OF_ORDER, expectedSeq: 2 });
   expect(await store.begin(second)).toEqual(CLAIMED);
   expect(await store.complete({ ...second, outcome: ERROR_OUTCOME })).toEqual(ERROR_OUTCOME);
