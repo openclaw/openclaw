@@ -228,12 +228,17 @@ function installDeferredStructuredChatChunks(model: Model): () => void {
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 
-function createManagedFixtureStream(model: Model, scenario: StructuredContentScenario) {
+function createFixtureStream(
+  model: Model<"openai-completions">,
+  scenario: Pick<StructuredContentScenario, "package" | "reasoningEffort">,
+) {
   const options = {
     apiKey: "fixture-token",
     reasoningEffort: scenario.reasoningEffort ?? "medium",
   };
-  const stream = createManagedStream(model, context, options);
+  const stream = scenario.package
+    ? streamOpenAICompletions(model, context, options)
+    : createManagedStream(model, context, options);
   if (stream instanceof Promise) {
     throw new Error("OpenAI Chat Completions transport must return its stream synchronously");
   }
@@ -242,27 +247,15 @@ function createManagedFixtureStream(model: Model, scenario: StructuredContentSce
 
 preserveTransportHost();
 
-describe.each([
-  {
-    name: "package",
-    createStream: (model: Model<"openai-completions">, scenario: StructuredContentScenario) =>
-      streamOpenAICompletions(model, context, {
-        apiKey: "fixture-token",
-        reasoningEffort: scenario.reasoningEffort ?? "medium",
-      }),
-  },
-  { name: "managed", createStream: createManagedFixtureStream },
-])("$name Chat Completions structured content", ({ name, createStream }) => {
-  const ownerScenarios =
-    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
-  it.each(ownerScenarios)("preserves $name", async (scenario) => {
+describe("Chat Completions structured content", () => {
+  it.each(scenarios)("preserves $name", async (scenario) => {
     const model = {
       ...reasoningModel,
       reasoning: scenario.reasoningEnabled ?? true,
     } satisfies Model<"openai-completions">;
     installChatChunk(scenario, model);
 
-    const result = await createStream(model, scenario).result();
+    const result = await createFixtureStream(model, scenario).result();
     expect({ stopReason: result.stopReason, content: result.content }).toEqual({
       stopReason: "stop",
       content: scenario.expectedContent,
@@ -283,17 +276,16 @@ describe.each([
     }
   });
 
-  it.each(["medium", "none"] as const)(
-    "streams visible structured content before terminal when reasoning is %s",
-    async (reasoningEffort) => {
+  it.each([
+    [true, "medium"],
+    [true, "none"],
+    [false, "medium"],
+    [false, "none"],
+  ] as const)(
+    "streams visible content before terminal (direct=%s, reasoning=%s)",
+    async (direct, reasoningEffort) => {
       const releaseTerminal = installDeferredStructuredChatChunks(reasoningModel);
-      const scenario: StructuredContentScenario = {
-        name: "incremental structured reasoning",
-        choice: {},
-        expectedContent: [],
-        reasoningEffort,
-      };
-      const stream = createStream(reasoningModel, scenario);
+      const stream = createFixtureStream(reasoningModel, { package: direct, reasoningEffort });
       const firstVisible = createDeferred<string>();
       let resolveFirstVisible: ((value: string) => void) | undefined = firstVisible.resolve;
       const textDeltas: string[] = [];
