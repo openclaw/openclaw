@@ -1,12 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
-  appendTranscriptMessageSync,
   loadTranscriptEventsSync,
-  replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -23,9 +20,8 @@ import {
 } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
-import { createReplyDispatch } from "./chat-send-reply-dispatch.test-support.js";
+import { withReplyTranscript } from "./chat-send-reply-dispatch.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (
@@ -37,135 +33,110 @@ const observer = useReconcileWorkerObserver();
 
 it.each(["reply-observation", "commentary-media"] as const)(
   "cancels %s projection waiting without cancelling the shared rebuild or losing the answer",
-  (scenario) =>
-    withOpenClawTestState({ label: "chat-projection-cancel" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const runId = "projection-run";
-      const scope = {
-        agentId: "main",
-        sessionId: "projection-session",
-        sessionKey: "agent:main:projection",
-        storePath: (await loadSessionEntryAsync("agent:main:projection", { agentId: "main" }))
-          .storePath,
-      };
-      const entry = { sessionId: scope.sessionId, lifecycleRevision: "initial", updatedAt: 1 };
-      await replaceSessionEntry(scope, entry);
-      const inputRecorder = (text: string, idempotencyKey: string) =>
-        createUserTurnTranscriptRecorder({
-          input: { text, idempotencyKey },
-          target: { ...scope, sessionEntry: entry },
+  (scenario, test) =>
+    withReplyTranscript(
+      async ({ scope, runId, dispatch, appendSync, abortController: controller }) => {
+        const warn = vi.fn();
+        const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
+          runId,
+          sessionId: scope.sessionId,
         });
-      const recorder = inputRecorder("Inspect the fixture", `${runId}:user`);
-      await recorder.persistApproved();
-      const controller = new AbortController();
-      const warn = vi.fn();
-      const dispatch = createReplyDispatch(runId, {
-        abortSignal: controller.signal,
-        logGateway: { warn } as never,
-        session: {
-          ...scope,
-          entry,
-          backingSessionId: scope.sessionId,
-          cfg: {},
-          clientRunId: runId,
-          sessionLoadOptions: { agentId: "main" },
-        },
-        userTurnRecorder: recorder,
-      });
-      const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
-        runId,
-        sessionId: scope.sessionId,
-      });
-      const databaseOptions = {
-        agentId: scope.agentId,
-        path: resolveSessionTranscriptDatabasePath(scope),
-      };
-      const database = () => openOpenClawAgentDatabase(databaseOptions).db;
-      if (scenario === "commentary-media") {
-        markRebuild(database());
-        await reconcile.reconcileSessionTranscriptIndexes(databaseOptions);
-      }
-      const enteredWait = createDeferred();
-      const waitForProjection = reconcile.waitForSessionTranscriptProjection;
-      const waiting = vi
-        .spyOn(reconcile, "waitForSessionTranscriptProjection")
-        .mockImplementation((...args) => {
-          const result = waitForProjection(...args);
-          enteredWait.resolve();
-          return result;
+        const databaseOptions = {
+          agentId: scope.agentId,
+          path: resolveSessionTranscriptDatabasePath(scope),
+        };
+        const database = () => openOpenClawAgentDatabase(databaseOptions).db;
+        if (scenario === "commentary-media") {
+          markRebuild(database());
+          await reconcile.reconcileSessionTranscriptIndexes(databaseOptions);
+        }
+        const enteredWait = createDeferred();
+        const waitForProjection = reconcile.waitForSessionTranscriptProjection;
+        const waiting = vi
+          .spyOn(reconcile, "waitForSessionTranscriptProjection")
+          .mockImplementation((...args) => {
+            const result = waitForProjection(...args);
+            enteredWait.resolve();
+            return result;
+          });
+        const projection = holdReconcileAck(observer, "plan-start", scope.sessionId);
+        const mediaUrl = "https://example.test/retained-attachment.png";
+        const message = attachSessionTranscriptRunId(
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: `Fixture inspected.\nMEDIA:${mediaUrl}`,
+                ...(scenario === "commentary-media"
+                  ? { textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }) }
+                  : {}),
+              },
+            ],
+            openclawDelivery: { mediaUrls: [mediaUrl] },
+          },
+          runId,
+        );
+        let settled = false;
+        const operation = dispatch
+          .runAgentMediaTranscript({ run: async (run) => run() }, async () =>
+            withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: scope,
+                assertCommitAllowed: () => controller.signal.throwIfAborted(),
+                withTranscriptWrite: (...args) => lifecycle.withTranscriptWrite(...args),
+              },
+              async () => {
+                dispatch.captureAgentTranscriptStart();
+                appendSync("answer", message);
+                markRebuild(database());
+                reconcile.startSessionTranscriptIndexReconcile(databaseOptions);
+                if (scenario === "reply-observation") {
+                  return await observeReplyDelivery(dispatch.resolveReplyDelivery, 0, warn);
+                }
+                emitSessionTranscriptUpdate({ target: scope, messageId: "answer", message, runId });
+                await enteredWait.promise;
+                await lifecycle.beginCleanup();
+                return "finished";
+              },
+            ),
+          )
+          .then((result) => {
+            settled = true;
+            return result;
+          });
+        try {
+          await withinTest(Promise.all([enteredWait.promise, projection.paused]), test.signal);
+          expect(settled).toBe(false);
+          controller.abort(new Error("Operator stopped this run"));
+          expect(await withinTest(operation, test.signal)).toBe(
+            scenario === "reply-observation" ? "pending" : "finished",
+          );
+          expect(reconcile.isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(true);
+          expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
+        } finally {
+          controller.abort(new Error("Projection cancellation fixture cleanup"));
+          waiting.mockRestore();
+          observer.onTask = undefined;
+          projection.release();
+          await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
+          await operation;
+          await lifecycle.dispose();
+        }
+        expect(rebuildState(database(), scope.sessionId)).toMatchObject({ needs_rebuild: 0 });
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({ id: "answer", message }),
+        );
+        const nextInput = createUserTurnTranscriptRecorder({
+          input: { text: "Continue with the next fixture", idempotencyKey: "successor:user" },
+          target: {
+            ...scope,
+            sessionEntry: (
+              await loadSessionEntryAsync(scope.sessionKey, { agentId: scope.agentId })
+            ).entry,
+          },
         });
-      const projection = holdReconcileAck(observer, "plan-start", scope.sessionId);
-      const mediaUrl = "https://example.test/retained-attachment.png";
-      const message = attachSessionTranscriptRunId(
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `Fixture inspected.\nMEDIA:${mediaUrl}`,
-              ...(scenario === "commentary-media"
-                ? { textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }) }
-                : {}),
-            },
-          ],
-          openclawDelivery: { mediaUrls: [mediaUrl] },
-        },
-        runId,
-      );
-      let settled = false;
-      const operation = dispatch
-        .runAgentMediaTranscript({ run: async (run) => run() }, async () =>
-          withOwnedSessionTranscriptWrites(
-            {
-              sessionTarget: scope,
-              assertCommitAllowed: () => controller.signal.throwIfAborted(),
-              withTranscriptWrite: (...args) => lifecycle.withTranscriptWrite(...args),
-            },
-            async () => {
-              dispatch.captureAgentTranscriptStart();
-              expect(
-                appendTranscriptMessageSync(scope, { eventId: "answer", message }),
-              ).toMatchObject({ ok: true });
-              markRebuild(database());
-              reconcile.startSessionTranscriptIndexReconcile(databaseOptions);
-              if (scenario === "reply-observation") {
-                return await observeReplyDelivery(dispatch.resolveReplyDelivery, 0, warn);
-              }
-              emitSessionTranscriptUpdate({ target: scope, messageId: "answer", message, runId });
-              await enteredWait.promise;
-              await lifecycle.beginCleanup();
-              return "finished";
-            },
-          ),
-        )
-        .then((result) => {
-          settled = true;
-          return result;
-        });
-      try {
-        await enteredWait.promise;
-        await projection.paused;
-        expect(settled).toBe(false);
-        controller.abort(new Error("Operator stopped this run"));
-        await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
-        expect(await operation).toBe(scenario === "reply-observation" ? "pending" : "finished");
-        expect(warn).toHaveBeenCalledOnce();
-        expect(reconcile.isSessionTranscriptIndexReconcileRunning(databaseOptions)).toBe(true);
-        expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
-      } finally {
-        controller.abort(new Error("Projection cancellation fixture cleanup"));
-        waiting.mockRestore();
-        observer.onTask = undefined;
-        projection.release();
-        await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
-        await operation;
-        await lifecycle.dispose();
-      }
-      expect(rebuildState(database(), scope.sessionId)).toMatchObject({ needs_rebuild: 0 });
-      expect(loadTranscriptEventsSync(scope)).toContainEqual(
-        expect.objectContaining({ id: "answer", message }),
-      );
-      const nextInput = inputRecorder("Continue with the next fixture", "successor:user");
-      expect(await nextInput.persistApproved()).toMatchObject({ appended: true });
-    }),
+        expect(await nextInput.persistApproved()).toMatchObject({ appended: true });
+      },
+    ),
 );
