@@ -41,6 +41,11 @@ afterEach(() => {
 
 const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
+const seedPrivate = (key: string, sessionId: string, entry: Partial<SessionEntry> = {}) =>
+  replaceSessionEntry(
+    { agentId: "main", sessionKey: key },
+    { sessionId, updatedAt: 1, incognito: true, ...entry },
+  );
 
 type PlacementRow = {
   key: string;
@@ -101,12 +106,17 @@ function describeSession(
   return { respond, completion };
 }
 
-function expectPlacementResponse(respond: ReturnType<typeof vi.fn>, row: PlacementRow) {
+function expectPlacementResponse(
+  respond: ReturnType<typeof vi.fn>,
+  row: PlacementRow,
+  extra: Partial<SessionEntry> = {},
+) {
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
     session: expect.objectContaining({
       key: row.key,
       sessionId: row.sessionId,
       placement: projectWorkerSessionPlacement(row.placement),
+      ...extra,
     }),
   });
 }
@@ -448,14 +458,7 @@ it("keeps exact category reads independent of bulk placement preparation", async
       } finally {
         sql.restore();
       }
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        session: expect.objectContaining({
-          key: exactRow.key,
-          sessionId: exactRow.sessionId,
-          label: "Fresh exact description",
-          placement: projectWorkerSessionPlacement(exactRow.placement),
-        }),
-      });
+      expectPlacementResponse(respond, exactRow, { label: "Fresh exact description" });
       releaseBulk.resolve();
       await bulk;
       expect(projection.snapshot({ agentId: "main", key: bulkRow.key }).row?.placement).toEqual(
@@ -477,16 +480,10 @@ it("consumes an incognito repository description without SQLite or resident priv
       branch: "private-description",
       assertCurrent: () => {},
     });
-    await replaceSessionEntry(
-      { agentId: query.agentId, sessionKey: query.key },
-      {
-        sessionId: "private-description",
-        lifecycleRevision: "original",
-        updatedAt: 1,
-        incognito: true,
-        repositoryWorkspaceId: repository.workspaceId,
-      },
-    );
+    await seedPrivate(query.key, "private-description", {
+      lifecycleRevision: "original",
+      repositoryWorkspaceId: repository.workspaceId,
+    });
     const placements = createWorkerSessionPlacementStore();
     await placements.startDispatch({
       agentId: query.agentId,
@@ -576,20 +573,9 @@ it("keeps missing private reads absent and refuses unprepared keys and asynchron
 
 it("prepares only the private response's child selections before consumption", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await replaceSessionEntry(
-      { agentId: query.agentId, sessionKey: query.key },
-      { sessionId: "private-parent", updatedAt: 1, incognito: true },
-    );
+    await seedPrivate(query.key, "private-parent");
     const childKey = "agent:main:dashboard:incognito-child-visibility";
-    await replaceSessionEntry(
-      { agentId: query.agentId, sessionKey: childKey },
-      {
-        sessionId: "private-child",
-        updatedAt: 1,
-        incognito: true,
-        parentSessionKey: query.key,
-      },
-    );
+    await seedPrivate(childKey, "private-child", { parentSessionKey: query.key });
     using projection = await createTestProjection({ cfg });
 
     const describe = projection.describe.bind(projection);

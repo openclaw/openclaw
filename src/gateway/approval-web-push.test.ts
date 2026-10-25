@@ -1,10 +1,10 @@
-import { beforeEach, expect, it, vi, type TestContext } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
 import { encodePngRgba } from "../media/png-encode.js";
-import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.types.js";
+import { createExecApprovalRecord } from "./exec-approval-registration.js";
 
 const mocks = vi.hoisted(() => ({
   pairings: vi.fn(),
@@ -138,12 +138,11 @@ function terminalPage(approvalIds: string[], throughApprovalId = approvalIds.at(
 }
 
 function unregisteredRecord(id: string, request: ExecApprovalRecord["request"]) {
-  const createdAtMs = Date.now();
-  return { id, request, createdAtMs, expiresAtMs: createdAtMs + 60_000 };
+  return createExecApprovalRecord(request, 60_000, id);
 }
 
-function createRecord(context: TestContext, id: string, command = "echo ok") {
-  return createTestApprovalManager<{ command: string }>(context).create({ command }, 60_000, id);
+function createRecord(id: string, command = "echo ok") {
+  return unregisteredRecord(id, { command });
 }
 
 async function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({})) {
@@ -283,10 +282,10 @@ it.each([true, false])(
   },
 );
 
-it("sends a generic approval link only to currently authorized visible bindings", async (testContext) => {
+it("sends a generic approval link only to currently authorized visible bindings", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
-  const record = createRecord(testContext, "exec:approval.1", "sensitive command");
+  const record = createRecord("exec:approval.1", "sensitive command");
   record.requestedByDeviceId = "allowed-device";
   const allowed = boundSubscription("allowed-device", "profile-allowed");
   const wrongDevice = boundSubscription("wrong-device", "profile-allowed");
@@ -328,12 +327,9 @@ it("sends a generic approval link only to currently authorized visible bindings"
   expect(JSON.stringify(mocks.send.mock.calls)).not.toContain("sensitive command");
 });
 
-it("sanitizes identified approval labels without changing agent filters", async (testContext) => {
+it("sanitizes identified approval labels without changing agent filters", async () => {
   const agentId = "agent\n\u202E";
-  const record = createTestApprovalManager(testContext).create(
-    { command: "echo ok", agentId },
-    60_000,
-  );
+  const record = unregisteredRecord("exec:labels", { command: "echo ok", agentId });
   const subscription = boundSubscription("browser-device", null, {
     label: "Phone\u202E",
     detailLevel: "identified",
@@ -355,8 +351,8 @@ it("sanitizes identified approval labels without changing agent filters", async 
   expect(record.request.agentId).toBe(agentId);
 });
 
-it("rechecks the profile role and excludes unbound role-based subscriptions", async (testContext) => {
-  const record = createRecord(testContext, "exec:role-check");
+it("rechecks the profile role and excludes unbound role-based subscriptions", async () => {
+  const record = createRecord("exec:role-check");
   const current = boundSubscription("current-device", "profile-current");
   const downgraded = boundSubscription("downgraded-device", "profile-downgraded");
   const missingPolicy = boundSubscription("missing-policy-device", "profile-missing");
@@ -386,8 +382,8 @@ it("rechecks the profile role and excludes unbound role-based subscriptions", as
   expectSend({ subscriptions: [current] });
 });
 
-it("reads runtime role policy after transport preparation", async (testContext) => {
-  const record = createRecord(testContext, "exec:config-race");
+it("reads runtime role policy after transport preparation", async () => {
+  const record = createRecord("exec:config-race");
   bindDevice("current");
   const preparation = createDeferred<typeof mocks.send>();
   mocks.prepareSender.mockReturnValue(preparation.promise);
@@ -413,13 +409,13 @@ it("reads runtime role policy after transport preparation", async (testContext) 
   expect(mocks.send).not.toHaveBeenCalled();
 });
 
-it.for([
+it.each([
   { terminalState: "resolved", phase: "transport" },
   { terminalState: "expired", phase: "preferences" },
 ] as const)(
   "does not send after the approval becomes $terminalState during $phase preparation",
-  async ({ terminalState, phase }, testContext) => {
-    const record = createRecord(testContext, `exec:${terminalState}-during-preparation`);
+  async ({ terminalState, phase }) => {
+    const record = createRecord(`exec:${terminalState}-during-preparation`);
     bindDevice("current");
     const preparationStarted = createDeferred();
     const preparationReady = createDeferred();
@@ -445,10 +441,10 @@ it.for([
   },
 );
 
-it("recomputes the remaining TTL after transport preparation", async (testContext) => {
+it("recomputes the remaining TTL after transport preparation", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
-  const record = createRecord(testContext, "exec:ttl-after-preparation");
+  const record = createRecord("exec:ttl-after-preparation");
   const current = bindDevice("current");
   mocks.send.mockResolvedValue([success(current)]);
   const preparation = createDeferred<typeof mocks.send>();
@@ -466,8 +462,8 @@ it("recomputes the remaining TTL after transport preparation", async (testContex
   });
 });
 
-it("retains ambiguous request targets for terminal replacement and prunes definite failures", async (testContext) => {
-  const record = createRecord(testContext, "exec:ambiguous-request");
+it("retains ambiguous request targets for terminal replacement and prunes definite failures", async () => {
+  const record = createRecord("exec:ambiguous-request");
   const ambiguous = boundSubscription("ambiguous-device", "profile-ambiguous");
   const gone = boundSubscription("gone-device", "profile-gone");
   const rejected = boundSubscription("rejected-device", "profile-rejected");
@@ -498,8 +494,8 @@ it("retains ambiguous request targets for terminal replacement and prunes defini
   );
 });
 
-it("replaces successful request alerts after the approval becomes expired", async (testContext) => {
-  const record = createRecord(testContext, "exec:terminal-expired", "sensitive command");
+it("replaces successful request alerts after the approval becomes expired", async () => {
+  const record = createRecord("exec:terminal-expired", "sensitive command");
   const delivered = boundSubscription("delivered-device", "profile-delivered");
   const failed = boundSubscription("failed-device", "profile-failed");
   bindSubscriptions(delivered, failed);
@@ -564,8 +560,8 @@ it("drains terminal recovery beyond the first 1,024 approvals", async () => {
   expect(mocks.targets).toHaveBeenCalledTimes(1_025);
 });
 
-it("recovers a terminal replacement from durable targets after process restart", async (testContext) => {
-  const record = createRecord(testContext, "exec:restart-terminal", "sensitive command");
+it("recovers a terminal replacement from durable targets after process restart", async () => {
+  const record = createRecord("exec:restart-terminal", "sensitive command");
   const delivered = bindDevice("delivered");
   mocks.send
     .mockResolvedValueOnce([success(delivered)])
@@ -592,10 +588,10 @@ it("recovers a terminal replacement from durable targets after process restart",
   expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
 });
 
-it.for(["same-process", "restart"] as const)(
+it.each(["same-process", "restart"] as const)(
   "does not send a terminal approval link after device authority is revoked in %s delivery",
-  async (mode, testContext) => {
-    const record = createRecord(testContext, `exec:revoked-terminal-${mode}`, "sensitive command");
+  async (mode) => {
+    const record = createRecord(`exec:revoked-terminal-${mode}`, "sensitive command");
     const delivered = boundSubscription("revoked-device", "profile-revoked");
     const active = pairedOperator("revoked-device");
     const revoked = {
@@ -623,8 +619,8 @@ it.for(["same-process", "restart"] as const)(
   },
 );
 
-it("does not send a terminal approval link after profile policy is tightened", async (testContext) => {
-  const record = createRecord(testContext, "exec:tightened-terminal-policy", "sensitive command");
+it("does not send a terminal approval link after profile policy is tightened", async () => {
+  const record = createRecord("exec:tightened-terminal-policy", "sensitive command");
   const delivered = bindDevice("policy");
   mocks.send.mockResolvedValueOnce([success(delivered)]);
   const tightenedConfig = { gateway: { roles: { definitions: {} } } };

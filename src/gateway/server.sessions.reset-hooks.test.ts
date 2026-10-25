@@ -171,19 +171,16 @@ async function performSessionReset(params: {
   return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
 }
 
-function isCommandHookEvent(event: unknown, action: string): event is CommandNewHookEvent {
-  return (
-    Boolean(event) &&
-    typeof event === "object" &&
-    (event as { type?: unknown }).type === "command" &&
-    (event as { action?: unknown }).action === action
-  );
-}
-
 function commandHookEvents(action = "new") {
   return (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
     .map((call) => call[0])
-    .filter((event) => isCommandHookEvent(event, action));
+    .filter(
+      (event): event is CommandNewHookEvent =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === action,
+    );
 }
 
 function expectSingleCommandHookEvent(action: "new" | "reset") {
@@ -194,14 +191,6 @@ function expectSingleCommandHookEvent(action: "new" | "reset") {
     throw new Error(`expected command ${action} hook event`);
   }
   return event;
-}
-
-function claudeCliBindings(sessionId: string) {
-  return {
-    claudeCliSessionId: sessionId,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-    cliSessionIds: { "claude-cli": sessionId },
-  };
 }
 
 function readStoredSession(key = "main") {
@@ -349,8 +338,7 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       ]);
     }
     const hookEvent = expectSingleCommandHookEvent("reset");
-    expect(hookEvent.sessionKey).toBe("global");
-    expect(hookEvent.context?.agentId).toBe("work");
+    expect(hookEvent).toMatchObject({ sessionKey: "global", context: { agentId: "work" } });
   });
 });
 
@@ -465,8 +453,7 @@ test("sessions.create waits for the parent work admission to release", async () 
   try {
     const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
     expect(commandHookEvents()).toHaveLength(0);
     expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
   } finally {
@@ -601,7 +588,9 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
   await createSessionStoreDir();
   await writeStoredSession("sess-dashboard-child", {
     key: "dashboard:child:42",
-    ...claudeCliBindings("claude-cli-dashboard-session"),
+    claudeCliSessionId: "claude-cli-dashboard-session",
+    cliSessionBindings: { "claude-cli": { sessionId: "claude-cli-dashboard-session" } },
+    cliSessionIds: { "claude-cli": "claude-cli-dashboard-session" },
     // Parent linkage alone does not make this a spawned subagent.
     parentSessionKey: "agent:main:main",
     content: "hello from dashboard child",
