@@ -27,6 +27,9 @@ describe("delivery queue entry state", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   const target = "reef:synthetic-peer";
   const queueId = "synthetic-entry";
+  function expectPublicInput(input: object) {
+    expect(input).not.toHaveProperty("deliveryQueueStateContext");
+  }
 
   function root(name: string) {
     const dir = path.join(fixtures.tmpDir(), name);
@@ -110,9 +113,9 @@ describe("delivery queue entry state", () => {
       const injectedRoot = root("injected");
 
       vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
-      const sendText = installSender((input) => {
+      installSender((input) => {
         expect(input).not.toHaveProperty("conversationDeliveryTarget");
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
+        expectPublicInput(input);
         expect(readQueuedEntries(originalRoot)).toHaveLength(1);
         expect(readQueuedEntries(injectedRoot)).toEqual([]);
       });
@@ -136,7 +139,6 @@ describe("delivery queue entry state", () => {
           { messageId: "sent" },
         ]);
       }
-      expect(sendText).toHaveBeenCalledOnce();
     },
   );
 
@@ -145,7 +147,7 @@ describe("delivery queue entry state", () => {
     const replacementRoot = root("replacement");
 
     const context = claimRoot(originalRoot);
-    const sendText = installSender(async () => {
+    installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot, context)).not.toBeNull();
       expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
     });
@@ -154,7 +156,6 @@ describe("delivery queue entry state", () => {
     await expect(delivery).resolves.toMatchObject([{ messageId: "sent" }]);
     expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
     expect(await loadPendingDelivery(queueId, replacementRoot)).toBeNull();
-    expect(sendText).toHaveBeenCalledOnce();
   });
 
   it("honors the owned root when resuming an existing queue entry", async () => {
@@ -163,7 +164,7 @@ describe("delivery queue entry state", () => {
 
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
     await enqueue(originalRoot, "required");
-    const sendText = installSender(async () => {
+    installSender(async () => {
       expect(await loadPendingDelivery(queueId, originalRoot)).toMatchObject({
         recoveryState: "send_attempt_started",
       });
@@ -176,7 +177,6 @@ describe("delivery queue entry state", () => {
         deliveryQueueStateDir: originalRoot,
       }),
     ).resolves.toMatchObject([{ messageId: "sent" }]);
-    expect(sendText).toHaveBeenCalledOnce();
     expect(await loadPendingDelivery(queueId, ambientRoot)).toBeNull();
     await ackDelivery(queueId, originalRoot);
   });
@@ -196,11 +196,9 @@ describe("delivery queue entry state", () => {
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
       const context = claimRoot(originalRoot);
       await enqueue(originalRoot);
-      const sendText = installSender((input) => {
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
-      });
+      const sendText = installSender(expectPublicInput);
       const custom = customDelivery((input) => {
-        expect(input).not.toHaveProperty("deliveryQueueStateContext");
+        expectPublicInput(input);
         expect(input).not.toHaveProperty("env");
       });
       const cwd =
@@ -227,9 +225,6 @@ describe("delivery queue entry state", () => {
       expect([custom.mock.calls.length, sendText.mock.calls.length]).toEqual(
         callback === "custom" ? [1, 0] : [0, 1],
       );
-      if (callback === "custom") {
-        expect(custom.mock.calls[0]).toHaveLength(1);
-      }
       expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
     },
   );

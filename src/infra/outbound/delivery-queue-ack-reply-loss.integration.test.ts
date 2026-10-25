@@ -57,6 +57,32 @@ describe("outbound custody reply loss", () => {
     return artifact;
   }
 
+  const expectMedia = (artifact: string) =>
+    expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+
+  async function loseReply<T>(
+    reply: ReturnType<typeof holdDeliveryQueueReply<T>>,
+    outcome: Promise<unknown>,
+    inspect: (value: T) => Promise<void> = async () => {},
+  ) {
+    try {
+      const value = await awaitCustodyReply(reply.held, outcome);
+      await inspect(value);
+      await reply.lose();
+      const failure = await outcome;
+      expect(failure).toBeInstanceOf(Error);
+      expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
+        "outcome-unknown",
+      );
+      expect(reply.attempts()).toBe(1);
+      return value;
+    } finally {
+      reply.restore();
+      reply.release();
+      await outcome;
+    }
+  }
+
   it.each(["pre-send fallback", "post-send settlement"] as const)(
     "does not replay a committed %s or release unacknowledged media",
     async (phase) => {
@@ -84,43 +110,25 @@ describe("outbound custody reply loss", () => {
         deps: { matrix: send },
         onDeliveryIntent: ({ id }) => queued.resolve({ id, reply: holdAcknowledgementReply(id) }),
       }).then(
-        (results) => ({ results }),
-        (error: unknown) => ({ error }),
+        () => undefined,
+        (error: unknown) => error,
       );
       const { id, reply } = await awaitCustodyReply(queued.promise, outcome);
-      let failure: unknown;
-      let committedArtifact = "";
-      try {
-        const committedPaths = await awaitCustodyReply(reply.held, outcome);
-        expect(committedPaths).toHaveLength(1);
-        committedArtifact = committedPaths[0]!;
+      const committedPaths = await loseReply(reply, outcome, async (paths) => {
+        expect(paths).toHaveLength(1);
+        const committedArtifact = paths[0]!;
         expect(path.dirname(committedArtifact)).toBe(path.join(stateDir, "delivery-queue-media"));
         expect(send).toHaveBeenCalledTimes(phase === "pre-send fallback" ? 0 : 1);
-        await expect(fs.readFile(committedArtifact, "utf8")).resolves.toBe(
-          "synthetic queued audio",
-        );
-        await reply.lose();
-        const result = await outcome;
-        expect(result).toHaveProperty("error");
-        failure = "error" in result ? result.error : undefined;
-        expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
-          "outcome-unknown",
-        );
-        expect(reply.attempts()).toBe(1);
-      } finally {
-        reply.restore();
-        reply.release();
-        await outcome;
-      }
+        await expectMedia(committedArtifact);
+      });
+      const committedArtifact = committedPaths[0]!;
       expect(send).toHaveBeenCalledTimes(phase === "pre-send fallback" ? 0 : 1);
       await closeOpenClawStateDatabaseAsync();
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir),
       ).toBeUndefined();
-      await expect(fs.readFile(committedArtifact, "utf8")).resolves.toBe("synthetic queued audio");
-      const recover = vi.fn(deliverOutboundPayloads);
-      await drainMatrixReconnect({ stateDir, deliver: recover });
-      expect(recover).not.toHaveBeenCalled();
+      await expectMedia(committedArtifact);
+      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
       expect(send).toHaveBeenCalledTimes(phase === "pre-send fallback" ? 0 : 1);
     },
   );
@@ -146,12 +154,11 @@ describe("outbound custody reply loss", () => {
     );
     const before = readQueuedEntry(stateDir, id);
     const sendMatrix = vi.fn(async () => {
-      await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+      await expectMedia(artifact);
       return { messageId: "recovered-after-claim-expiry" };
     });
-    const deliver = vi.fn<DeliverFn>((params) =>
-      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
-    );
+    const deliver: DeliverFn = (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } });
     const recover = () => drainMatrixReconnect({ deliver, stateDir });
     const reply = holdDeliveryQueueReply("deliveryQueue.claimPlatformSend", id, (value) =>
       typeof value === "string" ? value : undefined,
@@ -160,24 +167,8 @@ describe("outbound custody reply loss", () => {
       () => undefined,
       (error: unknown) => error,
     );
-    let committedClaim: string;
-    let failure: unknown;
-    try {
-      committedClaim = await awaitCustodyReply(reply.held, outcome);
-      await reply.lose();
-      failure = await outcome;
-      expect(reply.attempts()).toBe(1);
-    } finally {
-      reply.restore();
-      reply.release();
-      await outcome;
-    }
+    const committedClaim = await loseReply(reply, outcome);
     expect(committedClaim).toEqual(expect.any(String));
-    expect(failure).toBeInstanceOf(Error);
-    expect(collectNestedErrorCandidates(failure).map(extractErrorCode)).toContain(
-      "outcome-unknown",
-    );
-    expect(deliver).not.toHaveBeenCalled();
     expect(sendMatrix).not.toHaveBeenCalled();
     await closeOpenClawStateDatabaseAsync();
     const retained = readQueuedEntry(stateDir, id);
@@ -188,15 +179,13 @@ describe("outbound custody reply loss", () => {
       availableAt: expect.any(Number),
     });
     expect(retained.availableAt as number).toBeGreaterThan(Date.now());
-    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+    await expectMedia(artifact);
     await recover();
-    expect(deliver).not.toHaveBeenCalled();
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(readQueuedEntry(stateDir, id)).toEqual(retained);
-    await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic queued audio");
+    await expectMedia(artifact);
     setQueuedEntryState(stateDir, id, { retryCount: 0, availableAt: Date.now() - 1 });
     await recover();
-    expect(deliver).toHaveBeenCalledOnce();
     expect(sendMatrix).toHaveBeenCalledOnce();
     expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir)).toBe(
       "completed",

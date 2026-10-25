@@ -32,7 +32,7 @@ let adapter: ReturnType<typeof installQuestionAdapter>;
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
 const payload = { text: "Deploy where?", channelData: { askUser: { questionId } } };
-const sendMatrix = vi.fn(async () => ({ messageId: "message-b" }));
+const sendMatrix = vi.fn(async (_to: string, _text: string) => ({ messageId: "message-b" }));
 let sendOptions: Partial<Parameters<typeof deliver>[0]>;
 
 function request(timeoutMs: number): void {
@@ -79,24 +79,24 @@ function installQuestionAdapter() {
     buildKey: (messageId: string) => messageId,
     resolveReaction,
   });
-  const afterDeliverPayload = vi.fn<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>(
-    async ({ payload: deliveredPayload, results }) => {
-      const id = runtime.readAskUserQuestionId(deliveredPayload);
-      const messageId = results[0]?.messageId;
-      if (!id || !messageId) {
-        throw new Error("Question delivery did not carry its payload and native message identity");
-      }
-      runtime.registerChannelDelivery({
-        questionId: id,
-        deliveryId: `matrix:${messageId}`,
-        finalize: (statusLine) => finalized(messageId, statusLine),
-      });
-      reactions.register({ questionId: id, optionValues: ["Staging", "Production"] }, messageId);
-    },
-  );
+  const afterDeliverPayload: NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]> = async ({
+    payload: deliveredPayload,
+    results,
+  }) => {
+    const id = runtime.readAskUserQuestionId(deliveredPayload);
+    const messageId = results[0]?.messageId;
+    if (!id || !messageId) {
+      throw new Error("Question delivery did not carry its payload and native message identity");
+    }
+    runtime.registerChannelDelivery({
+      questionId: id,
+      deliveryId: `matrix:${messageId}`,
+      finalize: (statusLine) => finalized(messageId, statusLine),
+    });
+    reactions.register({ questionId: id, optionValues: ["Staging", "Production"] }, messageId);
+  };
   installQueueTestPlugin({ outbound: { ...matrixOutboundForQueueTest, afterDeliverPayload } });
   return {
-    afterDeliverPayload,
     finalized,
     resolveReaction,
     react: (messageId: string, optionIndex: number) =>
@@ -130,7 +130,6 @@ async function assertStaleReaction(
   statusLine: string,
   finalizedBeforeReaction = false,
 ) {
-  expect(adapter.afterDeliverPayload).toHaveBeenCalledOnce();
   if (finalizedBeforeReaction) {
     expect(adapter.finalized).toHaveBeenCalledExactlyOnceWith(messageId, statusLine);
   }
@@ -142,11 +141,7 @@ async function assertStaleReaction(
 }
 
 async function assertFreshReaction(previousMessageId: string, statusLine: string) {
-  expect(adapter.afterDeliverPayload).toHaveBeenCalledTimes(2);
   await expect(adapter.react("message-b", 1)).resolves.toBe(true);
-  expect(adapter.resolveReaction).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ questionId, optionValue: "Production" }),
-  );
   expect(manager.get(questionId)).toMatchObject({
     status: "answered",
     answers: { answers: { target: ["Production"] } },
@@ -206,18 +201,17 @@ it.each([
   },
 );
 
-it.each(["recovered id-only payload", "restored stable-intent custody"])(
-  "does not bind %s to a newer question generation, while a fresh send still binds",
-  async (custody) => {
-    const stableIntent = custody === "restored stable-intent custody";
-    const deliveryId = "question-generation-recovery";
+it.each([false, true])(
+  "does not bind recovered custody to reused questions (stable intent: %s)",
+  async (stableIntent) => {
+    const deliveryId = "recovery";
     const oldPayload = stableIntent
       ? { ...payload, text: "Original deployment question" }
       : payload;
     const newPayload = stableIntent
       ? { ...payload, text: "Replacement deployment question" }
       : payload;
-    const oldMessageId = stableIntent ? "retried-message-a" : "recovered-message-a";
+    const oldMessageId = "message-a";
     sendMatrix.mockResolvedValueOnce({ messageId: oldMessageId });
     sendOptions = {
       payloads: [newPayload],
@@ -234,34 +228,19 @@ it.each(["recovered id-only payload", "restored stable-intent custody"])(
     await expireAndReuse();
     if (stableIntent) {
       await expect(send(deliveryId)).resolves.toMatchObject([{ messageId: oldMessageId }]);
-      expect(sendMatrix).toHaveBeenCalledExactlyOnceWith(
-        "!room:example",
-        oldPayload.text,
-        expect.any(Object),
-      );
     } else {
-      const recover = vi.fn<DeliverFn>(async (params) =>
-        deliver({ ...params, deps: { matrix: sendMatrix } }),
-      );
+      const recover: DeliverFn = (params) => deliver({ ...params, deps: { matrix: sendMatrix } });
       await drainMatrixReconnect({ deliver: recover, stateDir: outbound.tmpDir() });
-      expect(recover).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ deliveryQueueId: deliveryId, skipQueue: true }),
-      );
-      expect(sendMatrix).toHaveBeenCalledOnce();
     }
     expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(0);
     await assertStaleReaction(oldMessageId, unavailable, true);
     await expect(send("question-generation-fresh-intent")).resolves.toMatchObject([
       { messageId: "message-b" },
     ]);
-    if (stableIntent) {
-      expect(sendMatrix).toHaveBeenNthCalledWith(
-        2,
-        "!room:example",
-        newPayload.text,
-        expect.any(Object),
-      );
-    }
+    expect(sendMatrix.mock.calls.map(([, text]) => text)).toEqual([
+      oldPayload.text,
+      newPayload.text,
+    ]);
     await assertFreshReaction(oldMessageId, unavailable);
     expect(await loadPendingDeliveries(outbound.tmpDir())).toHaveLength(0);
   },

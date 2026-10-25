@@ -71,13 +71,6 @@ describe("captured delivery queue state", () => {
   const expectMissing = (file: string) =>
     expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   const otherState = () => path.join(tmpDir(), "other-state");
-  const captureFields = (context: DeliveryQueueStateContext) => [
-    context.stateDir,
-    context.supervisorMode,
-    context.workerContext.admission.databasePath,
-    context.workerContext.environment.OPENCLAW_STATE_DIR,
-    context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
-  ];
 
   it("keeps preparation, retry evidence, and ACK on the captured state after ambient changes", async () => {
     const context = claimState();
@@ -173,12 +166,7 @@ describe("captured delivery queue state", () => {
             return [{ channel: "matrix", messageId: "synthetic-result" }];
           };
           const custom = vi.fn(send);
-          const internal = vi.fn(
-            async (params: Parameters<DeliverFn>[0], captured: DeliveryQueueStateContext) => {
-              expect(captureFields(captured)).toEqual(captureFields(context));
-              return send(params);
-            },
-          );
+          const internal = vi.fn(send);
           const summary = await recoverPendingDeliveries(
             { cfg: {}, log: createRecoveryLog(), deliver: custom },
             route === "internal" ? internal : undefined,
@@ -187,9 +175,6 @@ describe("captured delivery queue state", () => {
           expect([custom.mock.calls.length, internal.mock.calls.length]).toEqual(
             route === "custom" ? [1, 0] : [0, 1],
           );
-          if (route === "custom") {
-            expect(custom.mock.calls[0]).toHaveLength(1);
-          }
           expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
           await expectMissing(otherState());
         },

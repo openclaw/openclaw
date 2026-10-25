@@ -57,6 +57,8 @@ const terminal = {
   storePath: "/tmp/sessions.json",
   toolCallId: "message-call-1",
 };
+const failed = { ok: false, messageId: "attempt-id" };
+const partial = { ok: false, sentBeforeError: true, messageId: "partial-receipt" };
 
 function installTelegramTopicPlugin() {
   const unprefix = (raw: string) => raw.replace(/^telegram:/i, "");
@@ -85,23 +87,11 @@ it.each([
     ["explicit failure", { ok: false, status: "failed" }],
     ["error with attempt ID", { error: "send failed", messageId: "attempt-id" }],
     ["negative success flag", { success: false, messageId: "attempt-id" }],
-    [
-      "JSON-text failure",
-      {
-        content: [{ type: "text", text: JSON.stringify({ ok: false, messageId: "attempt-id" }) }],
-      },
-    ],
-    ["wrapped send failure", { sendResult: { ok: false, messageId: "attempt-id" } }],
+    ["JSON-text failure", { content: [{ type: "text", text: JSON.stringify(failed) }] }],
+    ["wrapped send failure", { sendResult: failed }],
   ].map(([name, payload]) => [name, payload, "not-delivered", direct] as const),
-  ...[false, true].map((wrapped) => {
-    const partial = { ok: false, sentBeforeError: true, messageId: "partial-receipt" };
-    return [
-      `partial delivery (wrapped=${wrapped})`,
-      wrapped ? { sendResult: partial } : partial,
-      "delivered",
-      direct,
-    ] as const;
-  }),
+  ["partial delivery", partial, "delivered", direct],
+  ["wrapped partial delivery", { sendResult: partial }, "delivered", direct],
   ["earlier ambiguous Gateway attempt", { ok: false, status: "failed" }, "pending", direct],
   [
     "another recipient",
@@ -121,10 +111,7 @@ it.each([
     "contradictory multipart topic receipt",
     {
       ...topicDelivery,
-      receipt: {
-        ...topicDelivery.receipt,
-        parts: [{ threadId: "77" }, { threadId: "78" }],
-      },
+      receipt: { ...topicDelivery.receipt, parts: [{ threadId: "77" }, { threadId: "78" }] },
     },
     "not-source",
     topic,
@@ -167,32 +154,22 @@ it.each([
   }
 });
 
-it.each([
-  [
-    "reply starts a thread on the inbound message",
-    true,
-    source("slack", "C123", {
-      action: "reply",
-      actionParams: { target: "C123", messageId: "1" },
-      toolContext: { currentMessageId: "1" },
-      deliveredPayload: {
-        ok: true,
-        messageId: "2",
-        channelId: "C123",
-        receipt: { threadId: "1", parts: [{ threadId: "1" }] },
-      },
-    }),
-  ],
-  [
-    "thread reply without owner proof or canonical receipt",
-    false,
-    source("testchat", "direct:user-1", {
-      action: "thread-reply",
-      actionParams: { to: "direct:user-1", message: "visible thread reply" },
-    }),
-  ],
-] as const)("classifies %s", (_name, expected, params) => {
-  expect(isDeliveredCurrentSourceReply(params)).toBe(expected);
+it("classifies replies starting a thread on the inbound message", () => {
+  expect(
+    isDeliveredCurrentSourceReply(
+      source("slack", "C123", {
+        action: "reply",
+        actionParams: { target: "C123", messageId: "1" },
+        toolContext: { currentMessageId: "1" },
+        deliveredPayload: {
+          ok: true,
+          messageId: "2",
+          channelId: "C123",
+          receipt: { threadId: "1", parts: [{ threadId: "1" }] },
+        },
+      }),
+    ),
+  ).toBe(true);
 });
 
 it.each([
@@ -242,6 +219,9 @@ it.each(["thread-reply", "upload-file", "sendAttachment", "sendWithEffect"])(
       toolContext: { currentSourceTurnId: "source-turn-1" },
       deliveredPayload: { ok: true },
     });
+    if (action === "thread-reply") {
+      expect(isDeliveredCurrentSourceReply(params)).toBe(false);
+    }
     await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
     expect(transcriptMocks.append).not.toHaveBeenCalled();
     await expect(beginTerminalSourceReplyDelivery(params)).resolves.toBeUndefined();
