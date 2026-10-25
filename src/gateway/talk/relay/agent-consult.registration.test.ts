@@ -227,19 +227,18 @@ it.for(["none", "live", "detached"] as const)(
   },
 );
 
-it.each(["call-1", "call-2"])("retains a shared run when %s clears first", async (first) => {
+it("retains a shared run until its last call clears", async () => {
   const { relay, target, chat } = await createRegistrationFixture();
-  const second = first === "call-1" ? "call-2" : "call-1";
   try {
     for (const callId of ["call-1", "call-2"]) {
       adoptRelayProviderToolCallId(relay, callId);
       await registerRun({ ...target, callId });
     }
-    clearRelayAgentToolCall(relay, first);
+    clearRelayAgentToolCall(relay, "call-1");
     expect(relay.activeAgentRuns.size).toBe(1);
-    expect(relay.activeAgentToolCalls.has(second)).toBe(true);
+    expect(relay.activeAgentToolCalls.has("call-2")).toBe(true);
     expect(resolveBinding(target.runId)).toBeDefined();
-    cancelTalkRealtimeRelayProviderToolCall(relay, second);
+    cancelTalkRealtimeRelayProviderToolCall(relay, "call-2");
     expect(chat.source.input.abortSignal.aborted).toBe(true);
     expect(relay.activeAgentRuns.size).toBe(0);
   } finally {

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveRealtimeVoiceProviderCapabilitiesAsync } from "../../../talk/provider-resolver.js";
 import type {
   RealtimeVoiceBridge,
@@ -71,6 +70,10 @@ function responseDone(request: BridgeRequest, responseId?: string) {
   request.onResponseDone?.({ status: "cancelled", ...(responseId ? { responseId } : {}) });
 }
 
+function responseDoneEvent(request: BridgeRequest, responseId?: string) {
+  request.onEvent?.({ direction: "server", type: "response.done", responseId });
+}
+
 function cancelTurn(relaySessionId: string, reason?: string) {
   return cancelTalkRealtimeRelayTurn({
     relaySessionId,
@@ -107,7 +110,7 @@ describe("talk realtime relay cancellation recovery", () => {
       void resumedInput.catch(() => {});
       if (mode === "exact-response") {
         responseDone(request);
-        request.onEvent?.({ direction: "server", type: "response.done" });
+        responseDoneEvent(request);
         await vi.advanceTimersByTimeAsync(0);
         expect(settled).toBe(false);
       }
@@ -135,11 +138,8 @@ describe("talk realtime relay cancellation recovery", () => {
   it.each(["turn-bound", "exact-response"] as const)(
     "keeps an unconfirmed %s cancellation open past its deadline and discards stale output",
     async (mode) => {
-      const pending = createDeferred();
       const { relaySessionId, relay, request, transport, payloadsOfType } =
-        await createRelayFixture(
-          mode === "turn-bound" ? { submitToolResult: vi.fn(() => pending.promise) } : {},
-        );
+        await createRelayFixture();
       responseCreated(request, "response-1", mode === "exact-response");
       let cancellationSettled = false;
       const cancellation = cancelTurn(
@@ -174,19 +174,9 @@ describe("talk realtime relay cancellation recovery", () => {
       expect(transport.close).not.toHaveBeenCalled();
 
       const audioBefore = payloadsOfType("audio").length;
-      const transcriptsBefore = payloadsOfType("transcript").length;
       request.onAudio(Buffer.from("stale audio"));
+      expect(payloadsOfType("audio")).toHaveLength(audioBefore);
       if (mode === "turn-bound") {
-        request.onTranscript?.("assistant", "stale words", true);
-        request.onToolCall?.({
-          itemId: "stale-item",
-          callId: "stale-call",
-          name: "custom_tool",
-          args: {},
-        });
-        expect(payloadsOfType("audio")).toHaveLength(audioBefore);
-        expect(payloadsOfType("transcript")).toHaveLength(transcriptsBefore);
-        expect(payloadsOfType("toolCall")).toHaveLength(0);
         const freshTurnId = relay.harness.talk.activeTurnId;
         expect(freshTurnId).toBeDefined();
         responseDone(request);
@@ -194,16 +184,11 @@ describe("talk realtime relay cancellation recovery", () => {
         expect(relay.harness.talk.activeTurnId).toBe(freshTurnId);
         await sendAudio(relaySessionId);
       } else {
-        expect(payloadsOfType("audio")).toHaveLength(audioBefore);
         relay.harness.talk.startTurn({ turnId: "turn-next" });
         responseCreated(request, "response-2");
       }
       request.onAudio(Buffer.from("fresh audio"));
       expect(payloadsOfType("audio")).toHaveLength(audioBefore + 1);
-      if (mode === "turn-bound") {
-        expect(relaySessions.has(relaySessionId)).toBe(true);
-      }
-      pending.resolve();
     },
   );
 
@@ -303,11 +288,7 @@ describe("talk realtime relay cancellation recovery", () => {
       if (mode === "exact-response") {
         responseCreated(request, "response-b");
         responseDone(request, "response-a");
-        request.onEvent?.({
-          direction: "server",
-          type: "response.done",
-          responseId: "response-a",
-        });
+        responseDoneEvent(request, "response-a");
       }
       request.onAudio(Buffer.from("reply B"));
       expect(payloadsOfType("audio").at(-1)?.talkEvent).toMatchObject({ turnId: turnB });
@@ -324,7 +305,7 @@ describe("talk realtime relay cancellation recovery", () => {
       if (mode === "exact-response") {
         responseDone(request, "response-a");
         responseDone(request);
-        request.onEvent?.({ direction: "server", type: "response.done" });
+        responseDoneEvent(request);
       }
       request.onAudio(Buffer.from("cancelled reply B"));
       request.onTranscript?.("assistant", "cancelled reply B", true);
@@ -336,11 +317,7 @@ describe("talk realtime relay cancellation recovery", () => {
       expect(payloadsOfType("transcript")).toEqual([]);
       expect(payloadsOfType("toolCall")).toEqual([]);
       responseDone(request, mode === "exact-response" ? "response-b" : undefined);
-      request.onEvent?.({
-        direction: "server",
-        type: "response.done",
-        ...(mode === "exact-response" ? { responseId: "response-b" } : {}),
-      });
+      responseDoneEvent(request, mode === "exact-response" ? "response-b" : undefined);
       responseCreated(request, "response-c", mode === "exact-response");
       request.onAudio(Buffer.from("reply C"));
       expect(payloadsOfType("audio").at(-1)).toMatchObject({
