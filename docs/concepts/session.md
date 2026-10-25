@@ -347,7 +347,8 @@ cap selection retains only the required oldest eligible entries. The writer chec
 the prepared store revision before applying changes, so concurrent updates are
 reconsidered instead of overwritten.
 If writes invalidate an automatic maintenance plan, its replacement waits for
-a quiet window after the last write (one second, then two seconds). Three
+a bounded retry window (one second, then two seconds). Further writes join the
+pending retry without postponing its deadline. Three
 consecutive invalidations pause automatic retries and log the cause; a new
 entry write can schedule another attempt. `warn` mode captures the maintenance
 age fact without constructing or dispatching automatic reclamation.

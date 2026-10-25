@@ -338,14 +338,13 @@ function scheduleMaintenanceAfterWriteQuiet(
   owner: SessionEntryMaintenanceOwner,
 ): void {
   owner.running = false;
+  if (owner.timer) {
+    // Coalesce writes without postponing an already scheduled retry indefinitely.
+    return;
+  }
   owner.retryDelayMs = MAINTENANCE_WRITE_QUIET_MS * 2 ** Math.max(0, owner.rejections - 1);
   owner.timerDeadlineMonotonicMs = performance.now() + owner.retryDelayMs;
   owner.timerKind = "retry";
-  if (owner.timer) {
-    // A write restarts this one-shot quiet window; no polling or competing retry owner.
-    owner.timer.refresh();
-    return;
-  }
   owner.timer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       owner.timer = undefined;
@@ -613,9 +612,7 @@ async function runPendingMaintenance(
           { error, path: databasePath, rejections: owner.rejections },
         );
       } else {
-        owner.running = true;
-        owner.retryDelayMs = undefined;
-        await runPendingMaintenance(databasePath, owner);
+        scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
       }
       return;
     }

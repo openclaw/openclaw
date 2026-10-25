@@ -376,8 +376,8 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
   );
 });
 
-it.for([1, 3])(
-  "replans policy conflicts without write quiet, bounded at three attempts (%s)",
+it.for([1, 2, 3])(
+  "backs off policy conflicts without postponing retries, bounded at three attempts (%s)",
   async (conflicts, { signal }) => {
     const { request, scope, storePath, updatedAt, archived } = createStore();
     const foregroundTurn = new AsyncLocalStorage<string>();
@@ -411,8 +411,24 @@ it.for([1, 3])(
     });
     foregroundTurn.run("completed-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
     await yieldToEventLoop();
+    expect(rejections).toBe(1);
+    expect(countPlanningPasses()).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
+    foregroundTurn.run("another-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
+    await vi.advanceTimersByTimeAsync(499);
+    expect(countPlanningPasses()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await yieldToEventLoop();
+    if (conflicts > 1) {
+      expect(rejections).toBe(2);
+      expect(countPlanningPasses()).toBe(2);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(countPlanningPasses()).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await yieldToEventLoop();
+    }
     expect(rejections).toBe(conflicts);
-    expect(countPlanningPasses()).toBe(conflicts === 1 ? 2 : 3);
+    expect(countPlanningPasses()).toBe(Math.min(conflicts + 1, 3));
     if (conflicts === 3) {
       expect(warn).toHaveBeenCalledWith(
         "SQLite automatic session maintenance paused after repeated input changes",
