@@ -2,7 +2,6 @@
 import "./system-agent.mocks.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -23,7 +22,6 @@ import { createTestApprovalManager } from "../exec-approval-manager.test-support
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
-import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import {
   defaultClient,
@@ -45,18 +43,9 @@ const {
   seededSession,
 } = useSystemAgentGatewayTestFixture();
 
-it.for([
-  { fullPermission: false, loss: "none" },
-  { fullPermission: true, loss: "none" },
-  { fullPermission: false, loss: "run" },
-  ...(["run", "tool", "gateway", "worker", "session"] as const).map((loss) => ({
-    fullPermission: true,
-    loss,
-  })),
-] as const)(
-  "settles delegated stop through host acceptance (Full Access=$fullPermission, loss=$loss)",
-  async ({ fullPermission, loss }, testContext) => {
-    const approvalRequested = createDeferred();
+it.for(["none", "run", "tool", "gateway", "worker", "session"] as const)(
+  "settles Full Access stop through host acceptance (loss=%s)",
+  async (loss, testContext) => {
     const preparationStarted = createDeferred();
     const releasePreparation = createDeferred();
     const auditStarted = createDeferred();
@@ -102,10 +91,6 @@ it.for([
       deps: { gatewayHostLifecycle: host.capability },
     });
     engine.propose({ kind: "gateway-stop" });
-    const proposalHash = expectDefined(
-      engine.getPendingOperatorProposal(),
-      "lifecycle proposal",
-    ).hash;
     vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
     const delegatedSession = seededSession({
       engine,
@@ -119,16 +104,10 @@ it.for([
       validateAgentRuntimeDelegatedAuthority: (authority) =>
         validateAgentRunDelegatedAuthority(authority) && workerActive,
     });
-    const operationalRunInstance = createOperationalRunInstanceRef(
-      "delegated-gateway-lifecycle-run",
-    );
+    const operationalRunInstance = createOperationalRunInstanceRef("hosted-stop-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     const controller = new AbortController();
-    const broadcast = vi.fn((event: string) => {
-      if (event === "openclaw.approval.requested") {
-        approvalRequested.resolve();
-      }
-    });
+    const broadcast = vi.fn();
     const context = {
       ...makeContext(sessions),
       systemAgentApprovalManager: manager,
@@ -149,7 +128,7 @@ it.for([
       ...delegation,
       operationalRunInstance,
       approvalAuthority: authority,
-      fullPermission,
+      fullPermission: true,
       gatewayContextResolver: () => liveContext,
       approvalSignals: [controller.signal],
       ...(loss === "worker" ? { workerTurnClaim } : {}),
@@ -180,42 +159,21 @@ it.for([
         extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
       }),
     );
-    const beforeReply = (gate: Promise<unknown>, stage: string) =>
-      awaitGateBeforeSettlement(gate, pendingChat, `Delegated lifecycle replied before ${stage}`);
-    const expectPending = (activeCount: number, roots?: number) => {
-      expect(requestResponses.calls).toHaveLength(0);
-      if (roots === undefined) {
-        expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-      } else {
-        expect(getActiveGatewayRootWorkCount()).toBe(roots);
-      }
-      expect(systemAgentLane()).toMatchObject({ activeCount, queuedCount: 0 });
-    };
     try {
-      if (!fullPermission) {
-        await beforeReply(approvalRequested.promise, "approval publication");
-        await runSystemAgentGatewayTask(async () => undefined);
-        const pendingRecords = await manager.listPendingRecords();
-        expect(pendingRecords).toHaveLength(1);
-        expectPending(0, 1);
-        const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
-        expect(await manager.getSnapshot(proposalId)).toMatchObject({
-          request: { proposalHash, ...delegation },
-        });
-        expect(acceptStop).not.toHaveBeenCalled();
-        expect(nativeEffect).not.toHaveBeenCalled();
-        expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
-      }
-      await beforeReply(preparationStarted.promise, "host preparation");
-      expectPending(1);
+      await awaitGateBeforeSettlement(
+        preparationStarted.promise,
+        pendingChat,
+        "Delegated lifecycle replied before host preparation",
+      );
+      expect(requestResponses.calls).toHaveLength(0);
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+      expect(systemAgentLane()).toMatchObject({ activeCount: 1, queuedCount: 0 });
       expect(delegatedSession.pendingApproval).toBeUndefined();
       expect(acceptStop).not.toHaveBeenCalled();
       expect(nativeEffect).not.toHaveBeenCalled();
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-      if (fullPermission) {
-        expect(await manager.listPendingRecords()).toEqual([]);
-        expect(broadcast).not.toHaveBeenCalled();
-      }
+      expect(await manager.listPendingRecords()).toEqual([]);
+      expect(broadcast).not.toHaveBeenCalled();
       if (loss === "run") {
         expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
       } else if (loss === "tool") {

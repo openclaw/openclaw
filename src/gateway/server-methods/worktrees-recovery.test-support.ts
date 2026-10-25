@@ -150,6 +150,8 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         }
         const relative = "artifacts/oversized.bin";
         const source = path.join(prepared.workspaceDir, relative);
+        const editedSource = path.join(prepared.workspaceDir, "source.txt");
+        const sourceEdit = "preserved source edit\n";
         const recoveryId = randomUUID();
         const destination = path.join(
           await fs.realpath(state.stateDir),
@@ -162,10 +164,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
           await fs.mkdir(path.dirname(source), { recursive: true });
           await fs.writeFile(source, "retained recovery authority proof\n");
           await fs.truncate(source, 64 * 1024 * 1024 + 1);
-          await fs.writeFile(
-            path.join(prepared.workspaceDir, "source.txt"),
-            "preserved source edit\n",
-          );
+          await fs.writeFile(editedSource, sourceEdit);
           await expect(prepared.checkpoint()).rejects.toThrow("result is too large");
         } finally {
           prepared[Symbol.dispose]();
@@ -176,9 +175,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         const unchanged = async () => {
           expect(await digest(source)).toBe(originalHash);
           await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await fs.readFile(path.join(prepared.workspaceDir, "source.txt"), "utf8")).toBe(
-            "preserved source edit\n",
-          );
+          expect(await fs.readFile(editedSource, "utf8")).toBe(sourceEdit);
           expect((await readLocalWorkspaceProjection(worktree.id))!.pending_ref).toBe(pending);
         };
         const createGate = () => ({
@@ -292,9 +289,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         await expect(fs.stat(source)).rejects.toMatchObject({ code: "ENOENT" });
         expect(await digest(destination)).toBe(originalHash);
         expect(moveCount).toBe(1);
-        expect(await fs.readFile(path.join(prepared.workspaceDir, "source.txt"), "utf8")).toBe(
-          "preserved source edit\n",
-        );
+        expect(await fs.readFile(editedSource, "utf8")).toBe(sourceEdit);
       } finally {
         vi.restoreAllMocks();
         for (const client of clients) {

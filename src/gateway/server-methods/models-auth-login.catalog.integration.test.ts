@@ -11,6 +11,7 @@ import {
 } from "./models-auth-catalog.test-support.js";
 import {
   catalogDiscoverySource,
+  createCatalogModel,
   writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
 import {
@@ -106,15 +107,7 @@ it.for([false, true])(
               [provider]: {
                 baseUrl,
                 api: "openai-completions",
-                models: [
-                  {
-                    id: "known-chat",
-                    name: "Known chat",
-                    input: ["text"],
-                    contextWindow: 32768,
-                    maxTokens: 4096,
-                  },
-                ],
+                models: [createCatalogModel("known-chat", "Known chat")],
               },
             },
           },

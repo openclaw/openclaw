@@ -31,6 +31,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
+import type { McpToolResultPayload } from "../mcp-http.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import type { GatewayUiCommandTarget } from "../ui-command-target.types.js";
@@ -118,7 +119,7 @@ export async function inRun<T>(
     const { operationalRunInstance } = admittedRun;
     const authority = expectDefined(
       runContext.getAdmittedRunDelegatedAuthority(admittedRun),
-      "admitted run",
+      "run",
     );
     registerAgentRunContext(runId, { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID });
     const caller = {
@@ -263,13 +264,7 @@ export async function createCreatorTransportTools(params: {
           signal: AbortSignal.timeout(15_000),
         },
       );
-      const message = (await json(response)) as {
-        error?: unknown;
-        result?: {
-          isError?: boolean;
-          content?: Array<{ text?: string }>;
-        };
-      };
+      const message = (await json(response)) as McpToolResultPayload & { error?: unknown };
       expect(message.error).toBeUndefined();
       if (message.result?.isError) {
         throw new Error(message.result.content?.map((item) => item.text).join("\n"));
@@ -339,7 +334,7 @@ export async function createCreatorTransportTools(params: {
     invoke: (name, args) => {
       const tool = expectDefined(
         tools.find((entry) => entry.name === name),
-        `embedded ${name} tool`,
+        name,
       );
       return gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
         tool.execute(`creator-${++sequence}`, args),

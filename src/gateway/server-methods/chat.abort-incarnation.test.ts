@@ -72,8 +72,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         childSessionKey,
         lifecycleRevision: "original",
       });
-      // Running fixture turns need real ownership so cold lifecycle setup cannot
-      // let the registry sweeper mistake them for lost executions.
+      // Real ownership prevents the registry sweeper from mistaking setup for lost work.
       registerAgentRunContext(runId, {
         sessionKey: childSessionKey,
         sessionId: `${runId}-session`,
@@ -122,8 +121,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           Array.from(params.identities).includes(endedKey)
         ) {
           holdEndedMutation = false;
-          // Preserve the reset/admission-before-Stop race at the actual mutation
-          // entry. Completed ancestors remain ungated late-discovery coverage.
+          // Pause at mutation entry; completed ancestors use ungated late discovery.
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
@@ -137,8 +135,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         )
       ) {
         expect(released).toBe(true);
-        // Keep the captured kill scope pending after the real drain. A cold
-        // sibling reset must not consume the active admission's deadline.
+        // Hold after the real drain so sibling reset cannot consume its deadline.
         entered.resolve();
         await resume.promise;
       }
@@ -282,18 +279,13 @@ it.each(["child", "ancestor"])(
     });
     const badDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
-    const capacityOwner = "read-failure-capacity";
+    const capacity = "read-failure-capacity";
+    // Keep reservations queued while Stop prepares its session snapshot.
     for (const [runId, start] of [
       ["bad", badDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
-      fixture.queueRun({
-        groupId: "read-failure",
-        runId,
-        // Keep these reservations queued while Stop prepares its session snapshot.
-        activeRunIds: [capacityOwner],
-        start,
-      });
+      fixture.queueRun({ groupId: "read-failure", runId, activeRunIds: [capacity], start });
     }
     try {
       const { parent, pending } = abortParent();
@@ -317,7 +309,7 @@ it.each(["child", "ancestor"])(
       expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toMatchObject({
         reason: "killed",
       });
-      expect(releaseSwarmRun(capacityOwner)).toBe(true);
+      expect(releaseSwarmRun(capacity)).toBe(true);
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
       expect(
         badDispatch,
@@ -325,7 +317,7 @@ it.each(["child", "ancestor"])(
       ).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
-      releaseSwarmRun(capacityOwner);
+      releaseSwarmRun(capacity);
       releaseSwarmRun("bad");
       releaseSwarmRun("survivor");
     }

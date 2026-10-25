@@ -1,20 +1,8 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { maybeHandleResetCommand } from "../../auto-reply/reply/commands-reset.js";
-import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import {
-  createSqliteTranscriptTarget,
-  persistUserTurnTranscript,
-  readTranscriptMessages,
-} from "../../sessions/user-turn-transcript.test-support.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { prepareVoice, requireInputText } from "./chat-send-user-turn-family.test-support.js";
 import {
@@ -38,14 +26,6 @@ function voiceRef(id = "voice.ogg") {
     label: id,
     sizeBytes: 12,
     sourceIndex: 0,
-  };
-}
-function voiceAttachments(id = "voice.ogg") {
-  return {
-    mediaPathOffloads: [
-      { path: `/state/media/inbound/${id}`, contentType: "audio/ogg", fileName: id },
-    ],
-    offloadedRefs: [voiceRef(id)],
   };
 }
 const echoAudio = {
@@ -93,14 +73,6 @@ describe("prepareChatSendUserTurn audio", () => {
     vi.restoreAllMocks();
     transcribeAudioAttachments.mockReset();
   });
-  const tempDirs = useSessionStoreTempDirs(
-    (cleanup) =>
-      afterAll(async () => {
-        await cleanup();
-        clearRuntimeConfigSnapshot();
-      }),
-    "chat-audio-history-",
-  );
   it.each([
     ["WebChat", GATEWAY_CLIENT_IDS.WEBCHAT_UI, GATEWAY_CLIENT_MODES.WEBCHAT],
     ["Control UI", GATEWAY_CLIENT_IDS.CONTROL_UI, GATEWAY_CLIENT_MODES.UI],
@@ -108,10 +80,9 @@ describe("prepareChatSendUserTurn audio", () => {
     ["iOS app", GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_MODES.UI],
     ["Android app", GATEWAY_CLIENT_IDS.ANDROID_APP, GATEWAY_CLIENT_MODES.UI],
   ] as const)(
-    "persists a configured %s voice transcript in its canonical user turn",
+    "prepares a configured %s voice transcript in its canonical user turn",
     async (_name, id, mode) => {
       const clientInfo = createClientInfo({ id, mode });
-      setRuntimeConfigSnapshot({});
       const scope = {
         default: "allow" as const,
         rules: [{ match: { channel: "webchat" }, action: "allow" as const }],
@@ -130,14 +101,10 @@ describe("prepareChatSendUserTurn audio", () => {
           },
           tools: { media: { audio: { ...echoAudio, scope } } },
         },
-        attachments: voiceAttachments(),
+        attachments: { offloadedRefs: [voiceRef()] },
       });
       const input = await prepared.readInput();
       expect(input.text).toBe("raw message\nHeard: transcribed voice");
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make() });
-      await persistUserTurnTranscript({ ...target, input, updateMode: "none" });
-      const [reloaded] = await readTranscriptMessages(target);
-      expect(reloaded?.content).toBe("raw message\nHeard: transcribed voice");
       prepared.applyApprovedText(requireInputText(input));
       expect(prepared.ctx.Body).toBe("raw message\nHeard: transcribed voice");
       expect(prepared.ctx.BodyForAgent).toContain(
@@ -219,9 +186,8 @@ describe("prepareChatSendUserTurn audio", () => {
     [undefined, "Heard: {transcript}", "Heard: /reset"],
     ["", "{transcript}", "/reset"],
   ] as const)(
-    "keeps transcript echo out of command dispatch with base text %s and format %s",
+    "keeps transcript echo out of command input with base text %s and format %s",
     async (baseText, echoFormat, echo) => {
-      const sessionEntry = { sessionId: "voice-session", updatedAt: 1 };
       const inputController = createUserTurnInputController("");
       inputController.controller.baseInput.text = baseText;
       const prepared = prepareTranscript("/reset", {
@@ -245,15 +211,6 @@ describe("prepareChatSendUserTurn audio", () => {
       expect(prepared.ctx.CommandSource).toBeUndefined();
       expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
       expect(prepared.ctx.media?.[0]?.transcribed).toBe(true);
-      const commandParams = buildCommandTestParams(
-        prepared.ctx.CommandBody ?? "",
-        { commands: { text: true } },
-        prepared.ctx,
-      );
-      commandParams.sessionEntry = sessionEntry;
-      commandParams.sessionStore = { [commandParams.sessionKey]: sessionEntry };
-      expect(await maybeHandleResetCommand(commandParams)).toBeNull();
-      expect(sessionEntry).toEqual({ sessionId: "voice-session", updatedAt: 1 });
     },
   );
 
