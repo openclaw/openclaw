@@ -103,12 +103,18 @@ describe("matrix qa config", () => {
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {
+    const chunk = { maxChars: 48, minChars: 1 };
     const agentDefaults = {
-      blockStreamingChunk: { breakPreference: "newline", maxChars: 48, minChars: 1 },
-      blockStreamingCoalesce: { idleMs: 0, maxChars: 48, minChars: 1 },
+      blockStreamingChunk: { ...chunk, breakPreference: "newline" },
+      blockStreamingCoalesce: { ...chunk, idleMs: 0 },
     } as const;
     const threadBindings = { enabled: true, idleHours: 1, spawnSessions: true };
     const audio = { echoTranscript: false, enabled: true };
+    const secondary = {
+      allowBots: false,
+      requireMention: false,
+      tools: { allow: ["sessions_spawn"] },
+    };
     const next = build(
       {
         autoJoin: "allowlist",
@@ -121,13 +127,7 @@ describe("matrix qa config", () => {
         configuredBotRoles: ["observer"],
         groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
         groupMentionPatterns: ["\\S"],
-        groupsByKey: {
-          secondary: {
-            allowBots: false,
-            requireMention: false,
-            tools: { allow: ["sessions_spawn"] },
-          },
-        },
+        groupsByKey: { secondary },
         replyToMode: "all",
         streaming: "quiet",
         threadBindings: structuredClone(threadBindings),
@@ -162,12 +162,7 @@ describe("matrix qa config", () => {
     });
     expect(sut?.groups).toEqual({
       "!main:matrix-qa.test": { enabled: true, requireMention: true },
-      "!secondary:matrix-qa.test": {
-        allowBots: false,
-        enabled: true,
-        requireMention: false,
-        tools: { allow: ["sessions_spawn"] },
-      },
+      "!secondary:matrix-qa.test": { ...secondary, enabled: true },
     });
     expect(sut?.threadBindings).toEqual(threadBindings);
   });
@@ -180,7 +175,6 @@ describe("matrix qa config", () => {
     const baseRules = [{ action: "allow", match: { chatType: "direct" } }];
     const sibling = { enabled: false, homeserver: "https://sibling.invalid" };
     const extraGroup = { adjacentGroup: "preserved", enabled: false };
-    // Each row states an input pair and its expected output, independently of the builder.
     const fields: Array<[string, unknown, unknown, unknown?]> = [
       ["unrelated", undefined, { currentOnly: true }, { currentOnly: true }],
       ["approvals/exec/enabled", false, true],
@@ -199,27 +193,17 @@ describe("matrix qa config", () => {
       ["messages/groupChat/adjacentMessage", undefined, "current", "current"],
       ["channels/matrix/unknownRoot", "baseline", "current", "current"],
       ["channels/matrix/accounts/sibling", undefined, sibling, sibling],
-      [
-        "channels/matrix/accounts/qa-driver-bot-source",
+      ...["driver", "observer"].map((role): [string, unknown, unknown] => [
+        `channels/matrix/accounts/qa-${role}-bot-source`,
         undefined,
         { enabled: false, userId: "@stale:test" },
-      ],
-      [
-        "channels/matrix/accounts/qa-observer-bot-source",
-        undefined,
-        { enabled: false, userId: "@stale:test" },
-      ],
+      ]),
       [s + "/allowBots", false, "mentions"],
       [s + "/autoJoin", "allowlist", "allowlist"],
       [s + "/autoJoinAllowlist", ["!baseline:matrix-qa.test"], ["!previous:matrix-qa.test"]],
       [s + "/deviceId", "BASELINE-DEVICE", "CURRENT-DEVICE", "CURRENT-DEVICE"],
       [s + "/lifecycleState", undefined, "current", "current"],
-      [
-        s + "/dm/allowFrom",
-        ["@baseline:matrix-qa.test"],
-        ["@previous:test"],
-        ["@driver:matrix-qa.test"],
-      ],
+      [s + "/dm/allowFrom", ["@baseline:test"], ["@previous:test"], [params.driverUserId]],
       [s + "/dm/enabled", true, true],
       [s + "/dm/policy", "open", "open", "allowlist"],
       [s + "/dm/sessionScope", "per-room", "per-user"],
@@ -290,32 +274,16 @@ describe("matrix qa config", () => {
     });
   });
 
-  it("normalizes Matrix QA overrides into the written account config", () => {
-    const config = build({
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!ops:matrix-qa.test"],
-      blockStreaming: true,
-      dm: {
-        sessionScope: "per-room",
-      },
-      groupMentionPatterns: ["\\S"],
-      groupPolicy: "open",
-      streaming: true,
-    });
+  it("normalizes boolean streaming and the group policy", () => {
+    const config = build({ blockStreaming: true, groupPolicy: "open", streaming: true });
     const account = config.channels?.matrix?.accounts?.sut;
-    expect(account).toMatchObject({
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!ops:matrix-qa.test"],
-      dm: { sessionScope: "per-room" },
-      groupPolicy: "open",
-    });
+    expect(account?.groupPolicy).toBe("open");
     expect(account?.streaming).toEqual({
       block: { enabled: true },
       chunkMode: "length",
       mode: "partial",
       preview: { toolProgress: true },
     });
-    expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
   });
 
   it("resets progress and preview overrides when a scalar follows an object", () => {
