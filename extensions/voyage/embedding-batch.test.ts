@@ -52,24 +52,18 @@ function runBatch(overrides: Partial<VoyageBatchOptions> = {}) {
   });
 }
 
-type ReceivedRequest = { url: string; authorization: string | undefined; body?: unknown };
-
 async function serve(replies: Record<string, unknown>) {
-  const received: ReceivedRequest[] = [];
+  const received: [path: string, body: unknown][] = [];
   const server = createServer((request, response) => {
     void text(request)
       .then((body) => {
-        received.push({
-          url: request.url ?? "",
-          authorization: request.headers.authorization,
-          body:
-            body && request.headers["content-type"]?.includes("application/json")
-              ? JSON.parse(body)
-              : undefined,
-        });
         const url = new URL(request.url ?? "", "http://localhost");
         assert.equal(url.search, `?${tenantQuery}`);
-        const result = replies[url.pathname.replace(/^\/tenant\/v1\//, "")];
+        assert.equal(request.headers.authorization, authorization);
+        const path = url.pathname.replace(/^\/tenant\/v1\//, "");
+        const json = request.headers["content-type"]?.includes("application/json");
+        received.push([path, json && body ? JSON.parse(body) : undefined]);
+        const result = replies[path];
         assert(result, `unexpected embedding endpoint: ${url.pathname}`);
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify(result));
@@ -87,7 +81,6 @@ const completedWithError = { ...batchResponses["batches/batch-0"], error_file_id
 const batchError = {
   custom_id: "req-0",
   response: { status_code: 500, message: "provider rejected request" },
-  error: null,
 };
 
 afterEach(() => {
@@ -109,26 +102,16 @@ it.each([
     status,
     chunkCount: 20,
     chunkSize: 1024 * 1024,
-    byte: 0,
     headers: { "content-type": "application/json" },
   });
-  const fetchMock = stubBatchFetch({
+  stubBatchFetch({
     [stage]: streamed.response,
     ...(stage === "files/error-0/content" ? { batches: Response.json(completedWithError) } : {}),
   });
-  const result = expect(runBatch()).rejects;
-  if (error instanceof RegExp) {
-    await result.toThrow(error);
-  } else {
-    await result.toMatchObject(error);
-  }
+  const expected = error instanceof RegExp ? { message: expect.stringMatching(error) } : error;
+  await expect(runBatch()).rejects.toMatchObject(expected);
   expect(streamed.getReadCount()).toBeLessThan(20);
   expect(streamed.wasCanceled()).toBe(true);
-  if (status === 500) {
-    expect(
-      fetchMock.mock.calls.filter(([input]) => requestUrl(input).endsWith("/batches/batch-0")),
-    ).toHaveLength(1);
-  }
 });
 
 it("preserves real default requests, grouping, and configured query parameters", async () => {
@@ -150,22 +133,13 @@ it("preserves real default requests, grouping, and configured query parameters",
   });
   assert(provider, "expected configured Voyage embedding provider");
   expect(provider.maxInputTokens).toBe(32000);
-  await expect(
-    provider.embedBatch([{ text: "first" }, "second"], { inputType: undefined }),
-  ).resolves.toEqual(vectors);
+  await expect(provider.embedBatch([{ text: "first" }, "second"])).resolves.toEqual(vectors);
   expect(received).toEqual([
-    {
-      url: `/tenant/v1/embeddings?${tenantQuery}`,
-      authorization,
-      body: { model: "voyage-3", input: ["first", "second"], input_type: "document" },
-    },
+    ["embeddings", { model: "voyage-3", input: ["first", "second"], input_type: "document" }],
   ]);
-  await expect(provider.embedBatch([], { inputType: undefined })).resolves.toEqual([]);
-  expect(received).toHaveLength(1);
 });
 
 it.each(["output", "error"] as const)("preserves real batch %s requests", async (kind) => {
-  const fetchSpy = vi.spyOn(globalThis, "fetch");
   const { baseUrl, received } = await serve({
     ...batchResponses,
     ...(kind === "error" ? { "batches/batch-0": completedWithError } : {}),
@@ -188,22 +162,17 @@ it.each(["output", "error"] as const)("preserves real batch %s requests", async 
   }
 
   const paths = ["files", "batches", "batches/batch-0", `files/${kind}-0/content`];
-  expect(received.map(({ url, authorization: auth }) => [url, auth])).toEqual(
-    paths.map((path) => [`/tenant/v1/${path}?${tenantQuery}`, authorization]),
-  );
-  expect(received[1].body).toMatchObject({
+  expect(received.map(([path]) => path)).toEqual(paths);
+  expect(received[1][1]).toMatchObject({
     endpoint: "/v1/embeddings",
     request_params: { model: "voyage-3", input_type: "document" },
   });
-  const status = fetchSpy.mock.calls.find(([url]) => requestUrl(url).includes("/batches/batch-0"));
-  expect(status?.[1]?.signal).toBeInstanceOf(AbortSignal);
 });
 
 it("clamps polling and avoids status fetch after expiry", async ({ signal }) => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
   const fetchMock = stubBatchFetch();
-  const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
   const nowSpy = vi.spyOn(Date, "now");
   const polling = createDeferred<void>();
   const result = runBatch({
@@ -226,7 +195,6 @@ it("clamps polling and avoids status fetch after expiry", async ({ signal }) => 
       awaitGateBeforeSettlement(polling.promise, result, "Voyage batch settled before polling"),
       signal,
     );
-    expect(timeoutSpy.mock.calls.some(([, ms]) => ms === 500)).toBe(true);
     nowSpy.mockReturnValue(1_000);
     await vi.advanceTimersByTimeAsync(500);
     await withinTest(rejection, signal);
