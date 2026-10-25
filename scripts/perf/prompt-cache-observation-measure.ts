@@ -248,17 +248,22 @@ for (const session of sessions) {
 const firstViews = sessions.flatMap(({ messages }) =>
   messages.map((message) => new WeakRef(message)),
 );
-const shapes: Record<string, number> = {};
-for (const message of sessions[0]!.messages) {
-  const shape = isOwnedTranscriptPayload(message)
-    ? "owned"
-    : isDeeplyFrozenPlainData(message)
-      ? "deeplyFrozen"
-      : isDeeplyFrozenPlainData(message.content)
-        ? "mutableEnvelopeFrozenContent"
-        : "fullyMutable";
-  shapes[shape] = (shapes[shape] ?? 0) + 1;
+// Keep inspected messages out of the module frame during the source-release probe.
+function countShapes(messages: Message[]) {
+  const shapes: Record<string, number> = {};
+  for (const message of messages) {
+    const shape = isOwnedTranscriptPayload(message)
+      ? "owned"
+      : isDeeplyFrozenPlainData(message)
+        ? "deeplyFrozen"
+        : isDeeplyFrozenPlainData(message.content)
+          ? "mutableEnvelopeFrozenContent"
+          : "fullyMutable";
+    shapes[shape] = (shapes[shape] ?? 0) + 1;
+  }
+  return shapes;
 }
+const shapes = countShapes(sessions[0]!.messages);
 await collect();
 const inspector = values.measure === "allocation" ? new Session() : undefined;
 if (inspector) {
