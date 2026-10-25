@@ -4,12 +4,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { createDanglingSkillWorkshopReviewIndex } from "../state/openclaw-state-db-corruption.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -49,25 +49,11 @@ function expectDatabase(file: string, queries: Record<string, unknown>) {
   }
 }
 
-function recoveryDirs(file: string) {
-  return fs
-    .readdirSync(path.dirname(file))
-    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
-}
-
 const repairOptions = { repair: true, nonInteractive: true };
 const orphan = { task_id: "orphan-preserved", requester_origin_json: "preserve orphan payload" };
 const runtimeRunIndex = ["runtime", "run_id", "source_id", "created_at", "task_id"].map((name) => ({
   name,
 }));
-
-async function repair() {
-  const runtime = createDoctorRuntime();
-  await doctorCommand(runtime, repairOptions);
-  expect(runtime.exit).not.toHaveBeenCalled();
-  expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-  return runtime;
-}
 
 async function seedState(state: OpenClawTestState) {
   await writeConfig(state);
@@ -79,24 +65,6 @@ async function seedState(state: OpenClawTestState) {
     ) VALUES ('review-preserved', 'main', 'backup-preserved', 1, '[]', '[]', '[]');
   `);
   return database;
-}
-
-function damageWorkshopIndex(databasePath: string): void {
-  editDatabase(databasePath, (database) => {
-    database.exec(
-      "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-    );
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database.exec(
-      `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-          WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-    );
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-  });
 }
 
 it("preserves known damaged state before backing up and migrating an older agent", async () => {
@@ -134,8 +102,11 @@ it("preserves known damaged state before backing up and migrating an older agent
       PRAGMA foreign_keys = ON;
     `);
     await closeOpenClawStateDatabaseAsync();
-    damageWorkshopIndex(database.path);
-    const runtime = await repair();
+    createDanglingSkillWorkshopReviewIndex(database.path);
+    const runtime = createDoctorRuntime();
+    await doctorCommand(runtime, repairOptions);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
     expect(runtime.log).toHaveBeenCalledWith("Removed dangling legacy Skill Workshop review index");
     expectDatabase(database.path, {
       "SELECT name FROM sqlite_schema WHERE name IN ('skill_workshop_collection_reviews', 'idx_skill_workshop_collection_reviews_workspace_time')":
@@ -145,14 +116,15 @@ it("preserves known damaged state before backing up and migrating an older agent
       "PRAGMA integrity_check": [{ integrity_check: "ok" }],
       "PRAGMA foreign_key_check": [],
     });
-    const dirs = recoveryDirs(database.path);
+    const directory = path.dirname(database.path);
+    const dirs = fs
+      .readdirSync(directory)
+      .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"));
     expect(dirs).toHaveLength(1);
-    const recovered = fs.readFileSync(
-      path.join(path.dirname(database.path), dirs[0]!, "orphan-rows.jsonl"),
-      "utf8",
-    );
+    const recoveryPath = path.join(directory, dirs[0]!);
+    const recovered = fs.readFileSync(path.join(recoveryPath, "orphan-rows.jsonl"), "utf8");
     expect(JSON.parse(recovered)).toMatchObject(orphan);
-    expectDatabase(path.join(path.dirname(database.path), dirs[0]!, "database.sqlite"), {
+    expectDatabase(path.join(recoveryPath, "database.sqlite"), {
       "SELECT task_id, requester_origin_json FROM task_delivery_state": [orphan],
     });
     for (const sourcePath of [database.path, agentPath]) {
@@ -190,7 +162,7 @@ it("refuses a newer custom agent schema before changing the malformed source", a
     );
     await writeConfig(state, { store: customPath });
     await closeOpenClawStateDatabaseAsync();
-    damageWorkshopIndex(database.path);
+    createDanglingSkillWorkshopReviewIndex(database.path);
     const before = fs.readFileSync(database.path);
     const configBefore = fs.readFileSync(state.configPath);
 
