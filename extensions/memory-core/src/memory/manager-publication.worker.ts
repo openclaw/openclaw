@@ -468,6 +468,15 @@ function createPublicationBackend(
       }
       if (command.type === "cache.prune") {
         if (cacheSize().size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            let exceedsCap = false;
+            const result = writeCache(() => {
+              const size = countMemoryEmbeddingCache(db);
+              exceedsCap = size > command.input.maxEntries;
+              return { size, exact: true };
+            });
+            return result.ok ? { ...result, value: exceedsCap } : result;
+          }
           return { ok: true, value: false };
         }
         return writeCache((size) =>

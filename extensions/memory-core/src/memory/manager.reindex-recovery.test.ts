@@ -716,8 +716,8 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
-  it("leaves even an oversized published cache untouched when a full rebuild fails", async () => {
-    const { memoryManager, harness, before } = await createOversizedPublishedCache();
+  it("restores the cache cap when a full rebuild fails", async () => {
+    const { memoryManager, harness, newest } = await createOversizedPublishedCache();
     vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata").mockImplementation(() => {
       throw new Error("failed shadow metadata");
     });
@@ -726,7 +726,7 @@ describe("memory manager reindex recovery", () => {
       "failed shadow metadata",
     );
 
-    expect(publishedCacheRows(harness.db)).toEqual(before);
+    expect(publishedCacheRows(harness.db)).toEqual(newest);
   });
 
   async function createOversizedPublishedCache() {
