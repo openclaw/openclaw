@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -7,9 +7,13 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -25,9 +29,16 @@ import { appendProjectionMessages } from "./session-row-projection.test-support.
 import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
 import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 it("releases terminal display rows after a broad visit without losing parent or search metadata", async () => {
-  await withSessionRowProjectionState(async (create) => {
+  await withSessionRowProjectionState(async (create, _, cleanup) => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    using now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    const expire = (projection: Parameters<typeof listRows>[0]) => {
+      clock.setTime(clock.clock.now() + 10 * 60_000);
+      projection.sweepMaterializedRows(clock.clock.now());
+    };
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parent = "agent:main:residency-parent";
@@ -46,12 +57,37 @@ it("releases terminal display rows after a broad visit without losing parent or 
     const projection = await create({ cfg, modelCatalog: [] });
     const page = await listRows(projection, { limit: 200 });
     expect(page.sessions).toHaveLength(121);
-    expect(projection.selectEntries().filter(ready).length).toBeLessThanOrEqual(101);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(121);
+    const timers = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      scheduler: createTestGatewayScheduler(clock.clock),
+      isNixMode: true,
+      resolveGatewayContext: () => bindSessionRowProjection(requestContext(cfg), () => projection),
+    });
+    cleanup.defer(async () => {
+      await timers.stopPeriodicTasks();
+      await timers.skillUsageCleanup();
+    });
+    await clock.advanceBy(9 * 60_000);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(121);
+    // A recently read child survives while the rest of the broad page expires.
+    const recent = { agentId: "main", key: children[0]! };
+    projection.snapshot(recent);
+    await clock.advanceBy(2 * 60_000);
+    expect(projection.capture(recent)?.materialized).toBeDefined();
+    expect(projection.selectEntries().filter(ready)).toHaveLength(2);
     const sharing = await projection.withPreparedExactRows(
       () => projection.selectEntries().map(({ agentId, key }) => ({ agentId, key })),
       () => projection.sharingRevision,
     );
-    expect(projection.sharingRevision).toBe(sharing);
+    for (let wave = 0; wave < 5; wave++) {
+      await listRows(projection, { limit: 200 });
+      expect(projection.selectEntries().filter(ready)).toHaveLength(121);
+      expire(projection);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(1);
+      expect(projection.sharingRevision).toBe(sharing);
+    }
+    expire(projection);
     const cold = projection.selectEntries().find((row) => row.key !== parent && !row.materialized);
     expect(cold).toBeDefined();
     expect(projection.selectEntries({ parentSessionKey: parent }).map((row) => row.key)).toEqual(
@@ -60,6 +96,7 @@ it("releases terminal display rows after a broad visit without losing parent or 
     const search = await listRows(projection, { search: cold!.entry!.label, limit: 200 });
     expect(search.sessions.map((row) => row.key)).toContain(cold!.key);
     await listRows(projection, { limit: 200 });
+    expire(projection);
     const exact = projection
       .selectEntries()
       .find((row) => row.key !== parent && !row.materialized)!;
@@ -78,6 +115,12 @@ it("releases terminal display rows after a broad visit without losing parent or 
 
 it("retains runtime, recovery, delivery, cleanup and client custody while trimming finished rows", async () => {
   await withSessionRowProjectionState(async (create, _, cleanup) => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    using now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    const expire = (projection: Parameters<typeof listRows>[0]) => {
+      clock.setTime(clock.clock.now() + 10 * 60_000);
+      projection.sweepMaterializedRows(clock.clock.now());
+    };
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const subscribers = createSessionMessageSubscriberRegistry();
@@ -126,31 +169,31 @@ it("retains runtime, recovery, delivery, cleanup and client custody while trimmi
       modelCatalog: [],
       observers: {
         has: (row) => subscribers.get(row.key).size > 0 || watches.has(row.key),
-        onChange(listener) {
-          const unsubscribe = subscribers.onChange(listener);
-          const unwatch = watches.onChange(listener);
-          return () => {
-            unsubscribe();
-            unwatch();
-          };
-        },
       },
     });
     await listRows(projection, { limit: 200 });
+    expire(projection);
     for (const name of names) {
       expect(
         projection.capture({ agentId: "main", key: key(name) })?.materialized,
         name,
       ).toBeDefined();
     }
-    expect(projection.selectEntries().filter(ready).length).toBeLessThanOrEqual(107);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(7);
     subscribers.unsubscribeAll("reader");
-    expect(projection.selectEntries().filter(ready).length).toBeLessThanOrEqual(106);
+    projection.sweepMaterializedRows(clock.clock.now());
+    expect(projection.selectEntries().filter(ready)).toHaveLength(6);
   }, true);
 });
 
 it("promotes a cold row for event publication and enforces visibility revocation from cold metadata", async () => {
   await withSessionRowProjectionState(async (create, _, cleanup) => {
+    const clock = createGatewaySchedulerClock(Date.now());
+    using now = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    const expire = () => {
+      clock.setTime(clock.clock.now() + 10 * 60_000);
+      projection.sweepMaterializedRows(clock.clock.now());
+    };
     const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const owner = ensureProfileForEmail("residency-owner@example.test");
@@ -180,6 +223,7 @@ it("promotes a cold row for event publication and enforces visibility revocation
     context.getSessionMessageSubscriberConnIds = connection.sessionMessageSubscribers.get;
     cleanup.defer(() => flushPendingSessionsChangedEvents(context));
     await listRows(projection, { limit: 200 });
+    expire();
     const cold = projection.selectEntries().find((row) => !row.materialized)!;
     expect(cold).toBeDefined();
     writeRow(cold.key, { ...entry, status: "failed", label: "Changed after demotion" });
@@ -201,9 +245,11 @@ it("promotes a cold row for event publication and enforces visibility revocation
       lastMessagePreview: "Synthetic post-demotion answer",
     });
     await listRows(projection, { limit: 200 });
+    expire();
     const revoked = projection.selectEntries().find((row) => !row.materialized)!;
     expect(revoked).toBeDefined();
     writeRow(revoked.key, { ...entry, visibility: "draft" });
+    expire();
     expect(projection.capture({ agentId: "main", key: revoked.key })?.materialized).toBeUndefined();
     const visible = await listRows(projection, { limit: 200 }, { context, client: peer.client });
     expect(visible.sessions.map((row) => row.key)).not.toContain(revoked.key);
@@ -211,10 +257,12 @@ it("promotes a cold row for event publication and enforces visibility revocation
     addSessionMember(scope, { identityId: viewer.id, addedBy: owner.id, addedAt: 1 });
     writeRow(revoked.key, { ...entry, visibility: "read-only", updatedAt: 1_000 });
     await listRows(projection, { limit: 200 });
+    expire();
     expect(projection.capture({ agentId: "main", key: revoked.key })?.materialized).toBeUndefined();
     const shared = await listRows(projection, { limit: 200 }, { context, client: peer.client });
     expect(shared.sessions.find((row) => row.key === revoked.key)?.sharingRole).toBe("member");
     await listRows(projection, { limit: 200 });
+    expire();
     expect(projection.capture({ agentId: "main", key: revoked.key })?.materialized).toBeUndefined();
     expect(removeSessionMember(scope, viewer.id)).not.toBeNull();
     const privateRows = await listRows(

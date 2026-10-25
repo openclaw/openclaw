@@ -84,14 +84,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
                 .size > 0 ||
               runtimeState.sessionViewerPresence?.has(sessionObserverScopeKey(key, agentId)) ===
                 true,
-            onChange(listener) {
-              const unsubscribe = runtime.sessionMessageSubscribers.onChange(listener);
-              const unwatch = runtimeState.sessionViewerPresence?.onChange(listener);
-              return () => {
-                unsubscribe();
-                unwatch?.();
-              };
-            },
           },
         });
       });

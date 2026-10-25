@@ -456,7 +456,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     materialize,
     forgetBackfill: backfill.remove,
     retainMaterialized: (row) => residency.describe(row),
-    trim: residency.trim,
   });
   const transcriptUpdates = createSessionRowProjectionTranscriptUpdates({
     matching,
@@ -651,8 +650,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       readSourceEntry,
       state: () => ({ cfg, modelCatalog: catalog.current, rowContext: metadata.current }),
     }),
-    present: (record: records.MaterializedRow, options?: records.SnapshotOptions) =>
-      records.present(record, metadata.current, options),
+    present(this: void, record: records.MaterializedRow, options?: records.SnapshotOptions) {
+      residency.describe(record);
+      return records.present(record, metadata.current, options);
+    },
+    sweepMaterializedRows: (now: number) => inOwnerContext(() => residency.sweep(now)),
     ensureMaterialized,
     prepareSelection,
     withSelectionPreparation,

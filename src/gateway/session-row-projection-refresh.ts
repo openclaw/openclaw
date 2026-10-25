@@ -37,7 +37,6 @@ export function createSessionRowRefresh(
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
     metadataReady: () => boolean;
-    trim: () => void;
   },
 ) {
   const materializer = createSessionRowMaterializer({
@@ -495,6 +494,7 @@ export function createSessionRowRefresh(
     },
     refresh: materializer.refresh,
     refreshPresentation(
+      this: void,
       rows: readonly records.Row[],
       agentId: string | undefined,
       onlyFacts: boolean,
@@ -512,11 +512,9 @@ export function createSessionRowRefresh(
       }
     },
     refreshBatch(this: void) {
-      return (refreshing ??= refreshBatch()
-        .then(owner.trim)
-        .finally(() => {
-          refreshing = undefined;
-        }));
+      return (refreshing ??= refreshBatch().finally(() => {
+        refreshing = undefined;
+      }));
     },
     prepareExactRows,
     prepareSelection,

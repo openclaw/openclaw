@@ -312,11 +312,16 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
   });
 });
 
-it("bounds archived residency across pages and evicts the least recently read rows", ({
+it("expires idle archived pages without evicting overlapping or disjoint read pins", ({
   signal,
   onTestFinished,
 }) => {
   const run = withSessionRowProjectionState(async (create, _, cleanup) => {
+    using clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const expire = () => {
+      clock.mockReturnValue(Date.now() + 10 * 60_000);
+      projection.sweepMaterializedRows(Date.now());
+    };
     for (let index = 0; index < 128; index++) {
       writeRow(`agent:main:archive-${index}`, {
         sessionId: `archive-${index}`,
@@ -350,12 +355,14 @@ it("bounds archived residency across pages and evicts the least recently read ro
     expect(second).toMatchObject({ count: 48, totalCount: 128, nextOffset: null });
     expect(new Set([...first.sessions, ...second.sessions].map((row) => row.key)).size).toBe(128);
     expect(projection.materializedCount).toBe(128);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+    expire();
+    expect(projection.selectEntries().filter(ready)).toHaveLength(0);
     const query = { agentId: "main", key: "agent:main:archive-127" };
     expect(projection.capture(query)?.materialized).toBeUndefined();
     expect((await preparedSnapshot(projection, query)).row?.sessionId).toBe("archive-127");
     expect(projection.materializedCount).toBe(129);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(1);
     const pagePrepared = createDeferredCore();
     const releasePage = createDeferredCore();
     let wholePagePaused = false;
@@ -377,6 +384,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
     const releaseSecond = createDeferredCore();
     try {
       await waitForPage(pendingPage, pagePrepared, signal);
+      expire();
       await listRows(projection, { archived: true, limit: 1 });
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
       let secondPaused = false;
@@ -393,7 +401,8 @@ it("bounds archived residency across pages and evicts the least recently read ro
       releasePage.resolve();
       const wholePage = await pendingPage;
       expect(wholePage.sessions).toHaveLength(128);
-      expect(projection.selectEntries().filter(ready)).toHaveLength(110);
+      projection.sweepMaterializedRows(Date.now());
+      expect(projection.selectEntries().filter(ready)).toHaveLength(128);
     } finally {
       releasePage.resolve();
       releaseSecond.resolve();
@@ -401,7 +410,9 @@ it("bounds archived residency across pages and evicts the least recently read ro
       afterExactPreparation = undefined;
     }
     expect((await overlappingPage)?.sessions).toHaveLength(110);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+    expire();
+    expect(projection.selectEntries().filter(ready)).toHaveLength(0);
     const wholePage = await pendingPage;
 
     sessionChanges.emit({ all: true, scope: "catalog" });
@@ -436,6 +447,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
         pages.push(page);
         await waitForPage(page, barrier.prepared, signal);
       }
+      expire();
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
     } catch (error) {
       projection.dispose();
@@ -450,7 +462,9 @@ it("bounds archived residency across pages and evicts the least recently read ro
     const disjoint = await Promise.all(pages);
     expect(disjoint.map((page) => page.sessions.length)).toEqual([64, 64]);
     expect(new Set(disjoint.flatMap((page) => page.sessions.map((row) => row.key))).size).toBe(128);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+    expire();
+    expect(projection.selectEntries().filter(ready)).toHaveLength(0);
   });
   // Vitest timeout cancels the waits; retain the fixture until its pages and state finish cleanup.
   onTestFinished(() => run);

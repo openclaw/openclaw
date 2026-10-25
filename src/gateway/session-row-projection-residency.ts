@@ -13,8 +13,10 @@ import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import * as records from "./session-row-projection-record.js";
 
-// One normal list page stays warm; larger pages retain their window only while reading it.
-const DEFAULT_MATERIALIZED_ROWS = 100;
+// Keep connected clients’ sidebar/board working sets warm between visits.
+const MATERIALIZED_IDLE_MS = 10 * 60_000;
+// Over twice the 5,159 graphs retained by the synthetic Team broad-visit workload.
+const MAX_MATERIALIZED_ROWS = 12_000;
 
 export function isColdSessionRow(row: records.Row) {
   return row.cold === true && !row.materialized;
@@ -42,9 +44,8 @@ export function createSessionRowProjectionResidency(params: {
   >;
   observers?: records.ProjectionOptions["observers"];
 }) {
-  const materialized = new Set<string>();
+  const materialized = new Map<string, number>();
   const readPins = new Set<ReadonlySet<string>>();
-  let limit = DEFAULT_MATERIALIZED_ROWS;
   function isProtected(row: records.Row) {
     const entry = row.storedEntry;
     if (!entry || !params.contextPrepared()) {
@@ -119,19 +120,23 @@ export function createSessionRowProjectionResidency(params: {
     }
     return cold;
   }
-  function trim() {
-    for (const id of materialized) {
-      if (materialized.size <= limit) {
-        break;
-      }
+  function touch(id: string, now: number) {
+    if (materialized.has(id) && materialized.get(id) !== now) {
+      materialized.delete(id);
+      materialized.set(id, now);
+    }
+  }
+  function sweep(now: number) {
+    const pinned = new Set([...readPins].flatMap((pins) => [...pins]));
+    for (const [id, lastRead] of materialized) {
       const row = params.rows.get(id)!;
       if (
-        ![...readPins].some((pins) => pins.has(id)) &&
-        (row.entry?.archivedAt !== undefined ||
-          (!params.dirty.has(id) &&
-            !row.pendingDatabaseFacts &&
-            !row.unresolvedDatabaseFacts &&
-            !isProtected(row)))
+        (now - lastRead >= MATERIALIZED_IDLE_MS || materialized.size > MAX_MATERIALIZED_ROWS) &&
+        !pinned.has(id) &&
+        !params.dirty.has(id) &&
+        !row.pendingDatabaseFacts &&
+        !row.unresolvedDatabaseFacts &&
+        !isProtected(row)
       ) {
         demote(row);
       }
@@ -179,9 +184,8 @@ export function createSessionRowProjectionResidency(params: {
       }
     }
   }
-  const stopObserving = params.observers?.onChange(trim);
   return {
-    trim,
+    sweep,
     acquire(row: records.Row, previous: records.Row) {
       if (!eligible(row)) {
         materialized.delete(records.identity(row));
@@ -262,25 +266,25 @@ export function createSessionRowProjectionResidency(params: {
       readPins.add(pins);
       return {
         update(ids: readonly string[]) {
+          const now = Date.now();
+          for (const id of pins) {
+            touch(id, now);
+          }
           readPins.delete(pins);
           pins = new Set(ids);
           readPins.add(pins);
-          limit = Math.max(limit, pins.size);
-          trim();
         },
         release() {
           readPins.delete(pins);
-          limit = Math.max(
-            DEFAULT_MATERIALIZED_ROWS,
-            ...Array.from(readPins, (heldPins) => heldPins.size),
-          );
-          trim();
+          const now = Date.now();
+          for (const id of pins) {
+            touch(id, now);
+          }
         },
       };
     },
     forget: (id: string) => materialized.delete(id),
     clear() {
-      stopObserving?.();
       materialized.clear();
       readPins.clear();
     },
@@ -290,9 +294,11 @@ export function createSessionRowProjectionResidency(params: {
       }
       if (records.ready(row)) {
         const id = records.identity(row);
-        materialized.delete(id);
-        materialized.add(id);
-        trim();
+        const now = Date.now();
+        if (materialized.get(id) !== now) {
+          materialized.delete(id);
+          materialized.set(id, now);
+        }
       }
       return row;
     },

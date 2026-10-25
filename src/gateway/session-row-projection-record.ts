@@ -39,7 +39,6 @@ export type ProjectionOptions = {
   placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
   observers?: {
     has: (row: Pick<Row, "key" | "agentId">) => boolean;
-    onChange: (listener: () => void) => () => void;
   };
 };
 
