@@ -177,18 +177,10 @@ it.each(["EIO", "ENOENT"])(
   },
 );
 
-it("closes after stat failure and propagates the read error", async () => {
+it.each(["statError", "closeError"] as const)("propagates %s and closes once", async (phase) => {
   const { root } = await createJournal();
-  const readError = new Error("stat failed");
-  const calls = observeIO({ statError: readError });
-  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === readError);
-  assert.equal(calls.closes, 1);
-});
-
-it("does not return an identity when closing the handle fails", async () => {
-  const { root } = await createJournal();
-  const failure = new Error("close failed");
-  const calls = observeIO({ closeError: failure });
+  const failure = new Error(phase);
+  const calls = observeIO({ [phase]: failure });
   await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
   assert.equal(calls.closes, 1);
 });
