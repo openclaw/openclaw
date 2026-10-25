@@ -35,6 +35,14 @@ import { createChatSendWorkAdmission } from "./server-methods/chat-send-work-adm
 import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
+const transcriptMessage = (text: string, role?: string) =>
+  expect.objectContaining({
+    message: expect.objectContaining({
+      content: [{ type: "text", text }],
+      ...(role ? { role } : {}),
+    }),
+  });
+
 async function withCancellationFixture(
   run: (fixture: Awaited<ReturnType<typeof createCancellationFixture>>) => Promise<void>,
 ): Promise<void> {
@@ -143,10 +151,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
       runId,
       entry,
       client: {
-        connect: gatewayConnect(["operator.sessions.write"], {
-          id: "test",
-          mode: "test",
-        }),
+        connect: gatewayConnect(["operator.sessions.write"], { id: "test", mode: "test" }),
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
       sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },
@@ -265,12 +270,7 @@ describe("operator access cancellation", () => {
             expect(f.transcript()).toEqual(
               expect.arrayContaining([
                 ...savedTranscript,
-                expect.objectContaining({
-                  message: expect.objectContaining({
-                    role: "assistant",
-                    content: [{ type: "text", text: "The guest's saved progress." }],
-                  }),
-                }),
+                transcriptMessage("The guest's saved progress.", "assistant"),
               ]),
             );
           }
@@ -423,11 +423,7 @@ describe("operator access cancellation", () => {
         } else {
           expect(original.controller.signal.aborted).toBe(true);
           expect(f.transcript()).toContainEqual(
-            expect.objectContaining({
-              message: expect.objectContaining({
-                content: [{ type: "text", text: "Keep the canceled run's progress." }],
-              }),
-            }),
+            transcriptMessage("Keep the canceled run's progress."),
           );
         }
       });

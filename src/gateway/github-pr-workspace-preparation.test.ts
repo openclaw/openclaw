@@ -16,6 +16,24 @@ import {
 import * as workspaceStore from "./worker-environments/local-workspace-store.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
+type PreparationFixture = Awaited<ReturnType<typeof fixture>>;
+async function expectFile(directory: string, file: string, contents: string) {
+  expect(await fs.readFile(path.join(directory, file), "utf8")).toBe(contents);
+}
+async function expectMissing(directory: string, file: string) {
+  await expect(fs.stat(path.join(directory, file))).rejects.toMatchObject({ code: "ENOENT" });
+}
+async function workspaceState(f: PreparationFixture) {
+  return {
+    hostHead: await f.git("rev-parse", "HEAD"),
+    hostIndex: await f.git("write-tree"),
+    hostStatus: await f.git("status", "--porcelain"),
+    guestHead: await f.guestGit("rev-parse", "HEAD"),
+    guestIndex: await f.guestGit("write-tree"),
+    guestStatus: await f.guestGit("status", "--porcelain"),
+  };
+}
+
 describe("existing PR preparation through the registered agent action", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
@@ -33,9 +51,7 @@ describe("existing PR preparation through the registered agent action", () => {
       const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
       expect(originalHead).toBe(f.pr.base.sha);
       expect(await f.git("status", "--porcelain")).toBe("");
-      expect(await fs.readFile(path.join(f.projection, "newer-base.txt"), "utf8")).toBe(
-        "base advanced after PR\n",
-      );
+      await expectFile(f.projection, "newer-base.txt", "base advanced after PR\n");
       await expect(f.invoke({}, null)).rejects.toThrow("sandboxed agent");
       await expect(f.invoke({}, { ...f.sandbox, workspaceAccess: "ro" })).rejects.toThrow(
         "read-only",
@@ -80,12 +96,8 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await f.guestGit("write-tree")).toBe(prTree);
       expect(await f.guestGit("diff", "--name-only")).toBe("");
       for (const directory of [f.cwd, f.projection]) {
-        expect(await fs.readFile(path.join(directory, "pr.txt"), "utf8")).toBe(
-          "original PR contents\n",
-        );
-        await expect(fs.stat(path.join(directory, "newer-base.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        await expectFile(directory, "pr.txt", "original PR contents\n");
+        await expectMissing(directory, "newer-base.txt");
       }
       expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(originalGuestHead);
@@ -103,15 +115,7 @@ describe("existing PR preparation through the registered agent action", () => {
       await fs.writeFile(path.join(f.projection, "artifact.txt"), "guest saved dirty work\n");
       await fs.writeFile(path.join(f.projection, "untracked.txt"), "guest untracked work\n");
       const association = f.readSession().worktree?.githubPullRequest;
-      const workspaceState = async () => ({
-        hostHead: await f.git("rev-parse", "HEAD"),
-        hostIndex: await f.git("write-tree"),
-        hostStatus: await f.git("status", "--porcelain"),
-        guestHead: await f.guestGit("rev-parse", "HEAD"),
-        guestIndex: await f.guestGit("write-tree"),
-        guestStatus: await f.guestGit("status", "--porcelain"),
-      });
-      const beforeRepeat = await workspaceState();
+      const beforeRepeat = await workspaceState(f);
       await closeOpenClawAgentDatabasesAsync();
       expect(f.readSession().worktree?.githubPullRequest).toEqual(association);
       expect(await f.invoke()).toMatchObject({
@@ -124,13 +128,13 @@ describe("existing PR preparation through the registered agent action", () => {
         "artifact.txt": "guest saved dirty work\n",
         "untracked.txt": "guest untracked work\n",
       })) {
-        expect(await fs.readFile(path.join(f.projection, file), "utf8")).toBe(contents);
+        await expectFile(f.projection, file, contents);
       }
-      expect(await workspaceState()).toEqual(beforeRepeat);
+      expect(await workspaceState(f)).toEqual(beforeRepeat);
       expect(f.readSession().worktree?.githubPullRequest).toEqual(association);
-      expect(await fs.readFile(path.join(f.cwd, "artifact.txt"), "utf8")).toBe("base\n");
+      await expectFile(f.cwd, "artifact.txt", "base\n");
       for (const file of ["guest-commit.txt", "untracked.txt"]) {
-        await expect(fs.stat(path.join(f.cwd, file))).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(f.cwd, file);
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
@@ -142,16 +146,10 @@ describe("existing PR preparation through the registered agent action", () => {
       await f.git("merge-base", "--is-ancestor", f.pr.head.sha, "HEAD");
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      expect(await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8")).toBe(
-        "guest saved dirty work\n",
-      );
-      expect(await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8")).toBe(
-        "guest untracked work\n",
-      );
+      await expectFile(f.projection, "artifact.txt", "guest saved dirty work\n");
+      await expectFile(f.projection, "untracked.txt", "guest untracked work\n");
       for (const directory of [f.cwd, f.projection]) {
-        expect(await fs.readFile(path.join(directory, "newer-pr.txt"), "utf8")).toBe(
-          "newer remote PR work\n",
-        );
+        await expectFile(directory, "newer-pr.txt", "newer remote PR work\n");
       }
       // Publication accepts only the head this preparation integrated.
       await f.advanceHead({ "newest-pr.txt": "unaccepted remote PR work\n" });
@@ -176,9 +174,7 @@ describe("existing PR preparation through the registered agent action", () => {
       f.pr.html_url = "https://github.com/openclaw/openclaw/pull/8";
       await expect(f.invoke()).rejects.toThrow("already continues another PR");
       expect(f.readSession().worktree?.githubPullRequest).toEqual(refreshedAssociation);
-      expect(await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8")).toBe(
-        "guest untracked work\n",
-      );
+      await expectFile(f.projection, "untracked.txt", "guest untracked work\n");
       expect(f.writes).toEqual([]);
       expect(f.externalWrites).toEqual([]);
     },
@@ -197,12 +193,8 @@ describe("existing PR preparation through the registered agent action", () => {
         await expect(f.invoke()).rejects.toThrow("existing dirty, untracked, or unpublished work");
         expect(f.readSession().worktree).toEqual(before.worktree);
         expect(await f.git("rev-parse", "HEAD")).toBe(emptyHead);
-        expect(await fs.readFile(path.join(f.projection, "notes.txt"), "utf8")).toBe(
-          "work before the URL arrived\n",
-        );
-        await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        await expectFile(f.projection, "notes.txt", "work before the URL arrived\n");
+        await expectMissing(f.projection, "pr.txt");
       } else {
         expect(await f.invoke()).toMatchObject({
           status: "prepared",
@@ -220,9 +212,7 @@ describe("existing PR preparation through the registered agent action", () => {
         expect(await f.git("write-tree")).toBe(prTree);
         expect(await f.git("status", "--porcelain")).toBe("");
         expect(await f.guestGit("write-tree")).toBe(prTree);
-        expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-          "original PR contents\n",
-        );
+        await expectFile(f.projection, "pr.txt", "original PR contents\n");
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
@@ -277,12 +267,7 @@ describe("existing PR preparation through the registered agent action", () => {
         await f.git("commit", "-m", "Unpublished host work");
       }
       const snapshot = async () => ({
-        hostHead: await f.git("rev-parse", "HEAD"),
-        guestHead: await f.guestGit("rev-parse", "HEAD"),
-        hostStatus: await f.git("status", "--porcelain"),
-        guestStatus: await f.guestGit("status", "--porcelain"),
-        hostIndex: await f.git("write-tree"),
-        guestIndex: await f.guestGit("write-tree"),
+        ...(await workspaceState(f)),
         hostArtifact: await contents(f.cwd, "artifact.txt"),
         guestArtifact: await contents(f.projection, "artifact.txt"),
         hostNotes: await contents(f.cwd, "notes.txt"),
@@ -294,9 +279,7 @@ describe("existing PR preparation through the registered agent action", () => {
       );
       expect(f.readSession().worktree, condition).toEqual(before.worktree);
       expect(await snapshot(), condition).toEqual(saved);
-      await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(f.projection, "pr.txt");
       // Restore only this rejected fixture change before exercising the next independent input.
       if (condition === "staged-only") {
         await f.guestGit("restore", "--staged", "artifact.txt");
@@ -318,12 +301,12 @@ describe("existing PR preparation through the registered agent action", () => {
     const before = f.readSession();
     const head = await f.git("rev-parse", "HEAD");
     const tree = await f.git("write-tree");
-    expect(await fs.readFile(path.join(f.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
+    await expectFile(f.cwd, "artifact.txt", "accepted\n");
     await expect(f.invoke()).rejects.toThrow("existing dirty, untracked, or unpublished work");
     expect(f.readSession().worktree).toEqual(before.worktree);
     expect(await f.git("rev-parse", "HEAD")).toBe(head);
     expect(await f.git("write-tree")).toBe(tree);
-    expect(await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8")).toBe("accepted\n");
+    await expectFile(f.projection, "artifact.txt", "accepted\n");
     expect(f.publishedTitles).toEqual(["earlier-pr"]);
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
@@ -340,12 +323,7 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       const snapshot = async () => ({
         worktree: structuredClone(f.readSession().worktree),
-        hostHead: await f.git("rev-parse", "HEAD"),
-        guestHead: await f.guestGit("rev-parse", "HEAD"),
-        hostIndex: await f.git("write-tree"),
-        guestIndex: await f.guestGit("write-tree"),
-        hostStatus: await f.git("status", "--porcelain"),
-        guestStatus: await f.guestGit("status", "--porcelain"),
+        ...(await workspaceState(f)),
       });
       const before = await snapshot();
       const transport = mocks.runCommand.getMockImplementation()!;
@@ -393,18 +371,14 @@ describe("existing PR preparation through the registered agent action", () => {
           status: "prepared",
           headCommit: f.headCommit,
         });
-        expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-          "original PR contents\n",
-        );
+        await expectFile(f.projection, "pr.txt", "original PR contents\n");
       } else {
         await expect(f.invoke()).rejects.toThrow(
           variant === "wrong author" ? "could not be verified as yours" : undefined,
         );
         expect(await snapshot()).toEqual(before);
         for (const directory of [f.cwd, f.projection]) {
-          await expect(fs.stat(path.join(directory, "pr.txt"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectMissing(directory, "pr.txt");
         }
       }
       expect(privateAccessReads).toBeGreaterThan(0);
@@ -432,9 +406,7 @@ describe("existing PR preparation through the registered agent action", () => {
     await expect(f.invoke()).rejects.toThrow("repository is archived");
     expect(f.readSession().worktree).toEqual(before.worktree);
     expect(await f.git("rev-parse", "HEAD")).toBe(head);
-    await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissing(f.projection, "pr.txt");
     expect(f.writes).toEqual([]);
   });
 
@@ -465,10 +437,8 @@ describe("existing PR preparation through the registered agent action", () => {
       );
       expect(f.readSession().worktree).toEqual(before.worktree);
       expect(await f.git("rev-parse", "HEAD")).toBe(head);
-      expect(await fs.readFile(path.join(f.cwd, "artifact.txt"), "utf8")).toBe(files);
-      await expect(fs.stat(path.join(f.projection, "pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectFile(f.cwd, "artifact.txt", files);
+      await expectMissing(f.projection, "pr.txt");
       expect(f.writes).toEqual([]);
     },
   );
@@ -537,15 +507,9 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await f.git("diff", "--name-only", f.headCommit)).toBe("");
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
-        "original PR contents\n",
-      );
-      await expect(fs.stat(path.join(f.projection, "newer-base.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      await expect(fs.stat(path.join(f.projection, "newer-pr.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectFile(f.projection, "pr.txt", "original PR contents\n");
+      await expectMissing(f.projection, "newer-base.txt");
+      await expectMissing(f.projection, "newer-pr.txt");
       expect(f.readSession().worktree?.githubPullRequest?.preparedHeadCommit).toBe(f.headCommit);
       expect(f.writes).toEqual([]);
     },
