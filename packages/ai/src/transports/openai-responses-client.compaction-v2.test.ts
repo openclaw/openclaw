@@ -26,8 +26,8 @@ const context = {
   systemPrompt: "Stable instructions",
   tools: [{ name: "lookup", description: "Read", parameters: Type.Object({ key: Type.String() }) }],
   messages: [
-    { role: "user", content: "remember copper", timestamp: 1 },
-    { role: "user", content: "runtime context", runtimeContext: { retained: true }, timestamp: 2 },
+    fixtures.userMessage("remember copper", 1),
+    fixtures.userMessage("runtime context", 2, { runtimeContext: { retained: true } }),
   ],
 } satisfies Context;
 const checkpoint = (value = "opaque") => ({
@@ -122,7 +122,7 @@ describe.each([
     const result = await compact({
       ...context,
       messages: convertToLlm([
-        { role: "user", content: "real request", timestamp: 1 },
+        fixtures.userMessage("real request", 1),
         { role: "compactionSummary", summary: "old summary", tokensBefore: 100, timestamp: 2 },
         {
           role: "custom",
@@ -179,10 +179,7 @@ describe.each([
     const serializedOwner = JSON.stringify(owner);
     const second = await compact({
       ...context,
-      messages: [
-        JSON.parse(serializedOwner),
-        { role: "user", content: "now silver", timestamp: 4 },
-      ],
+      messages: [JSON.parse(serializedOwner), fixtures.userMessage("now silver", 4)],
     });
     expect(second.output).toEqual([
       first.output[0],
@@ -196,10 +193,7 @@ describe.each([
 it("bounds retained multilingual input without reviving older users", async () => {
   const result = await compact({
     ...context,
-    messages: [
-      { role: "user", content: "oldest", timestamp: 1 },
-      { role: "user", content: "中".repeat(64_001), timestamp: 2 },
-    ],
+    messages: [fixtures.userMessage("oldest", 1), fixtures.userMessage("中".repeat(64_001), 2)],
   });
   expect(result.output).toHaveLength(2);
   expect(JSON.stringify(result.output)).not.toContain("oldest");
