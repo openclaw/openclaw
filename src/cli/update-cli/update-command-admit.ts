@@ -317,14 +317,17 @@ async function inspectUpdateAdmission(
         }
       }
       if (databaseContext && schemasAccepted) {
-        const context = databaseContext;
+        const admittedContext = databaseContext;
         try {
-          const snapshot = context.configSnapshot;
-          const selection = await resolveDatabaseEngineSelection(context.config, context.env);
+          const snapshot = admittedContext.configSnapshot;
+          const selection = await resolveDatabaseEngineSelection(
+            admittedContext.config,
+            admittedContext.env,
+          );
           await withDatabaseEngineSelection(selection, () =>
             assertHeartbeatScratchMigrationUnambiguous(
               snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
-              context.env,
+              admittedContext.env,
             ),
           );
         } catch (error) {
