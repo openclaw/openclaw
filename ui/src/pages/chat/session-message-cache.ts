@@ -116,7 +116,7 @@ export function createChatWidgetLayout(
     const prune = (heights: typeof snapshot.widgetHeights) =>
       Object.fromEntries(Object.entries(heights ?? {}).filter(retain));
     admitted = { ...snapshot, widgetHeights: prune(admitted?.widgetHeights) };
-    const widgetHeights = prune(snapshot.widgetHeights);
+    const widgetHeights = widgetKey ? prune(snapshot.widgetHeights) : snapshot.widgetHeights;
     cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
     setRowRevision((revision) => revision + 1);
   };

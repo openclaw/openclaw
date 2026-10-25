@@ -88,6 +88,17 @@ describe("session message cache", () => {
     expect(layout.read(row)).toBe(700);
     expect(context.layout().read(row)).toBe(700);
   });
+  it("retains a matching settled footprint for the following reload without another resize", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    context.write(
+      widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700, "canvas:widget": 600 } }),
+    );
+    const layout = context.layout();
+    expect(layout.write("canvas:widget", 600, "widget-row", true)).toBe(600);
+    expect(layout.read(row)).toBeUndefined();
+    expect(context.layout().read(row)).toBe(700);
+  });
   it("reserves an unchanged row while keeping widths, revisions and widget resizes independent", () => {
     const context = createCacheContext();
     const row = 'row:v1:768:gutter:revision-1:"notice"';
