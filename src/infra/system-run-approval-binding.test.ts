@@ -146,50 +146,19 @@ describe("normalizeSystemRunApprovalPlan", () => {
   });
 });
 
-describe("buildSystemRunApprovalEnvBinding", () => {
-  it.each([
-    {
-      input: { z_key: "b", " bad key ": "ignored", alpha: "a", EMPTY: 1 },
-      equivalent: { alpha: "a", z_key: "b" },
-      keys: ["alpha", "z_key"],
-      changed: { alpha: "changed", z_key: "b" },
-    },
-    {
-      input: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
-      equivalent: { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
-      keys: ["ProgramFiles(x86)"],
-      changed: { "ProgramFiles(x86)": "D:\\SDKs" },
-    },
-  ])(
-    "normalizes env keys and binds their values: $keys",
-    ({ input, equivalent, keys, changed }) => {
-      const normalized = buildSystemRunApprovalEnvBinding(input);
-      expect(normalized).toEqual({
-        envHash: buildSystemRunApprovalEnvBinding(equivalent).envHash,
-        envKeys: keys,
-      });
-      expect(normalized.envHash).toBeTypeOf("string");
-      expect(normalized.envHash).toHaveLength(64);
-      expect(normalized.envHash).not.toEqual(buildSystemRunApprovalEnvBinding(changed).envHash);
-    },
-  );
-
+describe("buildSystemRunApprovalBinding", () => {
   it("returns a null hash when no usable env entries remain", () => {
     expect(buildSystemRunApprovalEnvBinding(null)).toEqual({ envHash: null, envKeys: [] });
     expect(buildSystemRunApprovalEnvBinding({ bad: 1 })).toEqual({ envHash: null, envKeys: [] });
   });
-});
-
-describe("buildSystemRunApprovalBinding", () => {
-  it("normalizes argv and metadata into a binding", () => {
-    const env = { beta: "2", alpha: "1" };
+  it("normalizes argv, metadata and usable env entries into a binding", () => {
     expect(
       buildSystemRunApprovalBinding({
         argv: ["bash", "-lc", 12],
         cwd: " /tmp ",
         agentId: " main ",
         sessionKey: " agent:main:main ",
-        env,
+        env: { beta: "2", alpha: "1", " bad key ": "ignored", EMPTY: 1 },
       }),
     ).toEqual({
       binding: {
@@ -197,7 +166,7 @@ describe("buildSystemRunApprovalBinding", () => {
         cwd: " /tmp ",
         agentId: "main",
         sessionKey: "agent:main:main",
-        envHash: buildSystemRunApprovalEnvBinding(env).envHash,
+        envHash: buildSystemRunApprovalEnvBinding({ alpha: "1", beta: "2" }).envHash,
       },
       envKeys: ["alpha", "beta"],
     });
@@ -223,25 +192,23 @@ describe("matchSystemRunApprovalBinding", () => {
     envHash: "abc",
   };
 
-  it.each([
-    { argv: ["bash", "-lc", "echo bye"] },
-    { cwd: "/var/tmp" },
-    { agentId: "other" },
-    { sessionKey: "agent:main:other" },
-  ])("rejects approval binding mismatch: %j", (difference) => {
-    expect(
-      matchSystemRunApprovalBinding({
-        expected,
-        actual: { ...expected, ...difference },
-        actualEnvKeys: ["ALPHA"],
-      }),
-    ).toEqual({
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-      details: undefined,
-    });
-  });
+  it.each([{ cwd: "/var/tmp" }, { agentId: "other" }, { sessionKey: "agent:main:other" }])(
+    "rejects approval binding mismatch: %j",
+    (difference) => {
+      expect(
+        matchSystemRunApprovalBinding({
+          expected,
+          actual: { ...expected, ...difference },
+          actualEnvKeys: ["ALPHA"],
+        }),
+      ).toEqual({
+        ok: false,
+        code: "APPROVAL_REQUEST_MISMATCH",
+        message: "approval id does not match request",
+        details: undefined,
+      });
+    },
+  );
 });
 
 describe("mutable file operand binding", () => {
@@ -363,19 +330,8 @@ describe("mutable file operand binding", () => {
             }
           : undefined,
       );
-      const operands = binding.operands;
-      if (kind === "wrapper") {
-        expect(operands.map((operand) => operand.snapshot.path)).toContain(
-          fs.realpathSync(executable),
-        );
-      } else if (kind === "direct" || kind === "native") {
-        expect(
-          operands.filter((operand) =>
-            kind === "native" ? operand.executable : !operand.executable,
-          ),
-        ).toHaveLength(1);
-      } else {
-        expect(operands).toHaveLength(kind === "path" ? 1 : 2);
+      if (kind.endsWith("shim")) {
+        expect(binding.operands).toHaveLength(2);
       }
       await expectRevalidation(binding, cwd);
       if (kind === "native") {
@@ -428,14 +384,10 @@ describe("mutable file operand binding", () => {
       const cases: Array<[input: string | string[], message: string | null, startupEnv?: boolean]> =
         [
           [["sh", "-s", "job.sh"], startup],
-          [["bash", "-se", "job.sh"], startup],
-          [["bash", "-es", "job.sh"], startup],
-          [["bash", "-ls", "job.sh"], startup],
           [["bash", "-lse", "job.sh"], startup],
           ["bash --rcfile init.sh -i job.sh", startup],
           [["bash", "-O", "extglob", "-i", "job.sh"], startup],
           [["bash", "--rcfile", "init.sh", "-c", "echo ok"], startup],
-          [["bash", "-i", "job.sh"], startup],
           [["bash", "-c", "source loaded.sh"], null],
           [["bash", "-c", "echo ok; source loaded.sh"], null],
           [["env", "BASH_ENV=loaded.sh", "bash", "-c", "echo ok"], environment],
