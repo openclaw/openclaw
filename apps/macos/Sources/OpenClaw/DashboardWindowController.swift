@@ -1471,10 +1471,11 @@ extension DashboardWindowController {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === self.webView {
-            self.finishDocumentLoad(.failure(URLError(.networkConnectionLost)))
-            self.documentHost.hasLiveContent = false
-            self.nativeCommandsReady = false
-            self.invalidateGatewayHealth()
+            // A failure page instead of reload: a crash that recurs on load would loop.
+            self.showDashboardFailure(
+                URLError(.networkConnectionLost),
+                message: String(localized: "The dashboard page stopped unexpectedly."),
+                detail: String(localized: "Choose Reload to try loading the dashboard again."))
         } else if self.nativeBrowser.owns(webView) {
             webView.reload()
         }
