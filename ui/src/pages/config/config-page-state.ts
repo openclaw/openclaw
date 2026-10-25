@@ -303,7 +303,8 @@ export function createConfigPage(
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
-    if (runtimeConfig !== runtimeConfigSource) {
+    const sourceChanged = runtimeConfig !== runtimeConfigSource;
+    if (sourceChanged) {
       retireCommands();
       if (runtimeConfigSource) {
         customThemeImportOwner.retireImport();
@@ -312,7 +313,10 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const config = runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
+    if (
+      sourceChanged ||
+      (!config.configSnapshot && !config.configLoading && !currentConfigRead(config))
+    ) {
       void runtimeConfig.ensureLoaded().catch(() => undefined);
     }
     if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {

@@ -35,6 +35,7 @@ export function createRuntimeConfigEditor(
     current: () => Record<string, unknown> | null;
     subscribe: (listener: () => void) => () => void;
   },
+  initialRead?: Promise<unknown>,
 ) {
   // A read-only boot snapshot becomes an editable base with its original hash/raw pair.
   if (state.configSnapshot) {
@@ -93,6 +94,11 @@ export function createRuntimeConfigEditor(
   };
   const loadConfigOnce = (task: () => Promise<unknown>) =>
     loads.get("config") ?? run(task, "config");
+  // The display reader keeps its request; editing takes custody without waiting
+  // to expose independent schema reads or an explicit replacement refresh.
+  if (initialRead) {
+    void run(() => initialRead, "config");
+  }
 
   const loadSchema = () => {
     if (loads.has("schema") && schemaRead) {
@@ -179,6 +185,7 @@ export function createRuntimeConfigEditor(
   };
 
   return {
+    snapshotOwner: writes,
     get state() {
       return state;
     },

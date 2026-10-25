@@ -22,18 +22,18 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import {
+  isInternalCanvasEntryUrl,
+  resolveCanvasIframeUrl,
+  resolveEmbedSandbox,
+  type EmbedSandboxMode,
+} from "../../../lib/chat/canvas-embed-policy.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
   ToolPreview as ToolPreviewModel,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  isInternalCanvasEntryUrl,
-  resolveCanvasIframeUrl,
-  resolveEmbedSandbox,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";

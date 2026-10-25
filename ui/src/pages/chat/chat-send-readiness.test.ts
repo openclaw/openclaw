@@ -83,7 +83,7 @@ it("admits consecutive drafts synchronously and delivers them in order without c
     expect(
       host.request.mock.calls
         .filter(([method]) => method === "chat.send")
-        .map(([, params]) => requireRecord(params).message),
+        .map(([, params]) => requireRecord(params, "chat.send parameters").message),
     ).toEqual(["First submitted draft", "Second submitted draft"]);
     expect(host.chatQueue).toEqual([]);
   });

@@ -472,6 +472,7 @@ describe("ChannelsPage lifecycle", () => {
       }),
       configUiHints: { "channels.whatsapp.enabled": { advanced: false } },
     });
+    await source.runtimeConfig.ensureLoaded();
     const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
     const refreshChannels = vi.spyOn(source.channels, "refresh");
     const page = mountPage(source.context);

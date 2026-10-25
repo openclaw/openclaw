@@ -8,8 +8,6 @@ import { createBackgroundLayoutRef } from "../../../components/session-backgroun
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
-import "../../../styles/chat/emoji-menu.css";
-import "../../../styles/chat/mention-menu.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -27,6 +25,8 @@ import {
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
 } from "./chat-composer-controls.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
+import "../../../styles/chat/emoji-menu.css";
+import "../../../styles/chat/mention-menu.css";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";

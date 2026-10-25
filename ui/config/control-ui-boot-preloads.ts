@@ -4,7 +4,7 @@ import { controlUiBootEntryRoute, controlUiBootManifestKey } from "./control-ui-
 
 // These common interactions download beside the route, but evaluate only on use.
 // Include the nested option entries too: opening a menu must not start a second RTT.
-const composerInteractionEntries = new Set([
+const sharedInteractionEntries = new Set([
   "ui/src/pages/chat/components/chat-composer-slash-menu.tsx",
   "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx",
   "ui/src/pages/chat/components/chat-composer-skill-menu.tsx",
@@ -13,6 +13,11 @@ const composerInteractionEntries = new Set([
   "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx",
   "ui/src/pages/chat/components/chat-composer-emoji.tsx",
   "ui/src/pages/chat/components/chat-composer-emoji-options.tsx",
+  "ui/src/components/app-sidebar-online.tsx",
+]);
+const chatInteractionEntries = new Set([
+  "ui/src/pages/chat/chat-pane-session-operations.ts",
+  "ui/src/pages/chat/chat-send-delivery.runtime.ts",
 ]);
 
 export function collectControlUiStaticAssets(
@@ -65,15 +70,17 @@ export function collectControlUiBootAssets(
     for (const route of ["chat", "new"] as const) {
       if (
         entries.some((id) => {
+          const key = controlUiBootManifestKey(id);
+          // Placement belongs to the first New Session action, never Chat boot.
+          if (key === "ui/src/app/session-placement-startup.runtime.ts") {
+            return route === "new";
+          }
           const owner = controlUiBootEntryRoute(id);
           return (
             owner === "shared" ||
             owner === route ||
-            composerInteractionEntries.has(controlUiBootManifestKey(id)) ||
-            (route === "chat" &&
-              (controlUiBootManifestKey(id) ===
-                "ui/src/pages/chat/chat-pane-session-operations.ts" ||
-                controlUiBootManifestKey(id) === "ui/src/pages/chat/chat-send-delivery.runtime.ts"))
+            sharedInteractionEntries.has(key) ||
+            (route === "chat" && chatInteractionEntries.has(key))
           );
         })
       ) {

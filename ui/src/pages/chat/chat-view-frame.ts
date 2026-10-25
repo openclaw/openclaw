@@ -13,6 +13,7 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -163,43 +164,58 @@ export function createChatViewFrame(
   const resolveCommentSource = (selection: ChatSelectionSource) =>
     resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
       ?.range;
-  const openSelectionComment = (
+  const openSelectionComment = async (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
     selectionContextOnly = false,
   ) => {
-    showChatAnnotationEditor({
-      paneId: props.paneId,
-      anchorRect,
-      sourceRange: resolveCommentSource(selection),
-      comment: "",
-      readSignal: props.readSignal,
-      onCancel,
-      onSave: (comment): boolean => {
-        if (props.readSignal?.aborted) {
-          return true;
-        }
-        if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-          showToast({ message: uploadsDisabledMessage() });
-          return false;
-        }
-        const attachment = createChatSelectionAttachment(
-          { ...selection, comment, sessionKey: props.sessionKey },
-          { attachmentLimits: props.attachmentLimits, selectionContextOnly },
-          stagedAttachmentBytes(props),
-        );
-        if (!attachment) {
-          return false;
-        }
-        if (!stage(attachment)) {
-          releaseChatAttachmentPayloads([attachment]);
-          return false;
-        }
-        return true;
-      },
-    });
+    const readSignal = props.readSignal;
+    const sessionKey = props.sessionKey;
+    const paneId = props.paneId;
+    const sourceRange = resolveCommentSource(selection);
+    const current = () =>
+      !readSignal?.aborted && props.readSignal === readSignal && props.sessionKey === sessionKey;
+    try {
+      await showChatAnnotationEditor(
+        {
+          paneId,
+          anchorRect,
+          sourceRange,
+          comment: "",
+          readSignal,
+          onCancel,
+          onSave: (comment): boolean => {
+            if (props.readSignal?.aborted) {
+              return true;
+            }
+            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
+              showToast({ message: uploadsDisabledMessage() });
+              return false;
+            }
+            const attachment = createChatSelectionAttachment(
+              { ...selection, comment, sessionKey: props.sessionKey },
+              { attachmentLimits: props.attachmentLimits, selectionContextOnly },
+              stagedAttachmentBytes(props),
+            );
+            if (!attachment) {
+              return false;
+            }
+            if (!stage(attachment)) {
+              releaseChatAttachmentPayloads([attachment]);
+              return false;
+            }
+            return true;
+          },
+        },
+        current,
+      );
+    } catch (error) {
+      if (current()) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
   };
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);

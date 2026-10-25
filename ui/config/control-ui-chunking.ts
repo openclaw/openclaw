@@ -233,6 +233,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Placement and delivery share retries without importing either route's bundle.
+                modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,

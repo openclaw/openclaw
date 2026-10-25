@@ -932,6 +932,7 @@ describe("app launch catalog", () => {
     element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     button.click();
     await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(launch.mock.calls[0]![0].target).toBe(element);
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
       sessionKey: "agent:main:one",
       agentId: "main",

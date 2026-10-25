@@ -597,6 +597,7 @@ export async function deliverCapturedChatQueueItem(
     );
     if (!outbox) {
       // Admission succeeded; removal or another drain can retire the row while we yield.
+      chatOutboxOwner(host).syncHost(host);
       return "pending";
     }
     const drain = async (admittedItem: ChatQueueItem): Promise<QueuedChatSendResult> => {

@@ -21,7 +21,8 @@ describe("runtime config capability", () => {
   it("keeps bootstrap reads and connection facts available before configuration is opened", () => {
     const request = vi.fn(async () => ({}));
     const client = { request } as unknown as GatewayBrowserClient;
-    const replacement = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
     let config = { ui: { theme: "dark" } };
     let notify: (() => void) | undefined;
@@ -46,7 +47,7 @@ describe("runtime config capability", () => {
     expect(runtimeConfig.state.client).toBe(replacement);
     expect(runtimeConfig.state.connected).toBe(true);
     expect(request).not.toHaveBeenCalled();
-    expect(replacement.request).not.toHaveBeenCalled();
+    expect(replacementRequest).not.toHaveBeenCalled();
     expect(observed).toHaveBeenCalledTimes(3);
     runtimeConfig.dispose();
     expect(notify).toBeUndefined();
@@ -67,14 +68,15 @@ describe("runtime config capability", () => {
   it("does not retarget a first mutation while its editor activates on a replacement connection", async () => {
     const request = vi.fn(async () => makeSnapshot());
     const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
-    const replacement = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn(async () => ({}));
+    const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
     const mutation = runtimeConfig.patch({ raw: { count: 2 }, note: "test patch" });
     publish(false);
     publish(true, replacement);
     await expect(mutation).resolves.toBe(false);
     expect(request).not.toHaveBeenCalled();
-    expect(replacement.request).toHaveBeenCalledWith("config.get", {});
-    expect(replacement.request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(replacementRequest).toHaveBeenCalledWith("config.get", {});
+    expect(replacementRequest).not.toHaveBeenCalledWith("config.patch", expect.anything());
     runtimeConfig.dispose();
   });
 
@@ -90,6 +92,27 @@ describe("runtime config capability", () => {
     await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(server.submissions).toHaveLength(1);
     runtimeConfig.dispose();
+  });
+
+  it("keeps connection updates ahead of consumers when editing activates", async () => {
+    const server = createConfigServerMock();
+    const { gateway, publish } = createGatewayHarness({
+      request: server.request,
+    } as unknown as GatewayBrowserClient);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const observed: boolean[] = [];
+    const stop = gateway.subscribe((snapshot) => {
+      observed.push(runtimeConfig.state.connected === (snapshot.phase === "connected"));
+    });
+    try {
+      await runtimeConfig.ensureLoaded();
+      publish(false);
+      publish(true);
+      expect(observed).toEqual([true, true]);
+    } finally {
+      stop();
+      runtimeConfig.dispose();
+    }
   });
   it("publishes schema completion and retires a held schema read on disconnect", async () => {
     const first = deferred<unknown>();
@@ -810,6 +833,43 @@ describe("runtime config load subscriptions", () => {
       await expect(runtimeConfig.save()).resolves.toBe(true);
       expect(server.submissions[0]?.baseHash).toBe("hash-1");
     } finally {
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("loads schema and replaces a held display read after editing takes custody", async () => {
+    const first = deferred<ConfigSnapshot>();
+    let reads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.schema") {
+        return { schema: { type: "object" }, uiHints: {}, version: "ready" };
+      }
+      return ++reads === 1
+        ? first.promise
+        : makeSnapshot({ config: { count: 2 }, hash: "current" });
+    });
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
+    const display = runtimeConfig.ensureDisplayLoaded();
+    const editing = runtimeConfig.ensureLoaded();
+    try {
+      await runtimeConfig.ensureSchemaLoaded();
+      expect(request).toHaveBeenCalledWith("config.schema", {});
+      expect(reads).toBe(1);
+      expect(state.configLoading).toBe(true);
+
+      await runtimeConfig.refresh();
+      await editing;
+      expect(reads).toBe(2);
+      expect(state.configForm).toEqual({ count: 2 });
+      expect(state.configDraftBaseHash).toBe("current");
+      expect(state.configLoading).toBe(false);
+
+      first.resolve(makeSnapshot({ config: { count: 1 }, hash: "retired" }));
+      await display;
+      expect(state.configForm).toEqual({ count: 2 });
+      expect(state.configDraftBaseHash).toBe("current");
+    } finally {
+      first.resolve(makeSnapshot());
       runtimeConfig.dispose();
     }
   });

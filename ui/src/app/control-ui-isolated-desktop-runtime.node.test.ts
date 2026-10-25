@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts"
 import { controlUiBootPreloadsPlugin } from "../../config/control-ui-boot-preloads.ts";
 import {
   controlUiCodeSplitting,
+  createControlUiCodeSplitting,
   controlUiIsolatedDesktopRuntimePlugin,
 } from "../../config/control-ui-chunking.ts";
 
@@ -198,3 +199,115 @@ it.each([false, true])(
     expect((await loadingDesktop).default.codec).toBe("h264");
   },
 );
+
+it("preloads shared and route-owned views without evaluating them", async () => {
+  const root = tempDirs.make("control-ui-renderer-preloads-");
+  const local = (name: string) => path.join(root, name);
+  const modulePath = (name: string) => fileURLToPath(new URL(name, import.meta.url));
+  const commonDependency = local("renderer-dependency.js");
+  const placementDependency = local("placement-dependency.js");
+  const entries = {
+    online: modulePath("../components/app-sidebar-online.tsx"),
+    catalog: modulePath("../components/mcp-app-catalog-view.tsx"),
+    resources: modulePath("../components/mcp-app-resources-view.tsx"),
+    context: modulePath("../components/solid/mcp-app-context-strip-view.tsx"),
+    placement: modulePath("./session-placement-startup.runtime.ts"),
+    creator: modulePath("../pages/claws/creator-review-view.tsx"),
+  };
+  const aliases: Record<string, string> = {
+    "fixture:common": commonDependency,
+    "fixture:placement-dependency": placementDependency,
+  };
+  const sources: Record<string, string> = {
+    [commonDependency]:
+      'globalThis.preloadBuildFixture.events.push("common"); export const value = "common";',
+    [placementDependency]:
+      'globalThis.preloadBuildFixture.events.push("placement-dependency"); export const value = "placement";',
+  };
+  for (const [name, id] of Object.entries(entries)) {
+    aliases[`fixture:${name}`] = id;
+    const dependency = name === "placement" ? "fixture:placement-dependency" : "fixture:common";
+    sources[id] = `import { value as dependency } from ${JSON.stringify(dependency)};
+      globalThis.preloadBuildFixture.events.push(${JSON.stringify(name)});
+      export const value = dependency;`;
+  }
+  await fs.writeFile(local("package.json"), '{"type":"module"}');
+  await fs.writeFile(
+    local("index.html"),
+    '<html><head></head><body><script type="module" src="./main.js"></script></body></html>',
+  );
+  await fs.writeFile(
+    local("main.js"),
+    Object.keys(entries)
+      .map(
+        (name) =>
+          `globalThis.preloadBuildFixture.load[${JSON.stringify(name)}] = () => import("fixture:${name}");`,
+      )
+      .join("\n"),
+  );
+  const outDir = local("dist");
+  const result = await build({
+    configFile: false,
+    root,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "renderer-preload-fixture",
+        enforce: "pre",
+        resolveId: (source) => aliases[source] ?? null,
+        load: (id) => sources[id] ?? null,
+      },
+      controlUiBootPreloadsPlugin(),
+    ],
+    build: {
+      outDir,
+      minify: false,
+      target: "esnext",
+      modulePreload: false,
+      rolldownOptions: {
+        output: {
+          strictExecutionOrder: true,
+          // Exercise hints independently of the previous measured boot grouping.
+          codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
+        },
+      },
+    },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one Control UI renderer fixture bundle");
+  }
+  const chunks = result.output.filter((output) => output.type === "chunk");
+  const chunkFor = (id: string) => {
+    const chunk = chunks.find((output) => id in output.modules);
+    expect(chunk).toBeDefined();
+    return chunk!;
+  };
+  const commonChunks = [entries.online, commonDependency].map((id) => chunkFor(id).fileName);
+  const placementChunks = [entries.placement, placementDependency].map(
+    (id) => chunkFor(id).fileName,
+  );
+  const html = await fs.readFile(local("dist/index.html"), "utf8");
+  expect(routePreloads(html, "chat").toSorted()).toEqual([...new Set(commonChunks)].toSorted());
+  expect(routePreloads(html, "new").toSorted()).toEqual(
+    [...new Set([...commonChunks, ...placementChunks])].toSorted(),
+  );
+  expect(html).not.toContain(chunkFor(entries.creator).fileName);
+  for (const entry of [entries.catalog, entries.resources, entries.context]) {
+    expect(html).not.toContain(chunkFor(entry).fileName);
+  }
+
+  const fixture: {
+    events: string[];
+    load: Record<string, () => Promise<{ value: string }>>;
+  } = { events: [], load: {} };
+  vi.stubGlobal("preloadBuildFixture", fixture);
+  const entry = chunks.find((chunk) => chunk.isEntry);
+  expect(entry).toBeDefined();
+  await import(/* @vite-ignore */ pathToFileURL(path.join(outDir, entry!.fileName)).href);
+  expect(fixture.events).toEqual([]);
+  expect((await fixture.load.online!()).value).toBe("common");
+  expect(fixture.events).toEqual(["common", "online"]);
+  expect((await fixture.load.placement!()).value).toBe("placement");
+  expect(fixture.events).toEqual(["common", "online", "placement-dependency", "placement"]);
+});

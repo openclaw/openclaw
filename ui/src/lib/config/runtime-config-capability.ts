@@ -24,7 +24,7 @@ import type { RuntimeConfigEditor } from "./runtime-config-editor.ts";
 type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
 export type RuntimeConfigCapability = Omit<
   RuntimeConfigEditor,
-  OptionalRuntimeConfigCapabilityKey
+  OptionalRuntimeConfigCapabilityKey | "snapshotOwner"
 > &
   Partial<Pick<RuntimeConfigEditor, OptionalRuntimeConfigCapabilityKey>> & {
     ensureDisplayLoaded: () => Promise<void>;
@@ -47,6 +47,7 @@ export function createRuntimeConfigCapability(
   let pendingSchema: Promise<Result<void, string>> | null = null;
   let suspension: Parameters<RuntimeConfigEditor["setWritesSuspended"]> = [false];
   let stopEditor: (() => void) | undefined;
+  let updateEditorConnection: ((snapshot: RuntimeConfigGateway["snapshot"]) => void) | undefined;
   let displayRead: Promise<boolean> | null = null;
   const publish = () => {
     if (!disposed) {
@@ -56,8 +57,12 @@ export function createRuntimeConfigCapability(
     }
   };
   const displaySnapshotOwner = {
-    hasUnacknowledgedDraftWrite: () => false,
+    hasUnacknowledgedDraftWrite: () => editor?.snapshotOwner.hasUnacknowledgedDraftWrite() ?? false,
     applySnapshot: (snapshot: ConfigSnapshot) => {
+      if (editor) {
+        editor.snapshotOwner.applySnapshot(snapshot);
+        return;
+      }
       setConfigSnapshot(state, snapshot);
       if (snapshot.appliedConfigHash !== undefined) {
         const revision = snapshot.configRevisionHash ?? snapshot.hash ?? null;
@@ -124,6 +129,10 @@ export function createRuntimeConfigCapability(
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   // The same state holds display snapshots before the editor takes custody.
   const stopGateway = gateway.subscribe((snapshot) => {
+    if (updateEditorConnection) {
+      updateEditorConnection(snapshot);
+      return;
+    }
     const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
     const hadDisplaySnapshot = state.configSnapshot !== null;
     const accessLost = snapshot.phase === "connected" && canRead && !nextCanRead;
@@ -183,26 +192,30 @@ export function createRuntimeConfigCapability(
     if (!activation) {
       displayRefresh.cancel();
       activation = import("./runtime-config-editor.ts")
-        .then(async ({ createRuntimeConfigEditor }) => {
-          // Download in parallel, then take the current read's snapshot. Invalidation
-          // releases this wait even if an old transport never settles its request.
-          while (displayRead) {
-            const pending = currentConfigRead(state);
-            if (!pending) {
-              break;
-            }
-            await pending.settled;
-            if (currentConfigRead(state) === pending) {
-              break;
-            }
-          }
+        .then(({ createRuntimeConfigEditor }) => {
           if (disposed) {
             return null;
           }
-          stopGateway();
           stopBootstrap?.();
           displayRefresh.dispose();
-          editor = createRuntimeConfigEditor(state, gateway, canCallConfigMethod, bootstrap);
+          editor = createRuntimeConfigEditor(
+            state,
+            {
+              get snapshot() {
+                return gateway.snapshot;
+              },
+              subscribe(listener) {
+                // Keep connection updates ahead of consumers registered after this capability.
+                updateEditorConnection = listener;
+                return () => {
+                  updateEditorConnection = undefined;
+                };
+              },
+            },
+            canCallConfigMethod,
+            bootstrap,
+            displayRead ? currentConfigRead(state)?.settled : undefined,
+          );
           editor.setWritesSuspended(...suspension);
           stopEditor = editor.subscribe(publish);
           if (state.configSnapshot) {
@@ -265,7 +278,9 @@ export function createRuntimeConfigCapability(
     }
     const result = invoke((loaded) => {
       // Hand the module-loading flag to the read before its coalesced publication.
-      state.configLoading = false;
+      if (!currentConfigRead(state)) {
+        state.configLoading = false;
+      }
       return task(loaded);
     }, undefined);
     if (
@@ -290,11 +305,13 @@ export function createRuntimeConfigCapability(
   const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
     if (editor) {
       const loaded = editor;
-      return refresh
-        ? loaded.refreshSchema()
-        : loaded
-            .ensureSchemaLoaded()
-            .then(() => loaded.schemaRead ?? { ok: true, value: undefined });
+      if (refresh) {
+        return loaded.refreshSchema();
+      }
+      const loading = loaded.ensureSchemaLoaded();
+      // A reconnect can replace schemaRead before this caller's read settles.
+      const receipt = loaded.schemaRead;
+      return loading.then(() => receipt ?? { ok: true, value: undefined });
     }
     if (pendingSchema) {
       return pendingSchema;
@@ -307,8 +324,10 @@ export function createRuntimeConfigCapability(
         if (refresh) {
           return loaded.refreshSchema();
         }
-        await loaded.ensureSchemaLoaded();
-        return loaded.schemaRead ?? { ok: true as const, value: undefined };
+        const loading = loaded.ensureSchemaLoaded();
+        const receipt = loaded.schemaRead;
+        await loading;
+        return receipt ?? { ok: true as const, value: undefined };
       },
       { ok: true as const, value: undefined },
     );
