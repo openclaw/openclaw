@@ -89,6 +89,10 @@ function sendFailureWebhook(params: Partial<FailureAlertParams> = {}) {
   });
 }
 
+function announceJob(channel = "discord") {
+  return createWebhookJob({ mode: "announce", channel, to: "channel:ops" });
+}
+
 function sentFailureAlert() {
   return {
     status: "sent" as const,
@@ -205,7 +209,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   ])(
     "routes a failure alert using %s instead of the live default",
     async (_name, jobAgentId, defaultAgentId, recipient) => {
-      const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
+      const job = announceJob();
       job.agentId = jobAgentId;
       job.sessionKey = "agent:session-owner:main";
       const resolveCronAgent = vi.fn((requested?: string | null) => ({
@@ -519,9 +523,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     const onDeliverySettled = vi.fn(async () => {
       await settlement.promise;
     });
-    const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
-
-    const delivery = sendGatewayCronFailureAlert({ job, onDeliverySettled });
+    const delivery = sendGatewayCronFailureAlert({ job: announceJob(), onDeliverySettled });
 
     await waitForFast(() => expect(onDeliverySettled).toHaveBeenCalledOnce());
     expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -530,15 +532,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each([
-    { description: "ignores cancellation", recipientReached: false },
-    {
-      description: "ignores cancellation after reaching the recipient",
-      recipientReached: true,
-    },
-  ])(
-    "releases failure alert admission when a stalled sender $description",
-    async ({ recipientReached }) => {
+  it.each([false, true])(
+    "releases stalled failure alert admission (recipientReached=%s)",
+    async (recipientReached) => {
       vi.useFakeTimers();
       try {
         let deliverySignal: AbortSignal | undefined;
@@ -560,9 +556,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
               senderEntered.resolve();
             }),
         );
-        const job = createWebhookJob({ mode: "announce", channel: "discord", to: "channel:ops" });
-
-        const delivery = sendGatewayCronFailureAlert({ job, onDeliverySettled });
+        const delivery = sendGatewayCronFailureAlert({ job: announceJob(), onDeliverySettled });
         const deliveryOutcome = delivery.then(
           () => undefined,
           (error: unknown) => error,
@@ -710,33 +704,24 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
   });
 
-  it.each([
-    {
-      name: "without a public origin",
-      gateway: undefined,
-      expectedText: "cron failed\nRun started: 2026-01-15 10:30 EST",
-    },
-    {
-      name: "with a public origin",
-      gateway: {
-        publicOrigin: "https://gateway.example",
-        controlUi: { basePath: "/control" },
-      },
-      expectedText:
-        "cron failed\nRun started: 2026-01-15 10:30 EST\nInspect: https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000",
-    },
-  ])(
-    "composes failure alert details $name without dropping presentation",
-    async ({ gateway, expectedText }) => {
-      const job = createWebhookJob({ mode: "announce", channel: "telegram", to: "channel:ops" });
-
+  it.each([false, true])(
+    "composes failure alert details without dropping presentation (publicOrigin=%s)",
+    async (publicOrigin) => {
+      const gateway = publicOrigin
+        ? { publicOrigin: "https://gateway.example", controlUi: { basePath: "/control" } }
+        : undefined;
+      const expectedText =
+        "cron failed\nRun started: 2026-01-15 10:30 EST" +
+        (publicOrigin
+          ? "\nInspect: https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000"
+          : "");
       await sendGatewayCronFailureAlert({
         runAtMs,
         resolveCronAgent: () => ({
           agentId: "main",
           cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway },
         }),
-        job,
+        job: announceJob("telegram"),
         payload: {
           text: "cron failed",
           presentation: structuredClone(presentation),
