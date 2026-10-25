@@ -20,6 +20,7 @@ import {
   projectRecordedModelPrompt,
 } from "../../../sessions/user-turn-transcript.message.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import { memoizeFrozenPlainDataProjection } from "../../../shared/immutable-data.js";
 import { isTextContentBlock } from "../../content-blocks.js";
 import {
   escapeInternalRuntimeContextDelimiters,
@@ -40,9 +41,8 @@ import {
   hasNonBlankUserText,
   projectPersistedSenderContext,
   resolveUserTranscriptMessages,
-  type CurrentUserTimestampMatch,
-  type UserTranscriptContext,
 } from "./attempt-history.js";
+import type { LlmBoundaryOptions, UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   materializeSteeringRuntimeContext,
   type RuntimeContextCustomMessage,
@@ -63,18 +63,6 @@ const systemUpdateDetailsSchema = z.object({
   turnScoped: z.boolean(),
 });
 
-type LlmBoundaryOptions = {
-  sessionVersion?: number;
-  appendOnlyRuntimeContext?: boolean;
-  inHistorySystemUpdates?: boolean;
-  timezone?: string;
-  includeTimestamp?: boolean;
-  projectPersistedSenderContext?: boolean;
-  userTranscriptContexts?: readonly UserTranscriptContext[];
-  currentUserTimestampOverride?: CurrentUserTimestampMatch;
-  onRuntimeContextCarrierRemoved?: (removed: AgentMessage[]) => void;
-};
-
 /** A session keeps its model projection across replay and process restarts. */
 export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
   if (sessionVersion === undefined || sessionVersion === 3) {
@@ -86,59 +74,73 @@ export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
   throw new Error(`Unsupported session prompt projection version: ${sessionVersion}`);
 }
 
+// Only these two policy bits affect this projection; each has a separate weak cache.
+const runtimeContextProjections = [false, true].map((escape) =>
+  [false, true].map((inHistorySystemUpdates) =>
+    memoizeFrozenPlainDataProjection((message: AgentMessage): AgentMessage => {
+      if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
+        const details = systemUpdateDetailsSchema.safeParse(message.details);
+        if (details.success) {
+          const projected: UserMessage = {
+            role: "user",
+            content: message.content,
+            timestamp: message.timestamp,
+          };
+          if (inHistorySystemUpdates) {
+            projected.operatorMessage = { turnScoped: details.data.turnScoped };
+          }
+          return projected;
+        }
+      }
+      if (!escape || (message.role === "user" && message.operatorMessage)) {
+        return message;
+      }
+      if (
+        message.role === "custom" &&
+        message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
+      ) {
+        const details = runtimeContextDetailsSchema.safeParse(message.details);
+        if (details.success) {
+          const projected = projectRuntimeContextFragments(details.data.fragments);
+          return {
+            ...message,
+            content:
+              typeof message.content === "string" &&
+              hasLegacyRuntimeContextEnvelope(message.content)
+                ? `${RUNTIME_CONTEXT_BEGIN_MARKER}\n${projected}\n${RUNTIME_CONTEXT_END_MARKER}`
+                : projected,
+            details: details.data,
+          };
+        }
+      }
+      if (message.role !== "user" && message.role !== "custom") {
+        return message;
+      }
+      const content = message.content;
+      const projected =
+        typeof content === "string"
+          ? escapeInternalRuntimeContextDelimiters(content)
+          : content.map((block) =>
+              block.type === "text"
+                ? Object.assign({}, block, {
+                    text: escapeInternalRuntimeContextDelimiters(block.text),
+                  })
+                : block,
+            );
+      return Object.assign({}, message, { content: projected });
+    }),
+  ),
+);
+
 function projectRuntimeContextMessages(
   messages: AgentMessage[],
   options?: LlmBoundaryOptions,
 ): AgentMessage[] {
-  const escape = usesEscapedRuntimeContext(options?.sessionVersion);
-  return messages.map((message) => {
-    if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
-      const details = systemUpdateDetailsSchema.safeParse(message.details);
-      if (details.success) {
-        const projected: UserMessage = {
-          role: "user",
-          content: message.content,
-          timestamp: message.timestamp,
-        };
-        if (options?.inHistorySystemUpdates) {
-          projected.operatorMessage = { turnScoped: details.data.turnScoped };
-        }
-        return projected;
-      }
-    }
-    if (!escape || (message.role === "user" && message.operatorMessage)) {
-      return message;
-    }
-    if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
-      const details = runtimeContextDetailsSchema.safeParse(message.details);
-      if (details.success) {
-        const projected = projectRuntimeContextFragments(details.data.fragments);
-        return {
-          ...message,
-          content:
-            typeof message.content === "string" && hasLegacyRuntimeContextEnvelope(message.content)
-              ? `${RUNTIME_CONTEXT_BEGIN_MARKER}\n${projected}\n${RUNTIME_CONTEXT_END_MARKER}`
-              : projected,
-          details: details.data,
-        };
-      }
-    }
-    if (message.role !== "user" && message.role !== "custom") {
-      return message;
-    }
-    const content = message.content;
-    const projected =
-      typeof content === "string"
-        ? escapeInternalRuntimeContextDelimiters(content)
-        : content.map((block) =>
-            block.type === "text"
-              ? Object.assign({}, block, {
-                  text: escapeInternalRuntimeContextDelimiters(block.text),
-                })
-              : block,
-          );
-    return Object.assign({}, message, { content: projected });
-  });
+  const project =
+    runtimeContextProjections[Number(usesEscapedRuntimeContext(options?.sessionVersion))]![
+      Number(Boolean(options?.inHistorySystemUpdates))
+    ]!;
+  return messages.map(project);
 }
 
 type PromptContextTransform = (
@@ -178,7 +180,10 @@ export function normalizeMessagesForLlmBoundary(
   const retained =
     options?.appendOnlyRuntimeContext || options?.inHistorySystemUpdates
       ? withPersistedSenderContext
-      : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+      : stripHistoricalRuntimeContextCustomMessages(
+          withPersistedSenderContext,
+          options?.currentUserIdempotencyKey,
+        );
   if (retained.length < withPersistedSenderContext.length) {
     const retainedMessages = new Set(retained);
     options?.onRuntimeContextCarrierRemoved?.(
@@ -197,6 +202,7 @@ type CurrentPromptBoundaryInput = {
   includeTimestamp?: boolean;
   currentUserTimestamp?: number;
   currentUserTranscriptMessage?: AgentMessage;
+  currentUserIdempotencyKey?: string;
 };
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
@@ -229,6 +235,7 @@ function buildCurrentPromptBoundaryInput(params: CurrentPromptBoundaryInput): {
     sessionVersion: params.sessionVersion,
     appendOnlyRuntimeContext: params.appendOnlyRuntimeContext,
     inHistorySystemUpdates: params.inHistorySystemUpdates,
+    currentUserIdempotencyKey: params.currentUserIdempotencyKey,
     ...(params.timezone ? { timezone: params.timezone } : {}),
     ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
     ...(params.currentUserTranscriptMessage

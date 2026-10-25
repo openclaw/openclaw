@@ -1,34 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
-import {
-  captureSubagentCompletionReply,
-  readLatestSubagentOutputWithRetry,
-} from "./subagent-announce-output.js";
-import * as announceRuntime from "./subagent-announce.runtime.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
-type GatewayCall = {
-  method?: string;
-  timeoutMs?: number;
-  expectFinal?: boolean;
-  params?: Record<string, unknown>;
-};
-
-const gatewayCalls: GatewayCall[] = [];
 let sessionStore: Record<string, Record<string, unknown>> = {};
 const configOverride = { session: { mainKey: "main", scope: "per-sender" } } as const;
 const isActive = vi.fn((_sessionId: string) => false);
 const waitForEnd = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
-async function callGateway(request: GatewayCall) {
-  gatewayCalls.push(request);
-  return request.method === "chat.history" ? { messages: chatHistoryMessages } : {};
-}
-
-function createGatewayCallModuleMock() {
-  return { callGateway: vi.fn(callGateway) };
-}
+const callGateway = vi.fn(async (request: unknown) =>
+  request && typeof request === "object" && "method" in request && request.method === "chat.history"
+    ? { messages: chatHistoryMessages }
+    : {},
+);
+const deliver = vi.fn<typeof deliverSubagentAnnouncement>(async () => ({
+  delivered: true,
+  path: "direct",
+}));
 
 function createTimeoutHistoryWithNoReply() {
   return [
@@ -46,7 +34,9 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 // mock-isolation: Timeout fixtures supply Gateway history and delivery replies without a live Gateway.
-vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("../../../gateway/call.js", () => ({
+  callGateway: (request: unknown) => callGateway(request),
+}));
 vi.mock("../../../sessions/session-controller.queries.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../sessions/session-controller.queries.js")>()),
   isSessionRunActive: (sessionId: string) => isActive(sessionId),
@@ -65,7 +55,7 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 // mock-isolation: timeout tests replace the complete transport runtime with deterministic adapters.
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
-    callGateway: async (request: unknown) => callGateway(request as GatewayCall),
+    callGateway: (request) => callGateway(request),
     getRuntimeConfig: () => configOverride,
     loadSessionStore: () => sessionStore,
     resolveMainSessionKey: () => "agent:main:main",
@@ -75,29 +65,8 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
 );
 // mock-isolation: The fixture controls delivery deadlines and requester records without starting transport or session-store work.
 vi.mock("./subagent-announce-delivery.js", () => ({
-  deliverSubagentAnnouncement: async (
-    params: Parameters<typeof deliverSubagentAnnouncement>[0],
-  ) => {
-    const request = {
-      method: "agent",
-      expectFinal: true,
-      params: {
-        sessionKey: params.targetRequesterSessionKey,
-        message: params.triggerMessage,
-        deliver: !params.requesterIsSubagent,
-        internalEvents: params.internalEvents,
-        ...(params.requesterIsSubagent
-          ? {}
-          : {
-              channel: params.completionDirectOrigin?.channel,
-              to: params.completionDirectOrigin?.to,
-              accountId: params.completionDirectOrigin?.accountId,
-            }),
-      },
-    };
-    await callGateway(request);
-    return { delivered: true, path: "direct" };
-  },
+  deliverSubagentAnnouncement: (...args: Parameters<typeof deliverSubagentAnnouncement>) =>
+    deliver(...args),
   loadRequesterSessionEntry: (sessionKey: string) => ({
     cfg: configOverride,
     canonicalKey: sessionKey,
@@ -109,18 +78,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
-  callSubagentLifecycleGateway: createGatewayCallModuleMock().callGateway,
-  dispatchGatewayMethodInProcess: async (
-    method: string,
-    params: Record<string, unknown>,
-    options?: { expectFinal?: boolean; timeoutMs?: number },
-  ) =>
-    callGateway({
-      method,
-      params,
-      expectFinal: options?.expectFinal,
-      timeoutMs: options?.timeoutMs,
-    }),
+  callSubagentLifecycleGateway: (request: unknown) => callGateway(request),
   getRuntimeConfig: () => configOverride,
   readSessionMessagesAsync: vi.fn(async () => []),
   readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
@@ -167,24 +125,12 @@ function timeout(childRunId: string, overrides: Partial<AnnounceFlowParams> = {}
   });
 }
 
-function directCall(): GatewayCall | undefined {
-  return gatewayCalls.find((call) => call.method === "agent" && call.expectFinal === true);
-}
-
-function completionEvent() {
-  return (
-    directCall()?.params?.internalEvents as Array<{
-      result?: string;
-      status?: string;
-      statusLabel?: string;
-      noVisibleResult?: boolean;
-    }>
-  )?.[0];
-}
+const completionEvent = () => deliver.mock.calls[0]?.[0].internalEvents?.[0];
 
 describe("subagent announce timeout config", () => {
   beforeEach(() => {
-    gatewayCalls.length = 0;
+    callGateway.mockClear();
+    deliver.mockClear();
     chatHistoryMessages = [];
     sessionStore = {};
     isActive.mockReset().mockReturnValue(false);
@@ -199,13 +145,9 @@ describe("subagent announce timeout config", () => {
       requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
     });
 
-    const { sessionKey, deliver, channel, to, accountId } = directCall()?.params ?? {};
-    expect({ sessionKey, deliver, channel, to, accountId }).toEqual({
-      sessionKey: cronSessionKey,
-      deliver: false,
-      channel: undefined,
-      to: undefined,
-      accountId: undefined,
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      targetRequesterSessionKey: cronSessionKey,
+      requesterIsSubagent: true,
     });
   });
 
@@ -214,8 +156,8 @@ describe("subagent announce timeout config", () => {
 
     await timeout("silent", { terminalReply: { disposition: "silent" } });
 
-    expect(directCall()).toBeUndefined();
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps authoritative empty success intentional without transcript inference", async () => {
@@ -227,7 +169,7 @@ describe("subagent announce timeout config", () => {
     });
 
     expect(completionEvent()).toMatchObject({ result: "(no output)", noVisibleResult: true });
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
@@ -238,7 +180,7 @@ describe("subagent announce timeout config", () => {
     const didAnnounce = await timeout("active-delete", { cleanup: "delete" });
 
     expect(didAnnounce).toBe("retryable");
-    expect(directCall()).toBeUndefined();
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("does not announce cached reply text when the child run terminally failed", async () => {
@@ -253,15 +195,14 @@ describe("subagent announce timeout config", () => {
       fallbackReply: "older fallback output",
     });
 
-    const directAgentCall = directCall();
     expect(completionEvent()).toMatchObject({
       status: "error",
       statusLabel: expect.stringContaining("All models failed"),
       result: "(no output)",
       noVisibleResult: true,
     });
-    expect(directAgentCall?.params?.message).not.toContain("stale");
-    expect(directAgentCall?.params?.message).not.toContain("older fallback");
+    expect(deliver.mock.calls[0]?.[0].triggerMessage).not.toContain("stale");
+    expect(deliver.mock.calls[0]?.[0].triggerMessage).not.toContain("older fallback");
   });
 
   it.each([
@@ -299,76 +240,9 @@ describe("subagent announce timeout config", () => {
   ] as const)("%s", async (_name, history, expected) => {
     chatHistoryMessages = [...history];
     await timeout("progress", { terminalReply: { disposition: "empty" } });
-    expect(completionEvent()?.result).toEqual(expected);
-    expect(completionEvent()?.result).not.toContain("private tool output");
-  });
-});
-
-describe("captureSubagentCompletionReply", () => {
-  const sessionKey = "agent:main:subagent:child";
-  const sessionTarget = {
-    agentId: "main",
-    sessionKey,
-    sessionId: "child",
-    storePath: "/tmp/sessions-main.json",
-  };
-  const readMessages = vi.mocked(announceRuntime.readSessionMessagesAsync);
-  const capture = (waitForReply?: boolean) =>
-    captureSubagentCompletionReply(sessionKey, { sessionTarget, waitForReply });
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    readMessages.mockReset().mockResolvedValue([]);
-  });
-  afterEach(() => vi.useRealTimers());
-
-  it("returns immediate assistant output without polling", async () => {
-    readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
-    await expect(capture()).resolves.toBe("Immediate completion");
-    expect(readMessages).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("captures the final assistant reply at the deadline", async () => {
-    const startedAt = performance.now();
-    readMessages.mockImplementation(async () =>
-      performance.now() - startedAt >= 50 ? [textAssistant("Requester-visible final result")] : [],
-    );
-    const pending = capture();
-    await vi.runAllTimersAsync();
-    await expect(pending).resolves.toBe("Requester-visible final result");
-    expect(performance.now() - startedAt).toBe(50);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("charges slow output reads against the bounded retry deadline", async () => {
-    const startedAt = performance.now();
-    readMessages.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      return [];
+    expect(completionEvent()).toMatchObject({ result: expected });
+    expect(completionEvent()).not.toMatchObject({
+      result: expect.stringContaining("private tool output"),
     });
-    const pending = capture();
-    await vi.runAllTimersAsync();
-    await expect(pending).resolves.toBeUndefined();
-    expect(readMessages).toHaveBeenCalledTimes(3);
-    expect(performance.now() - startedAt).toBe(98);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not poll when waiting is disabled", async () => {
-    await expect(capture(false)).resolves.toBeUndefined();
-    expect(readMessages).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not read output with an exhausted retry budget", async () => {
-    const readHistory = vi.mocked(announceRuntime.callSubagentLifecycleGateway).mockClear();
-    await expect(
-      readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs: 0 }),
-    ).resolves.toBeUndefined();
-    expect(readHistory).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

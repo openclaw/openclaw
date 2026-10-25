@@ -1,7 +1,43 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { DEFAULT_WORKER_PENDING_TASKS } from "@openclaw/worker-runtime";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runExclusiveSqliteTranscriptArchiveWorker as enqueue } from "./session-accessor.sqlite-archive.js";
+
+it("bounds outstanding archive claims until their FIFO slots physically settle", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const holder = enqueue(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  const controller = new AbortController();
+  const queued = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS - 1 }, () =>
+    enqueue(async () => undefined, controller.signal),
+  );
+  const settled = Promise.allSettled(queued);
+  const overflow = vi.fn(async () => undefined);
+  let overflowError: unknown;
+  const rejected = enqueue(overflow).catch((error: unknown) => {
+    overflowError = error;
+  });
+  let canceledOverflow: Promise<unknown> | undefined;
+  try {
+    await nextTurn();
+    expect(overflowError).toMatchObject({ code: "overloaded" });
+    expect(overflow).not.toHaveBeenCalled();
+    controller.abort(new Error("request retired"));
+    await settled;
+    // Cancellation removes execution, not the linked FIFO slot behind a native owner.
+    canceledOverflow = enqueue(overflow);
+    await expect(canceledOverflow).rejects.toMatchObject({ code: "overloaded" });
+  } finally {
+    release.resolve();
+    await Promise.allSettled([holder, ...queued, rejected, canceledOverflow]);
+  }
+  await expect(enqueue(async () => "recovered")).resolves.toBe("recovered");
+});
 
 it.each(["before-enqueue", "queued"] as const)(
   "drops a revoked %s request while preserving surviving FIFO order",

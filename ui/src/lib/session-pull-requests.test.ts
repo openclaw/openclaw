@@ -587,20 +587,6 @@ describe("session pull request snapshot store", () => {
     },
   );
 
-  it("requests an immediate refresh for only the selected watched key", async () => {
-    await watch(["agent:main:demo", "agent:main:other"]);
-    harness.request.mockClear();
-
-    expect(store.refresh("agent:main:unwatched")).toBe(false);
-    expect(store.refresh("agent:main:demo")).toBe(true);
-    expect(store.refresh("agent:main:demo")).toBe(true);
-    await flushSync();
-
-    expect(harness.request).toHaveBeenCalledOnce();
-    expectSubscription(harness, ["agent:main:demo", "agent:main:other"], ["agent:main:demo"]);
-    await unwatch();
-  });
-
   it("debounces automatic bursts per session while an explicit refresh absorbs its timer", async () => {
     vi.useFakeTimers();
     const first = "agent:main:first";

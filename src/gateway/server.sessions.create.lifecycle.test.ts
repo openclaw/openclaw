@@ -11,7 +11,10 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import {
+  createGatewayActiveWorkSnapshot,
+  waitForGatewayActiveWork,
+} from "../infra/gateway-active-work.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -166,7 +169,12 @@ test.for([
       error: { message: "Runtime unavailable" },
     });
     expect(await successor).toMatchObject({ ok: true });
-    expect(createGatewayActiveWorkSnapshot()).toMatchObject({ idle: true, blockers: [] });
+    expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(0);
+    // Client closure does not settle detached connect work.
+    expect(await waitForGatewayActiveWork(5_000)).toMatchObject({
+      drained: true,
+      snapshot: { idle: true, blockers: [] },
+    });
   },
 );
 

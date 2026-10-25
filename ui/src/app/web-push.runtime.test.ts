@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import {
   getExistingSubscription,
   subscribeToWebPush,
@@ -54,11 +55,7 @@ function gatewayClient(vapidBytes: number[]) {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  if (originalServiceWorkerDescriptor) {
-    Object.defineProperty(navigator, "serviceWorker", originalServiceWorkerDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "serviceWorker");
-  }
+  restorePropertyDescriptor(navigator, "serviceWorker", originalServiceWorkerDescriptor);
 });
 
 describe("web push service worker readiness", () => {

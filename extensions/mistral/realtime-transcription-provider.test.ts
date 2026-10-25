@@ -1,12 +1,13 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 const provider = buildMistralRealtimeTranscriptionProvider({
@@ -62,12 +63,7 @@ async function createRealtimeServer(
       onConnection?.(ws);
       ws.on("close", () => closed.resolve());
       ws.on("message", (data) => {
-        const bytes = Buffer.isBuffer(data)
-          ? data
-          : Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.from(data);
-        const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
+        const message = JSON.parse(rawDataToString(data, "utf8")) as { type?: unknown };
         if (message.type === "session.update") {
           for (const event of eventsByConnection[connectionIndex] ?? []) {
             ws.send(JSON.stringify(event));
@@ -77,9 +73,7 @@ async function createRealtimeServer(
       ws.send(JSON.stringify({ type: "session.created" }));
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   cleanup = async () => {
     for (const ws of wss.clients) {
       ws.terminate();
@@ -87,13 +81,11 @@ async function createRealtimeServer(
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
     });
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await server[Symbol.asyncDispose]();
   };
   return {
     requests,
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     closed: closed.promise,
   };
 }

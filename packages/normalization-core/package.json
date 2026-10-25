@@ -69,6 +69,11 @@
       "import": "./dist/json-schema.mjs",
       "default": "./dist/json-schema.mjs"
     },
+    "./json-schema-validator": {
+      "types": "./dist/json-schema-validator.d.mts",
+      "import": "./dist/json-schema-validator.mjs",
+      "default": "./dist/json-schema-validator.mjs"
+    },
     "./markdown-plain-text": {
       "types": "./dist/markdown-plain-text.d.mts",
       "import": "./dist/markdown-plain-text.mjs",

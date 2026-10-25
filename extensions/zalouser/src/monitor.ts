@@ -66,10 +66,6 @@ type ZalouserMonitorOptions = {
   ingressQueue?: Parameters<typeof createZalouserIngressMonitor>[0]["queue"];
 };
 
-type ZalouserMonitorResult = {
-  stop: () => Promise<void>;
-};
-
 const ZALOUSER_TEXT_LIMIT = 2000;
 
 type ZalouserCoreRuntime = ReturnType<typeof getZalouserRuntime>;
@@ -88,9 +84,7 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   }
 }
 
-export async function monitorZalouserProvider(
-  options: ZalouserMonitorOptions,
-): Promise<ZalouserMonitorResult> {
+export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
   const { config } = options;
   let { account } = options;
   const { abortSignal, statusSink, runtime } = options;

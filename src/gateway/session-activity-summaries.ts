@@ -390,6 +390,9 @@ export function createSessionActivitySummaries(deps: {
               return undefined;
             }
             state.calls += 1;
+            // Recaps are shared Gateway metadata under the agent's utility authority,
+            // not delegated operator work. Role model-policy revocation does not stop
+            // them; assertRequestCurrent guards their lifecycle and utility route.
             const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",

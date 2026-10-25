@@ -21,6 +21,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -48,25 +49,20 @@ afterEach(async () => {
 
 it("publishes a cold compressed multi-chunk branch without host data SQL", async () => {
   const { options, scope, database } = await fixture();
-  const activeMessages = Array.from({ length: 520 }, (_, index) => ({
-    type: "message",
-    id: `message-${index}`,
-    parentId: index === 0 ? null : `message-${index - 1}`,
-    message: {
+  const activeMessages = Array.from({ length: 520 }, (_, index) =>
+    messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
       role: "user",
       content:
         index === 0 ? "retained payload ".repeat(256).trimEnd() : `projection message ${index}`,
-    },
-  }));
+    }),
+  );
   const events = [
     { type: "session", id: scope.sessionId, version: 3 },
     ...activeMessages,
-    {
-      type: "message",
-      id: "abandoned",
-      parentId: "message-519",
-      message: { role: "assistant", content: "abandoned payload ".repeat(256).trimEnd() },
-    },
+    messageEvent("abandoned", "message-519", {
+      role: "assistant",
+      content: "abandoned payload ".repeat(256).trimEnd(),
+    }),
     {
       type: "leaf",
       id: "rewind",

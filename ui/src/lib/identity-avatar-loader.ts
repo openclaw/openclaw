@@ -70,6 +70,14 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> | null
   };
   entry.promise = (async () => {
     try {
+      // Cold images must not start all authenticated fetches inside the row
+      // construction task. Cached images still resolve synchronously above.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      if (identityAvatarCache.get(url) !== entry) {
+        return null;
+      }
       const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
       if (!response.ok) {
         return null;
@@ -148,7 +156,6 @@ export function createIdentityAvatars() {
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
   let connected = false;
-  let unsubscribeGatewayReset: (() => void) | undefined;
   const routes = new Map<
     string,
     { url: string | null; result: string | Promise<string | null> | null; release?: () => void }
@@ -163,14 +170,11 @@ export function createIdentityAvatars() {
   }
   function disconnect() {
     connected = false;
-    unsubscribeGatewayReset?.();
-    unsubscribeGatewayReset = undefined;
     clearRoutes();
   }
   return {
     connect() {
       connected = true;
-      unsubscribeGatewayReset = registerAvatarGatewayReset(notify);
       notify();
       return disconnect;
     },

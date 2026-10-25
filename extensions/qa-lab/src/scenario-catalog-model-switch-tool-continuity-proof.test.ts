@@ -2,28 +2,12 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
+import { normalizeModelRef, splitModelRef } from "./model-switch.test-support.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 const continuity = "the model handoff preserved the QA mission after rereading the scenario pack";
 const richContinuity = continuity.replace("model handoff", "**model handoff**");
 const readError = "alternate-model run did not return exact owned successful read evidence";
-
-function splitModelRef(raw: string) {
-  const [provider, ...model] = raw.split("/");
-  return provider && model.length
-    ? { provider: provider.toLowerCase(), model: model.join("/") }
-    : null;
-}
-
-function normalizeModelRef(raw: string) {
-  const split = splitModelRef(raw);
-  if (!split) {
-    return null;
-  }
-  return split.provider === "openai" && split.model.toLowerCase() === "alternate-alias"
-    ? { provider: "openai", model: "alternate-model" }
-    : split;
-}
 
 async function runToolContinuity(
   params: {

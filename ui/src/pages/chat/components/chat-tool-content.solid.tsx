@@ -41,7 +41,9 @@ export function RawOutputToggle(props: {
         </span>
       </button>
       <div class="chat-tool-card__raw-body" hidden={!open()}>
-        <ToolDataBlock text={props.text} />
+        <Show when={open()}>
+          <ToolDataBlock text={props.text} />
+        </Show>
       </div>
     </div>
   );

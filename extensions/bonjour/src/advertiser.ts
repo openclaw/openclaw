@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
-import type { CiaoService } from "@homebridge/ciao";
+import { format } from "node:util";
+import type { CiaoLogger, CiaoService } from "@homebridge/ciao/native.js";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -132,45 +133,38 @@ function serviceSummary(label: string, svc: CiaoService): string {
   return `${label} fqdn=${svc.getFQDN()} host=${svc.getHostname()} port=${svc.getPort()} state=${svc.serviceState}`;
 }
 
-function installCiaoConsoleNoiseFilter(): () => void {
-  const previousConsoleLog = console.log;
-  const previousConsoleWarn = console.warn;
-  const logWrapper = (...args: unknown[]) => {
-    if (
-      args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
-    ) {
-      return;
-    }
-    previousConsoleLog(...args);
-  };
-  const warnWrapper = (...args: unknown[]) => {
-    if (
-      args.some(
-        (arg) =>
-          typeof arg === "string" &&
-          arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
-          arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
-      )
-    ) {
-      return;
-    }
-    previousConsoleWarn(...args);
-  };
-  console.log = logWrapper;
-  console.warn = warnWrapper;
-  return () => {
-    if (console.log === logWrapper) {
-      console.log = previousConsoleLog;
-    }
-    if (console.warn === warnWrapper) {
-      console.warn = previousConsoleWarn;
-    }
+function createCiaoLogger(logger: Pick<PluginLogger, "info" | "warn" | "error">): CiaoLogger {
+  return {
+    log(...args) {
+      if (
+        args.some((arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT))
+      ) {
+        return;
+      }
+      logger.info(`bonjour: ${format(...args)}`);
+    },
+    warn(...args) {
+      if (
+        args.some(
+          (arg) =>
+            typeof arg === "string" &&
+            arg.includes(CIAO_MDNS_SOCKET_ERROR_FRAGMENT) &&
+            arg.includes(CIAO_ENODEV_SOCKET_ERROR_FRAGMENT),
+        )
+      ) {
+        return;
+      }
+      logger.warn(`bonjour: ${format(...args)}`);
+    },
+    error(...args) {
+      logger.error(`bonjour: ${format(...args)}`);
+    },
   };
 }
 
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
-  logger: Pick<PluginLogger, "info" | "warn">,
+  logger: Pick<PluginLogger, "info" | "warn" | "error">,
 ): Promise<GatewayBonjourAdvertiser> {
   if (
     process.env.NODE_ENV === "test" ||
@@ -180,7 +174,6 @@ export async function startGatewayBonjourAdvertiser(
     return { stop: async () => {} };
   }
 
-  let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
 
@@ -190,8 +183,7 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   try {
-    const { getResponder } = await import("@homebridge/ciao");
-    restoreConsoleLog = installCiaoConsoleNoiseFilter();
+    const { getResponder } = await import("@homebridge/ciao/native.js");
     const handleCiaoProcessError = (reason: unknown): boolean => {
       const classification = classifyCiaoProcessError(reason);
       if (!classification) {
@@ -252,7 +244,7 @@ export async function startGatewayBonjourAdvertiser(
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }
 
-    const responder = getResponder();
+    const responder = getResponder({ logger: createCiaoLogger(logger) });
 
     function handleAdvertiseFailure(
       label: string,
@@ -318,14 +310,12 @@ export async function startGatewayBonjourAdvertiser(
           } catch {
             /* ignore */
           }
-          restoreConsoleLog();
           cleanupProcessHandlers();
         })();
         return stopPromise;
       },
     };
   } catch (err) {
-    restoreConsoleLog();
     cleanupProcessHandlers();
     throw err;
   }

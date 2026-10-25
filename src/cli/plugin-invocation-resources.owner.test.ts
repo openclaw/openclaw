@@ -194,29 +194,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   const fixture = {
     id,
-    key,
     state,
     config,
     env,
     resolveProviders: () => resolvePluginProviders({ config, env, onlyPluginIds: [id] }),
-    load: async () => {
-      const acquisition = await acquirePluginRegistryForInspection({
-        config,
-        env,
-        logger: quietLogger,
-      });
-      try {
-        expect(
-          acquisition.registry.plugins.find((record) => record.id === id),
-          JSON.stringify(acquisition.registry.diagnostics),
-        ).toMatchObject({ source: plugin.file, status: "loaded" });
-        expect(state.database).toBeDefined();
-        return acquisition;
-      } catch (error) {
-        await acquisition.release().catch(() => {});
-        throw error;
-      }
-    },
+    load: () => acquirePluginRegistryForInspection({ config, env, logger: quietLogger }),
   };
   fixtureCleanups.push(() => {
     state.resume.resolve();

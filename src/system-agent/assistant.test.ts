@@ -5,45 +5,33 @@ import {
   buildSystemAgentSystemPrompt,
   parseSystemAgentAssistantPlanText,
 } from "./assistant-prompts.js";
-import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 
-function overview(configured = false): SystemAgentOverview {
+function overview() {
+  const base = createSystemAgentOverviewFixture();
   return {
-    config: {
-      path: "/tmp/openclaw.json",
-      exists: configured,
-      valid: configured,
-      issues: [],
-      hash: configured ? "hash" : null,
-    },
-    agents: configured
-      ? [
-          {
-            id: "main",
-            name: "Main",
-            isDefault: true,
-            model: "openai/gpt-5.5",
-            workspace: "/tmp/main",
-          },
-        ]
-      : [],
-    defaultAgentId: configured ? "main" : "default",
-    ...(configured ? { defaultModel: "openai/gpt-5.5" } : {}),
-    tools: {
-      codex: {
-        command: "codex",
-        found: configured,
-        ...(configured ? { version: "codex 1.0.0" } : {}),
+    ...base,
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
+    agents: [
+      {
+        id: "main",
+        name: "Main",
+        isDefault: true,
+        model: "openai/gpt-5.5",
+        workspace: "/tmp/main",
       },
-      claude: { command: "claude", found: false },
-      gemini: { command: "gemini", found: false },
-      apiKeys: { openai: configured, anthropic: false },
+    ],
+    defaultModel: "openai/gpt-5.5",
+    tools: {
+      ...base.tools,
+      codex: { command: "codex", found: true, version: "codex 1.0.0" },
+      apiKeys: { openai: true, anthropic: false },
     },
     gateway: { url: "ws://127.0.0.1:14567", source: "local loopback", reachable: false },
     references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-      ...(configured ? { docsPath: "/tmp/openclaw/docs", sourcePath: "/tmp/openclaw" } : {}),
+      ...base.references,
+      docsPath: "/tmp/openclaw/docs",
+      sourcePath: "/tmp/openclaw",
     },
   };
 }
@@ -122,7 +110,7 @@ describe("OpenClaw assistant", () => {
   it("includes only operational summary context in planner prompts", () => {
     const prompt = buildSystemAgentAssistantUserPrompt({
       input: "fix my setup",
-      overview: overview(true),
+      overview: overview(),
     });
 
     expectContents(prompt, [

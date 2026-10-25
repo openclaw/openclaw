@@ -61,6 +61,55 @@ it("preserves an append when downstream filtering cancels an intermediate correc
   expectUpdate(projection.replace("Ready reply"), "Ready reply", null);
 });
 
+it("keeps settled equal-length rewrites when later checkpoint windows are unchanged", () => {
+  const rewrite = (value: string) => value.replaceAll("@", "!");
+  const projection = project({
+    activationTokens: ["@"],
+    transform: rewrite,
+    checkpoint: (value, settleBefore) => ({
+      text: rewrite(value),
+      retainStart: settleBefore,
+      retainedOutputStart: settleBefore,
+    }),
+  });
+  expectUpdate(projection.append("@first\n"), "!first\n");
+  expectUpdate(projection.append("second\n"), "!first\nsecond\n", "second\n");
+  expectUpdate(projection.append("third\n"), "!first\nsecond\nthird\n", "third\n");
+  expectUpdate(projection.replace("fresh\n"), "fresh\n", null);
+  expectUpdate(projection.append("@next\n"), "fresh\n!next\n", "!next\n");
+});
+
+it("restores a transformed prefix through chained checkpoints", () => {
+  const rewrite = (value: string) => value.replaceAll("A", "@");
+  const projection = project(
+    {
+      activationTokens: ["secret"],
+      transform: (value) => value,
+      checkpoint: (value, boundary) => ({
+        text: value,
+        retainStart: boundary,
+        retainedOutputStart: boundary,
+      }),
+    },
+    {
+      activationTokens: ["secret"],
+      transform: (value) => (value.endsWith("!") ? value : value.replace("secret ", "")),
+    },
+    {
+      activationTokens: ["A"],
+      transform: rewrite,
+      checkpoint: (value, boundary) => ({
+        text: rewrite(value),
+        retainStart: boundary,
+        retainedOutputStart: boundary,
+      }),
+    },
+  );
+  expectUpdate(projection.append("secret A\n\nB\n\nC"), "@\n\nB\n\nC");
+  expectUpdate(projection.append("!"), "secret @\n\nB\n\nC!", null);
+  expectUpdate(projection.append(" tail"), "@\n\nB\n\nC! tail", null);
+});
+
 it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
   const filter = text.trimTextFilter(mode);
   const projection = project(filter);
@@ -108,6 +157,7 @@ it.each([
   ["A\n\nA\n\n \n\nB", "A\n\n\n\nB"],
   ["\0\0\0\n\nA\n\nA\n\n`x`\0`y` `x`", "\0\0\0\n\nA\n\n`x`\0`y` `x`"],
   ["A\n\nA `x`", "A\n\nA `x`"],
+  ["A\n\nA\n\n```\n", "A\n\n```\n"],
 ])("preserves canonical separators and whitespace %#", (source, expected) => {
   expect(text.duplicateParagraphTextFilter.transform(source)).toBe(expected);
   const partitions = [

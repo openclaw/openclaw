@@ -250,21 +250,29 @@ async function restoreGatewayOperatorSnapshot(params: {
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
     let githubAccountIds: readonly number[] | undefined;
+    let profileRevision: object | undefined;
+    let profileFacts: ReturnType<typeof profileIdentity.readCurrentFacts>["profile"] | undefined;
     const assertFacts = () => {
       const cfg = assertSourcePolicy();
-      const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
-      if (
-        profile.profileId !== snapshot.profileId ||
-        profile.assignedRole !== snapshot.assignedRole ||
-        (profile.githubLogin ?? null) !== snapshot.githubLogin ||
-        githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
-      ) {
-        throw new GatewayOperatorRecoveryAuthorizationError(
-          "Restart recovery operator identity changed.",
-        );
+      // The bound owner still checks lifetime, settlement, and email bindings on every use.
+      const revision = profileIdentity.readCurrentRevision(snapshot.aliasBindingIds);
+      if (!profileFacts || revision !== profileRevision) {
+        const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
+        if (
+          profile.profileId !== snapshot.profileId ||
+          profile.assignedRole !== snapshot.assignedRole ||
+          (profile.githubLogin ?? null) !== snapshot.githubLogin ||
+          githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
+        ) {
+          throw new GatewayOperatorRecoveryAuthorizationError(
+            "Restart recovery operator identity changed.",
+          );
+        }
+        githubAccountIds ??= profile.githubAccountIds ?? [];
+        profileFacts = profile;
+        profileRevision = revision;
       }
-      githubAccountIds ??= profile.githubAccountIds ?? [];
-      return { cfg, profile };
+      return { cfg, profile: profileFacts };
     };
     let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
     assertPolicy = () => {

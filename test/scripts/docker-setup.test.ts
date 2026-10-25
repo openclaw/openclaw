@@ -264,6 +264,7 @@ describe("scripts/docker/setup.sh", () => {
 
     const result = runDockerSetup(sandbox, {
       GIT_COMMIT: buildCommit,
+      OPENCLAW_INSTALL_BROWSER: "1",
       OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
       OPENCLAW_EXTRA_MOUNTS: undefined,
       OPENCLAW_HOME_VOLUME: "openclaw-home",
@@ -275,6 +276,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
     const envFile = await read(".env");
     const buildArgs = {
+      OPENCLAW_INSTALL_BROWSER: "1",
       OPENCLAW_IMAGE_APT_PACKAGES: "curl wget",
       OPENCLAW_DOCKER_BUILD_NODE_OPTIONS: "--max-old-space-size=8192",
       OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB: "",

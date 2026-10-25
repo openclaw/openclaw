@@ -151,6 +151,19 @@ afterEach(() => {
 });
 
 describe("update candidate canary", () => {
+  it("runs a declared embedded recovery entry after its disk source is pruned", async () => {
+    const continuationEntry = path.join(root, "dist/infra/update-migrated-finalize.worker.js");
+    await fs.unlink(continuationEntry);
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (filename: string) => filename === continuationEntry,
+    );
+    stubHealthyGateway();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
+    expect(result.status).toBe("ok");
+    expect(mocks.spawn.mock.calls.some(([, args]) => args.includes(continuationEntry))).toBe(true);
+  });
+
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
   registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
   registerCanarySnapshotCapacityTests({ canaryStateOptions, getRoot: () => root, mocks });

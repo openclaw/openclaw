@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { broadcastChatDelta, broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 function createContext(seq = 0, cfg: OpenClawConfig = { agents: { entries: { main: {} } } }) {
@@ -99,14 +100,7 @@ it("emits canonical error payloads without message or agentId", () => {
   expect(context.nodeSendToSession.mock.calls[0]?.[2]).toBe(payload);
 });
 it("keeps the bare global subscription for its persisted fixed-store owner", () => {
-  const { context } = createContext(0, {
-    session: { scope: "global", store: "/stores/shared.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, research: {} },
-    },
-  });
+  const { context } = createContext(0, fixedStoreOwnershipConfig("/stores/shared.sqlite"));
 
   broadcastChatFinal({
     terminalEntry: undefined,

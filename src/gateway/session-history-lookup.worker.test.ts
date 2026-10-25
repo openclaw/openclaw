@@ -146,7 +146,9 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
     expect(await read()).toEqual(expected);
     expect(restore).toHaveBeenCalledWith(
       expect.objectContaining({
-        workerData: expect.objectContaining({ operation: "cold-mutate" }),
+        workerData: expect.objectContaining({
+          plan: expect.objectContaining({ kind: "cold-restore" }),
+        }),
       }),
     );
     expect(decode).not.toHaveBeenCalled();

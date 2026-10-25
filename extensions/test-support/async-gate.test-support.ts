@@ -10,3 +10,14 @@ export function createAsyncGate() {
     },
   };
 }
+
+export function trackPromiseFulfillment<T>(promise: Promise<T>) {
+  const tracked = {
+    settled: false,
+    promise: promise.then((result) => {
+      tracked.settled = true;
+      return result;
+    }),
+  };
+  return tracked;
+}

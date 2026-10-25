@@ -51,12 +51,7 @@ import {
   type WorkerEnvironmentTransitionPatch,
 } from "./store.js";
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../../test/helpers/vitest-wait.js";
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 export type WorkerEnvironmentServiceOptions = Parameters<
@@ -145,7 +140,9 @@ export const testState = {} as {
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite() {
+export function setupWorkerEnvironmentServiceSuite(
+  configureConfig?: (config: OpenClawConfig, root: string) => void,
+) {
   beforeEach(async () => {
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
@@ -171,6 +168,7 @@ export function setupWorkerEnvironmentServiceSuite() {
         },
       },
     };
+    configureConfig?.(testState.config, testState.root);
     // The Gateway publishes its runtime config at startup.
     setRuntimeConfigSnapshot(testState.config);
     testState.prepareInstallation = vi.fn(async (install) =>

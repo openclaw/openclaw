@@ -26,11 +26,8 @@ import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent, reserveMainGcHistograms } from "./service-operation-timing.js";
 import { recordSessionRetention } from "./service-retention.js";
-import {
-  createGatewayWorkMetricsRecorder,
-  recordSessionDiagnosticEvent,
-} from "./service-sessions.js";
-import { recordWorkerRequest } from "./service-worker.js";
+import { recordSessionDiagnosticEvent } from "./service-sessions.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
 const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
@@ -81,11 +78,6 @@ function recordDiagnosticEvent(
     case "sessions.event.rows.reset":
       if (metadata.trusted) {
         recordSessionRetention(store, evt);
-      }
-      return;
-    case "worker.request":
-      if (metadata.trusted) {
-        recordWorkerRequest(store, evt);
       }
       return;
     case "diagnostic.phase.completed":
@@ -612,6 +604,7 @@ export function createDiagnosticsPrometheusExporter() {
   });
   let unsubscribe: (() => void) | undefined;
   let unsubscribeWork: (() => void) | undefined;
+  let unsubscribeWorkerRequests: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
   const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
@@ -652,8 +645,31 @@ export function createDiagnosticsPrometheusExporter() {
           1,
         );
       }
-      unsubscribeWork = ctx.internalDiagnostics?.onGatewayWorkMetrics?.(
-        createGatewayWorkMetricsRecorder(store),
+      unsubscribeWork = ctx.internalDiagnostics?.onGatewayWorkMetrics?.((snapshot) => {
+        if (!snapshot) {
+          store.clearGauges("openclaw_sessions_active");
+          store.clearGauges("openclaw_gateway_active_work");
+          return;
+        }
+        for (const state of ["running", "queued"] as const) {
+          store.gauge(
+            "openclaw_sessions_active",
+            "Current active sessions in the Gateway session roster by run state.",
+            { state },
+            snapshot.sessions[state],
+          );
+        }
+        for (const kind of ["agentRuns", "chatRuns", "queuedTurns"] as const) {
+          store.gauge(
+            "openclaw_gateway_active_work",
+            "Current Gateway work by owner; categories may overlap.",
+            { kind },
+            snapshot.work[kind],
+          );
+        }
+      });
+      unsubscribeWorkerRequests = ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
+        createWorkerRequestMetricsRecorder(store),
       );
       unsubscribe = subscribe(
         (event, metadata) => {
@@ -666,7 +682,7 @@ export function createDiagnosticsPrometheusExporter() {
           }
         },
         // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
-        { exclude: ["log.record"], includePromptStats: false },
+        { exclude: ["log.record", "worker.request"], includePromptStats: false },
         { includePrivateData: false },
       );
       internalDiagnostics = ctx.internalDiagnostics;
@@ -678,6 +694,8 @@ export function createDiagnosticsPrometheusExporter() {
       });
     },
     stop() {
+      unsubscribeWorkerRequests?.();
+      unsubscribeWorkerRequests = undefined;
       unsubscribeWork?.();
       unsubscribeWork = undefined;
       unsubscribe?.();

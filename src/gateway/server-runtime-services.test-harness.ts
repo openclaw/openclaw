@@ -92,12 +92,7 @@ vi.mock("./channel-health-monitor.js", () => ({
 // Vitest moves the declaration before imports; it rejects an exported hoisted declaration.
 export { runtimeServiceMocks };
 
-export function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+export { waitForFast } from "../../test/helpers/vitest-wait.js";
 
 export function createLog() {
   return {

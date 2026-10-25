@@ -126,6 +126,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import { createCliTtyMock } from "../test-runtime-capture.js";
 import { registerMaintenanceContentionTests } from "./update-command-maintenance-contention.test-support.js";
 import * as postCoreModule from "./update-command-post-core.js";
 import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
@@ -134,7 +135,7 @@ import * as rollbackModule from "./update-command-rollback.js";
 import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ttyMock = createCliTtyMock([process.stdin]);
 
 type OrderedMock = { mock: { invocationCallOrder: number[] } };
 function expectBefore(first: OrderedMock, second: OrderedMock, firstIndex = 0, secondIndex = 0) {
@@ -155,11 +156,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (stdinIsTTYDescriptor) {
-    Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  ttyMock.restore();
 });
 
 describe("successful update finalization ordering", () => {
@@ -331,7 +328,7 @@ describe("successful update finalization ordering", () => {
   );
 
   it("restarts after completion status inspection fails", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    ttyMock.set(true);
     mocks.checkCompletionStatus.mockRejectedValueOnce(
       Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
     );
@@ -371,7 +368,7 @@ describe("successful update finalization ordering", () => {
 
   it("restarts when shell completion cache generation returns false", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    ttyMock.set(true);
     mocks.checkCompletionStatus.mockResolvedValueOnce({
       shell: "zsh",
       profileInstalled: true,

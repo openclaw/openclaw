@@ -59,6 +59,10 @@ import {
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
+import {
+  createAlreadyDeliveredSkillResult,
+  rememberSkillInstructionDelivery,
+} from "./skill-instruction-result.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
   resolveToolResultBudget,
@@ -1014,14 +1018,6 @@ export function wrapReadToolWithSkillContent(
     return tool;
   }
   const instructionDeliveryCache = options?.instructionDeliveryCache;
-  const alreadyDeliveredResult = (): AgentToolResult<ReadToolDetails> => {
-    const text =
-      "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
-    return {
-      content: [{ type: "text", text }],
-      details: { kind: "text", content: text },
-    };
-  };
   const readContent = (filePath: string): string => {
     const content = instructionContent.get(filePath);
     if (content === undefined) {
@@ -1053,7 +1049,7 @@ export function wrapReadToolWithSkillContent(
           continue;
         }
         if (delivered) {
-          return alreadyDeliveredResult();
+          return createAlreadyDeliveredSkillResult(priorDelivery);
         }
         instructionDeliveryCache?.delete(instructionPath);
       }
@@ -1113,6 +1109,9 @@ export function wrapReadToolWithSkillContent(
           resetDelivery();
           return result;
         }
+        if (!signal?.aborted) {
+          rememberSkillInstructionDelivery(result, details.content, delivery);
+        }
         settleDelivery(true);
         return result;
       } catch (error) {
@@ -1153,14 +1152,12 @@ function createSandboxMutationOperations(params: SandboxToolParams) {
     {
       resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
         resolveSandboxFileQueueKey(params, absolutePath, signal),
-      mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root, signal: params.abortSignal });
-      },
       writeFile: async (absolutePath: string, content: string) => {
         await params.bridge.writeFile({
           filePath: absolutePath,
           cwd: params.root,
           data: content,
+          mkdir: true,
           signal: params.abortSignal,
         });
       },

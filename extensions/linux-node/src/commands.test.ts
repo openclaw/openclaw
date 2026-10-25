@@ -1,5 +1,6 @@
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { createLinuxNodeCommands } from "./commands.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
 
@@ -54,15 +55,7 @@ const enabledConfig: ResolvedLinuxNodePluginConfig = {
 };
 
 function success(stdout = ""): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    noOutputTimedOut: false,
-  };
+  return commandResult({ stdout, noOutputTimedOut: false });
 }
 
 const jpeg640x480 = Buffer.from("ffd8ffc0000b0801e0028001011100ffd9", "hex");

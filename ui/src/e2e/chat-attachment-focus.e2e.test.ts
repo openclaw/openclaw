@@ -10,7 +10,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Attachment opening focus" });
 
 suite.define(() => {
-  it.each(["file", "photo"] as const)(
+  it.each(["file", "media"] as const)(
     "keeps native %s selection across the real opening animation",
     async (kind) => {
       const fixture = attachmentBrowser("Android Chrome");

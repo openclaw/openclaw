@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { withServer } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,12 +46,7 @@ describe("azure speech tts", () => {
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
-  const mockVoiceCatalog = (payload: unknown) =>
-    mockResponse(
-      new Response(JSON.stringify(payload), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  const mockVoiceCatalog = (payload: unknown) => mockResponse(jsonResponse(payload));
 
   afterEach(() => {
     vi.unstubAllGlobals();

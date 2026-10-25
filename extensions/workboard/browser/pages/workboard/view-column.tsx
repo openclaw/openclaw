@@ -23,9 +23,31 @@ import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 function dropBeforeCardId(
   event: DragEvent,
   draggedCardId: string | null,
-  items: Iterable<HTMLElement>,
+  items: () => Iterable<HTMLElement>,
 ): string | null {
-  for (const item of items) {
+  const row =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".workboard-column__item")
+      : null;
+  if (row && row.closest(".workboard-column") === event.currentTarget) {
+    if (row.dataset.cardId !== draggedCardId) {
+      const bounds = row.getBoundingClientRect();
+      if (event.clientY < bounds.top + bounds.height / 2) {
+        return row.dataset.cardId ?? null;
+      }
+    }
+    // A row's lower half belongs before the next card, excluding the drag source.
+    let next = row.nextElementSibling;
+    while (next) {
+      const cardId = next.getAttribute("data-card-id");
+      if (cardId && cardId !== draggedCardId) {
+        return cardId;
+      }
+      next = next.nextElementSibling;
+    }
+    return null;
+  }
+  for (const item of items()) {
     if (item.dataset.cardId === draggedCardId) {
       continue;
     }
@@ -189,7 +211,7 @@ export function WorkboardColumn(input: {
           if (event.dataTransfer) {
             event.dataTransfer.dropEffect = "move";
           }
-          const beforeCardId = dropBeforeCardId(event, state().draggedCardId, orderedRows());
+          const beforeCardId = dropBeforeCardId(event, state().draggedCardId, orderedRows);
           if (
             state().dragOverStatus !== input.status ||
             state().dragBeforeCardId !== beforeCardId
@@ -218,7 +240,7 @@ export function WorkboardColumn(input: {
       onDrop={(event: DragEvent) => {
         event.preventDefault();
         const cardId = event.dataTransfer?.getData("text/plain") || state().draggedCardId;
-        const beforeCardId = dropBeforeCardId(event, cardId, orderedRows());
+        const beforeCardId = dropBeforeCardId(event, cardId, orderedRows);
         state().draggedCardId = null;
         state().dragOverStatus = null;
         state().dragBeforeCardId = null;

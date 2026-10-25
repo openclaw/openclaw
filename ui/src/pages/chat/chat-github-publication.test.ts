@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
-import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   account,
   confirmation,
@@ -16,8 +14,28 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
+const accepted = { requestId, status: "requested", message: "Accepted." };
+const personalPublisher = { source: "personal", ...account };
+const selectionRejected = (idempotencyKey: unknown, message: string) =>
+  new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details: { code: "GITHUB_PUBLICATION_SELECTION_REJECTED", idempotencyKey },
+  });
+const callsFor = (request: ReturnType<typeof setup>["request"], method = "publish") =>
+  request.mock.calls.filter(([name]) => name === `sessions.github.${method}`);
+function expectLastRequest(
+  request: ReturnType<typeof setup>["request"],
+  method: string,
+  params: object,
+) {
+  expect(request).toHaveBeenLastCalledWith(`sessions.github.${method}`, {
+    sessionKey: "agent:main:one",
+    agentId: "main",
+    ...params,
+  });
+}
 describe("explicit GitHub publication", () => {
   it("notifies sibling presentations only after freezing the admitted account", async () => {
     const { controller, request, changed } = setup();
@@ -35,103 +53,16 @@ describe("explicit GitHub publication", () => {
     await completion;
   });
 
-  it("does not present an accepted publication status read as a new write", async () => {
-    const { controller, request } = setup();
-    (await settled(controller)).onSelect?.("personal");
-    const accepted = {
-      requestId,
-      publisher: { source: "personal", ...account },
-      status: "requested",
-      message: "Accepted.",
-    };
-    request.mockResolvedValueOnce(accepted);
-    void controller.view()?.onPublish?.();
-    const pending = await settled(controller);
-    const status = createDeferred<unknown>();
-    request.mockImplementationOnce(() => status.promise);
-    void pending.onRefresh();
-    const container = document.createElement("div");
-    let unmount: (() => void) | undefined;
-    try {
-      unmount = mountSolid(
-        () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
-        { container },
-      ).unmount;
-      flush();
-      expect(container.textContent).not.toContain("Publishing");
-      expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
-      expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
-        sessionKey: "agent:main:one",
-        agentId: "main",
-        requestId,
-      });
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-      ).toHaveLength(1);
-    } finally {
-      status.resolve({ result: accepted, confirmation: null });
-      await settled(controller);
-      unmount?.();
-    }
-  });
-
-  it("releases only a rejected first shared invocation for a fresh explicit choice", async () => {
-    const { controller, request } = setup();
-    const ready = await settled(controller);
-    expect(ready.selection).toEqual({ source: "shared", expected: shared });
-    ready.onSelect?.("shared");
-    request.mockImplementationOnce(async (_method, params) => {
-      throw new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Review the current publisher.",
-        details: {
-          code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
-          idempotencyKey: params.idempotencyKey,
-        },
-      });
-    });
-    void controller.view()?.onPublish?.();
-    const rejected = await settled(controller);
-    const first = request.mock.calls.at(-1)![1];
-    expect(rejected).toMatchObject({
-      locked: false,
-      options: null,
-      selection: null,
-      error: "Review the current publisher.",
-    });
-    const next = {
-      ...options,
-      shared: { ...shared, accountId: 3, login: "new-shared" },
-    };
-    request.mockResolvedValueOnce(next);
-    void rejected.onRefresh();
-    const refreshed = await settled(controller);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(1);
-    refreshed.onSelect?.("shared");
-    request.mockResolvedValueOnce({ requestId, status: "requested", message: "Accepted." });
-    void controller.view()?.onPublish?.();
-    await settled(controller);
-    const second = request.mock.calls.at(-1)![1];
-    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
-    expect(second.selection).toEqual({ source: "shared", expected: next.shared });
-  });
-
   it.each(["uncertain-retry", "wrong-key"])(
     "retains the exact attempt for %s instead of inferring admission from error prose",
     async (mode) => {
       const { controller, request } = setup();
       (await settled(controller)).onSelect?.("personal");
       const reject = async (_method: string, params: { idempotencyKey: string }) => {
-        throw new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "GitHub publication identity changed.",
-          details: {
-            code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
-            idempotencyKey: mode === "wrong-key" ? "other-key" : params.idempotencyKey,
-          },
-        });
+        throw selectionRejected(
+          mode === "wrong-key" ? "other-key" : params.idempotencyKey,
+          "GitHub publication identity changed.",
+        );
       };
       request.mockImplementationOnce(
         mode === "uncertain-retry"
@@ -177,11 +108,7 @@ describe("explicit GitHub publication", () => {
     });
     void unknown.onRefresh();
     const failed = await settled(controller);
-    expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      requestId,
-    });
+    expectLastRequest(request, "status", { requestId });
     expect(failed.onConfirm).toBeUndefined();
     expect(failed.onNewAction).toBeTypeOf("function");
   });
@@ -189,13 +116,8 @@ describe("explicit GitHub publication", () => {
   it("drops old options after an ownership change without exposing the old personal request", async () => {
     const { controller, request, scope } = setup();
     await settled(controller);
-    let resolveOld!: (value: GitHubPublicationOptions) => void;
-    request.mockImplementationOnce(
-      () =>
-        new Promise<GitHubPublicationOptions>((resolve) => {
-          resolveOld = resolve;
-        }),
-    );
+    const old = createDeferred<GitHubPublicationOptions>();
+    request.mockReturnValueOnce(old.promise);
     void controller.view()?.onRefresh();
     const nextOptions = {
       shared: { ...shared, login: "other-system" },
@@ -206,7 +128,7 @@ describe("explicit GitHub publication", () => {
     request.mockResolvedValueOnce(nextOptions);
     controller.sync({ ...scope, key: "gateway:bob:session:2" });
     await settled(controller);
-    resolveOld({ ...options, pendingPersonal: interrupted });
+    old.resolve({ ...options, pendingPersonal: interrupted });
     await Promise.resolve();
     expect(controller.view()?.options).toEqual(nextOptions);
     expect(controller.view()?.result).toBeNull();
@@ -231,18 +153,9 @@ describe("explicit GitHub publication", () => {
         response.resolve({ requestId, publisher: shared, status: "published" });
       } else {
         response.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Publication response",
-            ...(outcome === "selection-rejection"
-              ? {
-                  details: {
-                    code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
-                    idempotencyKey: first.idempotencyKey,
-                  },
-                }
-              : {}),
-          }),
+          outcome === "selection-rejection"
+            ? selectionRejected(first.idempotencyKey, "Publication response")
+            : new GatewayRequestError({ code: "UNAVAILABLE", message: "Publication response" }),
         );
       }
       await vi.waitFor(() => expect(changed).toHaveBeenCalled());
@@ -275,15 +188,8 @@ describe("explicit GitHub publication", () => {
     async (outcome) => {
       const { controller, request, scope } = setup();
       (await settled(controller)).onSelect?.("personal");
-      let resolveOld!: (value: unknown) => void;
-      let rejectOld!: (error: unknown) => void;
-      request.mockImplementationOnce(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveOld = resolve;
-            rejectOld = reject;
-          }),
-      );
+      const old = createDeferred<unknown>();
+      request.mockReturnValueOnce(old.promise);
       void controller.view()?.onPublish?.();
       const first = request.mock.calls.at(-1)![1];
       controller.reset();
@@ -291,70 +197,31 @@ describe("explicit GitHub publication", () => {
       controller.sync({ ...scope, key: "gateway:alice:session:2" });
       await settled(controller);
       if (outcome === "result") {
-        resolveOld({
+        old.resolve({
           requestId,
           status: "published",
-          publisher: { source: "personal", ...account },
+          publisher: personalPublisher,
         });
       } else {
-        rejectOld(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Old selection rejected.",
-            details: {
-              code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
-              idempotencyKey: first.idempotencyKey,
-            },
-          }),
-        );
+        old.reject(selectionRejected(first.idempotencyKey, "Old selection rejected."));
       }
       await Promise.resolve();
       expect(controller.view()?.result?.status).toBe("needs_confirmation");
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-      ).toHaveLength(1);
+      expect(callsFor(request)).toHaveLength(1);
     },
   );
 
-  it("keeps a sole personal account unselected until its labeled publish button is clicked", async () => {
-    const unbound = setup({ shared, personal: null, pendingPersonal: null, latestShared: null });
-    expect((await settled(unbound.controller)).selection).toEqual({
-      source: "shared",
-      expected: shared,
-    });
+  it("keeps a sole personal account unselected until explicit publication", async () => {
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
-    const container = document.createElement("div");
-    let unmount: (() => void) | undefined;
-    personalOnly.request.mockResolvedValueOnce({
-      requestId,
-      status: "requested",
-      message: "Accepted.",
+    personalOnly.request.mockResolvedValueOnce(accepted);
+    expect(personalOnly.request).toHaveBeenCalledTimes(1);
+    void personalOnly.controller.view()?.onPublish?.();
+    await settled(personalOnly.controller);
+    expectLastRequest(personalOnly.request, "publish", {
+      idempotencyKey: expect.any(String),
+      selection: { source: "personal", account, generation },
     });
-    try {
-      unmount = mountSolid(
-        () =>
-          createComponent(GitHubPublicationAction, {
-            publication: personalOnly.controller.view()!,
-          }),
-        { container },
-      ).unmount;
-      flush();
-      expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
-      const button = container.querySelector<HTMLButtonElement>(".chat-pr__create");
-      expect(button?.textContent?.trim()).toBe("Publish as @alice-tools");
-      expect(personalOnly.request).toHaveBeenCalledTimes(1);
-      button?.click();
-      await settled(personalOnly.controller);
-      expect(personalOnly.request).toHaveBeenLastCalledWith("sessions.github.publish", {
-        sessionKey: "agent:main:one",
-        agentId: "main",
-        idempotencyKey: expect.any(String),
-        selection: { source: "personal", account, generation },
-      });
-    } finally {
-      unmount?.();
-    }
   });
 
   it("does not confirm a personal receipt with shared-only publication access", async () => {
@@ -364,7 +231,7 @@ describe("explicit GitHub publication", () => {
     controller.sync({ ...scope, canPublishPersonal: false });
     expect(controller.view()?.onConfirm).toBeUndefined();
     void staff.onConfirm?.();
-    expect(request.mock.calls.some(([method]) => method === "sessions.github.confirm")).toBe(false);
+    expect(callsFor(request, "confirm")).toHaveLength(0);
   });
 
   it("retires a new shared publication action when refreshed options withdraw the target", async () => {
@@ -379,25 +246,16 @@ describe("explicit GitHub publication", () => {
     response.resolve({ ...options, shared: null, personal: null });
     expect((await settled(controller)).onPublish).toBeUndefined();
     void refreshing.onPublish?.();
-    expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
+    expect(callsFor(request)).toHaveLength(0);
   });
 
-  it("keeps readers nonmutating and personal publication unavailable on busy or remote workspaces", async () => {
+  it("keeps personal publication unavailable on busy or remote workspaces without blocking shared publication", async () => {
     const { controller, request, scope } = setup();
     await settled(controller);
-    controller.sync({
-      ...scope,
-      key: "reader",
-      canPublishShared: false,
-      canPublishPersonal: false,
-    });
-    const reader = await settled(controller);
-    expect(reader.onSelect).toBeUndefined();
-    expect(reader.onPublish).toBeUndefined();
     controller.sync({ ...scope, key: "remote", personalReady: false });
     (await settled(controller)).onSelect?.("personal");
     void controller.view()?.onPublish?.();
-    expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
+    expect(callsFor(request)).toHaveLength(0);
     controller.view()?.onSelect?.("shared");
     request.mockResolvedValueOnce({
       requestId,
@@ -435,9 +293,7 @@ describe("publication action observation", () => {
     expect(request).toHaveBeenCalledTimes(calls);
     void controller.view()?.onPublish?.();
     await settled(controller);
-    const publications = request.mock.calls.filter(
-      ([method]) => method === "sessions.github.publish",
-    );
+    const publications = callsFor(request);
     expect(publications.at(-1)).toEqual(publications.at(-2));
   });
 

@@ -3,7 +3,6 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -25,7 +24,10 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
-import { createReadyManagedServiceChild } from "./update-managed-service-handoff-command.test-support.js";
+import {
+  createReadyManagedServiceChild,
+  waitForHandoffResponse as waitForHandoffLine,
+} from "./update-managed-service-handoff-command.test-support.js";
 import { createManagedServiceBoundaryParent } from "./update-managed-service-handoff-process.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -34,22 +36,6 @@ const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDirMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
-
-async function waitForHandoffLine(output: Readable | null, expected: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let buffered = "";
-    const onData = (chunk: Buffer | string) => {
-      buffered += chunk.toString();
-      if (!buffered.includes(`${expected}\n`)) {
-        return;
-      }
-      output?.removeListener("data", onData);
-      resolve();
-    };
-    output?.on("data", onData);
-    output?.once("end", () => reject(new Error(`helper exited before ${expected}`)));
-  });
-}
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessModule } =

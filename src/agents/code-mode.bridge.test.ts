@@ -6,7 +6,6 @@ import { createGatedToolFactory } from "./code-mode-concurrency.test-support.js"
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
   expectToolCalls,
   expectCompleted,
   pluginToolWithExecute,
@@ -14,6 +13,7 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function bridge(targets: AnyAgentTool[], timeoutMs = 10_000, awaitResults?: boolean) {

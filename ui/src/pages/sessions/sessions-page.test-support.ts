@@ -96,14 +96,9 @@ export async function createPage(
           ]),
         );
       }
-      if (property in owner.actions) {
-        return Reflect.get(owner.actions, property);
-      }
-      if (property in view) {
-        return Reflect.get(view, property);
-      }
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
+      const source = property in owner.actions ? owner.actions : property in view ? view : target;
+      const value = Reflect.get(source, property, source);
+      return source === target && typeof value === "function" ? value.bind(target) : value;
     },
     set(target, property, value) {
       if (property === "routeData") {
@@ -146,7 +141,6 @@ export function createGateway(
     client,
     phase: "connected",
     hello: sessionMutationGatewayHello(),
-    assistantAgentId: null,
     sessionKey: "main",
   });
   const setSessionKey = vi.fn();
@@ -278,11 +272,7 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    plugins: {
-      registrations: vi.fn(() => []),
-      reportError: vi.fn(),
-      subscribe,
-    },
+    plugins: { registrations: vi.fn(() => []), reportError: vi.fn(), subscribe },
     navigate: vi.fn(),
     preload: vi.fn(),
   } as unknown as ApplicationContext;
@@ -380,10 +370,7 @@ export function withNotifyingAgentSelection(
     listeners.forEach((listener) => listener());
   };
   Object.assign(context.agentSelection, {
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     setScope: changeScope,
   });
   return { context, changeScope };

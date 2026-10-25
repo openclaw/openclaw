@@ -11,6 +11,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture } from "../plugins/native-resource.test-support.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -61,12 +62,7 @@ function nativeFixture(
     value: { connections, started, resume, captureAsyncWorkTracker },
   });
   cleanups.push(() => {
-    for (const { database } of connections) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-    Reflect.deleteProperty(globalThis, key);
+    cleanupNativeFixture(key, connections);
   });
   const plugin = writePlugin({
     dir,

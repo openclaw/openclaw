@@ -5,6 +5,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -43,13 +44,11 @@ function createSecondaryHydrationPane(scopes = ["operator.admin"]) {
     return () => undefined;
   };
   state.renderLifecycle = { afterCommit };
-  const frames = new Map<number, FrameRequestCallback>();
-  let nextFrame = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(framesClock.request);
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(framesClock.cancel);
   const paintFrame = async () => {
     const callbacks = [...frames.values()];
     frames.clear();
@@ -142,25 +141,20 @@ it.each([
   expect(f.commitEffects).toHaveLength(1);
   expectPending();
   const complete = f.commit();
-  await Promise.resolve();
-  expectPending();
-  expect(complete).not.toHaveBeenCalled();
-  await f.paintFrame();
-  expectPending();
-  expect(complete).not.toHaveBeenCalled();
+  for (const step of [() => Promise.resolve(), f.paintFrame]) {
+    await step();
+    expectPending();
+    expect(complete).not.toHaveBeenCalled();
+  }
   await f.paintFrame();
   expect(f.patch).toHaveBeenCalledTimes(Number(returning && committed));
   if (!returning) {
     expect(f.listBranches).toHaveBeenCalledOnce();
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
-      "system.info",
-      "session.discussion.info",
-      "sessions.companion.state",
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-    ]);
-    expect(
-      f.request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
-    ).toEqual({ sessionKey: f.state.sessionKey, agentId: "work" });
+    expect(f.request).toHaveBeenCalledWith("sessions.companion.state", {
+      sessionKey: f.state.sessionKey,
+      agentId: "work",
+    });
+    expect(f.request).toHaveBeenCalledWith("session.discussion.info", expect.anything());
   }
   expect(complete).toHaveBeenCalledOnce();
 });
@@ -204,14 +198,12 @@ it("resumes deferred companion and discussion hydration when a retained pane ret
   f.pane.presented = true;
   expect(f.commitEffects).toHaveLength(1);
   f.commit();
-  expect(f.request.mock.calls.map(([method]) => method).toSorted()).toEqual([
-    "chat.metadata",
-    "models.list",
-  ]);
+  for (const method of ["session.discussion.info", "sessions.companion.state"]) {
+    expect(f.request).not.toHaveBeenCalledWith(method, expect.anything());
+  }
   void f.paintFrame();
   await f.paintFrame();
 
-  expect(f.request.mock.calls.map(([method]) => method)).toEqual(
-    expect.arrayContaining(["session.discussion.info", "sessions.companion.state"]),
-  );
+  expect(f.request).toHaveBeenCalledWith("session.discussion.info", expect.anything());
+  expect(f.request).toHaveBeenCalledWith("sessions.companion.state", expect.anything());
 });

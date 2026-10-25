@@ -24,6 +24,7 @@ vi.mock("@panzoom/panzoom", () => ({
 
 import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
 const button = (modal: Lightbox, selector: string) =>
@@ -120,11 +121,7 @@ afterEach(async () => {
     vi.useRealTimers();
   }
   restoreDialogPolyfill();
-  if (animateDescriptor) {
-    Object.defineProperty(Element.prototype, "animate", animateDescriptor);
-  } else {
-    Reflect.deleteProperty(Element.prototype, "animate");
-  }
+  restorePropertyDescriptor(Element.prototype, "animate", animateDescriptor);
   vi.unstubAllGlobals();
 });
 
@@ -659,11 +656,7 @@ it.each(["document", "shadow"] as const)(
     const image = modal.querySelector<HTMLImageElement>(".image");
     const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
     onTestFinished(() => {
-      if (elementFromPoint) {
-        Object.defineProperty(hitTestRoot, "elementFromPoint", elementFromPoint);
-      } else {
-        Reflect.deleteProperty(hitTestRoot, "elementFromPoint");
-      }
+      restorePropertyDescriptor(hitTestRoot, "elementFromPoint", elementFromPoint);
     });
     Object.defineProperty(hitTestRoot, "elementFromPoint", {
       configurable: true,

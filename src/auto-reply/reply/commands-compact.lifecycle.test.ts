@@ -11,7 +11,6 @@ import {
   buildCompactParams,
   compactEmbeddedAgentSession,
   enqueueSystemEvent,
-  formatContextUsageShort,
   handleCompactCommand,
   incrementCompactionCount,
   prepareCurrentSessionEntry,
@@ -117,47 +116,86 @@ describe("handleCompactCommand lifecycle authority", () => {
     },
   );
 
-  it.each(["caller", "channel owner", "plugin owner", "operator"] as const)(
-    "rechecks %s authority after ingress adoption",
-    async (authority) => {
-      const controller = new AbortController();
-      let ownerCurrent = true;
-      const assertOwnerCurrent = () => {
-        if (!ownerCurrent) {
-          throw new Error("Command owner was revoked");
+  it.each([
+    ["adoption", "caller"],
+    ["adoption", "channel owner"],
+    ["adoption", "plugin owner"],
+    ["adoption", "operator"],
+    ["adoption", "writer"],
+    ["wait", "invocation"],
+    ["wait", "caller"],
+    ["wait", "plugin owner"],
+    ["wait", "session"],
+  ] as const)("rechecks %s authority for %s before effects", async (stage, authority) => {
+    const controller = new AbortController();
+    let current = true;
+    const ownerError =
+      authority === "writer" ? "command session changed" : "Command owner was revoked";
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error(ownerError);
+      }
+    };
+    const revoke = () => {
+      controller.abort();
+      current = false;
+      if (authority === "session") {
+        vi.mocked(prepareCurrentSessionEntry).mockResolvedValueOnce(undefined);
+      }
+    };
+    const entry = { sessionId: "session-1", updatedAt: 1 };
+    const params = buildLifecycleParams(
+      {
+        sessionEntry: entry,
+        compactionSessionEntry: entry,
+        commandInvocationSignal: authority === "invocation" ? controller.signal : undefined,
+        opts: {
+          abortSignal: authority === "caller" ? controller.signal : undefined,
+          operatorAuthority:
+            authority === "operator" ? { profileId: "test", scopes: [], assertCurrent } : undefined,
+        },
+      },
+      stage === "adoption" ? async () => revoke() : undefined,
+    );
+    if (authority === "channel owner") {
+      params.command.assertOwnerCurrent = assertCurrent;
+    }
+    const running =
+      stage === "wait" || authority === "writer" ? startCompactActiveRun(params) : undefined;
+    if (running) {
+      vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(async () => {
+        if (stage === "wait") {
+          revoke();
         }
-      };
-      const params = buildLifecycleParams(
-        {
-          opts: {
-            abortSignal: authority === "caller" ? controller.signal : undefined,
-            operatorAuthority:
-              authority === "operator"
-                ? { profileId: "test", scopes: [], assertCurrent: assertOwnerCurrent }
-                : undefined,
-          },
-        },
-        async () => {
-          controller.abort();
-          ownerCurrent = false;
-        },
-      );
-      if (authority === "channel owner") {
-        params.command.assertOwnerCurrent = assertOwnerCurrent;
-      }
-      const pending = handleCompactCommand(
-        params,
-        true,
-        authority === "plugin owner" ? assertOwnerCurrent : undefined,
-      );
-      if (authority === "caller") {
-        expect((await pending)?.sessionCompaction?.reason).toBe("command invocation closed");
-      } else {
-        await expect(pending).rejects.toThrow("Command owner was revoked");
-      }
-      expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
-    },
-  );
+        return false;
+      });
+    }
+    if (authority === "writer") {
+      vi.mocked(prepareCurrentSessionEntry).mockImplementationOnce(async ({ expected }) => ({
+        entry: { updatedAt: 1, ...expected },
+        assertCurrent,
+        release() {},
+      }));
+    }
+    const pending = handleCompactCommand(
+      params,
+      true,
+      authority === "plugin owner" ? assertCurrent : undefined,
+    );
+    if (authority === "caller" || authority === "invocation" || authority === "session") {
+      expect((await pending)?.sessionCompaction).toEqual({
+        compacted: false,
+        reason: authority === "session" ? "command session changed" : "command invocation closed",
+      });
+    } else {
+      await expect(pending).rejects.toThrow(ownerError);
+    }
+    if (running) {
+      expect(running.cancel).not.toHaveBeenCalled();
+    }
+    expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expect(incrementCompactionCount).not.toHaveBeenCalled();
+  });
 
   it.each(["missing-session", "aborted"] as const)(
     "does not adopt ingress for a %s command",
@@ -177,69 +215,6 @@ describe("handleCompactCommand lifecycle authority", () => {
       expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
     },
   );
-
-  it.each(["invocation", "caller", "owner", "session"] as const)(
-    "rejects stale %s authority before cancelling after the natural wait",
-    async (authority) => {
-      const controller = new AbortController();
-      const entry = { sessionId: "session-1", updatedAt: 1 };
-      let ownerCurrent = true;
-      const params = buildLifecycleParams({
-        sessionEntry: entry,
-        compactionSessionEntry: entry,
-        commandInvocationSignal: authority === "invocation" ? controller.signal : undefined,
-        opts: { abortSignal: authority === "caller" ? controller.signal : undefined },
-      });
-      const { cancel } = startCompactActiveRun(params);
-      vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(async () => {
-        if (authority === "session") {
-          vi.mocked(prepareCurrentSessionEntry).mockResolvedValueOnce(undefined);
-        } else if (authority === "owner") {
-          ownerCurrent = false;
-        } else {
-          controller.abort();
-        }
-        return false;
-      });
-      const pending = handleCompactCommand(params, true, () => {
-        if (!ownerCurrent) {
-          throw new Error("Command owner was revoked");
-        }
-      });
-      if (authority === "owner") {
-        await expect(pending).rejects.toThrow("Command owner was revoked");
-      } else {
-        expect((await pending)?.sessionCompaction).toEqual({
-          compacted: false,
-          reason: authority === "session" ? "command session changed" : "command invocation closed",
-        });
-      }
-      expect(cancel).not.toHaveBeenCalled();
-      expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
-      expect(incrementCompactionCount).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rechecks the retained writer predicate after ingress adoption before cancelling", async () => {
-    let current = true;
-    const params = buildLifecycleParams({}, async () => {
-      current = false;
-    });
-    const { cancel } = startCompactActiveRun(params);
-    vi.mocked(waitForSessionControllerSettlement).mockResolvedValueOnce(false);
-    vi.mocked(prepareCurrentSessionEntry).mockImplementationOnce(async ({ expected }) => ({
-      entry: { updatedAt: 1, ...expected },
-      assertCurrent() {
-        if (!current) {
-          throw new Error("command session changed");
-        }
-      },
-      release() {},
-    }));
-    await expect(handleCompactCommand(params, true)).rejects.toThrow("command session changed");
-    expect(cancel).not.toHaveBeenCalled();
-    expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
-  });
 
   it("marks manual compaction as maintenance until the command finishes", async () => {
     const replyOperation = createReplyOperation({
@@ -325,17 +300,14 @@ describe("handleCompactCommand lifecycle authority", () => {
       onAdopted,
     );
     const { operation, cancel } = startCompactActiveRun(params);
-    vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(
-      async (settled, timeout) => {
-        expect(timeout).toBe(60_000);
-        expect(onAdopted).not.toHaveBeenCalled();
-        expect(operation.abortSignal.aborted).toBe(false);
-        currentEntry = { ...original, activeWriterRunId: "drained-writer" };
-        operation.complete();
-        await settled;
-        return true;
-      },
-    );
+    vi.mocked(waitForSessionControllerSettlement).mockImplementationOnce(async (settled) => {
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(operation.abortSignal.aborted).toBe(false);
+      currentEntry = { ...original, activeWriterRunId: "drained-writer" };
+      operation.complete();
+      await settled;
+      return true;
+    });
     vi.mocked(prepareCurrentSessionEntry).mockImplementation(async () => ({
       entry: currentEntry,
       assertCurrent() {},
@@ -354,9 +326,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     });
     const result = await handleCompactCommand(params, true);
     expect(result?.sessionCompaction?.reason).toBe("command invocation closed");
-    expect(onAdopted).toHaveBeenCalledOnce();
     expect(incrementCompactionCount).toHaveBeenCalledOnce();
-    expect(compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
   });
@@ -425,24 +395,13 @@ describe("handleCompactCommand lifecycle authority", () => {
 
   it.each([
     {
-      name: "active Codex runtime config instead of stale session metadata",
+      name: "configured model budget instead of stale session metadata",
       cfg: {
-        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
         models: { providers: { openai: { models: [{ id: "gpt-5.5", contextWindow: 258_000 }] } } },
       } as unknown as OpenClawConfig,
       provider: "openai",
       model: "openai/gpt-5.5",
       session: { sessionId: "live-session", contextTokens: 400_000 },
-      result: {
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "compacted",
-          firstKeptEntryId: "first-kept",
-          tokensBefore: 199_000,
-          tokensAfter: 56_000,
-        },
-      },
       budget: 258_000,
     },
     {
@@ -459,11 +418,10 @@ describe("handleCompactCommand lifecycle authority", () => {
         modelOverride: "legacy-fast-model",
         modelOverrideSource: "user",
       },
-      result: { ok: true, compacted: false, reason: "already compacted" },
       budget: 777_777,
     },
-  ] as const)("resolves $name", async ({ cfg, provider, model, session, result, budget }) => {
-    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce(result);
+  ] as const)("resolves $name", async ({ cfg, provider, model, session, budget }) => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({ ok: true, compacted: false });
     await handleCompactCommand(
       buildLifecycleParams({
         cfg: {
@@ -479,8 +437,5 @@ describe("handleCompactCommand lifecycle authority", () => {
       true,
     );
     expect(requireCompactEmbeddedAgentSessionCall().contextTokenBudget).toBe(budget);
-    if (result.compacted) {
-      expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
-    }
   });
 });

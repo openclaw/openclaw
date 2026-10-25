@@ -425,6 +425,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         return;
       }
       this.activeCompactionItemIds.add(itemId);
+      this.usageProjection.beginCompaction();
     }
     await this.assistantProjection.recordItemStarted(item, itemId);
     if (
@@ -498,10 +499,12 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    let tokensAfter: number | undefined;
     if (item?.type === "contextCompaction" && itemId) {
       // Native history is already installed; pending observers cannot undo completion.
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      tokensAfter = this.usageProjection.completeCompaction();
     }
     if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
@@ -538,6 +541,9 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         config: this.params.config,
         cwd: this.params.workspaceDir,
         runId: this.params.runId,
+        provider: this.params.provider,
+        model: this.params.modelId,
+        tokensAfter,
         threadId: this.threadId,
         turnId: this.turnId,
         itemId,
@@ -715,14 +721,15 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         data: { phase, itemId, type },
       });
     }
-    if (item.role === "assistant" && extractRawResponseItemText(item)) {
+    const text = item.role === "assistant" ? extractRawResponseItemText(item) : undefined;
+    if (text) {
       this.eventProjection.markSafetyBufferingAssistantStarted();
     }
     this.toolSearchEvidenceProjection?.recordRawResponseItem(item);
     this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.
-    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
+    this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds, text);
     await this.settlement.project("media_projection", () =>
       this.generatedMediaProjection.recordRaw(item),
     );

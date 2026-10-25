@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { commandResult } from "../../agents/github-identity.test-support.js";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
@@ -79,15 +80,6 @@ async function expectWaiting(started: Promise<unknown>, pending: Promise<unknown
     "waiting",
   );
 }
-const commandResult = (value = "", code = 0) => ({
-  stdout: Buffer.from(value),
-  stderr: Buffer.alloc(0),
-  code,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
-
 const getOrCreatePromise = lazyPromise.getOrCreatePromise;
 
 function observeSharedReadAdmission() {
