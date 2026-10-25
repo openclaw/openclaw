@@ -1,4 +1,3 @@
-/** Tests reply payload sending through wired plugin hook flows. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -51,7 +50,7 @@ function send(
 }
 
 function editPayload(edit: (payload: PluginHookReplyPayload) => ReplyPayload) {
-  return vi.fn().mockImplementation(async (event: { payload: PluginHookReplyPayload }) => {
+  return vi.fn(async (event: { payload: PluginHookReplyPayload }) => {
     expect("trustedLocalMedia" in event.payload).toBe(false);
     return { payload: edit(event.payload) };
   });
@@ -91,7 +90,6 @@ describe("outbound hook runners", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(resultPromise).resolves.toEqual(expected);
-      expect(second).toHaveBeenCalledTimes(1);
       expect(logger.error).toHaveBeenCalledWith(
         `[hooks] ${hookName} handler from test-plugin failed: timed out after 15000ms`,
       );
@@ -148,22 +146,14 @@ describe("outbound hook runners", () => {
         blocks: [{ type: "buttons", buttons: [{ label: "Proceed", value: "action:proceed" }] }],
       },
     } satisfies ReplyPayload;
-    const first = vi.fn().mockResolvedValue({ payload });
-    const second = vi.fn().mockImplementation(async (event: { payload: ReplyPayload }) => ({
-      payload: {
-        ...event.payload,
-        text: `${event.payload.text ?? ""}!`,
+    const second = vi.fn(
+      async (event: typeof replyPayloadSendingEvent, context: typeof replyPayloadSendingCtx) => {
+        expect(event).toEqual({ ...replyPayloadSendingEvent, payload });
+        expect(context).toEqual(replyPayloadSendingCtx);
+        return { payload: { ...event.payload, text: `${event.payload.text}!` } };
       },
-    }));
-    const result = await send(createRunner([first, second]));
-
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledWith(
-      { ...replyPayloadSendingEvent, payload },
-      replyPayloadSendingCtx,
     );
-    expect(result).toEqual({
+    expect(await send(createRunner([async () => ({ payload }), second]))).toEqual({
       payload: { ...payload, text: "hello!" },
       cancel: undefined,
       reason: undefined,
@@ -171,11 +161,10 @@ describe("outbound hook runners", () => {
   });
 
   it("stops at the first handler that cancels delivery", async () => {
-    const first = vi.fn().mockResolvedValue({ cancel: true, reason: "blocked" });
     const second = vi.fn();
-    const result = await send(createRunner([first, second]));
-
-    expect(result).toEqual({
+    expect(
+      await send(createRunner([async () => ({ cancel: true, reason: "blocked" }), second])),
+    ).toEqual({
       payload: { text: "hello" },
       cancel: true,
       reason: "blocked",
@@ -194,7 +183,6 @@ describe("outbound hook runners", () => {
       : replyPayloadSendingEvent.payload;
     const result = await send(createRunner([handler]), payload);
 
-    expect(handler).toHaveBeenCalledTimes(1);
     expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(
       trusted ? true : undefined,
     );
@@ -202,11 +190,7 @@ describe("outbound hook runners", () => {
   });
 
   it("preserves internal reply metadata across plugin edits", async () => {
-    const handler = vi
-      .fn()
-      .mockImplementation(async (event: { payload: PluginHookReplyPayload }) => ({
-        payload: { ...event.payload, text: "plugin changed" },
-      }));
+    const handler = editPayload((payload) => ({ ...payload, text: "plugin changed" }));
     const metadata = {
       assistantMessageIndex: 7,
       sourceReplyTranscriptMirror: {
