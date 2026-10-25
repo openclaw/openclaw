@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
+import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
@@ -108,7 +109,6 @@ test.each(["transcript", "admission"] as const)(
     const key = "agent:main:dashboard:disk-full";
     Atomics.store(diskState, 1, 0);
     let startingTurn = false;
-    const admissionFailures: string[] = [];
     const begin = sessionLifecycle.beginSessionEffect;
     using admissionSpy = vi
       .spyOn(sessionLifecycle, "beginSessionEffect")
@@ -121,12 +121,7 @@ test.each(["transcript", "admission"] as const)(
           revalidateAllowed: async () => {
             Atomics.store(diskState, 0, 2);
             // Exercise real worker failure inside mandatory startup, independent of warm caches.
-            try {
-              await placements.getWithMoveAsync("disk-full-admission");
-            } catch (error) {
-              admissionFailures.push(String(error));
-              throw error;
-            }
+            await placements.getWithMoveAsync("disk-full-admission");
             await params.revalidateAllowed?.();
           },
         });
@@ -141,12 +136,7 @@ test.each(["transcript", "admission"] as const)(
         }
         return send(...args);
       });
-    type Created = {
-      key: string;
-      sessionId: string;
-      runStarted: boolean;
-      runError?: { message: string };
-    };
+    type Created = SessionsCreateResult & { sessionId: string };
     const params = {
       agentId: "main",
       key,
@@ -169,7 +159,7 @@ test.each(["transcript", "admission"] as const)(
     expect(sendSpy).toHaveBeenCalledOnce();
     expect(admissionSpy).toHaveBeenCalled();
     expect(Atomics.load(diskState, 1), JSON.stringify(created)).toBeGreaterThan(0);
-    expect(created, JSON.stringify({ created, admissionFailures })).toMatchObject({
+    expect(created).toMatchObject({
       ok: true,
       payload: { key, runStarted: false },
     });
@@ -189,7 +179,7 @@ test.each(["transcript", "admission"] as const)(
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
     expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(createGatewayActiveWorkSnapshot().counts.totalActive).toBe(0);
-    expect(context.broadcast, JSON.stringify({ created, admissionFailures })).toHaveBeenCalledWith(
+    expect(context.broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({
         sessionKey: key,

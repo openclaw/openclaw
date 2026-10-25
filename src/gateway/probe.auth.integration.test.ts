@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -58,9 +58,7 @@ beforeAll(async () => {
 afterAll(() => gatewayHarness.close());
 
 function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`expected ${label}`);
-  }
+  assert(typeof value === "string" && value, `expected ${label}`);
   return value;
 }
 const requireGatewayToken = () => requireString(testState.gatewayAuth?.token, "gateway auth token");
@@ -68,9 +66,7 @@ const statePath = (...parts: string[]) =>
   path.join(requireString(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR"), ...parts);
 
 function expectRecord(value: unknown, label: string) {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label}`);
-  }
+  assert(typeof value === "object" && value !== null, `expected ${label}`);
 }
 
 const gatewayUrl = () => `ws://127.0.0.1:${gatewayHarness.port}`;
@@ -149,8 +145,8 @@ describe("probeGateway auth integration", () => {
       // Lookup/persistence must use the SSH route, not this different local port.
       const moved = { ...remote, url: "ws://127.0.0.1:18999" };
       const result = await snapshot({ gateway: { ...config.gateway, remote: moved } });
-      expect(result).toMatchObject({ error: null, ok: true, auth: { capability: "read_only" } });
-      expectRecord(result?.status, "SSH route paired read without shared credentials");
+      expectStatus(result, "SSH route paired read without shared credentials");
+      expect(result?.auth.capability).toBe("read_only");
 
       // The fixture server would accept A's token even on this second route;
       // rejecting anonymously proves B did not inherit A's valid bearer.

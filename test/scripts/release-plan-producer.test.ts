@@ -42,6 +42,7 @@ import {
   type ReleaseInventorySource,
   type VerifiedReleaseInventory,
 } from "../../scripts/release-plan-producer.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { INVENTORY_PRODUCER_PATHS as TOOLING_CLOSURE } from "./release-inventory-paths.test-support.js";
@@ -1682,7 +1683,8 @@ mutateModule.syncBuiltinESMExports();
     expect(existsSync(join(root, "src"))).toBe(false);
     expect(collectExtensionPackageJsonCandidates(root)).toEqual(candidates);
     expect(
-      readdirSync(join(root, "extensions"), { recursive: true, withFileTypes: true })
+      listDirectoryTreeStrictSync(join(root, "extensions"))
+        .map((walkEntry) => walkEntry.dirent)
         .filter((entry) => entry.isFile())
         .map((entry) => relative(root, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
         .toSorted(),

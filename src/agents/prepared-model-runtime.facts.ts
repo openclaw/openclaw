@@ -511,10 +511,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   assertCurrent?: (input: PreparedModelRuntimeInput) => void;
   registries?: PreparedConfiguredModelRegistries;
-}): Promise<{
-  catalogs: Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>;
-  registryCount: number;
-}> {
+}) {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
   const preparedStaticProviderConfigs = resolvePreparedProviderStaticConfigs(

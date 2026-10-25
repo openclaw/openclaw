@@ -465,6 +465,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
+      ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -634,6 +635,7 @@ export function saveSettings(
     lobsterPetSounds: next.lobsterPetSounds === true ? true : undefined,
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
+    chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

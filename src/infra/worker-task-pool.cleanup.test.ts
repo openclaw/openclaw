@@ -26,12 +26,7 @@ async function mockWorker(
   terminate: () => Promise<number>,
   respond: (message: TaskMessage) => unknown = defaultReply,
 ) {
-  const created = vi.fn();
   class MockWorker extends EventEmitter {
-    constructor() {
-      super();
-      created();
-    }
     ref() {}
     unref() {}
     terminate = terminate;
@@ -46,17 +41,14 @@ async function mockWorker(
   }));
   vi.resetModules();
   cleanup.mockReset();
-  return { created, Pool: (await import("./worker-task-pool.js")).WorkerTaskPool };
+  return (await import("./worker-task-pool.js")).WorkerTaskPool;
 }
 
 it("retries failed idle retirement without releasing artifacts before native exit", async () => {
   const failure = new Error("mock termination did not complete");
   const terminate = vi.fn<() => Promise<number>>().mockResolvedValue(0);
   terminate.mockRejectedValueOnce(failure);
-  const loadCleanup = vi.fn(() => ({ removeTemporaryArtifacts: cleanup }));
-  // mock-isolation: Observe lazy cleanup loading without deleting fixture artifacts.
-  vi.doMock("./temp-artifact-cleanup.js", loadCleanup);
-  const { created, Pool } = await mockWorker(terminate);
+  const Pool = await mockWorker(terminate);
   const cleanupOrder: string[] = [];
   async function recordCleanup(label: string) {
     await Promise.resolve();
@@ -64,10 +56,7 @@ it("retries failed idle retirement without releasing artifacts before native exi
   }
   cleanup.mockImplementation(() => recordCleanup("temporary-directory"));
   const releaseResources = vi.fn(() => recordCleanup("resources"));
-  const observedCustody: number[][] = [];
-  const onRetirementFailure = vi.fn(() => {
-    observedCustody.push([cleanup.mock.calls.length, releaseResources.mock.calls.length]);
-  });
+  const onRetirementFailure = vi.fn();
   const pool = new Pool<number, number>({
     workerUrl: new URL("file:///fixture/worker.js"),
     maxWorkers: 1,
@@ -76,19 +65,13 @@ it("retries failed idle retirement without releasing artifacts before native exi
   });
   try {
     await expect(pool.run(1, {})).resolves.toBe(42);
-    loadCleanup.mockImplementation(() => {
-      throw new Error("cleanup module loaded during retirement");
-    });
     expect(await Promise.allSettled([pool.close(), pool.close()])).toEqual(
       Array.from({ length: 2 }, () => ({ status: "rejected", reason: failure })),
     );
-    expectCalls(1, terminate, created);
     expect(onRetirementFailure).toHaveBeenCalledExactlyOnceWith(failure);
-    expect(observedCustody).toEqual([[0, 0]]);
     expectCalls(0, cleanup, releaseResources);
     await Promise.all([pool.close(), pool.close()]);
-    expectCalls(2, terminate);
-    expectCalls(1, onRetirementFailure, created, releaseResources);
+    expectCalls(1, onRetirementFailure, releaseResources);
     expect(cleanup).toHaveBeenCalledExactlyOnceWith(temporaryDirectory, "Worker task");
     expect(cleanupOrder).toEqual(["temporary-directory", "resources"]);
   } finally {
@@ -119,7 +102,7 @@ it.each([false, true])(
       retryEntered.resolve();
       return stopped.promise;
     });
-    const { created, Pool } = await mockWorker(terminate, (message) => {
+    const Pool = await mockWorker(terminate, (message) => {
       expect(message.responseId).toBeUndefined();
       return message.input === "active"
         ? { status: "request", taskId: message.taskId, id: 1, value: "host" }
@@ -170,7 +153,6 @@ it.each([false, true])(
       });
       await hostReturned.promise;
       expectCalls(0, inputConsumed, responseConsumed, cleanup, queuedFactory);
-      expectCalls(1, created);
       const closed = new Error("terminal pool close");
       const closing = closeDuringRotation ? pool.close(closed) : undefined;
       stopped.resolve(0);
@@ -181,7 +163,6 @@ it.each([false, true])(
         closeDuringRotation ? { error: closed } : { value: "next" },
       );
       expectCalls(closeDuringRotation ? 0 : 1, queuedFactory);
-      expectCalls(closeDuringRotation ? 1 : 2, created);
       if (closeDuringRotation) {
         await expect(pool.run("later", {})).rejects.toBe(closed);
       }

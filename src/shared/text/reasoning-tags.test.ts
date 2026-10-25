@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as markdownCore from "../../../packages/markdown-core/src/reasoning-tags.js";
+import * as markdownCore from "../../../packages/markdown-core/src/reasoning-tags-batch.js";
 import * as finalTags from "./final-tags.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 

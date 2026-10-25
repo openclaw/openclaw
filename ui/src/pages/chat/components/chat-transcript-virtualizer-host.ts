@@ -83,13 +83,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private headerHeight = 0;
   private appliedHeaderHeight = 0;
   private readonly initialRange: TranscriptInitialRange;
-  private readonly endAnchor = new TranscriptEndAnchor();
+  private readonly endAnchor = new TranscriptEndAnchor((fn) => this.renderer.queueAfterCommit(fn));
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
     this.endAnchor.recordLayoutCorrection(before, after);
     this.scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
-  private readonly followEnd = () => this.scrollToEnd({ source: "auto" });
+  private readonly followEnd = () =>
+    this.scrollToEnd({
+      source: "auto",
+      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
+    });
   private readonly reconcileEnd = () => {
     if (!this.connected || this.offsetState.pendingInteractionAnchor) {
       return;
@@ -158,7 +162,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
   private messageRowKeysById: ReadonlyMap<string, string> = new Map();
-  private readonly prependAnchor = new TranscriptPrependAnchor(this.messageElements.elements);
+  private readonly prependAnchor = new TranscriptPrependAnchor(
+    this.messageElements.elements,
+    this.recordEndLayoutCorrection,
+  );
   private candidateMessageRowKeysById: ReadonlyMap<string, string> = new Map();
   private candidateMessageRowsByKey: ReadonlyMap<string, string> = new Map();
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
@@ -611,13 +618,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     }
     // The smooth journey may already be automatic when its skipped sizes settle.
     if (measureSkippedRows) {
-      const adjustScroll = this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
-      this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
-      try {
-        this.presentation.measureRows();
-      } finally {
-        this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
-      }
+      this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
     if (element) {

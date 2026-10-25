@@ -9,6 +9,9 @@
 .chat-context__segment {
   flex: none;
 }
+.chat-context__total {
+  --context-color: var(--ctx-color, var(--muted));
+}
 .chat-context__messages {
   --context-color: var(--info);
 }

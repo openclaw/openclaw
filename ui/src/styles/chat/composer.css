@@ -1423,7 +1423,6 @@
 .mention-menu .chat-author-avatar {
   flex-basis: 22px;
   border: 0;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 68%, transparent);
 }
 
 @media (max-width: 640px) {
@@ -1898,7 +1897,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .agent-chat__file-input,
 .agent-chat__photo-input,
-.agent-chat__camera-input {
+.agent-chat__camera-input,
+.agent-chat__media-input {
   display: none;
   position: fixed;
   margin: 0;
@@ -2944,6 +2944,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .chat-controls__fast-mode-row {
   gap: 8px;
   padding: 11px 12px;
+}
+
+/* Effort menu sections (Access, Effort, Speed) are separated only between siblings. */
+.chat-controls__effort-menu > * + *,
+.chat-controls__fast-mode-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 

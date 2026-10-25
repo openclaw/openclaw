@@ -5,6 +5,7 @@ import type { Socket } from "node:net";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -51,14 +52,9 @@ async function createPeer(
     }, waitMs);
     timers.add(timer);
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected a TCP listening address");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     get attempts() {
       return attempts;
     },

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { claimClickClackSetupCode } from "./setup-claim.js";
 
 function createLookupFn(...addresses: string[]): LookupFn {
@@ -95,10 +95,7 @@ describe("ClickClack setup-code claim", () => {
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify(claimResponse({ defaults: {} })));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const port = (server.address() as AddressInfo).port;
+    const port = await listenOnLoopback(server);
     const lookupFn = createLookupFn("127.0.0.1", "93.184.216.34");
 
     try {
@@ -114,9 +111,7 @@ describe("ClickClack setup-code claim", () => {
       });
       expect(lookupFn).toHaveBeenCalledTimes(2);
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
     }
   });
 

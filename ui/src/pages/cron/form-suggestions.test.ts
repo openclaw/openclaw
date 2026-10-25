@@ -77,6 +77,9 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
   };
   mounted.gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
   await waitForCronPage(() => expect(mounted.page.cron.cronJobs).toHaveLength(2));
+  expect(mounted.page.querySelector("datalist")).toBeNull();
+  mounted.page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();
+  await mounted.page.settle();
   mounted.page.patchForm({
     deliveryMode: "announce",
     deliveryChannel: "telegram",

@@ -26,9 +26,12 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
-With `--json`, local action-input refusals also write one JSON error document to
+With `--json`, local action-input, state, and viewport validation refusals write one JSON error document to
 stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
 `--json`, the diagnostic remains on stderr.
+
+Malformed request timeouts, invalid tab indexes, and Gateway request rejections
+also use this JSON failure envelope, including navigation, resize, and cookie requests.
 
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.

@@ -25,7 +25,7 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordWorkerRequest } from "./service-worker.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
 const { values } = parseArgs({
   options: {
@@ -580,19 +580,10 @@ try {
     observe(2000);
     await measure("prometheus.observation", iterations * 3, () => observe(iterations));
     const workerStore = createPrometheusMetricStore();
+    const recordWorker = createWorkerRequestMetricsRecorder(workerStore);
     const record = (count: number) => {
       for (let index = 0; index < count; index++) {
-        recordWorkerRequest(workerStore, {
-          type: "worker.request",
-          ts: 1,
-          seq: index,
-          kind: "sqlite_read",
-          phase: "completed",
-          requestClass: "sessions.get",
-          queueDepth: 0,
-          queueWaitMs: 0.1,
-          durationMs: 1,
-        });
+        recordWorker("sqlite_read", "sessions.get", "completed", 0, 0.1, 1, undefined);
       }
     };
     record(2000);

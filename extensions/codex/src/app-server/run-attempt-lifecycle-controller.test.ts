@@ -509,11 +509,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
           dynamicToolResult("reply", {
             success: true,
             terminate: true,
-            toolAuthoredSourceReply: {
-              text: "Premature reply.",
-              toolAuthored: true,
-              sourceReplyFinal: true,
-            },
+            toolAuthoredSourceReply: finalReply("Premature reply."),
           }),
         );
       };
@@ -538,11 +534,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
           dynamicToolResult("later", {
             success: true,
             terminate: true,
-            toolAuthoredSourceReply: {
-              text: "Later reply.",
-              toolAuthored: true,
-              sourceReplyFinal: true,
-            },
+            toolAuthoredSourceReply: finalReply("Later reply."),
           }),
         );
         await yieldImmediate();
@@ -602,11 +594,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
         dynamicToolResult("first", {
           success: true,
           terminate: true,
-          toolAuthoredSourceReply: {
-            text: "First reply.",
-            toolAuthored: true,
-            sourceReplyFinal: true,
-          },
+          toolAuthoredSourceReply: finalReply("First reply."),
         }),
       );
       await yieldImmediate();
@@ -617,11 +605,7 @@ describe("Codex batch release after a tool-authored final reply", () => {
         dynamicToolResult("second", {
           success: true,
           terminate: true,
-          toolAuthoredSourceReply: {
-            text: "Second reply.",
-            toolAuthored: true,
-            sourceReplyFinal: true,
-          },
+          toolAuthoredSourceReply: finalReply("Second reply."),
         }),
       );
       await yieldImmediate();

@@ -4,10 +4,12 @@ import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
+import { createCliTtyMock } from "../test-runtime-capture.js";
 import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
@@ -65,31 +67,22 @@ const timeline = (phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord
 });
 
 function runRecord(): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     createdAtMs: 100,
     updatedAtMs: 100,
-    trigger: "cli",
     status: "running",
     phase: "requested",
-    reason: null,
     before: { version: "2026.9.2" },
-    after: {},
     target: { version: "2026.9.3" },
-    origin: {},
     steps: [{ step: "requested", status: "in_progress", startedAtMs: 100 }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
     finishedAtMs: null,
-    downtimeMs: null,
-  };
+  });
 }
 
 describe("update progress", () => {
   let run: UpdateRunRecord;
   let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const tty = createCliTtyMock([process.stdout]);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -101,7 +94,7 @@ describe("update progress", () => {
       .mockImplementation(async () => structuredClone(run));
     vi.mocked(writeUpdateRunReportArtifact).mockReset().mockResolvedValue(reportPath);
     vi.mocked(getUpdateRun).mockImplementation(() => run);
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    tty.set(false);
   });
 
   async function observe(...args: Parameters<typeof createUpdateProgress>) {
@@ -124,11 +117,7 @@ describe("update progress", () => {
   afterEach(() => {
     presentation?.dispose();
     presentation = undefined;
-    if (tty) {
-      Object.defineProperty(process.stdout, "isTTY", tty);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
+    tty.restore();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -208,7 +197,7 @@ describe("update progress", () => {
   it("cancels an in-flight read and releases the terminal spinner on disposal", async () => {
     const error = silenceErrors();
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    tty.set(true);
     const timerCount = vi.getTimerCount();
     const signals = ["SIGINT", "SIGTERM"] as const;
     const listenerCounts = signals.map((signal) => process.listenerCount(signal));

@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
@@ -14,7 +15,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import { listenProvider } from "../gateway-provider-fixture.test-support.js";
+import { listenProvider, writeToolCallResponse } from "../gateway-provider-fixture.test-support.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -34,65 +35,14 @@ type ResponseInput = {
 };
 type SpawnReceipt = { status: string; runId: string; childSessionKey: string };
 type WaitResult = Awaited<ReturnType<typeof agentJob.waitForAgentJob>>;
-type ToolItem = {
-  type: "function_call";
-  id: string;
-  call_id: string;
-  name: string;
-  arguments: string;
-  status: "completed";
-};
-
-function message(text: string) {
-  return {
-    type: "message" as const,
-    id: randomUUID(),
-    role: "assistant" as const,
-    status: "completed" as const,
-    content: [{ type: "output_text" as const, text, annotations: [] }],
-  };
-}
-
 const publicationTools = ["github_identity_status", "github_publish"];
 
-function streamReply(response: ServerResponse, item: ToolItem | ReturnType<typeof message>) {
-  const envelope = {
-    id: randomUUID(),
-    object: "response",
-    created_at: Math.floor(Date.now() / 1000),
-    status: "completed",
-    model: "gpt-5.4",
-    output: [item],
-    usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
-  };
-  const events: Array<{ type: string } & Record<string, unknown>> = [
-    { type: "response.created", response: { ...envelope, status: "in_progress", output: [] } },
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: item.type === "function_call" ? { ...item, arguments: "" } : { ...item, content: [] },
-    },
-  ];
-  if (item.type === "function_call") {
-    const position = { item_id: item.id, output_index: 0 };
-    events.push(
-      { type: "response.function_call_arguments.delta", ...position, delta: item.arguments },
-      { type: "response.function_call_arguments.done", ...position, arguments: item.arguments },
-    );
-  }
-  events.push(
-    { type: "response.output_item.done", output_index: 0, item },
-    { type: "response.completed", response: envelope },
-  );
-  response.writeHead(200, { "content-type": "text/event-stream" });
-  response.end(
-    events
-      .map(
-        (event, sequence_number) =>
-          `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
-      )
-      .join(""),
-  );
+function replyText(response: ServerResponse, text: string) {
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: randomUUID(),
+    responseId: randomUUID(),
+  });
 }
 
 it.for(["reset", "complete"] as const)(
@@ -211,17 +161,18 @@ it.for(["reset", "complete"] as const)(
       tools: Array<{ name: string }>,
     ) {
       expect(
-        tools.some((entry) => entry.name === name),
+        tools.map((entry) => entry.name),
         `available ${name}`,
-      ).toBe(true);
-      streamReply(response, {
+      ).toContain(name);
+      const item = {
         type: "function_call",
         id: `fc_${callId.slice(5)}`,
         call_id: callId,
         name,
         arguments: JSON.stringify(args),
         status: "completed",
-      });
+      };
+      writeToolCallResponse(response, item, randomUUID(), 64, 32);
     }
     const spawnOptions = { visible: true, context: "isolated" };
     const waitForFixture = (label: string, pending: Promise<void>) =>
@@ -257,7 +208,7 @@ it.for(["reset", "complete"] as const)(
           if (marker === requesterMarker && yieldDispatched) {
             if (outcome === "complete") {
               resumedCatalog.resolve(body.tools.map((entry) => entry.name));
-              streamReply(response, message("Review complete."));
+              replyText(response, "Review complete.");
               return;
             }
             unexpectedInference++;
@@ -295,7 +246,7 @@ it.for(["reset", "complete"] as const)(
               if (attachedChatRuns.has(requester.runId)) {
                 requesterWaitAttached.resolve();
               }
-              streamReply(response, message("Requester started."));
+              replyText(response, "Requester started.");
               return;
             }
             child = parseSpawnReceipt(body.input, childCallId);
@@ -424,10 +375,7 @@ it.for(["reset", "complete"] as const)(
         .soft(waitResult, "chat waiter must retain actual yield metadata")
         .toMatchObject({ status: "ok", yielded: true });
       if (outcome === "complete") {
-        streamReply(
-          expectDefined(childResponse, "held reviewer response"),
-          message("Reviewer finished."),
-        );
+        replyText(expectDefined(childResponse, "held reviewer response"), "Reviewer finished.");
         publicationCatalogs.push(await withinTest(resumedCatalog.promise, signal));
         expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
         for (const catalog of publicationCatalogs) {

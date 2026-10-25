@@ -80,6 +80,97 @@ describe("materializePreparedRuntimeModel", () => {
       },
     ],
   });
+  it("reuses suppression policy across selected routes and refreshes changed policy", async () => {
+    let compilations = 0;
+    const entries = new Proxy(
+      { "retirement-owner": { enabled: true } },
+      {
+        ownKeys(target) {
+          compilations += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    const config = {
+      ...configFor("openai", apiSibling.baseUrl, { api: apiSibling.api }),
+      plugins: { entries },
+    };
+    const run = (model: typeof retired, currentConfig = config) =>
+      materializePreparedRuntimeModel({
+        provider: "openai",
+        modelId: retired.id,
+        config: currentConfig,
+        metadataSnapshot,
+        plan: {
+          ...plan,
+          modelRoute: {
+            ...plan.modelRoute!,
+            api: model.api,
+            baseUrl: model.baseUrl,
+            modelId: model.id,
+          },
+        },
+        model,
+        resolveModel: async () => {
+          throw new Error("Matching route must not resolve again");
+        },
+      });
+    await expect(run(apiSibling)).resolves.toBe(apiSibling);
+    await expect(run(retired)).rejects.toMatchObject({ reason: "model_not_found" });
+    await expect(run(apiSibling)).resolves.toBe(apiSibling);
+    expect(compilations).toBe(1);
+    const disabled = {
+      ...config,
+      plugins: { entries: { "retirement-owner": { enabled: false } } },
+    };
+    await expect(run(retired, disabled)).resolves.toBe(retired);
+    await expect(run(retired)).rejects.toMatchObject({ reason: "model_not_found" });
+    expect(compilations).toBe(1);
+  });
+  it.each([true, false])("preserves configless plugin enablement (routed: %s)", async (routed) => {
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "installed-owner",
+          origin: "global",
+          providers: ["openai"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "openai",
+                model: retired.id,
+                retirement: {},
+                when: { baseUrlHosts: ["subscription.example"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    for (const plugin of snapshot.index.plugins) {
+      plugin.enabled = false;
+    }
+    const result = expectModel({
+      modelId: retired.id,
+      model: retired,
+      metadataSnapshot: snapshot,
+      plan: {
+        ...plan,
+        modelRoute: routed
+          ? { ...plan.modelRoute!, modelId: retired.id, baseUrl: retired.baseUrl }
+          : undefined,
+      },
+      resolveModel: async () => {
+        throw new Error("Matching model must not resolve again");
+      },
+    });
+    if (routed) {
+      await result.rejects.toMatchObject({ reason: "model_not_found" });
+    } else {
+      await result.resolves.toBe(retired);
+    }
+  });
+
   it.each(["matching", "resolved", "route-less", "api-sibling"] as const)(
     "validates retirement on the final %s route",
     async (mode) => {

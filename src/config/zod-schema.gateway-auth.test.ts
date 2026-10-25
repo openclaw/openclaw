@@ -1,4 +1,4 @@
-import { expect, it, test } from "vitest";
+import { expect, test } from "vitest";
 import { validateConfigObject, validateConfigObjectRaw } from "./validation-core.js";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -8,7 +8,6 @@ const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
-  expect(result.success).toBe(false);
   expect(result.error?.issues).toContainEqual(
     expect.objectContaining({
       path,
@@ -38,14 +37,11 @@ test.each([
   ["blank claim", { ...trusted, githubAccountIdClaim: " " }],
   ["incomplete mapping", { issuer: trusted.issuer }],
 ])("rejects %s", (_name, mapping) => {
-  const auth = {
-    mode: "trusted-proxy",
-    trustedProxy: {
-      userHeader: "cf-access-authenticated-user-email",
-      cloudflareAccessOidc: mapping,
-    },
+  const trustedProxy = {
+    userHeader: "cf-access-authenticated-user-email",
+    cloudflareAccessOidc: mapping,
   };
-  expect(accepts({ gateway: { auth } })).toBe(false);
+  expect(accepts({ gateway: { auth: { mode: "trusted-proxy", trustedProxy } } })).toBe(false);
 });
 
 const validRole = {
@@ -53,18 +49,11 @@ const validRole = {
   agents: ["guest-agent"],
   scopes: ["operator.read", "operator.write"],
 };
-const withRole = (role: unknown) => ({
-  gateway: { roles: { default: "guest", definitions: { guest: role } } },
-});
 const rolesConfig = (overrides: Record<string, unknown>) => ({
   gateway: { roles: { default: "guest", definitions: { guest: validRole }, ...overrides } },
 });
 const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
-  agents: {
-    entries: {
-      shared: { model: "fixture/primary", models: { "fixture/fallback": { alias: "backup" } } },
-    },
-  },
+  agents: { entries: { shared: { models: { "fixture/fallback": { alias: "backup" } } } } },
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
@@ -81,16 +70,17 @@ test.each([
 });
 
 test("validates model source, scoped aliases, empty membership and future-family exclusions", () => {
-  const config = validated(
-    modelConfig(
-      { sourceAgent: " SHARED ", allow: ["backup"], deny: ["fixture/restricted-*"] },
-      { paused: { ...validRole, modelPolicy: { allow: [] } } },
-    ),
-  );
-  expect(config.gateway?.roles?.definitions.guest?.modelPolicy).toEqual({
-    sourceAgent: "shared",
+  const modelPolicy = {
+    sourceAgent: " SHARED ",
     allow: ["backup"],
     deny: ["fixture/restricted-*"],
+  };
+  const config = validated(
+    modelConfig(modelPolicy, { paused: { ...validRole, modelPolicy: { allow: [] } } }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.modelPolicy).toEqual({
+    ...modelPolicy,
+    sourceAgent: "shared",
   });
 });
 
@@ -99,15 +89,14 @@ test.each([
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
   { sourceAgent: "shared", deny: ["fixture/restricted- *"] },
 ])("rejects model exclusions that cannot be applied as configured: %j", (modelPolicy) => {
-  const result = validateConfigObject(modelConfig(modelPolicy));
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.issues).toContainEqual(
+  expect(validateConfigObject(modelConfig(modelPolicy))).toMatchObject({
+    ok: false,
+    issues: expect.arrayContaining([
       expect.objectContaining({
         path: expect.stringContaining("gateway.roles.definitions.guest.modelPolicy"),
       }),
-    );
-  }
+    ]),
+  });
 });
 
 test.each([
@@ -119,71 +108,62 @@ test.each([
   ["missing session policy", { sessions: undefined, agents: "*", scopes: ["operator.read"] }],
   ["freeform capability", { capability: "sessions.delete" }],
 ] as const)("rejects %s", (_name, overrides) => {
-  expect(accepts(withRole({ ...validRole, ...overrides }))).toBe(false);
-});
-
-test("rejects a default role that has no definition", () => {
-  expectSchemaIssue(rolesConfig({ default: "missing" }), ["gateway", "roles", "default"]);
+  const definitions = { guest: { ...validRole, ...overrides } };
+  expect(accepts(rolesConfig({ definitions }))).toBe(false);
 });
 
 test.each([
+  [{ default: "missing", definitions: { guest: validRole } }, "default"],
   [{ definitions: { guest: validRole } }, "default"],
   [{ definitions: {} }, "definitions"],
 ] as const)("requires a role %s", (roles, field) => {
   expectSchemaIssue({ gateway: { roles } }, ["gateway", "roles", field]);
 });
 
-test("accepts a matching GitHub cloud endpoint", () => {
-  const github = { host: "tenant.ghe.com", apiBaseUrl: "https://api.tenant.ghe.com" };
-  expect(accepts({ gateway: { github } })).toBe(true);
-});
-
 test.each([
-  { host: "ghe.example.test", apiBaseUrl: "https://api.other.example.test" },
-  { host: "ghe.example.test", apiBaseUrl: "http://ghe.example.test/api/v3" },
-  { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/other" },
-  { host: "ghe.example.test" },
-])("rejects a GitHub endpoint that could send credentials away from $host", (github) => {
-  expect(accepts({ gateway: { github } })).toBe(false);
+  ["tenant.ghe.com", "https://api.tenant.ghe.com", true],
+  ["ghe.example.test", "https://api.other.example.test", false],
+  ["ghe.example.test", "http://ghe.example.test/api/v3", false],
+  ["ghe.example.test", "https://ghe.example.test/other", false],
+  ["ghe.example.test", undefined, false],
+])("validates GitHub credential endpoint %s %s", (host, apiBaseUrl, expected) => {
+  expect(accepts({ gateway: { github: { host, apiBaseUrl } } })).toBe(expected);
 });
 
 test("accepts a provider neutral repository default", () => {
+  const defaultRepository = { url: "https://ghe.example.test/acme/private-repo.git", ref: "main" };
+  const projectProfiles = { "ghe.example.test/acme/private-repo": "example-worker" };
   expect(
     accepts({
-      gateway: {
-        projects: {
-          defaultRepository: { url: "https://ghe.example.test/acme/private-repo.git", ref: "main" },
-        },
-      },
-      cloudWorkers: {
-        projectProfiles: { "ghe.example.test/acme/private-repo": "example-worker" },
-      },
+      gateway: { projects: { defaultRepository } },
+      cloudWorkers: { projectProfiles },
     }),
   ).toBe(true);
 });
 
-it("preserves a SecretRef-only bundled overlay without custom provider fields", () => {
+test("preserves a SecretRef-only bundled overlay without custom provider fields", () => {
   const apiKey = { source: "file", provider: "x", id: "/runway" };
   const parsed = ModelsConfigSchema.parse({ providers: { runway: { apiKey } } });
   expect(parsed?.providers?.runway?.apiKey).toEqual(apiKey);
 });
 
-it("requires the legacy bailian-token-plan owner to remain an exact custom provider", () => {
-  const acceptsProvider = (provider: unknown) =>
-    ModelsConfigSchema.safeParse({
-      providers: { "bailian-token-plan": provider },
-    }).success;
-  expect(acceptsProvider({ timeoutSeconds: 600 })).toBe(false);
-  expect(
-    acceptsProvider({
+test.each([
+  [{ timeoutSeconds: 600 }, false],
+  [
+    {
       api: "anthropic-messages",
       baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
       models: [{ id: "qwen3.7-plus", name: "qwen3.7-plus" }],
-    }),
-  ).toBe(true);
+    },
+    true,
+  ],
+])("requires bailian-token-plan to remain an exact custom provider: %j", (provider, expected) => {
+  expect(
+    ModelsConfigSchema.safeParse({ providers: { "bailian-token-plan": provider } }).success,
+  ).toBe(expected);
 });
 
-it.each([
+test.each([
   ["preserveRecent", "forever"],
   ["resetArchiveRetention", "0d"],
   ["maxDiskBytes", "big"],
@@ -193,29 +173,24 @@ it.each([
   expect(result.error?.issues[0]?.path).toContain(key);
 });
 
-it("rejects inherited realtime provider keys", () => {
-  const realtime = { provider: "constructor", providers: { elevenlabs: { voiceId: "voice-123" } } };
-  const result = OpenClawSchema.safeParse({ talk: { realtime } });
-  expect(result.success).toBe(false);
-  expect(result.error?.issues[0]?.path).toEqual(["talk", "realtime", "provider"]);
+test("rejects inherited realtime provider keys", () => {
+  expectSchemaIssue(
+    { talk: { realtime: { provider: "constructor", providers: { elevenlabs: {} } } } },
+    ["talk", "realtime", "provider"],
+  );
 });
 
-it("requires an explicit selection when multiple providers are configured", () => {
-  expect(() =>
-    OpenClawSchema.parse({
-      talk: {
-        providers: { acme: { voiceId: "voice-acme" }, elevenlabs: { voiceId: "voice-eleven" } },
-      },
-    }),
-  ).toThrow(/talk\.provider|required/i);
+test("requires an explicit selection when multiple providers are configured", () => {
+  const providers = { acme: { voiceId: "voice-acme" }, elevenlabs: { voiceId: "voice-eleven" } };
+  expect(() => OpenClawSchema.parse({ talk: { providers } })).toThrow(/talk\.provider|required/i);
 });
 
-it("rejects a blank certPath", () => {
+test("rejects a blank certPath", () => {
   const result = validateConfigObject({ gateway: { tls: { enabled: true, certPath: "" } } });
   expect(result.ok ? undefined : result.issues[0]?.path).toContain("certPath");
 });
 
-it("preserves exact non-empty cert and key path bytes", () => {
+test("preserves exact non-empty cert and key path bytes", () => {
   const tls = {
     enabled: true,
     certPath: "  /etc/ssl/cert.pem  ",
@@ -224,7 +199,7 @@ it("preserves exact non-empty cert and key path bytes", () => {
   expect(validated({ gateway: { tls } }).gateway?.tls).toEqual(tls);
 });
 
-it.each([
+test.each([
   [{ visibleReplies: true }, { visibleReplies: "automatic" }],
   [{ groupChat: { visibleReplies: false } }, { groupChat: { visibleReplies: "message_tool" } }],
 ])("normalizes boolean visible replies %#", (messages, expected) => {
@@ -234,7 +209,7 @@ it.each([
   });
 });
 
-it.each([
+test.each([
   [{ visibleReplies: "visible" }, "messages.visibleReplies"],
   [{ groupChat: { unmentionedInbound: true } }, "messages.groupChat.unmentionedInbound"],
 ])("rejects unsupported messages %j at %s", (messages, path) => {
@@ -244,11 +219,11 @@ it.each([
   });
 });
 
-it("rejects a relative worktreeRoot", () => {
+test("rejects a relative worktreeRoot", () => {
   expect(accepts({ worktreeRoot: "worktrees" })).toBe(false);
 });
 
-it("validates the realtime input transcription model as an optional string", () => {
+test("validates the realtime input transcription model as an optional string", () => {
   const providers = { openai: { inputTranscriptionModel: "transcribe-prod" } };
   expect(validated({ talk: { realtime: { providers } } }).talk?.realtime?.providers).toEqual(
     providers,

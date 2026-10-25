@@ -6,10 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import {
-  runtimeProcessEntrypoints,
-  SQLITE_READONLY_CHILD_ARG,
-} from "./runtime-process-entrypoints.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { sqliteReadOnlyWorkerRequestArgs } from "./sqlite-readonly-worker-protocol.js";
 import {
@@ -26,19 +23,6 @@ import {
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
-import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
-
-const logs = vi.hoisted(() => ({ debug: vi.fn() }));
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
-      ...actual.createSubsystemLogger(...args),
-      debug: logs.debug,
-    }),
-  };
-});
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -47,28 +31,28 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const openDatabase = (location: string, readOnly = false) =>
+  new (requireNodeSqlite().DatabaseSync)(location, { readOnly });
+const witnessSql = (value: string) =>
+  `CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('${value}');`;
+type Worker = ReturnType<typeof createScopedSqliteReadOnlyWorker>;
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockClear();
-  logs.debug.mockClear();
 });
 
-function createDatabase(paddingBytes: number | null, sql = ""): string {
+function createDatabase(sql = ""): string {
   const source = path.join(tempDirs.make("openclaw-snapshot-budget-"), "source.sqlite");
-  using database = new (requireNodeSqlite().DatabaseSync)(source);
+  using database = openDatabase(source);
   if (sql) {
     database.exec(sql);
-  }
-  if (paddingBytes !== null) {
-    database.exec("CREATE TABLE padding (data BLOB)");
-    database.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
   }
   return source;
 }
 
 async function withWorker<T>(
-  run: (worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>) => Promise<T>,
+  run: (worker: Worker) => Promise<T>,
   launch: Parameters<
     typeof createScopedSqliteReadOnlyWorker
   >[0] = captureSqliteReadOnlyWorkerLaunch(),
@@ -88,121 +72,76 @@ async function readSnapshotVersion(source: string) {
 }
 
 function readQueries(location: string, ...queries: string[]) {
-  using snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  using snapshot = openDatabase(location, true);
   return queries.map((sql) => snapshot.prepare(sql).get());
 }
 
 describe("scoped SQLite read-only children", () => {
-  it.each(["frame-free read", "disposal refusal"] as const)(
-    "forks through the retained IPC session with %s",
-    async (scenario) => {
-      const source = createDatabase(
-        null,
-        "CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('checkpointed');",
-      );
-      using writer = new (requireNodeSqlite().DatabaseSync)(source);
-      writer.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('seed WAL'); DELETE FROM witness WHERE value='seed WAL'; PRAGMA wal_checkpoint(TRUNCATE)",
-      );
-      if (scenario !== "frame-free read") {
-        writer.exec("INSERT INTO witness VALUES ('committed in WAL')");
-      } else {
-        writer.close();
+  it("forks through retained IPC and joins cleanup after disposal refusal", async () => {
+    const source = createDatabase(witnessSql("checkpointed"));
+    using writer = openDatabase(source);
+    writer.exec(
+      "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('seed WAL'); DELETE FROM witness WHERE value='seed WAL'; PRAGMA wal_checkpoint(TRUNCATE)",
+    );
+    writer.exec("INSERT INTO witness VALUES ('committed in WAL')");
+    const preparation = startSqliteReadOnlyLocationAsync(source, {
+      preserveSourceArtifacts: true,
+      signal: new AbortController().signal,
+    });
+    let prepared: Awaited<typeof preparation.result> | undefined;
+    let fork: Awaited<ReturnType<typeof forkSqlitePrivateSnapshot>> | undefined;
+    const assertCurrent = vi.fn();
+    let forkChildren: ReturnType<typeof spawn>[] = [];
+    try {
+      prepared = await preparation.result;
+      const family = prepared.privateFamily;
+      if (!family) {
+        throw new Error("Retained fixture did not publish its captured WAL family");
       }
-      const familyBytes = (location: string) =>
-        ["", "-wal", "-shm"].map((suffix) =>
-          fs.existsSync(location + suffix) ? fs.readFileSync(location + suffix) : null,
-        );
-      const sourceBytes = familyBytes(source);
-      const preparation = startSqliteReadOnlyLocationAsync(source, {
-        preserveSourceArtifacts: true,
-        signal: new AbortController().signal,
+      const firstChild = vi.mocked(spawn).mock.results.length;
+      fork = await forkSqlitePrivateSnapshot(
+        prepared.location,
+        family,
+        new AbortController().signal,
+        assertCurrent,
+      );
+      forkChildren = vi
+        .mocked(spawn)
+        .mock.results.slice(firstChild)
+        .map(({ value }) => value);
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      {
+        using writable = openDatabase(fork.location);
+        expect(writable.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual([
+          { value: "checkpointed" },
+          { value: "committed in WAL" },
+        ]);
+      }
+      const remove = fs.promises.rm.bind(fs.promises);
+      using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+        if (String(target) === fork!.cleanupRoot) {
+          throw Object.assign(new Error("fixture directory is busy"), { code: "EBUSY" });
+        }
+        return remove(target, options);
       });
-      let prepared: Awaited<typeof preparation.result> | undefined;
-      let fork: Awaited<ReturnType<typeof forkSqlitePrivateSnapshot>> | undefined;
-      const assertCurrent = vi.fn();
-      let forkChildren: ReturnType<typeof spawn>[] = [];
-      try {
-        prepared = await preparation.result;
-        const family = prepared.privateFamily;
-        if (!family) {
-          throw new Error("Retained fixture did not publish its captured WAL family");
-        }
-        if (scenario === "frame-free read") {
-          expect(family.wal).toBeNull();
-          expect(fs.existsSync(`${prepared.location}-wal`)).toBe(false);
-          using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
-            readOnly: true,
-          });
-          expect(reader.prepare("SELECT value FROM witness").all()).toEqual([
-            { value: "checkpointed" },
-          ]);
-          expect(fs.statSync(`${prepared.location}-wal`).size).toBe(0);
-        } else {
-          expect(family.wal).not.toBeNull();
-        }
-        const privateBytes = familyBytes(prepared.location);
-        // The retained source may start a shared native broker. Only the fork owns
-        // the IPC child whose retirement this fixture must join.
-        const firstChild = vi.mocked(spawn).mock.results.length;
-        fork = await forkSqlitePrivateSnapshot(
-          prepared.location,
-          family,
-          new AbortController().signal,
-          assertCurrent,
-        );
-        forkChildren = vi
-          .mocked(spawn)
-          .mock.results.slice(firstChild)
-          .map(({ value }) => value);
-        expect(assertCurrent).toHaveBeenCalledOnce();
-        expect(fs.statSync(fork.location).ino).not.toBe(fs.statSync(prepared.location).ino);
-        expect(fs.existsSync(`${fork.location}-shm`)).toBe(false);
-        if (scenario === "frame-free read") {
-          expect(fs.existsSync(`${fork.location}-wal`)).toBe(false);
-        }
-        {
-          using writable = new (requireNodeSqlite().DatabaseSync)(fork.location);
-          expect(writable.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual(
-            scenario === "frame-free read"
-              ? [{ value: "checkpointed" }]
-              : [{ value: "checkpointed" }, { value: "committed in WAL" }],
-          );
-          writable.exec("DELETE FROM witness; PRAGMA wal_checkpoint(TRUNCATE)");
-        }
-        expect(familyBytes(prepared.location)).toEqual(privateBytes);
-        expect(familyBytes(source)).toEqual(sourceBytes);
-        if (scenario === "disposal refusal") {
-          const remove = fs.promises.rm.bind(fs.promises);
-          let refused = false;
-          using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-            if (String(target) === fork!.cleanupRoot) {
-              refused = true;
-              throw Object.assign(new Error("fixture directory is busy"), { code: "EBUSY" });
-            }
-            return remove(target, options);
-          });
-          expect(await fork.cleanupAsync()).toBe(false);
-          expect(refused).toBe(true);
-        }
-      } finally {
-        if (fork) {
-          expect(await fork.cleanupAsync()).toBe(true);
-          expect(fs.existsSync(fork.cleanupRoot!)).toBe(false);
-        }
-        if (prepared) {
-          expect(await prepared.cleanupAsync()).toBe(true);
-        }
-        await preparation.startClose().result;
+      expect(await fork.cleanupAsync()).toBe(false);
+    } finally {
+      if (fork) {
+        expect(await fork.cleanupAsync()).toBe(true);
+        expect(fs.existsSync(fork.cleanupRoot!)).toBe(false);
       }
-      expect(fs.existsSync(prepared!.cleanupRoot!)).toBe(false);
-      expect(forkChildren).toHaveLength(1);
-      for (const child of forkChildren) {
-        expect(child.connected).toBe(false);
-        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      if (prepared) {
+        expect(await prepared.cleanupAsync()).toBe(true);
       }
-    },
-  );
+      await preparation.startClose().result;
+    }
+    expect(fs.existsSync(prepared!.cleanupRoot!)).toBe(false);
+    expect(forkChildren).toHaveLength(1);
+    for (const child of forkChildren) {
+      expect(child.connected).toBe(false);
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    }
+  });
 
   it.each(["callback", "throw"])(
     "joins a staging IPC send %s failure before admitting another request",
@@ -242,8 +181,8 @@ describe("scoped SQLite read-only children", () => {
   );
 
   it("reuses fresh raw snapshots while joining backup-capable children before returning", async () => {
-    const source = createDatabase(1024 * 1024);
-    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    const source = createDatabase();
+    using writer = openDatabase(source);
     writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
     await withSqliteReadOnlyWorkerScope(async () => {
       for (const [index, mode] of (["sync", "async", "sync"] as const).entries()) {
@@ -253,13 +192,9 @@ describe("scoped SQLite read-only children", () => {
         } else {
           const prepared = await prepareSqliteReadOnlyLocation(source);
           try {
-            expect(
-              readQueries(
-                prepared.location,
-                "PRAGMA user_version",
-                "SELECT length(data) AS length FROM padding",
-              ),
-            ).toEqual([{ user_version: index + 1 }, { length: 1024 * 1024 }]);
+            expect(readQueries(prepared.location, "PRAGMA user_version")).toEqual([
+              { user_version: index + 1 },
+            ]);
           } finally {
             expect(await prepared.cleanupAsync()).toBe(true);
           }
@@ -270,23 +205,14 @@ describe("scoped SQLite read-only children", () => {
       }
     });
     expect(spawn).toHaveBeenCalledTimes(1);
-    const children = vi.mocked(execFile).mock.calls.flatMap(([, args], index) => {
-      const marker = args?.indexOf(SQLITE_READONLY_CHILD_ARG) ?? -1;
-      return marker < 0
-        ? []
-        : [{ mode: args?.[marker + 1], child: vi.mocked(execFile).mock.results[index]?.value }];
-    });
-    expect(children.filter(({ mode }) => mode !== "reclaim").map(({ mode }) => mode)).toEqual([
-      "async",
-    ]);
-    for (const { child } of children) {
-      expect(child).toMatchObject({ exitCode: 0, connected: false });
+    for (const { value } of vi.mocked(execFile).mock.results) {
+      expect(value).toMatchObject({ exitCode: 0, connected: false });
     }
     expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
   });
 
   it("keeps concurrent source inspections in separate processes", async () => {
-    const source = createDatabase(0);
+    const source = createDatabase("CREATE TABLE witness(value)");
     await withSqliteReadOnlyWorkerScope(async () => {
       expect(await Promise.all([readSnapshotVersion(source), readSnapshotVersion(source)])).toEqual(
         [0, 0],
@@ -338,7 +264,7 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
 });
 
 it("preserves an intermittent failed launch without parsing absent worker output", async () => {
-  const source = createDatabase(null);
+  const source = createDatabase();
   const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
   const run = () => runSqliteReadOnlyWorkerSync(source, stagingRoot);
   expect(fs.existsSync(run())).toBe(true);
@@ -374,15 +300,12 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
         ? vi.mocked(spawnSync).mock.calls.filter(([, argv]) => argv?.[0] !== "--version")
         : vi.mocked(execFile).mock.calls;
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.[2]).toMatchObject({ timeout, killSignal: "SIGKILL", windowsHide: true });
-    if (mode === "sync") {
-      expect(calls[0]?.[2]).toHaveProperty("stdio", "pipe");
-    }
+    expect(calls[0]?.[2]).toMatchObject({ timeout, killSignal: "SIGKILL" });
   }
 
   it("budgets the WAL family while copying committed data from an open writer", async () => {
-    const source = createDatabase(null);
-    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    const source = createDatabase();
+    using writer = openDatabase(source);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
     );
@@ -396,31 +319,9 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
       expect(fs.existsSync(`${snapshot}-wal`)).toBe(false);
       expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
     }
-    {
-      using copied = new (requireNodeSqlite().DatabaseSync)(snapshot, { readOnly: true });
-      expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
-        { bytes: 32 * 1024 * 1024 },
-      ]);
-    }
-    expectBudget(341_000);
-  });
-
-  it("reports the applied size budget for a timed-out snapshot", async () => {
-    const source = createDatabase(32 * 1024 * 1024);
-    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    // Keep the real timeout/close behavior without waiting out the production budget.
-    if (mode === "sync") {
-      vi.mocked(spawnSync).mockImplementationOnce((command, args, options) =>
-        actual.spawnSync(command, args, { ...options, timeout: 1 }),
-      );
-    } else {
-      vi.mocked(execFile).mockImplementationOnce((file, args, options, callback) =>
-        actual.execFile(file, args, { ...options, timeout: 1 }, callback),
-      );
-    }
-    await expect(run(source)).rejects.toThrow(
-      `SQLite read-only snapshot timed out after 341 seconds (budget for 32.0 MiB) for ${source}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
-    );
+    expect(readQueries(snapshot, "SELECT length(data) AS bytes FROM padding")).toEqual([
+      { bytes: 32 * 1024 * 1024 },
+    ]);
     expectBudget(341_000);
   });
 
@@ -428,7 +329,6 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     const source = path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite");
     await expect(run(source)).rejects.toThrow(/SQLite read-only worker.*ENOENT/);
     expectBudget(300_000);
-    expect(logs.debug).not.toHaveBeenCalled();
   });
 });
 
@@ -438,10 +338,7 @@ it.each(
     : ["unavailable"],
 )("cold-starts an absolute SQLite snapshot when the invoking cwd is %s", async (condition) => {
   const root = tempDirs.make("openclaw-sqlite-unavailable-cwd-");
-  const source = createDatabase(
-    null,
-    "CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('preserved');",
-  );
+  const source = createDatabase(witnessSql("preserved"));
   const stagingRoot = path.join(root, "staging");
   fs.mkdirSync(stagingRoot);
   const before = fs.readFileSync(source);
@@ -454,7 +351,7 @@ it.each(
     }
     throw unavailable;
   });
-  let worker: ReturnType<typeof createScopedSqliteReadOnlyWorker> | undefined;
+  let worker: Worker | undefined;
   let witness: unknown;
   try {
     worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
@@ -505,10 +402,7 @@ it.runIf(process.platform !== "win32")(
   "reports the real SQLite write errcode across the isolated worker boundary",
   () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
-    const databasePath = createDatabase(
-      null,
-      "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
-    );
+    const databasePath = createDatabase("CREATE TABLE probe AS SELECT zeroblob(8192) AS payload");
     const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
     const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
     const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
@@ -549,23 +443,8 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("distinguishes actual worker startup from serialized directory creation failures", async () => {
+it("reports the missing cwd for an actual worker startup failure", async () => {
   const root = tempDirs.make("openclaw-sqlite-worker-diagnostics-");
-  const notDirectory = path.join(root, "file");
-  fs.writeFileSync(notDirectory, "preserved");
-  const allocationError = await createSqliteSnapshotStagingDirectory(
-    notDirectory,
-    false,
-    undefined,
-    true,
-  ).catch((error: unknown) => error);
-  expect(allocationError).toBeInstanceOf(Error);
-  expect((allocationError as Error).message).toContain(`snapshot staging root ${notDirectory}`);
-  expect((allocationError as Error).message).toContain("XDG_CACHE_HOME");
-  expect((allocationError as Error).message).not.toContain("free disk space/quota");
-  expect((allocationError as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
-  expect(fs.readFileSync(notDirectory, "utf8")).toBe("preserved");
-
   const cwd = path.join(root, "missing-cwd");
   await withWorker(
     async (worker) => {

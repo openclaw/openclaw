@@ -85,12 +85,12 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
       accountId: params.accountId,
     });
   } catch (err) {
-    params.runtime?.log?.(
+    params.runtime?.log(
       `feishu[${params.accountId ?? "default"}]: failed to open quick-action launcher for ${params.operatorOpenId}: ${String(err)}`,
     );
     return false;
   }
-  params.runtime?.log?.(
+  params.runtime?.log(
     `feishu[${params.accountId ?? "default"}]: opened quick-action launcher for ${params.operatorOpenId}`,
   );
   return true;

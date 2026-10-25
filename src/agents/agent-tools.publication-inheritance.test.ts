@@ -19,6 +19,37 @@ const parentKey = "agent:main:dashboard:parent";
 const childKey = "agent:main:dashboard:child";
 const allowed = ["sessions_spawn", "github_publish", "github_identity_status"];
 const plan = createOpenClawOnlyToolConstructionPlan();
+type ToolOptions = Parameters<typeof createOpenClawCodingToolsInternal>[0];
+type CapabilityStore = Parameters<
+  typeof resolveConversationCapabilityProfile
+>[0]["preparedSessionCapabilityStore"];
+function buildTools(
+  options: ToolOptions & { config: OpenClawConfig; sessionKey: string },
+  preparedSessionCapabilityStore: CapabilityStore = {},
+) {
+  return createOpenClawCodingToolsInternal({
+    ...options,
+    toolConstructionPlan: plan,
+    wrapBeforeToolCallHook: false,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: options.config,
+      sessionKey: options.sessionKey,
+      runtimeToolAllowlist: options.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options.inheritRuntimeToolAllowlist,
+      sandboxToolPolicy: options.sandbox?.tools,
+      preparedSessionCapabilityStore,
+    }),
+  });
+}
+function inheritedEntry(allow: string[], deny?: string[], parent = parentKey) {
+  return {
+    sessionId: parent === parentKey ? "child" : "parent",
+    spawnedBy: parent,
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: [...allow],
+    ...(deny ? { inheritedToolDeny: deny } : {}),
+  };
+}
 
 describe("publication policy inherited by a managed child", () => {
   afterEach(() => clearRuntimeConfigSnapshot());
@@ -47,18 +78,11 @@ describe("publication policy inherited by a managed child", () => {
         }),
       },
       () =>
-        createOpenClawCodingToolsInternal({
+        buildTools({
           config,
           sessionKey: parentKey,
           githubPublicationAvailable: false,
           additionalInheritedToolNamesRef,
-          toolConstructionPlan: plan,
-          wrapBeforeToolCallHook: false,
-          conversationCapabilityProfile: resolveConversationCapabilityProfile({
-            config,
-            sessionKey: parentKey,
-            preparedSessionCapabilityStore: {},
-          }),
         }),
     );
     const parentPublishers = tools.filter((tool) => tool.name === "github_publish");
@@ -68,25 +92,14 @@ describe("publication policy inherited by a managed child", () => {
     });
     expect(additionalInheritedToolNamesRef).toEqual(["github_publish"]);
 
-    const child = createOpenClawCodingToolsInternal({
-      config,
-      sessionKey: childKey,
-      githubPublicationAvailable: true,
-      toolConstructionPlan: plan,
-      wrapBeforeToolCallHook: false,
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+    const child = buildTools(
+      {
         config,
         sessionKey: childKey,
-        preparedSessionCapabilityStore: {
-          [childKey]: {
-            sessionId: "child",
-            spawnedBy: parentKey,
-            inheritedToolPolicyVersion: 1,
-            inheritedToolAllow: [...additionalInheritedToolNamesRef],
-          },
-        },
-      }),
-    });
+        githubPublicationAvailable: true,
+      },
+      { [childKey]: inheritedEntry(additionalInheritedToolNamesRef) },
+    );
     const childPublishers = child.filter((tool) => tool.name === "github_publish");
     expect(childPublishers).toHaveLength(1);
     expect(childPublishers[0]?.parameters).toMatchObject({
@@ -94,72 +107,48 @@ describe("publication policy inherited by a managed child", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    tools: NonNullable<OpenClawConfig["tools"]>;
-    runtime?: string[];
-    inheritedDeny?: string[];
-    expected: boolean;
-  }>([
-    { name: "permitted publication", tools: { allow: allowed }, expected: true },
-    {
-      name: "preparation-only deployment policy",
-      tools: {
+  it.each<[string, NonNullable<OpenClawConfig["tools"]>, boolean, string[]?, string[]?]>([
+    ["permitted publication", { allow: allowed }, true],
+    [
+      "preparation-only deployment policy",
+      {
         allow: allowed,
-        gatewayPolicy: {
-          allow: ["github_publish"],
-          actions: { github_publish: ["prepare_pr"] },
-        },
+        gatewayPolicy: { allow: ["github_publish"], actions: { github_publish: ["prepare_pr"] } },
       },
-      expected: true,
-    },
-    {
-      name: "explicit denial",
-      tools: { allow: allowed, deny: ["github_publish"] },
-      expected: false,
-    },
-    { name: "restrictive allowlist", tools: { allow: ["sessions_spawn"] }, expected: false },
-    {
-      name: "inherited runtime restriction",
-      tools: { allow: allowed },
-      runtime: ["sessions_spawn"],
-      expected: false,
-    },
-    {
-      name: "deployment tool exclusion",
-      tools: { allow: allowed, gatewayPolicy: { allow: ["sessions_spawn"] } },
-      expected: false,
-    },
-    {
-      name: "deployment action restriction",
-      tools: {
+      true,
+    ],
+    ["explicit denial", { allow: allowed, deny: ["github_publish"] }, false],
+    ["restrictive allowlist", { allow: ["sessions_spawn"] }, false],
+    ["inherited runtime restriction", { allow: allowed }, false, ["sessions_spawn"]],
+    [
+      "deployment tool exclusion",
+      {
         allow: allowed,
-        gatewayPolicy: {
-          allow: allowed,
-          actions: { github_publish: ["inspect"] },
-        },
+        gatewayPolicy: { allow: ["sessions_spawn"] },
       },
-      expected: false,
-    },
-    {
-      name: "profile restriction",
-      tools: { profile: "minimal", alsoAllow: ["sessions_spawn"] },
-      expected: false,
-    },
-    {
-      name: "sender restriction",
-      tools: { allow: allowed, toolsBySender: { "*": { deny: ["github_publish"] } } },
-      expected: false,
-    },
-    {
-      name: "inherited denial",
-      tools: { allow: allowed },
-      inheritedDeny: ["github_publish"],
-      expected: false,
-    },
+      false,
+    ],
+    [
+      "deployment action restriction",
+      {
+        allow: allowed,
+        gatewayPolicy: { allow: allowed, actions: { github_publish: ["inspect"] } },
+      },
+      false,
+    ],
+    ["profile restriction", { profile: "minimal", alsoAllow: ["sessions_spawn"] }, false],
+    [
+      "sender restriction",
+      {
+        allow: allowed,
+        toolsBySender: { "*": { deny: ["github_publish"] } },
+      },
+      false,
+    ],
+    ["inherited denial", { allow: allowed }, false, undefined, ["github_publish"]],
   ])(
-    "preserves $name when the parent has no publishable repository",
-    ({ tools, runtime, inheritedDeny, expected }) => {
+    "preserves %s when the parent has no publishable repository",
+    (_name, tools, expected, runtime, inheritedDeny) => {
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         tools: { ...tools, sandbox: { tools: { alsoAllow: ["github_publish"] } } },
@@ -170,35 +159,26 @@ describe("publication policy inherited by a managed child", () => {
         tools: resolveSandboxToolPolicyForAgent(config, "main"),
       });
       const inheritedToolAllowlistRef: string[] = [];
-      const parent = createOpenClawCodingToolsInternal({
-        config,
-        sessionKey: parentKey,
-        sandbox,
-        githubPublicationAvailable: false,
-        runtimeToolAllowlist: runtime,
-        inheritRuntimeToolAllowlist: true,
-        inheritedToolAllowlistRef,
-        toolConstructionPlan: plan,
-        wrapBeforeToolCallHook: false,
-        conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      const parent = buildTools(
+        {
           config,
           sessionKey: parentKey,
+          sandbox,
+          githubPublicationAvailable: false,
           runtimeToolAllowlist: runtime,
           inheritRuntimeToolAllowlist: true,
-          sandboxToolPolicy: sandbox.tools,
-          preparedSessionCapabilityStore: inheritedDeny
-            ? {
-                [parentKey]: {
-                  sessionId: "parent",
-                  spawnedBy: "agent:main:dashboard:grandparent",
-                  inheritedToolPolicyVersion: 1,
-                  inheritedToolAllow: allowed,
-                  inheritedToolDeny: inheritedDeny,
-                },
-              }
-            : {},
-        }),
-      });
+          inheritedToolAllowlistRef,
+        },
+        inheritedDeny
+          ? {
+              [parentKey]: inheritedEntry(
+                allowed,
+                inheritedDeny,
+                "agent:main:dashboard:grandparent",
+              ),
+            }
+          : {},
+      );
       expect(parent.some((tool) => tool.name === "github_publish")).toBe(false);
       expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(expected);
 
@@ -225,28 +205,15 @@ describe("publication policy inherited by a managed child", () => {
           },
         },
       };
-      const child = createOpenClawCodingToolsInternal({
-        config: childConfig,
-        sessionKey: childKey,
-        sandbox: childSandbox,
-        githubPublicationAvailable: true,
-        toolConstructionPlan: plan,
-        wrapBeforeToolCallHook: false,
-        conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      const child = buildTools(
+        {
           config: childConfig,
           sessionKey: childKey,
-          sandboxToolPolicy: sandbox.tools,
-          preparedSessionCapabilityStore: {
-            [childKey]: {
-              sessionId: "child",
-              spawnedBy: parentKey,
-              inheritedToolPolicyVersion: 1,
-              inheritedToolAllow: [...inheritedToolAllowlistRef],
-              inheritedToolDeny: tools.deny ?? [],
-            },
-          },
-        }),
-      });
+          sandbox: childSandbox,
+          githubPublicationAvailable: true,
+        },
+        { [childKey]: inheritedEntry(inheritedToolAllowlistRef, tools.deny ?? []) },
+      );
       expect(child.some((tool) => tool.name === "github_publish")).toBe(expected);
       if (tools.gatewayPolicy?.actions?.github_publish?.includes("prepare_pr")) {
         const publisher = expectDefined(

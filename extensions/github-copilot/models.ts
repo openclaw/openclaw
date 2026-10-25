@@ -338,14 +338,6 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
   return value as CopilotApiModelEntry;
 }
 
-type FetchCopilotModelCatalogParams = {
-  /** GitHub source token accepted by the account's Copilot API endpoint. */
-  copilotApiToken: string;
-  /** Resolved baseUrl from the same token-exchange response. */
-  baseUrl: string;
-  headers?: Record<string, string>;
-};
-
 /**
  * Fetch the live Copilot model catalog from `${baseUrl}/models` and project it
  * into `ModelDefinitionConfig[]`. Used by the plugin's discovery hook so the
@@ -355,9 +347,13 @@ type FetchCopilotModelCatalogParams = {
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
  * Failures propagate so the catalog owner can publish a truthful outcome.
  */
-export async function fetchCopilotModelCatalog(
-  params: FetchCopilotModelCatalogParams,
-): Promise<CopilotCatalogModel[]> {
+export async function fetchCopilotModelCatalog(params: {
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
+  copilotApiToken: string;
+  /** Resolved baseUrl from the same token-exchange response. */
+  baseUrl: string;
+  headers?: Record<string, string>;
+}): Promise<CopilotCatalogModel[]> {
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");

@@ -550,19 +550,26 @@ describe("child followups", () => {
   it.each(["ok", "error", "timeout"] as const)(
     "consumes an inline child follow-up result without a second requester delivery (%s)",
     async (status) => {
-      await setupFollowup(async () => {
+      const result = {
+        runId,
+        status,
+        startedAt: 1,
+        ...(status === "ok" ? { terminalReply } : { error: "Child failed" }),
+      };
+      // The registry's own wait holds no root work while pending; release it only when
+      // the test can observe what it settles, never alongside registry teardown.
+      const registryWait = createDeferredCore();
+      await setupFollowup(async (request) => {
+        if (request.params?.timeoutMs !== 1000) {
+          await registryWait.promise;
+          return { ...result, endedAt: Date.now() };
+        }
         if (status === "ok") {
           await writeFinal(childSessionKey, runId, terminalReply.text);
           // The real child ends while its requester still holds the inline claim.
           await endChildRun(runId, childSessionKey, terminalReply);
         }
-        return {
-          runId,
-          status,
-          startedAt: 1,
-          endedAt: Date.now(),
-          ...(status === "ok" ? { terminalReply } : { error: "Child failed" }),
-        };
+        return { ...result, endedAt: Date.now() };
       });
       const { handle } = createDurableSessionsSendTestRun(requesterTurnRunId);
       const closeRequester = await setSessionsSendTestActiveRun(
@@ -574,9 +581,10 @@ describe("child followups", () => {
       );
       // The fixture requester has no controller operation; model its live inline claim.
       const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
+      let stopObserving = () => {};
       try {
-        const result = await followup(1);
-        expect(result.details).toMatchObject({
+        const sent = await followup(1);
+        expect(sent.details).toMatchObject({
           status,
           ...(status === "ok"
             ? { reply: terminalReply.text, delivery: { status: "skipped" } }
@@ -588,16 +596,26 @@ describe("child followups", () => {
         });
         await closeRequester();
         await settlePair(requesterSessionKey, requesterTurnRunId, childSessionKey, [runId], false);
+        if (status !== "ok") {
+          // Only the registry's wait observes these endings, after the inline result was consumed.
+          const settled = observeSubagentChange(
+            () => getSubagentRunByRunId(runId)?.cleanupCompletedAt !== undefined,
+          );
+          stopObserving = settled.stop;
+          registryWait.resolve();
+          await settled.promise;
+        }
         await settleSessionWork();
         expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
-        if (status === "ok") {
-          await expectChildCleanupSettled(runId, requesterSessionKey);
-        }
+        await expectChildCleanupSettled(runId, requesterSessionKey);
       } finally {
+        stopObserving();
         requesterTurn.restore();
         await closeRequester();
         await settleSessionWork();
         await resetSubagentRegistryForTests();
+        // The ok child ended through its lifecycle; its redundant wait now finds no row.
+        registryWait.resolve();
         announceTesting.setDepsForTest();
       }
     },

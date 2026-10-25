@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { computerCapabilities } from "../gateway/desktop/computer.test-support.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createAdmittedHostCapabilityTestFixture } from "./harness/host-capability.test-support.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
@@ -17,15 +18,10 @@ const scope = {
   sessionKey: "agent:main:session-computer",
 };
 const transport: ComputerToolTransport = {
-  computerUse: {
-    contractVersion: 2,
-    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-    actions: ["screenshot"],
-    targets: ["screen"],
-    deliveryModes: ["foreground"],
-    observations: ["image"],
-    features: { recording: false, agentCursor: false, multiDisplay: false },
-  },
+  computerUse: computerCapabilities(
+    { id: "fixture", label: "Fixture", generation: "generation-1" },
+    ["screenshot"],
+  ),
   resolveNode: async () => ({ nodeId: "session-desktop" }),
   invoke: async () => {
     throw new Error("Tool construction must not invoke the desktop");

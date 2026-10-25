@@ -9,6 +9,7 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { chatStartupStatusLabel } from "../pages/chat/chat-run-startup.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
 import {
@@ -485,10 +486,7 @@ describe("placement startup reconnect", () => {
   }
 
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   describe("initial turn ownership through disconnect", () => {
     it("restores paused content without effects after storage failure and client replacement", async () => {

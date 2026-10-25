@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { retryAfterPluginReplacement } from "../../../plugins/plugin-replacement-retry.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
@@ -41,7 +42,15 @@ export function createSubagentRegistryContextCleanup(config: {
   const endedHookInFlightOwners = new Set<object>();
   const endedHookEmittedOwners = new WeakSet<object>();
 
-  async function runContextEngineSubagentEnded(
+  /** Delivers once, again after a plugin reload that refused it, from the current registry. */
+  function runContextEngineSubagentEnded(
+    params: ContextEngineSubagentEndedParams,
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+  ): Promise<void> {
+    return retryAfterPluginReplacement(() => deliverContextEngineSubagentEnded(params, options));
+  }
+
+  async function deliverContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {

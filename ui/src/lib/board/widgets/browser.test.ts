@@ -13,25 +13,22 @@ import {
 } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import type { BoardWidget } from "../types.ts";
+import { createBoardWidget } from "../widget.test-support.ts";
 import "./browser.tsx";
 
 const sessionKey = "agent:main:dashboard-test";
 const dashboardIdentity = { sessionKey, name: "status", instanceId: "first" };
 const browserMethods = ["browser.request", "browser.dashboard.request"];
 function widget(instanceId: string): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "status",
     instanceId,
-    tabId: "main",
     contentKind: "plugin",
     pluginKind: "browser:dashboard",
     props: { url: "http://status.example" },
     sizeW: 12,
     sizeH: 8,
-    position: 0,
-    revision: 1,
-    grantState: "none",
-  };
+  });
 }
 function response(instanceId: string, paused = false, targetId = instanceId) {
   return {

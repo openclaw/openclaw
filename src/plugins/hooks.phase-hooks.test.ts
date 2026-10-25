@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
@@ -545,6 +546,94 @@ describe("before_prompt_build dispatch", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("does not serialize immutable prompt text or owned history envelopes", async () => {
+    const message = { role: "user", content: [{ type: "text", text: "owned history" }] };
+    normalizeTranscriptJsonValue(message, "");
+    const event = { prompt: "prompt \ud800\n", messages: [message] };
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const runner = promptRunner([
+        {
+          handler: (input) => {
+            expect(input).toEqual(event);
+            expect(input).not.toBe(event);
+            expect(input.messages).not.toBe(event.messages);
+            expect(input.messages[0]).not.toBe(message);
+            return { prependContext: input.prompt };
+          },
+        },
+      ]);
+      expect(await runner.runBeforePromptBuild(event, {})).toEqual({
+        prependContext: "prompt \ud800\n",
+      });
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  it.each([
+    { mix: [], expected: "Ask 🌍\r\n\ud800" },
+    { mix: ["read"], expected: "Ask 🌍\r\n\ud800" },
+    { mix: ["contribute"], expected: "context:history\n\nAsk 🌍\r\n\ud800\n\ntail" },
+    {
+      mix: ["mutate", "read", "contribute"],
+      expected: "context:dispatch only\n\nAsk 🌍\r\n\ud800\n\ntail",
+    },
+  ])("preserves model prompt bytes for hook mix $mix", async ({ mix, expected }) => {
+    const source = { role: "user", content: "history" };
+    const event = { prompt: "Ask 🌍\r\n\ud800", messages: [source] };
+    const runner = promptRunner(
+      mix.map((kind) => ({
+        handler: (input) => {
+          const message = input.messages[0] as typeof source;
+          if (kind === "mutate") {
+            input.prompt = "dispatch prompt";
+            message.content = "dispatch only";
+          } else if (kind === "contribute") {
+            return { prependContext: `context:${message.content}`, appendContext: "tail" };
+          }
+          return undefined;
+        },
+      })),
+    );
+    for (let turn = 0; turn < 2; turn++) {
+      const contribution = await runner.runBeforePromptBuild(event, {});
+      const prompt = resolveModelPromptText({
+        text: event.prompt,
+        transcriptPrompt: event.prompt,
+        ...contribution,
+      });
+      expect(prompt).toBe(expected);
+      expect(Buffer.from(prompt, "utf16le")).toEqual(Buffer.from(expected, "utf16le"));
+      expect(source.content).toBe("history");
+      expect(event.prompt).toBe("Ask 🌍\r\n\ud800");
+    }
+  });
+
+  it("preserves aliases and native values in unowned hook data", async () => {
+    const date = new Date("2026-01-01T00:00:00Z");
+    const leaf = { text: "caller" };
+    const map = new Map([["leaf", leaf]]);
+    const event = { prompt: "test", messages: [{ date, leaf, map }, { leaf }] };
+    const runner = promptRunner([
+      {
+        handler: (input) => {
+          const [first, second] = input.messages as typeof event.messages;
+          expect(first!.date).toEqual(date);
+          expect(first!.date).not.toBe(date);
+          expect(first!.leaf).toBe(second!.leaf);
+          expect(first!.map!.get("leaf")).toBe(first!.leaf);
+          first!.leaf.text = "local";
+          expect(second!.leaf.text).toBe("local");
+        },
+      },
+    ]);
+    await runner.runBeforePromptBuild(event, {});
+    expect(leaf.text).toBe("caller");
+    expect(map.get("leaf")).toBe(leaf);
+  });
+
   it.each([0, 1, 2])("never deep-clones owned payloads with %i handlers", async (handlers) => {
     const message = {
       role: "toolResult" as const,
@@ -606,12 +695,9 @@ describe("before_prompt_build dispatch", () => {
             handlers ? Array(handlers).fill("returned context").join("\n\n") : undefined,
           );
           expect(clone).toHaveBeenCalledTimes(handlers ? 1 : 0);
-          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
-          for (const [input] of clone.mock.calls) {
-            const snapshot = input as typeof event;
-            for (const [index, source] of messages.entries()) {
-              expect(snapshot.messages[index]!.content).not.toBe(source.content);
-            }
+          // Projection admits frozen metadata on its first read; warm dispatches must not rescan it.
+          if (turn > 0) {
+            expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
           }
           for (const source of messages) {
             expect(source.content[0]!.text).toBe("caller history");
@@ -739,10 +825,7 @@ describe("before_prompt_build dispatch", () => {
   });
 
   it("allows detached descendants to dispatch after the outer call settles", async () => {
-    let releaseDetached: (() => void) | undefined;
-    const detachedGate = new Promise<void>((resolve) => {
-      releaseDetached = resolve;
-    });
+    const { promise: detachedGate, resolve: releaseDetached } = createDeferredCore();
     let detachedDispatch: Promise<unknown> | undefined;
     const promptBuild = vi.fn(async (event: unknown) => {
       const prompt = (event as { prompt: string }).prompt;
@@ -765,7 +848,7 @@ describe("before_prompt_build dispatch", () => {
     );
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
-    releaseDetached?.();
+    releaseDetached();
     const pendingDetachedDispatch = detachedDispatch;
     if (!pendingDetachedDispatch) {
       throw new Error("detached prompt dispatch was not created");

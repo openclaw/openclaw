@@ -74,7 +74,7 @@ export function createSettingsStatus<T>(
   onSettled(() => {
     let connection = connectionKey();
     // Every connection receipt retires requests before a same-turn reconnect can settle them.
-    const stopGateway = gatewayProjection.subscribe(() => {
+    const stopGateway = context.gateway.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {
         const identityChanged =

@@ -98,7 +98,9 @@ it.each(
           deltaText: text,
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
-        expect(state).toMatchObject({ chatRunId: "predecessor-live-run", chatStream: text });
+        await vi.waitFor(() =>
+          expect(state).toMatchObject({ chatRunId: "predecessor-live-run", chatStream: text }),
+        );
         expect(getChatSessionProjection(state).entries).toEqual([]);
       } else if (transcript === "optimistic-only") {
         reduceChatSessionProjection(state, {

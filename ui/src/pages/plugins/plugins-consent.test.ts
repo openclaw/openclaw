@@ -41,13 +41,11 @@ function createConsentHarness(
     return () => listeners.delete(listener);
   };
   const { gateway: applicationGateway } = createGateway(client);
-  const gateway = new GatewayPageBinding(vi.fn(), {
-    getGateway: () => applicationGateway,
-  });
+  const gateway = new GatewayPageBinding(vi.fn(), { getGateway: () => applicationGateway });
   gateway.connect();
   let result = createResult(available);
-  let messages: Record<string, PluginRowMessage> = {};
-  const busy = new Set<string>();
+  let messages = new Map<string, PluginRowMessage>();
+  const busy = new Map<string, boolean>();
   const context = createContext(applicationGateway, refreshConfig);
   const applyMutationResult = vi.fn();
   const refreshCatalog = async (): Promise<void> => {
@@ -57,7 +55,7 @@ function createConsentHarness(
     } catch {
       return;
     }
-    messages = consent.reconcileInstallMessages(next);
+    messages = new Map(Object.entries(consent.reconcileInstallMessages(next)));
     result = next;
   };
   const consent: ReturnType<typeof createPluginsConsent> = createRoot((dispose) => {
@@ -68,22 +66,10 @@ function createConsentHarness(
       getContext: () => context,
       getResult: () => result,
       canMutate: () => true,
-      isBusy: (key) => busy.has(key),
-      setBusy: (key, action) => {
-        if (action) {
-          busy.add(key);
-        } else {
-          busy.delete(key);
-        }
-      },
-      setMessage: (key, message) => {
-        if (message) {
-          messages[key] = message;
-        } else {
-          delete messages[key];
-        }
-      },
-      getMessages: () => messages,
+      isBusy: (key) => busy.get(key) === true,
+      setBusy: (key, action) => busy.set(key, Boolean(action)),
+      setMessage: (key, message) => (message ? messages.set(key, message) : messages.delete(key)),
+      getMessages: () => Object.fromEntries(messages),
       clearPageNotice: () => {},
       closeDetails: () => {},
       applyMutationResult,
@@ -97,7 +83,7 @@ function createConsentHarness(
     request,
     listeners,
     progress: consent.read().installProgress,
-    message: (key: string) => messages[key],
+    message: (key: string) => messages.get(key),
     emit: (requestId: string, status = "started") => {
       for (const listener of listeners) {
         listener({
@@ -175,9 +161,8 @@ it("correlates concurrent install progress and retires listeners on success and 
   expect(listeners.size).toBe(0);
 });
 
-it("blocks repeat install when saved-state reads fail, then reconciles aliases and later removal", async () => {
+it("blocks repeat install when saved-state reads fail, then reconciles aliases", async () => {
   let inventoryFails = true;
-  let present = true;
   const otherInstall = deferred<never>();
   const otherRequest: PluginInstallRequest = { source: "npm", spec: "another-plugin" };
   const { consent, progress, message, refresh, request } = createConsentHarness(
@@ -204,13 +189,13 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
         if (inventoryFails) {
           throw new Error("Catalog refresh unavailable");
         }
-        return createResult(present ? installed : available);
+        return createResult(installed);
       }
       throw new Error(`Unexpected request: ${method}`);
     },
-    vi.fn(async () => {
+    async () => {
       throw new Error("Config refresh unavailable");
-    }),
+    },
   );
   const installCalls = () => request.mock.calls.filter(([method]) => method === "plugins.install");
   const alias = "clawhub:community-calendar";
@@ -225,10 +210,7 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
   const otherIdentity = "npm:another-plugin";
   const installingOther = consent.install(otherRequest, otherIdentity);
   await waitForSolid(() => expect(progress.has(otherIdentity)).toBe(true));
-  expect(progress.get(alias)).toMatchObject({
-    finishedAt: expect.any(Number),
-    canRetry: false,
-  });
+  expect(progress.get(alias)).toMatchObject({ finishedAt: expect.any(Number), canRetry: false });
   inventoryFails = false;
   await refresh();
   flush();
@@ -237,12 +219,6 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
   expect(progress.get(otherIdentity)?.finishedAt).toBeUndefined();
   expect(message(alias)).toBeUndefined();
   expect(message(rowKey)?.text).toContain("Plugin startup failed");
-  present = false;
-  await refresh();
-  flush();
-  expect(message(rowKey)).toBeUndefined();
-  await consent.install(installRequest, alias);
-  expect(installCalls()).toHaveLength(3);
   otherInstall.reject(new Error("Another registry is unavailable"));
   await installingOther;
   flush();

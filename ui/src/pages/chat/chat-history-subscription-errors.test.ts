@@ -4,6 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   chatHistoryRequests,
@@ -79,10 +80,14 @@ it("makes the new subscription ready before the old unsubscribe settles", async 
   const sync = syncSelectedSessionMessageSubscription(state);
   await Promise.resolve();
   expect(unsubscribeMessages).toHaveBeenCalledOnce();
-  expect(subscribeMessages).toHaveBeenCalledWith(selected.key, {
-    agentId: undefined,
-    includeApprovals: true,
-  });
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    selected.key,
+    {
+      agentId: undefined,
+      includeApprovals: true,
+    },
+    undefined,
+  );
   try {
     await vi.waitFor(() => expect(state.chatSessionMessageSubscription).toEqual(selected));
     await expect(sync).resolves.toBe(true);
@@ -154,10 +159,7 @@ it.each([false, true])(
 it.each(["dispose", "selection", "capability", "deadline"] as const)(
   "settles transient subscription recovery on %s without touching drafts",
   async (change) => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
     const subscribeMessages = vi.fn<Subscribe>().mockRejectedValue(sessionChanged());
     const { state } = createSubscriptionState({ subscribeMessages });
     state.chatMessage = "New unsent draft";
@@ -348,8 +350,12 @@ it("clears stale approvals while switching the selected global agent", async () 
   await sync;
 
   expect(queueWhileReplacementIsPending).toEqual([]);
-  expect(subscribeMessages).toHaveBeenCalledWith("global", {
-    agentId: "research",
-    includeApprovals: true,
-  });
+  expect(subscribeMessages).toHaveBeenCalledWith(
+    "global",
+    {
+      agentId: "research",
+      includeApprovals: true,
+    },
+    undefined,
+  );
 });

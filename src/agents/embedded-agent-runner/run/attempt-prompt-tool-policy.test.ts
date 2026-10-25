@@ -4,7 +4,6 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import {
-  applyPromptBuildToolsAllow,
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
@@ -61,19 +60,14 @@ function createPolicyFixture(
   return {
     params,
     apply: (toolsAllow: string[] = [], forceToolNames?: string[]) =>
-      applyPromptBuildToolsAllow({
-        ...params,
-        toolsAllow,
-        forceToolNames,
-        baseline: {
-          activeToolNames: names,
-          catalogEntries: [...(catalogRef?.current?.entries ?? [])],
-        },
-      }),
+      createPromptBuildToolPolicy({ ...params, forceToolNames }).apply(toolsAllow),
   };
 }
 
-function expectSurface(result: ReturnType<typeof applyPromptBuildToolsAllow>, names: string[]) {
+function expectSurface(
+  result: ReturnType<typeof createPromptBuildToolPolicy>["current"],
+  names: string[],
+) {
   const tools = named(...names);
   expect(result).toMatchObject({
     activeToolNames: names,

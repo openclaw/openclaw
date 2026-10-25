@@ -261,3 +261,45 @@ it("retains settled history and seeds disabled announce/last jobs without delive
   expect(target?.archived_at).toBeNull();
   expect(JSON.parse(String(target?.entry_json))).not.toHaveProperty("deliveryContext");
 });
+
+it("seeds the stress category mix with readable targets and settled unarchived subagents", async () => {
+  const stateDir = path.join(temporary.make("team-shape-load-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 108 --runs 43 --settled-runs --team-stress --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
+    ),
+  );
+  expect(summary.stressCounts).toMatchObject({
+    subagent: 43,
+    archivedDashboard: 44,
+    dashboard: 4,
+    explicit: 2,
+  });
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expectCounts(agent, {
+    "session_nodes WHERE entry_valid = 1": 108,
+    "session_nodes WHERE session_key LIKE 'agent:main:subagent:%' AND archived_at IS NULL": 43,
+    "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NOT NULL": 44,
+    "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NULL": 4,
+  });
+  expectCounts(state, {
+    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered'": 43,
+  });
+  expect(summary.stressTargets?.length).toBeGreaterThan(0);
+  for (const target of summary.stressTargets ?? []) {
+    const row = agent
+      .prepare(
+        "SELECT json_extract(entry_json, '$.sessionId') AS session_id, archived_at FROM session_nodes WHERE session_key = ?",
+      )
+      .get(target.sessionKey);
+    expect(row?.archived_at).toBeNull();
+    const transcript = agent
+      .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")
+      .get(String(row?.session_id));
+    expect(Number(transcript?.n)).toBeGreaterThan(1);
+  }
+  const agents = readJson(path.join(stateDir, "openclaw.json")).agents.entries;
+  expect(Object.keys(agents).toSorted()).toEqual(["main", "planner", "researcher", "reviewer"]);
+});

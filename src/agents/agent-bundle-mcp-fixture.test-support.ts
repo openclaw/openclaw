@@ -100,3 +100,16 @@ export function bindFixtureIdentity(
     requesterScope: params.requesterScope,
   };
 }
+
+export function staticRuntime(
+  fields: Omit<SessionMcpRuntime, "createdAt" | "lastUsedAt" | "markUsed" | "dispose"> &
+    Partial<SessionMcpRuntime>,
+): SessionMcpRuntime {
+  return {
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    dispose: async () => {},
+    ...fields,
+  };
+}

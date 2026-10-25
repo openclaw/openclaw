@@ -90,14 +90,15 @@ export function refreshSessionPatchQueuedSelection(params: {
   catalog?: ModelCatalogEntry[];
 }): void {
   const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
-  if (!modelSelectionChanged && params.patch.thinkingLevel === undefined) {
+  const thinkingChanged = modelSelectionChanged || params.patch.thinkingLevel !== undefined;
+  if (!thinkingChanged && params.patch.cyberAccessProgram === undefined) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
   refreshQueuedFollowupSession({
     key: sessionKey,
-    // An effort-only edit must not replace a queued route/account or clear its
+    // A preference-only edit must not replace a queued route/account or clear its
     // fallback provenance. Model changes still retarget waiting work as before.
     ...(modelSelectionChanged
       ? {
@@ -110,18 +111,23 @@ export function refreshSessionPatchQueuedSelection(params: {
           nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
         }
       : {}),
-    nextThinking: {
-      level: entry.thinkingLevel,
-      catalog: params.catalog,
-      agentRuntime: resolveEffectiveAgentRuntime({
-        cfg,
-        provider: model.provider,
-        modelId: model.model,
-        agentId,
-        sessionKey,
-        sessionEntry: entry,
-      }),
-    },
+    ...(params.patch.cyberAccessProgram !== undefined
+      ? { nextCyberAccessProgram: entry.cyberAccessProgram ?? null }
+      : {}),
+    nextThinking: thinkingChanged
+      ? {
+          level: entry.thinkingLevel,
+          catalog: params.catalog,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg,
+            provider: model.provider,
+            modelId: model.model,
+            agentId,
+            sessionKey,
+            sessionEntry: entry,
+          }),
+        }
+      : undefined,
   });
 }
 

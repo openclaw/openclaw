@@ -112,50 +112,70 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
   event: T,
 ): T {
   try {
-    const shared: Array<{ index: number; key: string; value: object }> = [];
+    const unowned: unknown[] = [];
+    const positions: Array<{ target: object; key: string }> = [];
+    const isolate = (target: object, key: string, value: unknown, owned = false) => {
+      const kind = typeof value;
+      if (
+        value === null ||
+        (kind !== "object" && kind !== "function" && kind !== "symbol") ||
+        owned
+      ) {
+        return;
+      }
+      unowned.push(value);
+      positions.push({ target, key });
+    };
     const messages = projectModelContextMessages(event.messages);
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index];
-      if (!message || typeof message !== "object") {
-        continue;
-      }
-      const prototype = Object.getPrototypeOf(message);
-      // Preserve native cloning for non-record values, including Error.cause.
-      if (prototype !== Object.prototype && prototype !== null) {
-        continue;
-      }
-      const original = event.messages[index];
-      const ownedMessage =
-        original && typeof original === "object" && isOwnedTranscriptPayload(original)
-          ? original
-          : undefined;
-      const envelope: Record<string, unknown> = { ...message };
-      for (const key of Object.keys(envelope)) {
-        const value = envelope[key];
-        // Entry normalization owns the whole message. Projection can replace metadata,
-        // so only unchanged fields inherit that owner's deep-freeze guarantee.
-        if (
-          value &&
-          typeof value === "object" &&
-          ((ownedMessage && Reflect.get(ownedMessage, key) === value) ||
-            isOwnedTranscriptPayload(value))
-        ) {
-          shared.push({ index, key, value });
-          envelope[key] = undefined;
+      if (message && typeof message === "object") {
+        const prototype = Object.getPrototypeOf(message);
+        if (prototype === Object.prototype || prototype === null) {
+          const original = event.messages[index];
+          const ownedMessage =
+            original && typeof original === "object" && isOwnedTranscriptPayload(original)
+              ? original
+              : undefined;
+          const entries: [string, unknown][] = Object.entries(message);
+          const envelope = Object.fromEntries(entries);
+          for (const [key, value] of entries) {
+            // Projection may replace metadata; only unchanged fields inherit ownership.
+            isolate(
+              envelope,
+              key,
+              value,
+              value !== null &&
+                typeof value === "object" &&
+                ((ownedMessage !== undefined && Reflect.get(ownedMessage, key) === value) ||
+                  isOwnedTranscriptPayload(value)),
+            );
+          }
+          messages[index] = envelope;
+          continue;
         }
       }
-      messages[index] = envelope;
+      isolate(messages, String(index), message);
     }
-    // Clone the remaining graph with the existing native-value and shared-memory checks.
-    const snapshot = cloneHookIsolationValue(hookName, { ...event, messages });
-    for (const { index, key, value } of shared) {
-      // Each recorded position is an own property of a plain cloned envelope.
-      Object.defineProperty(snapshot.messages[index], key, {
-        value,
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+    const snapshot = { ...event, messages };
+    for (const key of Reflect.ownKeys(snapshot)) {
+      if (typeof key === "symbol") {
+        Reflect.deleteProperty(snapshot, key);
+      } else if (key !== "messages") {
+        isolate(snapshot, key, Reflect.get(snapshot, key));
+      }
+    }
+    if (unowned.length) {
+      // One graph clone preserves aliases among unowned values and native-value checks.
+      const cloned = cloneHookIsolationValue(hookName, unowned);
+      for (const [index, { target, key }] of positions.entries()) {
+        Object.defineProperty(target, key, {
+          value: cloned[index],
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      }
     }
     return snapshot;
   } catch (cause) {

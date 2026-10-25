@@ -20,6 +20,7 @@ import {
   touchGenericCurrentConversationBinding as touchGeneric,
   unbindGenericCurrentConversationBindings as unbindGeneric,
 } from "./current-conversation-bindings.js";
+import { recordPublications } from "./current-conversation-bindings.test-support.js";
 import { inspectSessionBindingByConversation } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
@@ -318,6 +319,19 @@ it("touches the latest committed target and complete opaque metadata", async () 
     }),
   });
   expect(resolveWorkspace("user:owner")?.targetSessionKey).toBe("agent:main:new");
+});
+
+it("does not persist or publish a rejected synchronous generic touch", async () => {
+  await bindWorkspace("user:held");
+  const sibling = await bindWorkspace("user:held\u241fsibling");
+  const rows = openOpenClawStateDatabase().db.prepare(
+    "SELECT * FROM current_conversation_bindings ORDER BY binding_key",
+  );
+  const before = rows.all();
+  const publications = recordPublications();
+  touchGeneric(sibling.bindingId, 99);
+  expect(publications).toEqual([]);
+  expect(rows.all()).toEqual(before);
 });
 
 it.each(["rebind", "delete"] as const)(

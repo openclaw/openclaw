@@ -150,10 +150,10 @@ function matchesSessionListSearch(fields: Array<string | undefined>, search: str
   );
 }
 
-// Selection facts are replaced with the resident entry; weak keys release retired revisions.
+// Search follows the committed entry and physical key; weak keys release retired revisions.
 const staticSearchFields = new WeakMap<
-  NonNullable<ReturnType<SessionListTargetLookup>>["selection"],
-  { literal: string[]; titles: string[] }
+  SessionEntry,
+  { key: string; literal: string[]; titles: string[] }
 >();
 
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
@@ -268,8 +268,8 @@ export function filterSessionEntries(
     ? (key: string, entry: SessionEntry): boolean => {
         const target = expectDefined(params.getTarget(key), "search row owner");
         const storeKey = target.storeKey ?? key;
-        let fields = staticSearchFields.get(target.selection);
-        if (!fields) {
+        let fields = staticSearchFields.get(entry);
+        if (!fields || fields.key !== storeKey) {
           const titles = [
             entry.label,
             entry.subject,
@@ -288,10 +288,11 @@ export function filterSessionEntries(
             model: entry.model,
           });
           fields = {
+            key: storeKey,
             literal: rawFields.map(normalizeLowercaseStringOrEmpty),
             titles: titles.map(normalizeSessionSearchText),
           };
-          staticSearchFields.set(target.selection, fields);
+          staticSearchFields.set(entry, fields);
         }
         if (
           fields.literal.some((field) => field.includes(search)) ||

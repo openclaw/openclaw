@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -7,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 
 const profile = vi.hoisted(() => ({ value: "dynamic-execution" }));
@@ -78,14 +78,9 @@ for (const value of ["dynamic-execution", "embedded-aot"]) {
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ ok: true, result: { output: { data } } }));
       });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("LLM fixture did not bind its loopback port");
-      }
+      const port = await listenOnLoopback(server);
       vi.stubEnv("LOBSTER_STATE_DIR", path.join(cwd, "state"));
-      vi.stubEnv("LOBSTER_LLM_ADAPTER_URL", `http://127.0.0.1:${address.port}`);
+      vi.stubEnv("LOBSTER_LLM_ADAPTER_URL", `http://127.0.0.1:${port}`);
       vi.stubEnv("LOBSTER_LLM_ADAPTER_TOKEN", "");
       vi.stubEnv("LOBSTER_LLM_MODEL", "test-model");
       vi.stubEnv("LOBSTER_RUN_STATE_KEY", "");
