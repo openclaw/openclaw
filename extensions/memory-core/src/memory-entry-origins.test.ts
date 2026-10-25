@@ -84,6 +84,22 @@ describe("memory entry origins", () => {
   const row = (sql: string) => database().prepare(sql).get();
   const table = (name: string) => row(`SELECT name FROM sqlite_schema WHERE name = '${name}'`);
   const revision = () => row("SELECT revision FROM memory_index_state WHERE id = 1");
+  const seedTombstones = (sessionIds: string[], createdAt = 1_000, reason = "forgotten") =>
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds, createdAt, reason });
+  const prune = (
+    entryKeys: string[],
+    retainedEntryKeys = new Set<string>(),
+    workspaceDir = stateDir,
+  ) => pruneMemoryEntryOrigins({ workspaceDir, agentIds: ["main"], entryKeys, retainedEntryKeys });
+  const remove = (
+    filter: Omit<Parameters<typeof deleteMemoryEntryOriginsInDatabase>[1], "agentId">,
+  ) =>
+    withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+      deleteMemoryEntryOriginsInDatabase(requireNativeSqliteDatabase(db), {
+        agentId: "main",
+        ...filter,
+      }),
+    );
   const reserve = (priorEntry: string, candidateKeys = ["candidate"], agentIds = ["main"]) =>
     reserveMemoryEntryOrigins({
       agentIds,
@@ -94,21 +110,18 @@ describe("memory entry origins", () => {
         priorEntries: [priorEntry],
       })),
     });
-  const readOrigins = () =>
+  const readInWorker = (
+    selection: { kind: "origin-rows" } | { kind: "session-tombstones"; sessionIds: string[] },
+  ) =>
     readMemoryOriginsInWorker({
       agentId: "main",
       stateDir,
       databasePath: databasePath(),
-      kind: "origin-rows",
+      ...selection,
     });
+  const readOrigins = () => readInWorker({ kind: "origin-rows" });
   const readTombstones = (sessionIds: string[]) =>
-    readMemoryOriginsInWorker({
-      agentId: "main",
-      stateDir,
-      databasePath: databasePath(),
-      kind: "session-tombstones",
-      sessionIds,
-    });
+    readInWorker({ kind: "session-tombstones", sessionIds });
 
   async function withoutHostOriginSql(run: () => Promise<void>) {
     const db = database();
@@ -156,20 +169,14 @@ describe("memory entry origins", () => {
         });
       });
     try {
-      const pruning = {
-        workspaceDir: stateDir,
-        agentIds: ["main"],
-        entryKeys: ["candidate"],
-        retainedEntryKeys: new Set<string>(),
-      };
-      await pruneMemoryEntryOrigins(pruning);
+      await prune(["candidate"]);
       await expect(fs.access(databasePath())).rejects.toThrow();
       const db = database();
       const version = db.prepare("PRAGMA user_version").get();
       db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
       expect(await list()).toEqual([]);
-      await pruneMemoryEntryOrigins(pruning);
+      await prune(["candidate"]);
       expect(table("memory_entry_origins")).toBeUndefined();
       await expect(
         record([
@@ -261,23 +268,10 @@ describe("memory entry origins", () => {
     await record([origin("candidate", "session-1")]);
     expect(table("memory_session_tombstones")).toBeUndefined();
 
-    expect(
-      seedMemoryForgetTombstones({
-        agentId: "main",
-        sessionIds: ["session-2", "session-1", "session-1"],
-        createdAt: 1_000,
-      }),
-    ).toBe(2);
+    expect(seedTombstones(["session-2", "session-1", "session-1"])).toBe(2);
     const deletionRevision = revision();
     expect(deletionRevision).not.toEqual(revisionBefore);
-    expect(
-      seedMemoryForgetTombstones({
-        agentId: "main",
-        sessionIds: ["session-1"],
-        reason: "replacement",
-        createdAt: 2_000,
-      }),
-    ).toBe(0);
+    expect(seedTombstones(["session-1"], 2_000, "replacement")).toBe(0);
     expect(revision()).toEqual(deletionRevision);
     expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([
       { sessionId: "session-1", agentId: "main", reason: "forgotten", createdAt: 1_000 },
@@ -330,27 +324,16 @@ describe("memory entry origins", () => {
     const kept = origin("kept", "session-1");
     const pruned = origin("pruned", "session-2");
     await record([kept, origin("kept", "session-3"), pruned]);
-    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["session-2"], createdAt: 1_000 });
+    seedTombstones(["session-2"]);
 
     expect(await list({ sessionIds: selected("session", "session-1") })).toEqual([kept]);
     expect(await list({ entryKeys: selected("key", "pruned") })).toEqual([pruned]);
     expect(await forgotten(selected("session", "session-2"))).toEqual(new Set(["session-2"]));
 
-    await pruneMemoryEntryOrigins({
-      workspaceDir: stateDir,
-      agentIds: ["main"],
-      entryKeys: selected("key", "pruned"),
-      retainedEntryKeys: new Set(),
-    });
+    await prune(selected("key", "pruned"));
     expect(await list()).toEqual([kept, origin("kept", "session-3")]);
     await expect(
-      withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
-        deleteMemoryEntryOriginsInDatabase(requireNativeSqliteDatabase(db), {
-          agentId: "main",
-          entryKeys: ["kept"],
-          sessionIds: selected("session", "session-3"),
-        }),
-      ),
+      remove({ entryKeys: ["kept"], sessionIds: selected("session", "session-3") }),
     ).resolves.toBe(1);
     expect(await list()).toEqual([kept]);
   });
@@ -410,12 +393,7 @@ describe("memory entry origins", () => {
     const sessionIds = Array.from({ length: 513 }, (_, index) => `forgotten-${index}`);
     sessionIds[255] = `long-${"x".repeat(64 * 1024)}`;
     sessionIds[256] = "nul-\0-🦞";
-    seedMemoryForgetTombstones({
-      agentId: "main",
-      sessionIds,
-      reason: "x".repeat(1024),
-      createdAt: 1_000,
-    });
+    seedTombstones(sessionIds, 1_000, "x".repeat(1024));
     expect(readTombstones(sessionIds)).toEqual({
       kind: "session-tombstones",
       indices: Array.from({ length: 256 }, (_, i) => i),
@@ -440,14 +418,7 @@ describe("memory entry origins", () => {
       { entryKeys: ["missing"] },
       { entryKeys: ["candidate"], sessionIds: ["session-1"] },
     ]) {
-      await expect(
-        withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
-          deleteMemoryEntryOriginsInDatabase(requireNativeSqliteDatabase(db), {
-            agentId: "main",
-            ...filter,
-          }),
-        ),
-      ).resolves.toBe(0);
+      await expect(remove(filter)).resolves.toBe(0);
     }
     expect(await list()).toEqual(original);
     await withoutHostOriginSql(async () => {
@@ -621,12 +592,7 @@ export function bindSqliteWorkerBackend(input, context) {
         db.prepare(calibration).all();
         expect(observation.queries).toContain(calibration);
         observation.queries.length = 0;
-        await pruneMemoryEntryOrigins({
-          workspaceDir,
-          agentIds: ["main"],
-          entryKeys: ["diary"],
-          retainedEntryKeys,
-        });
+        await prune(["diary"], retainedEntryKeys, workspaceDir);
         expect(await list({ entryKeys: ["diary"] })).toEqual([]);
         expect(
           observation.queries.filter((sql) =>
@@ -642,11 +608,7 @@ export function bindSqliteWorkerBackend(input, context) {
   it("records exact session identity when a transcript recall candidate is first produced", async () => {
     const workspaceDir = path.join(stateDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    seedMemoryForgetTombstones({
-      agentId: "main",
-      sessionIds: ["already-forgotten"],
-      createdAt: 999,
-    });
+    seedTombstones(["already-forgotten"], 999);
     await record([origin("calibration", "calibration-session")]);
     await withoutHostOriginSql(async () => {
       await recordShortTermRecalls({

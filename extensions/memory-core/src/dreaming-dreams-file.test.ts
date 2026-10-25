@@ -36,6 +36,7 @@ beforeEach(async () => {
   workspaceDir = await createTempWorkspace("dreaming-diary-");
   dreamsPath = path.join(workspaceDir, "DREAMS.md");
 });
+const readDiary = () => fs.readFile(dreamsPath, "utf8");
 
 function writeBackfill(
   body = "The archive remembered a durable fact.",
@@ -94,7 +95,7 @@ it("does not restore deleted diary content from an update already in progress", 
     });
     publish.resolve();
     await Promise.all([update, forgotten]);
-    const content = await fs.readFile(dreamsPath, "utf8");
+    const content = await readDiary();
     expect(content).not.toContain(claim);
     expect(content).toContain("A new unrelated entry.");
   } finally {
@@ -132,9 +133,9 @@ it("refuses to overwrite a symlinked DREAMS.md", async () => {
   await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
 });
 
-it.each(["😀tail"])("publishes unchanged truncated context ending in %s", async (suffix) => {
+it("publishes unchanged truncated context ending in an emoji", async () => {
   const prefix = "a".repeat(359);
-  const body = `${prefix}${suffix}`;
+  const body = `${prefix}😀tail`;
   await writeBackfill(body);
 
   const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 1 });
@@ -153,11 +154,7 @@ it.each(["😀tail"])("publishes unchanged truncated context ending in %s", asyn
 
 it("skips symlinked and non-file DREAMS.md when reading recent context", async () => {
   const targetPath = path.join(workspaceDir, "target-dreams.md");
-  await fs.writeFile(
-    targetPath,
-    renderDiary("*April 5, 2026*\n\nSymlink target diary text must not enter the prompt."),
-    "utf8",
-  );
+  await fs.writeFile(targetPath, renderDiary("*April 5, 2026*\n\nPrivate symlink target."));
   await fs.symlink(targetPath, dreamsPath);
 
   await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
@@ -169,9 +166,9 @@ it("skips symlinked and non-file DREAMS.md when reading recent context", async (
   ).resolves.toEqual([]);
 });
 
-it.each(["EPERM"])("only optional diary context suppresses %s", async (code) => {
+it("only optional diary context suppresses EPERM", async () => {
   await fs.writeFile(dreamsPath, "# Existing\n");
-  const error = Object.assign(new Error("read denied"), { code });
+  const error = Object.assign(new Error("read denied"), { code: "EPERM" });
   vi.spyOn(fs, "open").mockRejectedValue(error);
 
   await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
@@ -203,16 +200,8 @@ it("preserves restrictive DREAMS.md permissions across atomic replace", async ()
 });
 
 it("serializes concurrent writes and deduplication", async () => {
-  await fs.writeFile(
-    dreamsPath,
-    renderDiary(
-      ...Array.from(
-        { length: 2 },
-        () => "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.",
-      ),
-    ),
-    "utf8",
-  );
+  const entry = "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.";
+  await fs.writeFile(dreamsPath, renderDiary(entry, entry));
 
   await Promise.all([
     dedupeDreamDiaryEntries({ workspaceDir }),
@@ -221,7 +210,7 @@ it("serializes concurrent writes and deduplication", async () => {
     }),
   ]);
 
-  const content = await fs.readFile(dreamsPath, "utf8");
+  const content = await readDiary();
   expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
   expect(content).toContain("A fresh signal arrived after the cleanup started.");
 });
@@ -258,7 +247,7 @@ The old diary entry stays.
       bodyLines: ["- New summary."],
     });
 
-    const dreamsContent = await fs.readFile(dreamsPath, "utf-8");
+    const dreamsContent = await readDiary();
     expect(dreamsContent).toContain("The old diary entry stays.");
     expect(dreamsContent).toContain("- New summary.");
     expect(dreamsContent).not.toContain("- Old summary.");
@@ -273,8 +262,7 @@ The old diary entry stays.
         ...(mode === "separate" ? ["dreaming", "light"] : []),
         "2026-04-05.md",
       );
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.writeFile(targetPath, "# Previous dreaming artifact\n", "utf-8");
+      await writeNote(path.relative(workspaceDir, targetPath), "# Previous dreaming artifact\n");
       const priorBytes = await fs.readFile(targetPath);
       const realRename = fs.rename;
       vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
@@ -313,7 +301,7 @@ The old diary entry stays.
 });
 
 describe("dream narrative publication", () => {
-  async function narrativeHarness(text?: string) {
+  function narrativeHarness(text?: string) {
     const subagent = createDreamingCompletion(text);
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const run = (overrides: Partial<Parameters<typeof runDreamNarrative>[0]> = {}) =>
@@ -326,15 +314,14 @@ describe("dream narrative publication", () => {
         data: { phase: "light", snippets: ["A private raw staging fragment."] },
         ...overrides,
       });
-    const readDiary = () => fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
-    return { workspaceDir, subagent, logger, run, readDiary };
+    return { subagent, logger, run };
   }
 
   it.each([false, true])(
     "retries unavailable models but never denied selection (denied=%s)",
     async (denied) => {
       const text = "The default model carried the diary home.";
-      const { subagent, logger, run, readDiary } = await narrativeHarness(text);
+      const { subagent, logger, run } = narrativeHarness(text);
       const error = new Error(denied ? "model override is not authorized" : "Completion failed", {
         cause: new Error("unknown model: ollama/missing-model"),
       });
@@ -365,7 +352,7 @@ describe("dream narrative publication", () => {
   );
 
   it("writes only a generic trace after empty completion", async () => {
-    const { run, readDiary } = await narrativeHarness("   \n  ");
+    const { run } = narrativeHarness("   \n  ");
     const outcome = await run({
       data: { phase: "deep", snippets: ["A private raw staging fragment."] },
     });
@@ -377,7 +364,7 @@ describe("dream narrative publication", () => {
   });
 
   it.each([false, true])("handles an ownerless sweep with empty=%s", async (empty) => {
-    const { subagent, run, readDiary } = await narrativeHarness();
+    const { subagent, run } = narrativeHarness();
     await expect(
       run({
         agentId: undefined,
@@ -386,7 +373,7 @@ describe("dream narrative publication", () => {
     ).resolves.toEqual({ status: empty ? "skipped" : "completed" });
     expect(subagent.complete).not.toHaveBeenCalled();
     if (empty) {
-      await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+      await expect(fs.access(dreamsPath)).rejects.toMatchObject({
         code: "ENOENT",
       });
     } else {
@@ -397,7 +384,7 @@ describe("dream narrative publication", () => {
   it.for([false, true])(
     "detaches publication without an unhandled failure (reject=%s)",
     async (reject, { signal }) => {
-      const { subagent, logger, run, readDiary } = await narrativeHarness();
+      const { subagent, logger, run } = narrativeHarness();
       const completion = createDeferred<{ text: string }>();
       subagent.complete.mockReturnValue(completion.promise);
       const published = createDeferred<void>();
@@ -437,14 +424,15 @@ describe("dream narrative publication", () => {
   ] as const)(
     "validates $source before publishing generated quotes after $mutation",
     async ({ source, mutation }) => {
-      const { subagent, logger, run, readDiary } = await narrativeHarness();
+      const { subagent, logger, run } = narrativeHarness();
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
       const nowMs = Date.now();
       const claim = "The private cobalt archive opens every midnight.";
       const retainedClaim = "A public archive is open throughout the afternoon.";
-      const corpusPath = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR, "2026-08-26.txt");
-      await fs.mkdir(path.dirname(corpusPath), { recursive: true });
-      await fs.writeFile(corpusPath, `[main:forgotten-narrative-source#L1] ${claim}\n`);
+      await writeNote(
+        `${SESSION_CORPUS_RELATIVE_DIR}/2026-08-26.txt`,
+        `[main:forgotten-narrative-source#L1] ${claim}\n`,
+      );
       await fs.writeFile(dreamsPath, "# Dream Diary\n\nA retained public diary entry.\n");
       await recordShortTermRecalls({
         workspaceDir,
