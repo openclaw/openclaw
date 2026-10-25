@@ -128,49 +128,22 @@ const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unkn
 const emitSessionLifecycleEventMock = vi.hoisted(() => vi.fn());
 const removeInternalSessionEffectsSessionMock = vi.fn(async (_target?: unknown) => {});
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireSubagentEndedHookCall(runId: string): {
   event: Record<string, unknown>;
   ctx: Record<string, unknown>;
 } {
-  const call = runSubagentEndedHookMock.mock.calls.find((candidate) => {
-    const ctx = candidate[1] as { runId?: string } | undefined;
-    return ctx?.runId === runId;
-  });
-  if (!call) {
-    throw new Error(`expected subagent_ended hook call for ${runId}`);
-  }
+  const call = expectDefined(
+    runSubagentEndedHookMock.mock.calls.find(
+      ([, ctx]) => requireRecord(ctx, "hook context").runId === runId,
+    ),
+    `subagent_ended hook for ${runId}`,
+  );
   return {
     event: requireRecord(call[0], `${runId} subagent_ended event`),
     ctx: requireRecord(call[1], `${runId} subagent_ended context`),
   };
-}
-
-function requireSessionLifecycleEventCall(label: string): Record<string, unknown> {
-  const call = emitSessionLifecycleEventMock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return requireRecord(call[0], label);
-}
-
-function requireFirstAnnounceCall(): Record<string, unknown> {
-  const call = announceSpy.mock.calls[0];
-  if (!call) {
-    throw new Error("expected announce call");
-  }
-  return requireRecord(call[0], "announce params");
 }
 
 const noopContextEngine = {
@@ -305,6 +278,9 @@ describe("subagent registry steer restarts", () => {
     });
   };
 
+  const registerNamedRun = (runId: string, child: string, task: string) =>
+    registerRun({ runId, childSessionKey: `agent:main:subagent:${child}`, task });
+
   const listMainRuns = () => mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
 
   const observeTerminalPublication = (runId: string) => {
@@ -360,14 +336,7 @@ describe("subagent registry steer restarts", () => {
     lifecycleGeneration?: string;
     preserveFrozenResultFallback?: boolean;
   }) => {
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: params.previousRunId,
-      nextRunId: params.nextRunId,
-      transcriptTarget: params.transcriptTarget,
-      task: params.task,
-      lifecycleGeneration: params.lifecycleGeneration,
-      preserveFrozenResultFallback: params.preserveFrozenResultFallback,
-    });
+    const replaced = await mod.replaceSubagentRunAfterSteerCore(params);
     expect(replaced).toBe(true);
 
     const runs = listMainRuns();
@@ -380,13 +349,7 @@ describe("subagent registry steer restarts", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await settleSubagentRegistryPersistenceWork();
-    announceSpy.mockReset();
-    announceSpy.mockResolvedValue("delivered");
-    runSubagentEndedHookMock.mockReset();
-    runSubagentEndedHookMock.mockImplementation(async () => {});
-    emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
-    removeInternalSessionEffectsSessionMock.mockClear();
     await mod.resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
   });
@@ -394,11 +357,7 @@ describe("subagent registry steer restarts", () => {
   it("honors persisted steer suppression and only announces the replacement run", async () => {
     const settleRootWork = observeRootWork();
     try {
-      await registerRun({
-        runId: "run-old",
-        childSessionKey: "agent:main:subagent:steer",
-        task: "initial task",
-      });
+      await registerNamedRun("run-old", "steer", "initial task");
 
       const previous = expectDefined(listMainRuns()[0], "registered run");
       expect(previous.runId).toBe("run-old");
@@ -423,17 +382,14 @@ describe("subagent registry steer restarts", () => {
 
       await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       expect(announceSpy).toHaveBeenCalledTimes(1);
-      const matchingCalls = runSubagentEndedHookMock.mock.calls.filter((call) => {
-        const ctx = call[1] as { runId?: string } | undefined;
-        return ctx?.runId === "run-new";
-      });
-      expect(matchingCalls).toHaveLength(1);
+      expect(runSubagentEndedHookMock).toHaveBeenCalledOnce();
       const hookCall = requireSubagentEndedHookCall("run-new");
       expect(hookCall.event.runId).toBe("run-new");
       expect(hookCall.ctx.runId).toBe("run-new");
 
-      const announce = requireFirstAnnounceCall();
-      expect(announce.childRunId).toBe("run-new");
+      expect(requireRecord(announceSpy.mock.calls[0]?.[0], "announce params")).toMatchObject({
+        childRunId: "run-new",
+      });
     } finally {
       await settleRootWork();
     }
@@ -455,11 +411,14 @@ describe("subagent registry steer restarts", () => {
       await settleSubagentRegistryPersistenceWork();
       expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
       const hookCall = requireSubagentEndedHookCall("run-completion-delayed");
-      expect(hookCall.event.targetSessionKey).toBe("agent:main:subagent:completion-delayed");
-      expect(hookCall.event.reason).toBe("subagent-complete");
-      expect(hookCall.event.sendFarewell).toBe(true);
-      expect(hookCall.ctx.runId).toBe("run-completion-delayed");
-      expect(hookCall.ctx.requesterSessionKey).toBe(MAIN_REQUESTER_SESSION_KEY);
+      expect(hookCall).toMatchObject({
+        event: {
+          targetSessionKey: "agent:main:subagent:completion-delayed",
+          reason: "subagent-complete",
+          sendFarewell: true,
+        },
+        ctx: { runId: "run-completion-delayed", requesterSessionKey: MAIN_REQUESTER_SESSION_KEY },
+      });
     } finally {
       announce.resolve("delivered");
     }
@@ -491,11 +450,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("clears terminal lifecycle state when replacing after steer restart", async () => {
-    await registerRun({
-      runId: "run-terminal-state-old",
-      childSessionKey: "agent:main:subagent:terminal-state",
-      task: "terminal state",
-    });
+    await registerNamedRun("run-terminal-state-old", "terminal-state", "terminal state");
     const previous = expectDefined(listMainRuns()[0], "registered run");
     const endedAt = Date.now();
     await updateRun(previous.runId, (draft) => {
@@ -532,24 +487,17 @@ describe("subagent registry steer restarts", () => {
       nextRunId: "run-terminal-state-new",
       lifecycleGeneration: "test-generation",
     });
-    expect(run.task).toBe(previous.task);
-    expect(run.execution).toMatchObject({
-      status: "running",
-      lifecycleGeneration: "test-generation",
+    expect(run).toMatchObject({
+      task: previous.task,
+      execution: { status: "running", lifecycleGeneration: "test-generation", endedAt: undefined },
+      completion: { resultText: undefined, capturedAt: undefined },
+      endedHookEmittedAt: undefined,
+      endedReason: undefined,
+      terminalOwner: undefined,
+      cleanupCompletedAt: undefined,
+      cleanupHandled: false,
+      archiveAtMs: undefined,
     });
-    for (const key of [
-      "endedHookEmittedAt",
-      "endedReason",
-      "terminalOwner",
-      "cleanupCompletedAt",
-    ] as const) {
-      expect(run[key], key).toBeUndefined();
-    }
-    expect(run.execution.endedAt).toBeUndefined();
-    expect(run.completion?.resultText).toBeUndefined();
-    expect(run.completion?.capturedAt).toBeUndefined();
-    expect(run.cleanupHandled).toBe(false);
-    expect(run.archiveAtMs).toBeUndefined();
     expect(run.delivery).toEqual({ status: "pending" });
 
     const settleRootWork = observeRootWork();
@@ -561,7 +509,9 @@ describe("subagent registry steer restarts", () => {
       const hookCall = requireSubagentEndedHookCall(run.runId);
       expect(hookCall.event.runId).toBe(run.runId);
       expect(hookCall.ctx.runId).toBe(run.runId);
-      expect(requireSessionLifecycleEventCall("replacement lifecycle event")).toMatchObject({
+      expect(
+        requireRecord(emitSessionLifecycleEventMock.mock.calls[0]?.[0], "lifecycle event"),
+      ).toMatchObject({
         sessionKey: previous.childSessionKey,
         reason: "subagent-status",
       });
@@ -572,25 +522,18 @@ describe("subagent registry steer restarts", () => {
 
   it("updates task to the dispatched steer message when provided", async () => {
     // Restart recovery must redispatch the steer instruction, not the original task.
-    await registerRun({
-      runId: "run-steer-task-old",
-      childSessionKey: "agent:main:subagent:steer-task",
-      task: "original pre-steer task",
-    });
+    await registerNamedRun("run-steer-task-old", "steer-task", "original pre-steer task");
 
     const previous = listMainRuns()[0];
     expect(previous?.runId).toBe("run-steer-task-old");
     expect(previous?.taskRunId).toBe("run-steer-task-old");
     expect(previous?.generation).toBe(1);
 
-    const run = expectDefined(
-      await replaceRunAfterSteer({
-        previousRunId: "run-steer-task-old",
-        nextRunId: "run-steer-task-new",
-        task: "new steer instruction from user",
-      }),
-      'replaceRunAfterSteer({ previousRunId: "run-steer-task-old", nextRunId... test invariant',
-    );
+    const run = await replaceRunAfterSteer({
+      previousRunId: "run-steer-task-old",
+      nextRunId: "run-steer-task-new",
+      task: "new steer instruction from user",
+    });
 
     expect(run.task).toBe("new steer instruction from user");
     expect(run.taskRunId).toBe("run-steer-task-old");
@@ -598,17 +541,10 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("preserves cumulative session timing across steer replacement runs", async () => {
-    await registerRun({
-      runId: "run-runtime-old",
-      childSessionKey: "agent:main:subagent:runtime",
-      task: "keep timing stable",
-    });
+    await registerNamedRun("run-runtime-old", "runtime", "keep timing stable");
 
-    const previous = listMainRuns()[0];
-    expect(previous?.runId).toBe("run-runtime-old");
-    if (!previous) {
-      throw new Error("missing previous run");
-    }
+    const previous = expectDefined(listMainRuns()[0], "previous run");
+    expect(previous.runId).toBe("run-runtime-old");
 
     await updateRun(previous.runId, (draft) => {
       draft.execution.startedAt = 1_000;
@@ -618,16 +554,10 @@ describe("subagent registry steer restarts", () => {
       draft.execution.outcome = { status: "ok" };
     });
 
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
+    const next = await replaceRunAfterSteer({
       previousRunId: "run-runtime-old",
       nextRunId: "run-runtime-new",
     });
-    expect(replaced).toBe(true);
-
-    const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    if (next === undefined) {
-      throw new Error("expected restarted run");
-    }
     expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
     expect(next.accumulatedRuntimeMs).toBe(120_000);
 
@@ -638,11 +568,11 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("rejects a replacement owned by a retired Gateway lifecycle", async () => {
-    await registerRun({
-      runId: "run-retired-generation-old",
-      childSessionKey: "agent:main:subagent:retired-generation",
-      task: "keep the current owner",
-    });
+    await registerNamedRun(
+      "run-retired-generation-old",
+      "retired-generation",
+      "keep the current owner",
+    );
 
     expect(
       await mod.replaceSubagentRunAfterSteerCore({
@@ -657,11 +587,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("preserves frozen completion as fallback when replacing for wake continuation", async () => {
-    await registerRun({
-      runId: "run-wake-old",
-      childSessionKey: "agent:main:subagent:wake",
-      task: "wake result fallback",
-    });
+    await registerNamedRun("run-wake-old", "wake", "wake result fallback");
 
     const previous = listMainRuns()[0];
     expect(previous?.runId).toBe("run-wake-old");
@@ -673,17 +599,11 @@ describe("subagent registry steer restarts", () => {
       };
     });
 
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
+    const run = await replaceRunAfterSteer({
       previousRunId: "run-wake-old",
       nextRunId: "run-wake-new",
       preserveFrozenResultFallback: true,
     });
-    expect(replaced).toBe(true);
-
-    const run = listMainRuns().find((entry) => entry.runId === "run-wake-new");
-    if (!run) {
-      throw new Error("expected wake replacement run");
-    }
     expect(run.completion?.resultText).toBeUndefined();
     expect(run.completion?.fallbackResultText).toBe("final summary before wake");
     expect(run.completion?.fallbackCapturedAt).toBe(1234);
@@ -700,11 +620,7 @@ describe("subagent registry steer restarts", () => {
       return "delivered";
     });
 
-    await registerRun({
-      runId: "run-parent",
-      childSessionKey: "agent:main:subagent:parent",
-      task: "parent task",
-    });
+    await registerNamedRun("run-parent", "parent", "parent task");
     await registerRun({
       runId: "run-child",
       childSessionKey: "agent:main:subagent:parent:subagent:child",
@@ -720,27 +636,17 @@ describe("subagent registry steer restarts", () => {
       emitLifecycleEnd("run-parent");
       await parentPublished;
       await settleRootWork(true);
-      const initialChildRunIds = announceSpy.mock.calls.map(
-        (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
-      );
-      expect(countMatching(initialChildRunIds, (id) => id === "run-parent")).toBe(1);
+      const announced = (id: string) =>
+        announceSpy.mock.calls.filter(
+          ([params]) => requireRecord(params, "announce params").childRunId === id,
+        );
+      expect(announced("run-parent")).toHaveLength(1);
 
       emitLifecycleEnd("run-child");
       await childPublished;
       await settleRootWork(true);
-      {
-        const childRunIds = announceSpy.mock.calls.map(
-          (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
-        );
-        expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
-        expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
-      }
-
-      const childRunIds = announceSpy.mock.calls.map(
-        (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
-      );
-      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
-      expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
+      expect(announced("run-parent")).toHaveLength(2);
+      expect(announced("run-child")).toHaveLength(1);
     } finally {
       await settleRootWork();
     }
