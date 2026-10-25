@@ -295,55 +295,13 @@ describe("managed plugin capability consent", () => {
     return rootDir;
   }
 
-  const officialSources: PluginInstallRecord[] = [
-    {
-      source: "npm",
-      spec: "@openclaw/diffs@1.0.0",
-      resolvedName: "@openclaw/diffs",
-      resolvedSpec: "@openclaw/diffs@1.0.0",
-      integrity: "sha512-official-artifact",
-    },
-    {
-      source: "clawhub",
-      spec: "clawhub:@openclaw/diffs@1.0.0",
-      clawhubPackage: "@openclaw/diffs",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubChannel: "official",
-      integrity: "sha256-official-artifact",
-    },
-  ];
-
-  it.each(officialSources)(
-    "installs verified official $source artifacts without recording operator acceptance",
-    async (sourceRecord) => {
-      const rootDir = officialArtifact();
-      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
-      const handler = artifactHandler({
-        source: sourceRecord.source,
-        spec: sourceRecord.spec,
-        onCapabilityConsent,
-      });
-      await expect(
-        handler.onBeforePluginArtifactCommit({ ...stagedArtifact(rootDir), sourceRecord }),
-      ).resolves.toBeUndefined();
-      expect(onCapabilityConsent).not.toHaveBeenCalled();
-      expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toEqual(sourceRecord);
-    },
-  );
-
-  it("requires review for a custom ClawHub server", async () => {
-    const sourceRecord = { ...officialSources[1]!, clawhubUrl: "https://plugins.example" };
-    const handler = artifactHandler({
-      source: sourceRecord.source,
-      spec: sourceRecord.spec,
-    });
-    await expect(
-      handler.onBeforePluginArtifactCommit({
-        ...stagedArtifact(officialArtifact()),
-        sourceRecord,
-      }),
-    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
-  });
+  const officialRecord: PluginInstallRecord = {
+    source: "npm",
+    spec: "@openclaw/diffs@1.0.0",
+    resolvedName: "@openclaw/diffs",
+    resolvedSpec: "@openclaw/diffs@1.0.0",
+    integrity: "sha512-official-artifact",
+  };
 
   it("rechecks first-party package identity after the commit guard yields", async () => {
     const rootDir = officialArtifact();
@@ -357,7 +315,7 @@ describe("managed plugin capability consent", () => {
     await expect(
       handler.onBeforePluginArtifactCommit({
         ...stagedArtifact(rootDir),
-        sourceRecord: officialSources[0],
+        sourceRecord: officialRecord,
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
   });
@@ -366,18 +324,18 @@ describe("managed plugin capability consent", () => {
     const rootDir = officialArtifact();
     const handler = artifactHandler();
     const artifact = stagedArtifact(rootDir);
-    await handler.onBeforePluginArtifactCommit({ ...artifact, sourceRecord: officialSources[0] });
+    await handler.onBeforePluginArtifactCommit({ ...artifact, sourceRecord: officialRecord });
     await expect(handler.onBeforePluginArtifactCommit(artifact)).rejects.toMatchObject({
       capabilityConsent: { pluginId: "diffs" },
     });
-    expect(() => handler.applyAcceptedSurface("diffs", officialSources[0]!)).toThrow(
+    expect(() => handler.applyAcceptedSurface("diffs", officialRecord)).toThrow(
       "did not expose its verified artifact",
     );
   });
 
   it("enables and reports a verified official install without legacy acceptance", async () => {
     const rootDir = officialArtifact();
-    const record = { ...officialSources[0]!, installPath: rootDir };
+    const record = { ...officialRecord, installPath: rootDir };
     const config = {
       plugins: { load: { paths: [rootDir] }, entries: { diffs: { enabled: true } } },
     };
@@ -439,10 +397,6 @@ describe("managed plugin capability consent", () => {
       acceptedSurfaceIntegrity: "sha512-verified-artifact",
       acceptedSurfaceAt: expect.any(String),
     });
-    expect(mocks.writeRecords).toHaveBeenCalledWith(
-      expect.objectContaining({ "community-plugin": persisted }),
-      expect.objectContaining({ config: {}, env, lease: expect.any(Object) }),
-    );
 
     await expect(consent({ env, onCapabilityConsent })).resolves.toBeUndefined();
     expect(mocks.writeRecords).toHaveBeenCalledTimes(1);

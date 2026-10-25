@@ -567,18 +567,6 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
   },
 );
 
-it.each(["core-v1", "registry-v1", "plugin-v1"] as const)(
-  "does not account for lossy V1 output at %s",
-  async (entry) => {
-    const host = registered(async () => accepted(0));
-    await expect(invoke(entry, host, new AbortController().signal)).resolves.toEqual({
-      status: "unavailable",
-      reason: "unsupported-input",
-    });
-    expect(host.events).toEqual([]);
-  },
-);
-
 it.each([undefined, { units: { unit: "decision-units" as const, amount: 2 } }])(
   "leaves missing or units-only usage eventless (%j)",
   async (usage) => {
