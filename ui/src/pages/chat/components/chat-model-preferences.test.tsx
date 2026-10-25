@@ -53,9 +53,9 @@ async function controls(overrides: Partial<Props>) {
   };
   const [current, setCurrent] = createSignal(props);
   const { container } = mountSolid(() => <ChatModelControls {...current()} />);
-  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
+  const query = <T extends HTMLElement = HTMLElement>(selector: string): T | null =>
     container.querySelector<T>(selector);
-  const required = <T extends HTMLElement = HTMLElement>(selector: string) =>
+  const required = <T extends HTMLElement = HTMLElement>(selector: string): T =>
     expectDefined(query<T>(selector), selector);
   const picker = required<HTMLDetailsElement>(".chat-controls__effort-picker");
   picker.open = true;

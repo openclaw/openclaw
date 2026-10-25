@@ -97,12 +97,11 @@ it.each([false, true])(
     }
     const panel = vi.fn();
     onTestFinished(listen(window, BROWSER_PANEL_TOGGLE_EVENT, panel));
-    onTestFinished(
-      startNativeLinkRouting({
-        shouldOpenExternally,
-        shouldOpenInControlUiBrowser: () => true,
-      }).dispose,
-    );
+    const nativeRouting = startNativeLinkRouting({
+      shouldOpenExternally,
+      shouldOpenInControlUiBrowser: () => true,
+    });
+    onTestFinished(() => nativeRouting.dispose());
 
     expect(click()).toBe(!native);
     expect(accept).not.toHaveBeenCalled();
