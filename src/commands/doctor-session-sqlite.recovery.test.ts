@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore as upsertEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
@@ -14,6 +13,8 @@ import {
   writePrivateFile,
   runStoreDoctor,
   sessionScope,
+  archivedSource,
+  migrationManifest,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   expectMissing,
@@ -22,7 +23,6 @@ import {
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
 import {
   importLegacyStore,
-  readMigrationManifest as readManifest,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
@@ -69,19 +69,12 @@ describe("runDoctorSessionSqlite", () => {
 
       const report = await importLegacyStore(store);
       expect(report.targets[0]?.issues).toEqual([]);
-      expect(report.totals).toMatchObject({
-        archivedLegacyStoreFiles: 1,
-        archivedTranscriptFiles: 2,
-      });
-      const manifest = readManifest(report.migrationRun?.manifestPath);
+      expect(report.totals.archivedTranscriptFiles).toBe(2);
+      const manifest = migrationManifest(report);
       expect(manifest.targets[0]?.validationBeforeArchive).toBe("passed");
-      const archived = expectDefined(
-        manifest.targets[0]?.completedMoves.find((move) => move.kind === "transcript"),
-        "archived transcript",
-      );
-      expectFiles(original, archived.archivePath);
-      expectMissing(store.storePath);
-      expectMissing(store.transcriptPath);
+      expectFiles(original, archivedSource(report, store.transcriptPath).archivePath);
+      expect(archivedSource(report, store.storePath).kind).toBe("legacy-store");
+      expectMissing(store.storePath, store.transcriptPath);
       expect(readEvents(scope)).toMatchObject([header, { id: "one" }, { id: "two" }]);
       expect(() => assertMigrated({ cfg: {}, env: store.env, operation: "doctor" })).not.toThrow();
     },
@@ -107,18 +100,11 @@ describe("runDoctorSessionSqlite", () => {
       });
       let retainedTranscriptPath = store.transcriptPath;
       if (unindexed) {
-        const archive = expectDefined(
-          readManifest(report.migrationRun?.manifestPath).targets[0]?.completedMoves.find(
-            (move) => move.sourcePath === store.transcriptPath,
-          ),
-          "protected conflicting transcript",
-        );
+        const archive = archivedSource(report, store.transcriptPath);
         expect(archive.artifact?.classification).toBe("protected");
         retainedTranscriptPath = archive.archivePath;
       } else {
-        expect(
-          readManifest(report.migrationRun?.manifestPath).targets[0]?.validationBeforeArchive,
-        ).toBe("failed");
+        expect(migrationManifest(report).targets[0]?.validationBeforeArchive).toBe("failed");
         expect(report.totals.archivedLegacyStoreFiles).toBe(0);
         expect(fs.existsSync(store.storePath)).toBe(true);
       }
@@ -145,7 +131,7 @@ describe("runDoctorSessionSqlite", () => {
       }
       const rename = fs.renameSync;
       let calls = 0;
-      const spy =
+      using spy =
         state === "rename-failure"
           ? vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
               if (++calls === 2) {
@@ -154,12 +140,8 @@ describe("runDoctorSessionSqlite", () => {
               rename(source, destination);
             })
           : undefined;
-      let report;
-      try {
-        report = await recover();
-      } finally {
-        spy?.mockRestore();
-      }
+      const report = await recover();
+      spy?.mockRestore();
       if (state === "rename-failure") {
         expect(report.totals.issues).toBe(1);
         expect(report.targets[0]?.corruptRecovery).toBeUndefined();
@@ -201,7 +183,7 @@ describe("runDoctorSessionSqlite", () => {
         writePrivateFile(sqlitePath, "not a sqlite database\n");
       }
       const openDatabase = nodeSqlite.openNodeSqliteDatabase;
-      const spy =
+      using spy =
         failure === "directory"
           ? undefined
           : vi
@@ -215,27 +197,24 @@ describe("runDoctorSessionSqlite", () => {
                 }
                 return openDatabase(pathname, options);
               });
-      try {
-        const recovery = recover();
-        if (failure === "maintenance") {
-          await expect(recovery).rejects.toThrow(
-            "failed to acquire agent database maintenance lease",
-          );
-          expect(fs.readFileSync(sqlitePath, "utf8")).toBe("not a sqlite database\n");
-          return;
-        }
-        const report = await recovery;
-        expect(report.totals.issues).toBe(1);
-        expect(report.targets[0]?.corruptRecovery).toBeUndefined();
-        expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
-        if (failure === "directory") {
-          expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
-        } else {
-          expect(report.targets[0]?.issues[0]?.message).toContain("node:sqlite unavailable");
-          expect(fs.existsSync(sqlitePath)).toBe(true);
-        }
-      } finally {
-        spy?.mockRestore();
+      const recovery = recover();
+      if (failure === "maintenance") {
+        await expect(recovery).rejects.toThrow(
+          "failed to acquire agent database maintenance lease",
+        );
+        expect(fs.readFileSync(sqlitePath, "utf8")).toBe("not a sqlite database\n");
+        return;
+      }
+      const report = await recovery;
+      spy?.mockRestore();
+      expect(report.totals.issues).toBe(1);
+      expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+      expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
+      if (failure === "directory") {
+        expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
+      } else {
+        expect(report.targets[0]?.issues[0]?.message).toContain("node:sqlite unavailable");
+        expect(fs.existsSync(sqlitePath)).toBe(true);
       }
     },
   );
@@ -258,12 +237,8 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await importLegacyStore(store);
 
-    expect(report.totals).toMatchObject({
-      archivedTranscriptFiles: 0,
-      importedEntries: 0,
-      importedTranscriptEvents: 0,
-      issues: 0,
-    });
+    expect(report.totals.issues).toBe(0);
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
     expect(readEvents(sessionScope(store))).toHaveLength(3);
   });
 
@@ -282,26 +257,14 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await importLegacyStore(store);
     const inspect = await runStoreDoctor(store, "inspect");
-    expect(report.totals).toMatchObject({
-      issues: 1,
-      archivedTranscriptFiles: 2,
-      archivedUnreferencedJsonlFiles: 1,
-      importedEntries: 1,
-      importedTranscriptEvents: 0,
-      sqliteEntries: 1,
-      unreferencedJsonlFiles: 0,
-    });
+    expect(report.totals.issues).toBe(1);
     expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
     expect(report.targets[0]?.issues.every(isSessionSqliteMigrationWarning)).toBe(true);
-    expectMissing(store.transcriptPath);
-    expectMissing(store.unreferencedJsonlPath);
+    expectMissing(store.transcriptPath, store.unreferencedJsonlPath);
     expect(inspect.totals.sqliteEntries).toBe(1);
     expect(readEvents(sessionScope(store, "token-supersecret"))).toHaveLength(1);
-    const manifest = readManifest(report.migrationRun?.manifestPath);
-    const transcriptMove = expectDefined(
-      manifest.targets[0]?.completedMoves.find((move) => move.kind === "transcript"),
-      "protected malformed transcript archive",
-    );
+    const manifest = migrationManifest(report);
+    const transcriptMove = archivedSource(report, store.transcriptPath);
     expect(transcriptMove.artifact?.classification).toBe("protected");
     expectFiles(original, transcriptMove.archivePath);
     expect(

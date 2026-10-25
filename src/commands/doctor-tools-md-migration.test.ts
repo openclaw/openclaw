@@ -74,6 +74,10 @@ function expectSuccess(result: Awaited<ReturnType<typeof maybeMigrateToolsMd>>) 
   expect(result).toEqual({ warnings: [], changes: [expect.any(String)] });
 }
 
+function expectBlocked(result: Awaited<ReturnType<typeof maybeMigrateToolsMd>>, warning: string) {
+  expect(result).toEqual({ changes: [], warnings: [expect.stringContaining(warning)] });
+}
+
 async function expectMigrated(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   expected: string,
@@ -110,10 +114,7 @@ describe("TOOLS.md migration", () => {
   it("refuses to migrate a TOOLS.md whose bytes are not valid UTF-8", async () => {
     const toolsBytes = Buffer.from([0xff, 0xfe]);
     const fixture = await createFixture(DEFAULT_AGENTS, toolsBytes);
-    expect(await fixture.migrate()).toEqual({
-      changes: [],
-      warnings: [expect.stringContaining("is not valid UTF-8")],
-    });
+    expectBlocked(await fixture.migrate(), "is not valid UTF-8");
     await expectUnchanged(fixture, DEFAULT_AGENTS, toolsBytes);
     await expectMissing(path.join(fixture.stateDir, "backups", "tools-md-migration"));
   });
@@ -167,8 +168,7 @@ describe("TOOLS.md migration", () => {
       },
     });
     expect(child.code, child.stderr).toBe(0);
-    const result = JSON.parse(child.stdout);
-    expectSuccess(result);
+    expectSuccess(JSON.parse(child.stdout));
     await expectMigrated(fixture, expected, tools);
     if (process.platform !== "win32") {
       expect((await fs.stat(fixture.workspace)).mode & 0o777).toBe(0o751);
@@ -227,8 +227,7 @@ describe("TOOLS.md migration", () => {
       }
       return handle;
     });
-    const result = await fixture.migrate();
-    expect(result).toEqual({ changes: [], warnings: [expect.stringContaining(warning)] });
+    expectBlocked(await fixture.migrate(), warning);
     expect(sourceTightened).toBe(mode === 0o640);
     expect(grantedGroupRead).toBe(false);
     await expectUnchanged(fixture, DEFAULT_AGENTS, tools);
@@ -245,8 +244,7 @@ describe("TOOLS.md migration", () => {
     if (process.platform !== "win32") {
       await fs.chmod(fixture.toolsPath, 0o600);
     }
-    const result = await fixture.migrate();
-    expectSuccess(result);
+    expectSuccess(await fixture.migrate());
     await expectMigrated(
       fixture,
       `## Tools\n\n### Local notes (migrated from TOOLS.md)\n\n${tools}`,
@@ -274,8 +272,7 @@ describe("TOOLS.md migration", () => {
         message: `Agent "limited" TOOLS.md migration will produce a ${merged.length}-character AGENTS.md, exceeding its configured bootstrapMaxChars limit of 20000. Raise \`agents.entries.*.bootstrapMaxChars\` for this agent, or \`agents.defaults.bootstrapMaxChars\` as fallback, to preserve all migrated instructions.`,
       }),
     ]);
-    const result = await fixture.migrate();
-    expect(result).toMatchObject({ changes: [expect.any(String)], warnings: [] });
+    expectSuccess(await fixture.migrate());
     await expectMigrated(fixture, merged, tools);
   });
   it("rewrites the lesson reminder without leaving a TOOLS.md directive", async () => {
@@ -304,11 +301,7 @@ describe("TOOLS.md migration", () => {
       } else {
         await fs.link(linkedTarget, linkedFixture.agentsPath);
       }
-      const linkedResult = await linkedFixture.migrate();
-      expect(linkedResult).toEqual({
-        changes: [],
-        warnings: [expect.stringContaining("AGENTS.md must be an unlinked regular file")],
-      });
+      expectBlocked(await linkedFixture.migrate(), "AGENTS.md must be an unlinked regular file");
       await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe(
         "Local tool notes.\n",
       );

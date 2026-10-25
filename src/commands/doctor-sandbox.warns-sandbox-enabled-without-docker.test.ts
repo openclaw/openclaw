@@ -143,10 +143,7 @@ describe("sandbox health", () => {
     ["Codex", "user", "bwrap: setting up uid map: Permission denied"],
   ] as const)("reports %s %s namespace failures", async (stage, kind, denial) => {
     if (stage === "unshare") {
-      runExec.mockImplementation(async (command: string, args: string[]) => {
-        if (command === "docker" && args[0] === "version") {
-          return { stdout: "24.0.0", stderr: "" };
-        }
+      runExec.mockImplementation(async (command: string) => {
         if (command === "unshare") {
           throw Object.assign(new Error("unshare failed"), { stderr: denial });
         }
@@ -170,65 +167,52 @@ describe("sandbox health", () => {
     }
   });
 
-  it.each(["inconclusive", "unavailable", "older"] as const)(
-    "reports %s probes as unverified without diagnosing namespace policy",
-    async (scenario) => {
-      const reason = {
-        inconclusive: "Codex sandbox probe timed out.",
-        unavailable: "The selected Codex health API could not be loaded.",
-        older: "The selected Codex plugin does not provide a workspace-write sandbox check.",
-      }[scenario];
-      if (scenario === "unavailable") {
-        resolveCodexHealthApi.mockReturnValue({
-          status: "unavailable",
-          reason,
-          reportAvailability: true,
-        });
-      } else if (scenario === "older") {
-        resolveCodexHealthApi.mockReturnValue({ status: "available", api: {} });
-      }
+  it.each([
+    ["inconclusive", "Codex sandbox probe timed out."],
+    ["unavailable", "The selected Codex health API could not be loaded."],
+    ["older", "The selected Codex plugin does not provide a workspace-write sandbox check."],
+    ["not-configured", undefined],
+    ["ok", undefined],
+    ["skipped", undefined],
+    ["egress-enabled", undefined],
+  ] as const)("reports a %s Codex probe", async (scenario, reason) => {
+    if (scenario === "unavailable") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario, reason, reportAvailability: true });
+    } else if (scenario === "older") {
+      resolveCodexHealthApi.mockReturnValue({ status: "available", api: {} });
+    } else if (scenario === "not-configured") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario });
+    } else if (scenario === "inconclusive" || scenario === "skipped") {
       probeCodexWorkspaceWriteSandbox.mockResolvedValue({
-        status: "inconclusive",
+        status: scenario,
         command: codexSandboxCommand,
-        reason,
+        reason: reason ?? "A remote Codex transport is configured.",
       });
-      await probeOnLinux();
-      const message = note.mock.calls[0]![0];
-      expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
-      expect(message).toContain(`Check result: ${reason}`);
-      expect(message).not.toContain("namespace check failed");
-      expect(message).not.toContain("AppArmor");
-      if (scenario === "inconclusive") {
-        expect(message).toContain(`Check command: ${codexSandboxCommand}`);
-      } else {
-        expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["not-configured", "ok", "skipped", "egress-enabled"] as const)(
-    "does not emit a network note for a %s Codex sandbox probe",
-    async (status) => {
-      if (status === "not-configured") {
-        resolveCodexHealthApi.mockReturnValue({ status });
-      } else if (status === "skipped") {
-        probeCodexWorkspaceWriteSandbox.mockResolvedValue({
-          status,
-          reason: "A remote Codex transport is configured.",
-        });
-      }
-      await probeOnLinux(
-        createSandboxConfig("all", status === "egress-enabled" ? "bridge" : undefined),
-      );
+    }
+    await probeOnLinux(
+      createSandboxConfig("all", scenario === "egress-enabled" ? "bridge" : undefined),
+    );
+    if (!reason) {
       expect(note).not.toHaveBeenCalled();
-      if (status === "not-configured" || status === "egress-enabled") {
+      if (scenario === "not-configured" || scenario === "egress-enabled") {
         expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
       }
-      if (status === "egress-enabled") {
+      if (scenario === "egress-enabled") {
         expect(resolveCodexHealthApi).not.toHaveBeenCalled();
       }
-    },
-  );
+      return;
+    }
+    const message = note.mock.calls[0]![0];
+    expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
+    expect(message).toContain(`Check result: ${reason}`);
+    expect(message).not.toContain("namespace check failed");
+    expect(message).not.toContain("AppArmor");
+    if (scenario === "inconclusive") {
+      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
+    } else {
+      expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    }
+  });
 
   describe("sandbox setup script execution", () => {
     const dirs = useAutoCleanupTempDirTracker(afterEach);

@@ -6,12 +6,11 @@ import {
   readRuntimeConfig,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
-import { createStatusScanResultFixture } from "./status.test-support.ts";
+import { createStatusScanResultFixture as createScan } from "./status.test-support.ts";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const backup = {
@@ -39,7 +38,6 @@ const unavailableDatabases = {
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
-  writeRuntimeJson: vi.fn((_runtime: RuntimeEnv, _output: Record<string, unknown>) => {}),
   readBackupRunFreshness: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
@@ -48,10 +46,6 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: Fixed scan facts keep output composition independent of live Gateway collection.
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
-  writeRuntimeJson: mocks.writeRuntimeJson,
-}));
 vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
   readUpdateRunStatus: async () => ({}),
@@ -80,19 +74,14 @@ vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusUsageSummary: mocks.resolveStatusUsageSummary,
 }));
 
-function createScan() {
-  return createStatusScanResultFixture({
-    env: { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" },
-  });
-}
-
 async function runJson(
   scan: StatusJsonScanResult,
   opts: Parameters<typeof runStatusJsonCommand>[0]["opts"],
-) {
+): Promise<Record<string, unknown>> {
   mocks.scanStatusJsonFast.mockResolvedValueOnce(scan);
-  await runStatusJsonCommand({ opts, runtime: createTestRuntime() });
-  return expectDefined(mocks.writeRuntimeJson.mock.lastCall, "status JSON output")[1];
+  const runtime = createTestRuntime();
+  await runStatusJsonCommand({ opts, runtime });
+  return JSON.parse(String(expectDefined(runtime.log.mock.lastCall, "status JSON output")[0]));
 }
 
 describe("runStatusJsonCommand", () => {

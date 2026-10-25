@@ -222,56 +222,53 @@ it.each(["duplicate ids", "whole-entry include"])(
     }),
 );
 
-it.each([
-  ["$${DOCTOR_MEMORY_KEY}", "auto", undefined],
-  ["${DOCTOR_MEMORY_KEY}", "${DOCTOR_MEMORY_PROVIDER}", undefined],
-  ["${DOCTOR_MEMORY_KEY}", "auto", "${DOCTOR_CANONICAL_MEMORY_KEY}"],
-] satisfies Array<[string, string, string | undefined]>)(
-  "preserves migrated %s references while canonicalizing %s with canonical key %s",
-  (apiKey, provider, canonicalApiKey) =>
-    withCoreHome(async (home) => {
-      await withEnvAsync(memoryEnv(), async () => {
-        const expectedKey = apiKey.startsWith("$$")
-          ? "${DOCTOR_MEMORY_KEY}"
-          : `${canonicalApiKey ? "canonical" : "memory"}-secret-canary`;
-        const rotatedKey = apiKey.startsWith("$$") ? expectedKey : `rotated-${expectedKey}`;
-        const remote = canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {};
-        const configPath = await writeCoreConfig(home, {
-          memory: { search: search(false, 9, remote) },
-          agents: {
-            defaults: {
-              memorySearch: search(true, 7, { provider, remote: { apiKey } }),
-            },
-            entries: {
-              ops: {
-                memorySearch: { ...search(true, 3), provider: "auto" },
-                memory: { search: search(false, 5) },
-              },
+it("preserves the canonical memory reference over migrated defaults through environment rotation", () =>
+  withCoreHome(async (home) => {
+    // Normal/escaped migrated refs: automatic-config-repair.test.ts and config-flow-steps.references.test.ts.
+    await withEnvAsync(memoryEnv(), async () => {
+      const apiKey = "${DOCTOR_MEMORY_KEY}";
+      const canonicalApiKey = "${DOCTOR_CANONICAL_MEMORY_KEY}";
+      const configPath = await writeCoreConfig(home, {
+        memory: { search: search(false, 9, { remote: { apiKey: canonicalApiKey } }) },
+        agents: {
+          defaults: {
+            memorySearch: search(true, 7, {
+              provider: "${DOCTOR_MEMORY_PROVIDER}",
+              remote: { apiKey },
+            }),
+          },
+          entries: {
+            ops: {
+              memorySearch: search(true, 3, { provider: "auto" }),
+              memory: { search: search(false, 5) },
             },
           },
-        });
-        await using ctx = await prepareDoctorContext(configPath);
-        await withEnvAsync(memoryEnv("rotated-"), async () => {
-          await runInitialConfigWriteHealth(ctx);
-          const snapshot = await readConfigFileSnapshot();
-          expect(snapshot.valid).toBe(true);
-          expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(rotatedKey);
-        });
-        expect(ctx.configWriteRefusal).toBeUndefined();
-        expect(ctx.configResult.cfg.memory?.search?.remote?.apiKey).toBe(expectedKey);
-        const saved = JSON.parse(await read(configPath));
-        expect(saved.memory.search).toEqual(
-          search(false, 9, { provider: "openai", remote: { apiKey: canonicalApiKey ?? apiKey } }),
-        );
-        expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
-        const ops = saved.agents.entries.ops;
-        expect(ops.memory.search).toEqual(search(false, 5, { provider: "openai" }));
-        expect(ops).not.toHaveProperty("memorySearch");
-        expect((await readConfigFileSnapshot()).valid).toBe(true);
-        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        },
       });
-    }),
-);
+      await using ctx = await prepareDoctorContext(configPath);
+      await withEnvAsync(memoryEnv("rotated-"), async () => {
+        await runInitialConfigWriteHealth(ctx);
+        const snapshot = await readConfigFileSnapshot();
+        expect(snapshot.valid).toBe(true);
+        expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
+          "rotated-canonical-secret-canary",
+        );
+      });
+      expect(ctx.configWriteRefusal).toBeUndefined();
+      expect(ctx.configResult.cfg.memory?.search?.remote?.apiKey).toBe("canonical-secret-canary");
+      const saved = JSON.parse(await read(configPath));
+      expect(saved.memory.search).toEqual(
+        search(false, 9, { provider: "openai", remote: { apiKey: canonicalApiKey } }),
+      );
+      expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
+      expect(saved.agents.entries.ops.memory.search).toEqual(
+        search(false, 5, { provider: "openai" }),
+      );
+      expect(saved.agents.entries.ops).not.toHaveProperty("memorySearch");
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
+      expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+    });
+  }));
 
 it.each([undefined, true, false])(
   "preserves message bypass inheritance and precedence with explicit root denial %s",

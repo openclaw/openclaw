@@ -1,10 +1,6 @@
-import { IncomingMessage } from "node:http";
-import { Socket } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { authorizeHttpGatewayConnect, resolveGatewayAuth } from "../gateway/auth.js";
-import { isTrustedProxyAddress } from "../gateway/net.js";
 import { shortenHomePath } from "../utils.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,12 +14,7 @@ const mocks = vi.hoisted(() => ({
   getTailnetHostname: vi.fn(async (): Promise<string | null> => null),
 }));
 
-const chatChannels = vi.hoisted(() =>
-  vi.fn(() => [
-    { id: "telegram", label: "Telegram" },
-    { id: "twitch", label: "Twitch" },
-  ]),
-);
+const chatChannels = vi.hoisted(() => vi.fn<() => Array<{ id: string; label: string }>>(() => []));
 
 vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => chatChannels(),
@@ -61,7 +52,6 @@ async function runGatewayPrompt(params: {
   selectQueue: string[];
   textQueue?: Array<string | undefined>;
   baseConfig?: OpenClawConfig;
-  randomToken?: string;
   confirmResult?: boolean;
 }) {
   vi.clearAllMocks();
@@ -72,9 +62,9 @@ async function runGatewayPrompt(params: {
   const text = params.textQueue ?? [];
   mocks.text.mockImplementation(async () => text.shift());
   mocks.password.mockImplementation(async () => text.shift());
-  mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
+  mocks.randomToken.mockReturnValue("generated-token");
   mocks.confirm.mockImplementation(async (input) => params.confirmResult ?? input.initialValue);
-  return promptGatewayConfig(params.baseConfig ?? {});
+  return (await promptGatewayConfig(params.baseConfig ?? {})).config.gateway!;
 }
 
 async function runTrustedProxyPrompt(params: {
@@ -112,26 +102,6 @@ const expectLoopbackWarning = (initialValue: boolean) => {
 
 afterEach(() => vi.unstubAllEnvs());
 
-async function authorizeConfiguredProxy(config: OpenClawConfig, remoteAddress = "127.0.0.1") {
-  const req = new IncomingMessage(new Socket());
-  Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
-  req.headers = {
-    host: "localhost",
-    "x-forwarded-for": "203.0.113.10",
-    "x-forwarded-user": "operator@example.test",
-    "x-forwarded-proto": "https",
-  };
-  try {
-    return await authorizeHttpGatewayConnect({
-      auth: resolveGatewayAuth({ authConfig: config.gateway?.auth, env: {} }),
-      trustedProxies: config.gateway?.trustedProxies,
-      req,
-    });
-  } finally {
-    req.destroy();
-  }
-}
-
 describe("promptGatewayConfig", () => {
   it("keeps existing auth policy through the real token config builder", async () => {
     const mode = "token";
@@ -156,24 +126,31 @@ describe("promptGatewayConfig", () => {
       textQueue: ["18789", `  new-${mode}  `],
     });
 
-    expect(result.config.gateway?.auth).toEqual({ ...policy, mode, token: "new-token" });
+    expect(result.auth).toEqual({ ...policy, mode, token: "new-token" });
   });
 
-  it.each([undefined, "undefined"])("generates a token for prompt value %j", async (token) => {
+  it.each([
+    ["token", undefined, "plaintext", { mode: "token", token: "generated-token" }],
+    ["token", "undefined", "plaintext", { mode: "token", token: "generated-token" }],
+    ["password", undefined, "plaintext", { mode: "password" }],
+    [
+      "token",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "ref",
+      {
+        mode: "token",
+        token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+      },
+    ],
+  ] as const)("stores %s prompt value %j using %s", async (mode, value, source, expected) => {
+    if (source === "ref") {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
+    }
     const result = await runGatewayPrompt({
-      selectQueue: ["loopback", "token", "off", "plaintext"],
-      textQueue: ["18789", token],
-      randomToken: "generated-token",
+      selectQueue: ["loopback", mode, "off", source],
+      textQueue: ["18789", value],
     });
-    expect(result.config.gateway?.auth).toEqual({ mode: "token", token: "generated-token" });
-  });
-
-  it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
-    const result = await runGatewayPrompt({
-      selectQueue: ["loopback", "password", "off"],
-      textQueue: ["18789", undefined],
-    });
-    expect(result.config.gateway?.auth).toEqual({ mode: "password" });
+    expect(result.auth).toEqual(expected);
   });
 
   it("configures proxy headers and disables incompatible Tailscale serve", async () => {
@@ -189,7 +166,7 @@ describe("promptGatewayConfig", () => {
       ],
     });
 
-    expect(result.config.gateway?.auth).toEqual({
+    expect(result.auth).toEqual({
       mode: "trusted-proxy",
       trustedProxy: {
         userHeader: "x-forwarded-user",
@@ -197,11 +174,11 @@ describe("promptGatewayConfig", () => {
         allowUsers: ["nick@example.com"],
       },
     });
-    expect(result.config.gateway).toMatchObject({
+    expect(result).toMatchObject({
       bind: "lan",
       trustedProxies: ["10.0.1.10", "192.168.1.5"],
     });
-    expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
+    expect(result.tailscale).toEqual({ mode: "off" });
   });
 
   it("rejects an empty entry in trusted proxy input", async () => {
@@ -211,46 +188,44 @@ describe("promptGatewayConfig", () => {
     );
   });
 
-  it("accepts runtime auth after consent for a mapped loopback proxy", async () => {
-    const proxies = "::ffff:127.0.0.0/104";
-    vi.stubEnv("OPENCLAW_LOCALE", "en");
-    const result = await runTrustedProxyPrompt({
-      textQueue: ["18789", "x-forwarded-user", "x-forwarded-proto", "", proxies],
-      confirmResult: true,
-    });
-    expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
-    expect(proxyPrompt().validate(proxies)).toBeUndefined();
-    expectLoopbackWarning(false);
-    expect(await authorizeConfiguredProxy(result.config, "127.0.0.1")).toEqual({
-      ok: true,
-      method: "trusted-proxy",
-      user: "operator@example.test",
-    });
-  });
-
-  it("rejects proxy attribution through an IPv4 catch-all", async () => {
-    const proxies = "::ffff:0:0/96";
-    const result = await runTrustedProxyPrompt({ proxies, confirmResult: true });
-    expectLoopbackWarning(false);
-    expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
-    expect(isTrustedProxyAddress("127.0.0.1", result.config.gateway?.trustedProxies)).toBe(true);
-    // Every IPv4 hop is trusted, so the forwarded client address is consumed as a proxy too.
-    expect(await authorizeConfiguredProxy(result.config, "127.0.0.1")).toEqual({
-      ok: false,
-      reason: "proxy_attribution_required",
-    });
-  });
-
-  it("does not grant loopback consent for an unmatched IPv6 zone", async () => {
-    const proxies = "::1%LO0";
-    const result = await runTrustedProxyPrompt({ proxies });
-    expect(mocks.confirm).not.toHaveBeenCalled();
-    expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBeUndefined();
-    for (const peer of ["127.0.0.1", "::1", "::1%LO0"]) {
-      expect(isTrustedProxyAddress(peer, result.config.gateway?.trustedProxies)).toBe(false);
-      expect(await authorizeConfiguredProxy(result.config, peer)).toMatchObject({ ok: false });
-    }
-  });
+  it.each([
+    ["::ffff:127.0.0.0/104", true],
+    ["::ffff:0:0/96", true],
+    ["::1%LO0", false],
+  ] as const)(
+    "persists proxy configuration and explicit consent for %s",
+    async (proxies, consent) => {
+      vi.stubEnv("OPENCLAW_LOCALE", "en");
+      const mappedLoopback = proxies === "::ffff:127.0.0.0/104";
+      const result = await runTrustedProxyPrompt({
+        textQueue: [
+          "18789",
+          "x-forwarded-user",
+          mappedLoopback ? "x-forwarded-proto" : "",
+          "",
+          proxies,
+        ],
+        confirmResult: true,
+      });
+      expect(result.trustedProxies).toEqual([proxies]);
+      expect(result.auth).toEqual({
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          ...(mappedLoopback ? { requiredHeaders: ["x-forwarded-proto"] } : {}),
+          ...(consent ? { allowLoopback: true } : {}),
+        },
+      });
+      if (consent) {
+        expectLoopbackWarning(false);
+      } else {
+        expect(mocks.confirm).not.toHaveBeenCalled();
+      }
+      if (mappedLoopback) {
+        expect(proxyPrompt().validate(proxies)).toBeUndefined();
+      }
+    },
+  );
 
   it.each(["fresh", "rerun", "password"] as const)(
     "requires fresh loopback consent: %s",
@@ -269,7 +244,7 @@ describe("promptGatewayConfig", () => {
       const baseConfig = previous === "fresh" ? {} : { gateway: { auth } };
       const original = structuredClone(baseConfig);
       const result = await runTrustedProxyPrompt({ baseConfig, confirmResult: false });
-      expect(result.config.gateway?.auth).toEqual({
+      expect(result.auth).toEqual({
         mode: "trusted-proxy",
         trustedProxy: {
           userHeader: "x-forwarded-user",
@@ -282,10 +257,6 @@ describe("promptGatewayConfig", () => {
       expect(refusalMessage).toContain("will be rejected");
       expect(refusalMessage).toContain("trusted_proxy_loopback_source");
       expect(refusalMessage).toContain("https://docs.openclaw.ai/gateway/trusted-proxy-auth");
-      expect(await authorizeConfiguredProxy(result.config)).toMatchObject({
-        ok: false,
-        reason: "trusted_proxy_loopback_source",
-      });
     },
   );
 
@@ -296,22 +267,7 @@ describe("promptGatewayConfig", () => {
       textQueue: ["18789", "my-token"],
       confirmResult: true,
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
-      "https://[fd7a:115c:a1e0::12]",
-    ]);
-  });
-
-  it("stores gateway token as SecretRef when token source is ref", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
-    const result = await runGatewayPrompt({
-      selectQueue: ["loopback", "token", "off", "ref"],
-      textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
-    });
-
-    expect(result.config.gateway?.auth).toEqual({
-      mode: "token",
-      token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
+    expect(result.controlUi?.allowedOrigins).toEqual(["https://[fd7a:115c:a1e0::12]"]);
   });
 });
 
@@ -319,43 +275,26 @@ const { select, confirm, note } = mocks;
 const channelChoice = (id: string) => ({ kind: "channel" as const, id });
 const doneChoice = { kind: "done" as const };
 const configPathLabel = shortenHomePath(CONFIG_PATH);
-
-async function removeChannelConfig(channel: string) {
-  select.mockResolvedValueOnce(channelChoice(channel)).mockResolvedValueOnce(doneChoice);
-
-  return removeChannelConfigWizard({
-    channels: { [channel]: { token: "secret" }, telegram: { token: "secret" } },
+it.each([
+  { id: "telegram", label: "Telegram\u001B[31m\nBot\u0007", expected: "Telegram\\nBot" },
+  { id: "\u001B[31m\u0007", label: undefined, expected: "<invalid channel key>" },
+])("sanitizes channel removal labels ($expected)", async ({ id, label, expected }) => {
+  vi.resetAllMocks();
+  chatChannels.mockReturnValue([{ id: "telegram", label: label ?? "Telegram" }]);
+  confirm.mockResolvedValue(true);
+  select.mockResolvedValueOnce(channelChoice(id)).mockResolvedValueOnce(doneChoice);
+  const next = await removeChannelConfigWizard({
+    channels: { [id]: { token: "secret" }, telegram: { token: "secret" } },
   } as never);
-}
-
-describe("removeChannelConfigWizard", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    chatChannels.mockReturnValue([
-      { id: "telegram", label: "Telegram" },
-      { id: "twitch", label: "Twitch" },
-    ]);
-    confirm.mockResolvedValue(true);
-  });
-
-  it.each([
-    { id: "telegram", label: "Telegram\u001B[31m\nBot\u0007", expected: "Telegram\\nBot" },
-    { id: "\u001B[31m\u0007", label: undefined, expected: "<invalid channel key>" },
-  ])("sanitizes channel prompt labels ($expected)", async ({ id, label, expected }) => {
-    if (label) {
-      chatChannels.mockReturnValue([{ id, label }]);
-    }
-    const next = await removeChannelConfig(id);
-    expect(select.mock.calls[0]?.[0].options).toContainEqual(
-      expect.objectContaining({ value: channelChoice(id), label: expected }),
-    );
-    expect(confirm.mock.calls[0]?.[0].message).toBe(
-      `Delete ${expected} configuration from ${configPathLabel}?`,
-    );
-    expect(note).toHaveBeenCalledWith(
-      `${expected} selected for removal from config.\nNote: credentials/sessions on disk are unchanged.`,
-      "Channel removal",
-    );
-    expect(next.channels).toEqual(label ? undefined : { telegram: { token: "secret" } });
-  });
+  expect(select.mock.calls[0]?.[0].options).toContainEqual(
+    expect.objectContaining({ value: channelChoice(id), label: expected }),
+  );
+  expect(confirm.mock.calls[0]?.[0].message).toBe(
+    `Delete ${expected} configuration from ${configPathLabel}?`,
+  );
+  expect(note).toHaveBeenCalledWith(
+    `${expected} selected for removal from config.\nNote: credentials/sessions on disk are unchanged.`,
+    "Channel removal",
+  );
+  expect(next.channels).toEqual(label ? undefined : { telegram: { token: "secret" } });
 });

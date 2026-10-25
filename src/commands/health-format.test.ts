@@ -50,35 +50,26 @@ it.each([
   },
 );
 
-describe("health failure diagnostic redaction", () => {
-  it.each([false, true])("keeps built-in and custom masking with rich=%s", (rich) => {
+it.each([false, true])(
+  "redacts diagnostic values before and after normalization (rich=%s)",
+  (rich) => {
     vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
       redactPatterns: ["deploymentMask9X"],
     });
-    const output = stripAnsi(
-      formatHealthCheckFailure(new Error("remote password=mockPass7X deploymentMask9X visible"), {
-        rich,
-      }),
-    );
-    expect(output).toBe(
-      `Health check failed: ${rich ? "" : "Error: "}remote password=*** *** visible`,
-    );
-  });
-
-  it.each([false, true])("masks complete and normalized registered values with rich=%s", (rich) => {
     for (const [registered, message] of [
+      [undefined, new Error("remote password=mockPass7X deploymentMask9X visible")],
       ["proofSecr9X", "remote proofSecr9X visible"],
       ["proofSecr9X", "remote proofSe\u001b[31mcr9X visible"],
       ["lineA9\nlineB7", "remote lineA9\nlineB7 visible"],
     ] as const) {
-      registerSecretValueForRedaction(registered);
-      const output = stripAnsi(formatHealthCheckFailure(message, { rich }));
-      expect(output).toContain("remote");
-      expect(output).toContain("visible");
-      for (const part of registered.split("\n")) {
-        expect(output).not.toContain(part);
+      if (registered) {
+        registerSecretValueForRedaction(registered);
       }
-      expect(output).toContain("***");
+      const detail = registered ? "remote *** visible" : "remote password=*** *** visible";
+      const prefix = message instanceof Error && !rich ? "Error: " : "";
+      expect(stripAnsi(formatHealthCheckFailure(message, { rich }))).toBe(
+        `Health check failed: ${prefix}${detail}`,
+      );
     }
     if (rich) {
       registerSecretValueForRedaction("joined secret");
@@ -86,14 +77,14 @@ describe("health failure diagnostic redaction", () => {
         "Health check failed: ***",
       );
     }
-  });
-});
+  },
+);
 
-const channelSummary = (id: string, label: string, account: ChannelAccountHealthSummary) =>
+const channelSummary = (account: Partial<ChannelAccountHealthSummary>) =>
   createHealthSummary({
-    channels: { [id]: account },
-    channelOrder: [id],
-    channelLabels: { [id]: label },
+    channels: { test: { accountId: "default", configured: true, ...account } },
+    channelOrder: ["test"],
+    channelLabels: { test: "Test" },
   });
 const ingressPressure = (channelId: string, accountId: string, overrides = {}) => ({
   channelId,
@@ -109,14 +100,12 @@ const ingressPressure = (channelId: string, accountId: string, overrides = {}) =
 describe("formatHealthChannelLines", () => {
   it("keeps the named startup error after removing terminal controls", () => {
     const error = "Legacy exec approvals exist at /tmp/synthetic/exec-approvals.json.";
-    const summary = channelSummary("telegram", "Telegram", {
-      accountId: "default",
-      configured: true,
+    const summary = channelSummary({
       running: false,
       healthState: "not-running",
       lastError: `\u001b[31m${error}\u001b[0m\n`,
     });
-    expectHealth(summary, `Telegram: not-running (${error}\\n)`);
+    expectHealth(summary, `Test: not-running (${error}\\n)`);
   });
 
   it.each([
@@ -137,13 +126,7 @@ describe("formatHealthChannelLines", () => {
     ],
     ["passive healthy state without a probe", { healthState: "healthy" }, "healthy"],
   ])("formats %s", (_name, account, expected) => {
-    const summary = channelSummary("test", "Test", {
-      accountId: "default",
-      configured: true,
-      ...account,
-    });
-
-    expectHealth(summary, `Test: ${expected}`);
+    expectHealth(channelSummary(account), `Test: ${expected}`);
   });
 
   it("surfaces secondary auth stabilization in default and verbose health output", () => {

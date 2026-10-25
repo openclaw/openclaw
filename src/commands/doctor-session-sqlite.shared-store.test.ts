@@ -34,10 +34,6 @@ import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-canonical-store-");
 
-async function closeStore(store: { stateDir: string; root: string }) {
-  await cleanupSessionStateForTest({ stateDir: store.stateDir, rootPath: store.root });
-}
-
 function doctor(store: Awaited<ReturnType<typeof createStore>>, mode: "recover" | "inspect") {
   return runDoctorSessionSqlite({ cfg: store.cfg, env: store.env, allAgents: true, mode });
 }
@@ -70,38 +66,34 @@ async function createStore() {
   await upsertSessionEntryCore(scope, { sessionId: "doctor-session", updatedAt: 1 });
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   const sqlitePath = resolveOpenClawAgentSqlitePath(options);
-  await closeStore({ stateDir, root });
+  await cleanupSessionStateForTest({ stateDir, rootPath: root });
   return { cfg, env, options, root, scope, sqlitePath, stateDir, storePath };
 }
 
 async function createHistoricalSharedStore() {
   const store = await createStore();
-  const database = openNodeSqliteDatabase(store.sqlitePath);
+  using database = openNodeSqliteDatabase(store.sqlitePath);
   const sql = sessionSqlFixture(database);
-  try {
-    restoreEmptyV21StorageForHistoricalFixture(database);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec("DROP TABLE session_participants;");
-    database.exec(LEGACY_PARTICIPANTS_SCHEMA);
-    sql`INSERT INTO session_participants VALUES (${store.scope.sessionKey}, 'human', 'person', 'profile', 3, 10, 20)`.run();
-    database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
-    database.exec(`
+  restoreEmptyV21StorageForHistoricalFixture(database);
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
+  database.exec("DROP TABLE session_participants;");
+  database.exec(LEGACY_PARTICIPANTS_SCHEMA);
+  sql`INSERT INTO session_participants VALUES (${store.scope.sessionKey}, 'human', 'person', 'profile', 3, 10, 20)`.run();
+  database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
+  database.exec(`
       INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
         VALUES ('doctor', 'preserved', '{"ok":true}', 100, 1);
       DROP INDEX idx_agent_cache_expiry;
       CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
     `);
-    database.enableDefensive?.(false);
-    database.exec(`PRAGMA writable_schema = ON;
+  database.enableDefensive?.(false);
+  database.exec(`PRAGMA writable_schema = ON;
       UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
         WHERE name = 'idx_agent_cache_expiry';
       PRAGMA writable_schema = OFF;`);
-    const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
-    database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
-    return store;
-  } finally {
-    database.close();
-  }
+  const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+  database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
+  return store;
 }
 
 async function repairHistoricalSharedStore(store: Awaited<ReturnType<typeof createStore>>) {
@@ -122,6 +114,16 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
   expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
   expect(sql`PRAGMA foreign_key_check`.all()).toEqual([]);
   expect(sql`PRAGMA integrity_check`.get()?.integrity_check).toBe("ok");
+}
+
+function sharedData(sqlitePath: string) {
+  using database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+  return {
+    version: database.prepare("PRAGMA user_version").get(),
+    rows: ["schema_meta", "session_nodes", "session_participants", "retained_participant_view"].map(
+      (table) => database.prepare(`SELECT * FROM ${table}`).all(),
+    ),
+  };
 }
 
 describe("Doctor canonical session SQLite targets", () => {
@@ -160,14 +162,13 @@ describe("Doctor canonical session SQLite targets", () => {
 
   it("keeps shared data in place when participant dependencies refuse canonical-index recovery", async () => {
     const store = await createHistoricalSharedStore();
-    const database = openNodeSqliteDatabase(store.sqlitePath);
-    try {
+    {
+      using database = openNodeSqliteDatabase(store.sqlitePath);
       database.exec(
         "CREATE VIEW retained_participant_view AS SELECT actor_id FROM session_participants;",
       );
-    } finally {
-      database.close();
     }
+    const before = sharedData(store.sqlitePath);
     const report = await doctor(store, "recover");
     expect(report.targets[0]?.issues).toEqual([
       expect.objectContaining({
@@ -188,28 +189,7 @@ describe("Doctor canonical session SQLite targets", () => {
         `Skipped agent database migration for ${store.sqlitePath}: Error: Participant migration cannot rebuild unknown indexes, views, or triggers.`,
       ],
     });
-    const preserved = openNodeSqliteDatabase(store.sqlitePath, { readOnly: true });
-    const sql = sessionSqlFixture(preserved);
-    try {
-      expect(sql`PRAGMA user_version`.get()?.user_version).toBe(17);
-      expect(sql`SELECT agent_id, schema_version FROM schema_meta`.get()).toEqual({
-        agent_id: "main",
-        schema_version: 17,
-      });
-      expect(
-        sql`SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants`.all(),
-      ).toEqual([
-        { actor_id: "person", contribution_count: 3, first_prompted_at: 10, last_prompted_at: 20 },
-      ]);
-      expect(sql`SELECT actor_id FROM retained_participant_view`.all()).toEqual([
-        { actor_id: "person" },
-      ]);
-      expect(
-        sql`SELECT current_session_id FROM session_nodes WHERE session_key = ${store.scope.sessionKey}`.get(),
-      ).toEqual({ current_session_id: "doctor-session" });
-    } finally {
-      preserved.close();
-    }
+    expect(sharedData(store.sqlitePath)).toEqual(before);
   });
 
   it("never treats an exact SQLite database as a legacy import file", async () => {
