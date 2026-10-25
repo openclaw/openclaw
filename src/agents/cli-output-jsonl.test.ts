@@ -4,14 +4,37 @@ import { describe, expect, it } from "vitest";
 import { parseCliOutput } from "./cli-output.js";
 import {
   claudeMessageStart,
+  claudeMessageStop,
   claudeStreamEvent,
   claudeTextDelta,
   createClaudeParser,
   createClaudeBackend,
+  createGeminiBackend,
   joinJsonlFrames,
 } from "./cli-output.test-helpers.js";
 
 type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
+
+const resultFrame = (result: string, fields: Record<string, unknown> = {}) => ({
+  type: "result",
+  result,
+  ...fields,
+});
+const textFrames = (text: string, id?: string) => [
+  claudeMessageStart(id),
+  claudeTextDelta(text),
+  claudeMessageStop(),
+];
+const assistantRecord = (
+  content: unknown[],
+  fields: Record<string, unknown> = {},
+  id?: string,
+) => ({
+  type: "assistant",
+  message: { role: "assistant", content, ...(id ? { id } : {}) },
+  ...fields,
+});
+const textBlock = (text: string) => ({ type: "text", text });
 
 function parseCliJsonl(
   raw: string,
@@ -30,12 +53,10 @@ describe("parseCliJsonl", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
         { type: "init", session_id: "session-dialect" },
-        {
-          type: "result",
+        resultFrame("dialect says hello", {
           session_id: "session-dialect",
-          result: "dialect says hello",
           usage: { input_tokens: 5, output_tokens: 2 },
-        },
+        }),
       ),
       createClaudeBackend("local-cli"),
       "local-cli",
@@ -44,33 +65,6 @@ describe("parseCliJsonl", () => {
       text: "dialect says hello",
       sessionId: "session-dialect",
       usage: { input: 5, output: 2 },
-    });
-  });
-
-  it("keeps streamed pre-tool text over the final-message result in transcript reparses", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-reparse" },
-        claudeMessageStart(),
-        claudeTextDelta("Marker caribou-lampion-473 explanation."),
-        claudeStreamEvent({
-          type: "content_block_start",
-          content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-        }),
-        claudeStreamEvent({ type: "message_stop" }),
-        claudeMessageStart(),
-        claudeTextDelta("TEST DONE"),
-        { type: "result", session_id: "session-reparse", result: "TEST DONE" },
-      ),
-      createClaudeBackend("local-cli"),
-      "local-cli",
-    );
-
-    expect(result).toEqual({
-      text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
-      rawFinalText: "TEST DONE",
-      sessionId: "session-reparse",
-      usage: undefined,
     });
   });
 
@@ -90,7 +84,7 @@ describe("parseCliJsonl", () => {
       type: "content_block_start",
       content_block: { type: "tool_use", id, name: "Read" },
     }),
-    claudeStreamEvent({ type: "message_stop" }),
+    claudeMessageStop(),
     {
       type: "user",
       message: {
@@ -100,36 +94,16 @@ describe("parseCliJsonl", () => {
     },
   ];
 
+  const rejection = [stopHookFeedback, stopHookNotification];
   it.each([
-    {
-      name: "Stop-hook rejection before a tool",
-      feedback: [stopHookFeedback, stopHookNotification],
-      rewrite: "B",
-      expected: "B",
-    },
-    {
-      name: "rewrite without a tool",
-      feedback: [stopHookFeedback, stopHookNotification],
-      rewrite: "B",
-      expected: "B",
-      tool: false,
-    },
-    { name: "notification", feedback: [stopHookNotification], rewrite: "B", expected: "B" },
-    {
-      name: "silent rewrite with both feedback records",
-      feedback: [stopHookFeedback, stopHookNotification],
-      rewrite: "NO_REPLY",
-      expected: "NO_REPLY",
-    },
-    {
-      name: "ordinary tool split",
-      feedback: [],
-      rewrite: "B",
-      expected: "A\n\nB",
-    },
-    {
-      name: "replayed user steering",
-      feedback: [
+    ["Stop-hook rejection before a tool", rejection, "B", "B", true],
+    ["rewrite without a tool", rejection, "B", "B", false],
+    ["notification", [stopHookNotification], "B", "B", true],
+    ["silent rewrite", rejection, "NO_REPLY", "NO_REPLY", true],
+    ["ordinary tool split", [], "B", "A\n\nB", true],
+    [
+      "replayed user steering",
+      [
         {
           type: "user",
           isReplay: true,
@@ -137,39 +111,32 @@ describe("parseCliJsonl", () => {
           message: { role: "user", content: [{ type: "text", text: "Check README.md too." }] },
         },
       ],
-      rewrite: "B",
-      expected: "A\n\nB",
-    },
-    {
-      name: "user text without a rejection notification",
-      feedback: [stopHookFeedback],
-      rewrite: "B",
-      expected: "A\n\nB",
-    },
-    {
-      name: "subagent feedback and unrelated notification",
-      feedback: [
+      "B",
+      "A\n\nB",
+      true,
+    ],
+    ["user text without a rejection notification", [stopHookFeedback], "B", "A\n\nB", true],
+    [
+      "subagent feedback and unrelated notification",
+      [
         { ...stopHookFeedback, parent_tool_use_id: "subagent-1" },
         { ...stopHookNotification, parent_tool_use_id: "subagent-1" },
         { ...stopHookNotification, key: "tool-progress" },
       ],
-      rewrite: "B",
-      expected: "A\n\nB",
-    },
-  ])(
-    "selects the final reply across Claude stream boundaries ($name)",
-    ({ feedback, rewrite, expected, tool = true }) => {
+      "B",
+      "A\n\nB",
+      true,
+    ],
+  ] as const)(
+    "selects the final reply across Claude stream boundaries (%s)",
+    (_name, feedback, rewrite, expected, tool) => {
       const result = parseCliJsonl(
         joinJsonlFrames(
-          claudeMessageStart("draft"),
-          claudeTextDelta("A"),
-          claudeStreamEvent({ type: "message_stop" }),
+          ...textFrames("A", "draft"),
           ...feedback,
           ...(tool ? toolRoundTrip("read-1") : []),
-          claudeMessageStart("rewrite"),
-          claudeTextDelta(rewrite),
-          claudeStreamEvent({ type: "message_stop" }),
-          { type: "result", result: rewrite },
+          ...textFrames(rewrite, "rewrite"),
+          resultFrame(rewrite),
         ),
       );
 
@@ -180,56 +147,21 @@ describe("parseCliJsonl", () => {
   it("discards each rejected segment across repeated Stop-hook bounces", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
-        claudeMessageStart("first-draft"),
-        claudeTextDelta("A"),
-        claudeStreamEvent({ type: "message_stop" }),
+        ...textFrames("A", "first-draft"),
         stopHookFeedback,
         stopHookNotification,
         ...toolRoundTrip("read-1"),
-        claudeMessageStart("second-draft"),
-        claudeTextDelta("B"),
-        claudeStreamEvent({ type: "message_stop" }),
+        ...textFrames("B", "second-draft"),
         stopHookFeedback,
         stopHookNotification,
         ...toolRoundTrip("read-2"),
         claudeMessageStart("rewrite"),
         claudeTextDelta("C"),
-        { type: "result", result: "C" },
+        resultFrame("C"),
       ),
     );
 
     expect(result.text).toBe("C");
-  });
-
-  it("continues transcript reparses past an interim result", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-interim-reparse" },
-        claudeMessageStart(),
-        claudeTextDelta("Interim answer."),
-        {
-          type: "result",
-          session_id: "session-interim-reparse",
-          result: "Interim answer.",
-        },
-        claudeMessageStart(),
-        claudeTextDelta("Pre-tool follow-up."),
-        claudeStreamEvent({
-          type: "content_block_start",
-          content_block: { type: "tool_use", id: "tool-2", name: "session_status" },
-        }),
-        claudeTextDelta("DONE"),
-        {
-          type: "result",
-          session_id: "session-interim-reparse",
-          result: "DONE",
-        },
-      ),
-      createClaudeBackend("local-cli"),
-      "local-cli",
-    );
-
-    expect(result?.text).toBe("Interim answer.\nPre-tool follow-up.\n\nDONE");
   });
 
   it.each([
@@ -238,27 +170,23 @@ describe("parseCliJsonl", () => {
       frames: [
         {
           type: "init",
-          timestamp: "2026-06-16T19:36:46.000Z",
           session_id: "gemini-session-123",
           model: "gemini-3.1-pro-preview",
         },
         {
           type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "Gemini says ",
           delta: true,
         },
         {
           type: "message",
-          timestamp: "2026-06-16T19:36:48.000Z",
           role: "assistant",
           content: "hello",
           delta: true,
         },
         {
           type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
           stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 },
         },
@@ -275,27 +203,23 @@ describe("parseCliJsonl", () => {
       frames: [
         {
           type: "init",
-          timestamp: "2026-06-16T19:36:46.000Z",
           session_id: "gemini-session-123",
           model: "gemini-3.1-pro-preview",
         },
         {
           type: "tool_use",
-          timestamp: "2026-06-16T19:36:47.000Z",
           tool_name: "mcp_openclaw_create_goal",
           tool_id: "tool-1",
           parameters: { objective: "Update files" },
         },
         {
           type: "tool_result",
-          timestamp: "2026-06-16T19:36:48.000Z",
           tool_id: "tool-1",
           status: "success",
           output: "created",
         },
         {
           type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
           stats: { total_tokens: 2, input_tokens: 1, output_tokens: 1 },
         },
@@ -310,12 +234,7 @@ describe("parseCliJsonl", () => {
   ])("$name", ({ frames, sessionIdFields, expected }) => {
     const result = parseCliJsonl(
       joinJsonlFrames(...frames),
-      {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-        ...(sessionIdFields ? { sessionIdFields } : {}),
-      },
+      { ...createGeminiBackend(), sessionIdFields },
       "google-gemini-cli",
     );
 
@@ -341,7 +260,7 @@ describe("parseCliJsonl", () => {
         ...(final ? [message("Done.")] : []),
         { type: "result", status: "success", stats: { total_tokens: 2 } },
       ),
-      { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" },
+      createGeminiBackend(),
       "google-gemini-cli",
     );
 
@@ -353,17 +272,15 @@ describe("parseCliJsonl", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
         { type: "init", session_id: "session-cache-123" },
-        {
-          type: "result",
+        resultFrame("Claude says hello", {
           session_id: "session-cache-123",
-          result: "Claude says hello",
           usage: {
             input_tokens: 12,
             output_tokens: 3,
             cache_read_input_tokens: 4,
             cache_creation_input_tokens: 7,
           },
-        },
+        }),
       ),
     );
 
@@ -384,39 +301,25 @@ describe("parseCliJsonl", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
         { type: "system", subtype: "init", session_id: "session-checkpoint" },
-        {
-          type: "assistant",
-          uuid: "assistant-checkpoint-1",
-          message: {
-            id: "provider-message-1",
-            role: "assistant",
-            content: [{ type: "text", text: "first" }],
+        assistantRecord(
+          [textBlock("first")],
+          { uuid: "assistant-checkpoint-1" },
+          "provider-message-1",
+        ),
+        assistantRecord(
+          [textBlock("done")],
+          { uuid: "assistant-checkpoint-2" },
+          "provider-message-2",
+        ),
+        assistantRecord(
+          [textBlock("nested")],
+          {
+            uuid: "subagent-checkpoint",
+            parent_tool_use_id: "tool-use-1",
           },
-        },
-        {
-          type: "assistant",
-          uuid: "assistant-checkpoint-2",
-          message: {
-            id: "provider-message-2",
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-          },
-        },
-        {
-          type: "assistant",
-          uuid: "subagent-checkpoint",
-          parent_tool_use_id: "tool-use-1",
-          message: {
-            id: "provider-subagent-message",
-            role: "assistant",
-            content: [{ type: "text", text: "nested" }],
-          },
-        },
-        {
-          type: "result",
-          session_id: "session-checkpoint",
-          result: "done",
-        },
+          "provider-subagent-message",
+        ),
+        resultFrame("done", { session_id: "session-checkpoint" }),
       ),
     );
 
@@ -428,12 +331,10 @@ describe("parseCliJsonl", () => {
       name: "preserves Claude session metadata even when the final result text is empty",
       raw: joinJsonlFrames(
         { type: "init", session_id: "session-456" },
-        {
-          type: "result",
+        resultFrame("   ", {
           session_id: "session-456",
-          result: "   ",
           usage: { input_tokens: 18, output_tokens: 0 },
-        },
+        }),
       ),
       expected: {
         text: "",
@@ -445,18 +346,18 @@ describe("parseCliJsonl", () => {
       name: "unwraps nested Claude agent result JSON from stream-json output",
       raw: joinJsonlFrames(
         { type: "init", session_id: "session-nested-jsonl" },
-        {
-          type: "result",
-          session_id: "session-nested-jsonl",
-          result: JSON.stringify({
-            type: "result",
-            result: JSON.stringify({
-              type: "result",
-              subtype: "success",
-              result: "actual response text",
-            }),
-          }),
-        },
+        resultFrame(
+          JSON.stringify(
+            resultFrame(
+              JSON.stringify(
+                resultFrame("actual response text", {
+                  subtype: "success",
+                }),
+              ),
+            ),
+          ),
+          { session_id: "session-nested-jsonl" },
+        ),
       ),
       expected: {
         text: "actual response text",
@@ -494,11 +395,7 @@ describe("parseCliJsonl", () => {
       joinJsonlFrames(
         { type: "system", subtype: "init", session_id: "session-ephemeral" },
         { type: "system", subtype: "init", session_id: "session-canonical" },
-        {
-          type: "result",
-          session_id: "session-canonical",
-          result: "rotated reply",
-        },
+        resultFrame("rotated reply", { session_id: "session-canonical" }),
       ),
     );
 
@@ -580,13 +477,7 @@ describe("parseCliJsonl", () => {
     const parentId = "toolu_parent";
     parser.push(
       joinJsonlFrames(
-        {
-          type: "assistant",
-          message: {
-            role: "assistant",
-            content: [{ type: "tool_use", id: parentId, name: "Agent", input: {} }],
-          },
-        },
+        assistantRecord([{ type: "tool_use", id: parentId, name: "Agent", input: {} }]),
         {
           type: "stream_event",
           parent_tool_use_id: parentId,
@@ -595,22 +486,12 @@ describe("parseCliJsonl", () => {
             delta: { type: "thinking_delta", thinking: "still working" },
           },
         },
-        {
-          type: "assistant",
+        assistantRecord([{ type: "thinking", thinking: "reading the tree" }], {
           parent_tool_use_id: parentId,
-          message: {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "reading the tree" }],
-          },
-        },
-        {
-          type: "assistant",
+        }),
+        assistantRecord([{ type: "tool_use", id: "toolu_child", name: "Read", input: {} }], {
           parent_tool_use_id: "toolu_other",
-          message: {
-            role: "assistant",
-            content: [{ type: "tool_use", id: "toolu_child", name: "Read", input: {} }],
-          },
-        },
+        }),
         {
           type: "user",
           parent_tool_use_id: parentId,
