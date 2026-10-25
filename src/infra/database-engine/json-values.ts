@@ -241,6 +241,7 @@ export function jsonPickObject(
 }
 
 type JsonFieldSelection = { readonly [key: string]: true | JsonFieldSelection };
+type JsonFieldRow = { key: string; value: unknown; type: string; ordinality: number };
 
 /** Whether native JSON field access can decode this value without losing escaped code units. */
 export function jsonNativeFieldsValid(
@@ -264,6 +265,7 @@ export function jsonObjectFieldsForScan(
   value: Expression<string>,
   fields: JsonFieldSelection,
 ): RawBuilder<string> {
+  const eb = expressionBuilder<Record<string, JsonFieldRow>, string>();
   if (!isPostgresSqlConnection(db)) {
     const projectSqlite = (
       input: Expression<unknown>,
@@ -271,9 +273,10 @@ export function jsonObjectFieldsForScan(
       depth: number,
     ): RawBuilder<unknown> => {
       const alias = `sqlite_field_${depth}`;
-      const key = sql.ref(`${alias}.key`);
-      const member = sql.ref(`${alias}.value`);
-      const memberType = sql.ref(`${alias}.type`);
+      const key = eb.ref(`${alias}.key`);
+      const member = eb.ref(`${alias}.value`);
+      const memberType = eb.ref(`${alias}.type`);
+      const entries = eb.fn<JsonFieldRow>("json_each", [input]).as(alias);
       const nested = Object.entries(selected).filter(
         (entry): entry is [string, JsonFieldSelection] => entry[1] !== true,
       );
@@ -293,7 +296,7 @@ export function jsonObjectFieldsForScan(
               sql` `,
             )} ELSE ${retained} END`;
       return /* kysely-allow-raw: Native JSON1 enumeration retains duplicate member order without returning bodies. */ sql`(SELECT json_group_object(${key}, ${projected})
-        FROM json_each(${input}) AS ${sql.id(alias)}
+        FROM ${entries}
         WHERE ${key} IN (${sql.join(Object.keys(selected).map((name) => sql.lit(name)))}))`;
     };
     return /* kysely-allow-raw: CASE preserves malformed/deep input and raw NUL member labels for the scanner. */ sql<string>`CASE WHEN json_valid(${value}) AND instr(${value}, ${String.raw`\u0000`}) = 0 THEN
@@ -306,9 +309,14 @@ export function jsonObjectFieldsForScan(
     depth: number,
   ): RawBuilder<unknown> => {
     const alias = `json_field_${depth}`;
-    const key = sql.ref(`${alias}.key`);
-    const member = sql.ref(`${alias}.value`);
-    const order = sql.ref(`${alias}.ordinality`);
+    const key = eb.ref(`${alias}.key`);
+    const member = eb.ref(`${alias}.value`);
+    const order = eb.ref(`${alias}.ordinality`);
+    const inputObject = sql`CASE WHEN json_typeof(${input}) = 'object' THEN ${input} ELSE '{}'::json END`;
+    const entries =
+      /* kysely-allow-raw: PostgreSQL ordinality orders duplicate members; Kysely binds the table alias. */ sql<JsonFieldRow>`${eb.fn<JsonFieldRow>("json_each", [inputObject])} WITH ORDINALITY`.as(
+        alias,
+      );
     const nested = Object.entries(selected).filter(
       (entry): entry is [string, JsonFieldSelection] => entry[1] !== true,
     );
@@ -323,8 +331,7 @@ export function jsonObjectFieldsForScan(
             sql` `,
           )} ELSE ${member} END`;
     return /* kysely-allow-raw: JSON (not JSONB) aggregation retains every selected duplicate in input order. */ sql`(SELECT coalesce(json_object_agg(${key}, ${projected} ORDER BY ${order}), '{}'::json)
-      FROM json_each(CASE WHEN json_typeof(${input}) = 'object' THEN ${input} ELSE '{}'::json END)
-        WITH ORDINALITY AS ${sql.id(alias)}(key, value, ordinality)
+      FROM ${entries}
       WHERE ${key} IN (${sql.join(Object.keys(selected).map((name) => sql.lit(name)))}))`;
   };
   return /* kysely-allow-raw: CASE fences all native decoding; the scanner handles exceptional raw text. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN
@@ -348,12 +355,17 @@ export function jsonFirstStringValue(
       string | null
     >`CASE WHEN json_valid(${value}) THEN CASE WHEN json_type(${value}, ${sql.lit(path)}) = 'text' THEN json_extract(${value}, ${sql.lit(path)}) END END`;
   }
+  const eb = expressionBuilder<Record<string, JsonFieldRow>, string>();
   let token: RawBuilder<unknown> = sql`${value}::json`;
   for (const [index, key] of keys.entries()) {
     const alias = `first_field_${index}`;
-    token = sql`(SELECT ${sql.ref(`${alias}.value`)} FROM json_each(CASE WHEN json_typeof(${token}) = 'object' THEN ${token} ELSE '{}'::json END)
-      WITH ORDINALITY AS ${sql.id(alias)}(key, value, ordinality)
-      WHERE ${sql.ref(`${alias}.key`)} = ${key} ORDER BY ${sql.ref(`${alias}.ordinality`)} LIMIT 1)`;
+    const inputObject = sql`CASE WHEN json_typeof(${token}) = 'object' THEN ${token} ELSE '{}'::json END`;
+    const entries =
+      /* kysely-allow-raw: PostgreSQL ordinality selects the first duplicate; Kysely binds the table alias. */ sql<JsonFieldRow>`${eb.fn<JsonFieldRow>("json_each", [inputObject])} WITH ORDINALITY`.as(
+        alias,
+      );
+    token = sql`(SELECT ${eb.ref(`${alias}.value`)} FROM ${entries}
+      WHERE ${eb.ref(`${alias}.key`)} = ${key} ORDER BY ${eb.ref(`${alias}.ordinality`)} LIMIT 1)`;
   }
   return /* kysely-allow-raw: PostgreSQL otherwise returns the last duplicate; raw ordinal lookup retains SQLite's first. */ sql<
     string | null
