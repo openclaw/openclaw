@@ -21,14 +21,17 @@ Keep content capture disabled. Traces consume prompt sizes; metrics-only OTel
 and Prometheus subscriptions do not request them.
 
 Use `transcript-broadcast-measure.ts --scenario memory-soak` with the built dist
-entry, 10,000 fixture sessions, 40 synthetic plugins, 64 clients, concurrent mock
-turns, `--stress-tools --mixed-rpc --dashboard-rpc --list-filter-churn`, a positive
-`--list-interval-ms`, and `--duration-ms 600000 --retained-profile-ms 0 --diagnostics`.
+entry, 10,000 fixture sessions, 40 synthetic plugins, `--clients 64 --exact-clients 8`,
+concurrent mock turns, `--stress-tools --mixed-rpc --list-filter-churn`,
+`--list-interval-ms 2000`, and `--duration-ms 600000 --retained-profile-ms 0 --diagnostics`.
 Disabling the retained profile prevents overlapping heap samplers; diagnostics
 collects the full-run GC and event-loop measurements. Reserve separate loopback ports
 for the Gateway, its adjacent dashboard port, mock provider and collector. For
 retained histories, first run the same history options with `--seed-history`;
 the measurement must use the same mock-provider port as the seed.
+
+`--dashboard-rpc` optionally adds GitHub and workboard widgets. Report failed
+runs separately; if changing the workload, start a fresh matched comparison.
 
 During each run, take matched allocation samples at elapsed minutes three and
 seven, using the isolated fixture's configuration and state directory:
