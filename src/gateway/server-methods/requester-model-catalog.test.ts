@@ -105,8 +105,8 @@ function clearSessionAuth(sessionKey: string) {
 
 function holdOwnershipRead() {
   const original = ownership.readSessionRuntimeOwnershipAsync;
-  const gate = createDeferred<void>();
-  const started = createDeferred<void>();
+  const gate = createDeferred();
+  const started = createDeferred();
   vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(async (params) => {
     started.resolve();
     await gate.promise;

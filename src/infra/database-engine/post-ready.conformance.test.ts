@@ -14,6 +14,7 @@ import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent
 import * as configIO from "../../config/io.factory.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
+  listConversations,
   readConversation,
   registerConversationAddresses as registerAddresses,
 } from "../../config/sessions/conversation-registry.js";
@@ -21,6 +22,7 @@ import { appendSessionTranscriptReport } from "../../config/sessions/session-acc
 import {
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionSubmittedInput,
   stageSessionPendingInput,
   type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -30,8 +32,10 @@ import { readSessionTranscriptJsonlBytesInDatabase } from "../../config/sessions
 import { readCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "../../config/sessions/session-accessor.sqlite-reset-window.js";
 import {
+  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  type ResolvedTranscriptScope,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptStatsFromDatabase } from "../../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -41,6 +45,7 @@ import { discardSessionPendingInput } from "../../config/sessions/session-pendin
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
+import { CronService } from "../../cron/service.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
 import { makeStore } from "../../cron/store.test-support.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
@@ -53,6 +58,7 @@ import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -61,11 +67,16 @@ import {
 } from "../../state/openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { getCanonicalUserPreferences } from "../../state/user-preferences.js";
+import {
+  getCanonicalUserPreferences,
+  setCanonicalUserPreferences,
+} from "../../state/user-preferences.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { createProfileAvatarReader } from "../../state/user-profiles-avatar.js";
 import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { executeSqliteQuerySync } from "../kysely-sync.js";
 import {
   bindCurrentConversationRecordAsync as bind,
   listCurrentConversationBindingRecordsBySessionsAsync as listBindings,
@@ -86,7 +97,7 @@ function conformance(
 }
 
 conformance("post-ready storage consumers", (fixture) => {
-  it("reads operator preferences with absent and binary profile avatars", async () => {
+  it("reads and updates operator preferences with absent and binary profile avatars", async () => {
     const profile = admit(() => {
       const owner = ensureGatewayOwnerProfile("Synthetic operator");
       ensureUserProfileRoleSchema({});
@@ -99,6 +110,21 @@ conformance("post-ready storage consumers", (fixture) => {
     await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
     const avatar = await createProfileAvatarReader(profile.id).inspect();
     await expect(avatar.loadBytes()).resolves.toMatchObject({ bytes, mime: "image/png" });
+    const set = (entries: Record<string, unknown>, expectedEntries?: Record<string, unknown>) =>
+      setCanonicalUserPreferences(profile.id, entries, { expectedEntries });
+    expect(await set({ accent: "blue" })).toMatchObject({ ok: true });
+    expect(await set({ accent: null }, { accent: "blue" })).toMatchObject({ ok: true });
+    await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
+    expect(await set({}, { accent: null })).toMatchObject({ ok: true });
+    expect(await set({ accent: "green" })).toMatchObject({ ok: true });
+    expect(await set({ accent: null }, { accent: "blue" })).toMatchObject({
+      ok: false,
+      error: { code: "conflict" },
+    });
+    await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual({
+      profileId: profile.id,
+      entries: { accent: "green" },
+    });
   });
 
   it("reads cold placement projections and committed turn claims", async () => {
@@ -175,6 +201,47 @@ conformance("post-ready storage consumers", (fixture) => {
       runtimeAuthorityRecoveryRequired: true,
     });
   });
+
+  it("starts cron and retains a disabled job across scheduler restart", async () => {
+    const unexpectedDispatch = () => {
+      throw new Error("Disabled cron conformance job must not dispatch");
+    };
+    const createCron = () =>
+      new CronService({
+        scheduler: createTestGatewayScheduler(),
+        storePath: path.join(fixture.root, "cron", "post-ready.json"),
+        cronEnabled: false,
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        enqueueSystemEvent: unexpectedDispatch,
+        runIsolatedAgentJob: unexpectedDispatch,
+      });
+    const original = createCron();
+    const restarted = createCron();
+    const retained = {
+      name: "post-ready durable job",
+      enabled: false,
+      payload: { kind: "systemEvent" as const, text: "synthetic cron marker" },
+    };
+    try {
+      await original.start();
+      const job = await original.add({
+        ...structuredClone(retained),
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      original.stop();
+      await original.waitForIdle();
+      await restarted.start();
+      expect(await restarted.list({ includeDisabled: true })).toMatchObject([
+        { id: job.id, ...retained },
+      ]);
+    } finally {
+      original.stop();
+      restarted.stop();
+      await Promise.all([original.waitForIdle(), restarted.waitForIdle()]);
+    }
+  });
 });
 conformance("pending input workers", () => {
   const receipts: SessionPendingInputReceipt[] = [];
@@ -227,6 +294,15 @@ conformance("pending input workers", () => {
       items: [expected],
     });
     expect(await readSessionPendingInputContext(scope)).toMatchObject({ items: [expected] });
+  });
+
+  it("recovers submitted input from its retained pending row before transcript consumption", async () => {
+    await stage("submitted");
+    expect(await readSessionSubmittedInput(scope, "submitted:user")).toMatchObject({
+      role: "user",
+      content: "submitted",
+      idempotencyKey: "submitted:user",
+    });
   });
 
   it("returns a persisted completion when the same input is submitted again", async () => {
@@ -295,9 +371,21 @@ conformance("subagent registry", (fixture) => {
     assert(maintenance?.ok && maintenance.type === "subagents.runs");
     const sessions = await read({ type: "subagents.sessionList" });
     assert(sessions?.ok && sessions.type === "subagents.sessionList" && "runs" in sessions);
-    for (const projection of [maintenance, sessions]) {
+    for (const [projection, fields] of [
+      [maintenance, { execution: { status: "terminal", endedAt: 250 } }],
+      [
+        sessions,
+        {
+          requesterStorePath: storePath,
+          controllerStorePath: storePath,
+          controllerSessionKey: "agent:main:controller",
+          execution: { status: "terminal", outcome: { status: "ok" } },
+        },
+      ],
+    ] as const) {
       expect([...projection.runs.keys()]).toEqual(runIds);
       for (const record of projection.runs.values()) {
+        expect(record).toMatchObject({ ...fields, delivery: { status: "pending" } });
         expect(record).not.toHaveProperty("task");
         expect(record).not.toHaveProperty("completion");
       }
@@ -311,65 +399,100 @@ conformance("subagent registry", (fixture) => {
     expect([...selected.runs]).toEqual([[runIds[1], before.get(runIds[1]!)]]);
   });
 });
+const scopeFor = (sessionId: string) => ({
+  agentId: "main",
+  sessionKey: `agent:main:${sessionId}`,
+  sessionId,
+});
 const message = (id: string, parentId: string | null, role: string, content: string) => ({
   type: "message",
   id,
   parentId,
   message: { role, content },
 });
-conformance("transcript report navigation", () => {
-  it("reads numeric raw and visible bytes and selects the latest persisted custom report", async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:reports", sessionId: "reports" };
+function withTranscript(
+  scope: ReturnType<typeof scopeFor>,
+  events: unknown[],
+  inspect: (database: OpenClawAgentDatabase, resolved: ResolvedTranscriptScope) => void,
+) {
+  admit(() => {
+    const resolved = resolveSqliteTranscriptScope(scope);
+    runOpenClawAgentWriteTransaction((database) => {
+      writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+      replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
+      inspect(database, resolved);
+    }, toDatabaseOptions(resolved));
+  });
+}
+
+conformance("transcript report navigation", (_fixture, engine) => {
+  it("returns numeric transcript bytes for raw, reset-tail, and maintenance reads", () => {
+    const scope = scopeFor("transcript-byte-counts");
     const kept = message("kept", "discarded", "user", "Retained λ🦞 preference.");
     const tail = message("tail", "reset", "assistant", "Fresh 日本語 response.");
-    const selected = {
-      customType: "status",
-      content: "synthetic report content ".repeat(400),
-      details: { selected: true },
-    };
-    const report = {
-      type: "custom_message",
-      id: "report",
-      parentId: "tail",
-      ...selected,
-      display: true,
-    };
     const events = [
       { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
       message("discarded", null, "user", "Discarded earlier context."),
       kept,
       { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept", reason: "new" },
       tail,
-      report,
     ];
     const bytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event));
     const payloadBytes = events.reduce((total, event) => total + bytes(event), 0);
-    admit(() => {
-      const resolved = resolveSqliteTranscriptScope(scope);
-      runOpenClawAgentWriteTransaction((database) => {
-        writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-        replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
-        expect(readTranscriptStatsFromDatabase(database, scope.sessionId)).toMatchObject({
-          eventCount: events.length,
-          sizeBytes: payloadBytes + events.length - 1,
-        });
-        expect(
-          readSessionTranscriptJsonlBytesInDatabase(database, [scope.sessionId, "missing"]),
-        ).toEqual(new Map([[scope.sessionId, payloadBytes + events.length]]));
-        const visible = readCurrentProjectionSnapshot(database, resolved, (projection) =>
-          // Cold projections reconstruct the retained prefix without cached accounting facts.
-          readVisibleTranscriptStats({
-            ...projection,
-            contextMetadata: undefined,
-            contextStats: undefined,
-          }),
-        );
-        expect(visible).toMatchObject({
-          kind: "value",
-          value: { eventCount: 3, sizeBytes: bytes(kept) + bytes(tail) + bytes(report) + 3 },
-        });
-      }, toDatabaseOptions(resolved));
+    withTranscript(scope, events, (database, resolved) => {
+      expect(readTranscriptStatsFromDatabase(database, scope.sessionId)).toMatchObject({
+        eventCount: events.length,
+        sizeBytes: payloadBytes + events.length - 1,
+      });
+      expect(
+        readSessionTranscriptJsonlBytesInDatabase(database, [scope.sessionId, "missing"]),
+      ).toEqual(new Map([[scope.sessionId, payloadBytes + events.length]]));
+      const visible = readCurrentProjectionSnapshot(database, resolved, (projection) =>
+        // Cold projections reconstruct the retained prefix without cached accounting facts.
+        readVisibleTranscriptStats({
+          ...projection,
+          contextMetadata: undefined,
+          contextStats: undefined,
+        }),
+      );
+      expect(visible).toMatchObject({
+        kind: "value",
+        value: { eventCount: 2, sizeBytes: bytes(kept) + bytes(tail) + 2 },
+      });
     });
+  });
+
+  it("selects the latest custom report from persisted transcript navigation", async () => {
+    const scope = scopeFor("report-navigation");
+    const content = "synthetic report content ".repeat(400);
+    const selected = { customType: "status", content, details: { selected: true } };
+    withTranscript(
+      scope,
+      [
+        { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
+        message("root", null, "user", content),
+        {
+          type: "custom_message",
+          id: "selected",
+          parentId: "root",
+          ...selected,
+          display: true,
+        },
+      ],
+      (database) => {
+        const rows = executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("transcript_events")
+            .select(["event_json", "event_zstd"])
+            .where("session_id", "=", scope.sessionId),
+        ).rows;
+        // SQLite uses zstd navigation; PostgreSQL keeps canonical JSON and delegates to TOAST.
+        expect(
+          rows.filter((row) => row.event_json === null && row.event_zstd !== null),
+        ).toHaveLength(engine === "sqlite" ? 2 : 0);
+      },
+    );
     const selectReport = vi.fn();
     await expect(
       appendSessionTranscriptReport(scope, {
@@ -464,42 +587,74 @@ conformance("post-ready plugin registry", (fixture) => {
 });
 
 conformance("conversation batches", () => {
-  it("registers addresses through the dialect's grouped insert", async () => {
-    const identity = buildConversationIdentity({
-      channel: "demo",
-      accountId: "default",
-      kind: "direct",
-      peerId: "first",
-      deliveryTarget: "demo:first",
-      label: "first",
+  it("registers distinct addresses with each duplicate's final postimage", async () => {
+    const addresses = ["first", "second"].map((id) => {
+      const identity = buildConversationIdentity({
+        channel: "demo",
+        accountId: "default",
+        kind: "direct",
+        peerId: id,
+        deliveryTarget: `demo:${id}`,
+        label: id,
+      });
+      assert(identity);
+      return identity;
     });
-    assert(identity);
     const scope = { agentId: "main", env: process.env };
-    await registerAddresses(scope, [identity], 100);
-    expect(await readConversation(scope, identity.conversationRef)).toMatchObject({
-      target: "demo:first",
-      label: "first",
-      firstSeenAt: 100,
-      lastSeenAt: 100,
-    });
+    await registerAddresses(scope, [...addresses, { ...addresses[0]!, label: "final first" }], 100);
+    expect(await listConversations(scope, { channel: "demo" })).toHaveLength(2);
+    for (const [index, identity] of addresses.entries()) {
+      expect(await readConversation(scope, identity.conversationRef)).toMatchObject({
+        conversationRef: identity.conversationRef,
+        target: identity.deliveryTarget,
+        label: index === 0 ? "final first" : "second",
+        firstSeenAt: 100,
+        lastSeenAt: 100,
+      });
+    }
   });
 
-  it("selects grouped bindings and lists with null and explicit scope parameters", async () => {
-    const record: SessionBindingRecord = {
-      bindingId: "generic:demo\u241fdefault\u241f\u241ffirst",
-      conversation: { channel: "demo", accountId: "default", conversationId: "first" },
-      targetSessionKey: "agent:main:first",
+  it("selects and lists binding batches with absences, duplicates, and account scope", async () => {
+    const records: SessionBindingRecord[] = ["first", "second"].map((id) => ({
+      bindingId: id === "first" ? "generic:demo\u241fdefault\u241f\u241ffirst" : `fixture:${id}`,
+      conversation: {
+        channel: "demo",
+        accountId: id === "first" ? "default" : "other",
+        conversationId: id,
+      },
+      targetSessionKey: `agent:main:${id}`,
       targetKind: "session",
       status: "active",
       boundAt: 1,
       metadata: {},
-    };
-    await bind({ record });
-    expect(await selectBindings([record.conversation])).toEqual([record]);
-    const targets = [record.targetSessionKey];
-    expect(await listBindings(targets)).toEqual([[record]]);
-    expect(await listBindings(targets, { channel: "demo", accountId: "default" })).toEqual([
-      [record],
-    ]);
+    }));
+    for (const record of records) {
+      await bind({ record });
+    }
+    const [first, second] = records;
+    assert(first && second);
+    expect(
+      await selectBindings([
+        second.conversation,
+        { ...first.conversation, conversationId: "missing" },
+        first.conversation,
+        second.conversation,
+      ]),
+    ).toEqual([second, null, first, second]);
+    const targets = [
+      second.targetSessionKey,
+      "agent:main:missing",
+      first.targetSessionKey,
+      second.targetSessionKey,
+    ];
+    for (const [accountId, expected] of [
+      [undefined, [[], [], [first], []]],
+      ["default", [[], [], [first], []]],
+      ["other", [[second], [], [], [second]]],
+    ] as const) {
+      expect(
+        await listBindings(targets, accountId ? { channel: "demo", accountId } : undefined),
+      ).toEqual(expected);
+    }
   });
 });

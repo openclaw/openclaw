@@ -158,7 +158,8 @@ async function runSchedulingFixture(
       const visible = structuredClone(jobs);
       if (restarted && kind === "recurring") {
         visible.splice(0, 1);
-        first(visible).state.nextRunAtMs = now + 100_000;
+        assert.ok(visible[0]);
+        visible[0].state.nextRunAtMs = now + 100_000;
       }
       if (restarted) {
         options.mutateRestartedJobs?.(visible);

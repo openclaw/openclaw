@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,10 +8,8 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import * as logger from "../logger.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -23,16 +22,8 @@ const elevated = { enabled: true, allowed: true, defaultLevel: "full" } as const
 const approvalCalls = ["exec.approval.request", "exec.approval.waitDecision"];
 const text = (result: { content: Array<{ type: string; text?: string }> }) =>
   result.content[0]?.text;
-const makeReviewer = (
-  rationale: string,
-  overrides: Partial<Awaited<ReturnType<ExecAutoReviewer>>> = {},
-) =>
-  vi.fn<ExecAutoReviewer>(async () => ({
-    decision: "allow-once",
-    risk: "low",
-    rationale,
-    ...overrides,
-  }));
+const makeReviewer = (decision: Awaited<ReturnType<ExecAutoReviewer>>) =>
+  vi.fn<ExecAutoReviewer>(async () => decision);
 const transcript = (message: string): ExecAutoReviewTranscript => ({
   entries: [{ kind: "user", origin: "operator", text: message }],
   omittedEntries: 0,
@@ -117,19 +108,45 @@ function createAutoTool(defaults?: ToolOptions) {
 const runAuto = (options: ToolOptions, command: string, args = {}) =>
   createAutoTool(options).execute("auto-review", { command, ...args });
 
-let state: OpenClawTestState;
+let envSnapshot: ReturnType<typeof captureEnv>;
 let tempRoot: string;
 
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "exec-security-floor" });
-  tempRoot = state.root;
+beforeEach(() => {
+  envSnapshot = captureEnv([
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "SHELL",
+  ]);
+  tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-"));
+  setTestEnvValue("HOME", tempRoot);
+  setTestEnvValue("USERPROFILE", tempRoot);
+  setTestEnvValue("OPENCLAW_HOME", tempRoot);
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
+  if (process.platform === "win32") {
+    const parsed = path.parse(tempRoot);
+    setTestEnvValue("HOMEDRIVE", parsed.root.slice(0, 2));
+    setTestEnvValue("HOMEPATH", tempRoot.slice(2) || "\\");
+  } else {
+    deleteTestEnvValue("HOMEDRIVE");
+    deleteTestEnvValue("HOMEPATH");
+  }
   resetProcessRegistryForTests();
   vi.mocked(callGatewayTool).mockReset();
   reviewerRuntime.prepare.mockReset();
   reviewerRuntime.complete.mockReset();
 });
 
-afterEach(async () => state.cleanup());
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  envSnapshot.restore();
+  if (tempRoot) {
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+});
 
 it("does not load optional review or delivery runtimes for full/off execution", async () => {
   const result = await run({ host: "gateway", mode: "full" }, "echo hello");
@@ -224,7 +241,11 @@ it.each([undefined, "deny"] as const)(
 
 it("intersects normalized gateway auto mode with host approval deny defaults", async () => {
   writePolicy("deny");
-  const autoReviewer = makeReviewer("would otherwise run");
+  const autoReviewer = makeReviewer({
+    decision: "allow-once",
+    risk: "low",
+    rationale: "would otherwise run",
+  });
   await expect(runAuto({ autoReviewer }, "echo blocked")).rejects.toThrow(
     /security=deny|exec denied/i,
   );
@@ -233,7 +254,12 @@ it("intersects normalized gateway auto mode with host approval deny defaults", a
 
 it("reviews current conversation context and retains Guardian approval without a run ID", async () => {
   const reviewTranscript = vi.fn(() => currentTranscript);
-  const autoReviewer = makeReviewer("read-only version check", { userAuthorization: "high" });
+  const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "allow-once",
+    risk: "low",
+    rationale: "read-only version check",
+    userAuthorization: "high",
+  }));
   const tool = createAutoTool({
     autoReviewer,
     reviewTranscript,
@@ -251,6 +277,7 @@ it("reviews current conversation context and retains Guardian approval without a
     .execute("call-guardian-review", { command: "node --version" })
     .finally(unsubscribe);
   expect(liveReviews).toEqual([]);
+  expect(reviewTranscript).toHaveBeenCalledTimes(1);
   expect(autoReviewer).toHaveBeenCalledWith(
     expect.objectContaining({ host: "gateway", transcript: currentTranscript }),
   );
@@ -263,6 +290,9 @@ it("reviews current conversation context and retains Guardian approval without a
     approvalReviewOutcome: "approved",
     approvalReviews: [
       {
+        id: "guardian:call-guardian-review",
+        label: "Guardian",
+        status: "approved",
         riskLevel: "low",
         rationale: "read-only version check",
       },
@@ -277,12 +307,12 @@ it("defers to human approval when the default reviewer import fails", async () =
   vi.doMock("./exec-auto-reviewer.js", loadReviewer);
   vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
   try {
-    const result = await createAutoTool({ messageProvider: "webchat" }).execute(
-      "default-review-import-failure",
-      {
-        command: "node --version",
-      },
-    );
+    const tool = createAutoTool({
+      messageProvider: "webchat",
+    });
+    const result = await tool.execute("default-review-import-failure", {
+      command: "node --version",
+    });
     expect(loadReviewer).toHaveBeenCalled();
     expect(result.details).toMatchObject({
       status: "failed",
@@ -303,7 +333,11 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
     const command = "sh script.sh; ls *.sh";
     const script = path.join(tempRoot, "script.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-    const autoReviewer = makeReviewer("approved script");
+    const autoReviewer = makeReviewer({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "approved script",
+    });
     const tool = createAutoTool({
       autoReviewer,
       runId: "run-guardian-script",
@@ -321,7 +355,9 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
       }
     });
     const result = await tool.execute("tool-guardian-script", { command }).finally(unsubscribe);
-    expect(autoReviewer).toHaveBeenCalledWith(expect.objectContaining({ command }));
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({ command, reason: "execution-plan-miss" }),
+    );
     expect(callGatewayTool).not.toHaveBeenCalled();
     expect(changedAfterApproval).toBe(mutate);
     const output = mutate ? "approval script operand changed before execution" : "approved";
@@ -330,7 +366,9 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
       status: mutate ? "failed" : "completed",
       ...(!mutate ? { exitCode: 0 } : {}),
       approvalReviewOutcome: "approved",
-      approvalReviews: [{ status: "approved" }],
+      approvalReviews: [
+        { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },
+      ],
       aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh",
     });
   },
@@ -372,15 +410,17 @@ it.each([
 
 it("honors normalized auto mode before elevated full bypass", async () => {
   const calls = mockApprovalGateway();
-  const autoReviewer = makeReviewer("test reviewer asks for approval", {
+  const autoReviewer = makeReviewer({
     decision: "ask",
     risk: "high",
+    rationale: "test reviewer asks for approval",
   });
   const result = await runAuto({ autoReviewer, elevated }, "whoami", { elevated: true });
   expect(autoReviewer).toHaveBeenCalledWith(
     expect.objectContaining({
       command: expect.stringMatching(/(?:^|[/\\])whoami(?:\.exe)?$/u),
       host: "gateway",
+      reason: "allowlist-miss",
     }),
   );
   expectOutput(result, "approval-timeout", { status: "failed", timedOut: true });

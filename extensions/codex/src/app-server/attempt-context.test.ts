@@ -294,7 +294,7 @@ describe("Codex app-server attempt context", () => {
       overrides: {
         pluginHarnessToolPolicyRestricted: true,
         toolsAllow: ["message"],
-        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
       },
     },
   ])(
