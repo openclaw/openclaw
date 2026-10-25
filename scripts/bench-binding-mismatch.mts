@@ -476,7 +476,7 @@ type PhaseCounts = {
   sqlByOperation: Record<string, number>;
   bindingUpsertsByOperation: Record<string, number>;
 };
-type ObservedSite = { method: string; sql: string; ok: boolean; cause: unknown };
+type ObservedSite = { method: string; sql: string; ok: boolean; cause: unknown; stack: string[] };
 function summarizeObserver() {
   const filenames = readdirSync(output).filter((name) => /^sql-\d+-\d+\.jsonl$/u.test(name));
   const execShapes = new Set<string>();
@@ -544,9 +544,11 @@ function summarizeObserver() {
       sqlByOperation: {},
       bindingUpsertsByOperation: {},
     });
-  const operation = (cause: unknown): string => {
-    if (!isRecord(cause) || !Array.isArray(cause.payloadDiscriminators)) return "unattributed";
-    const discriminators: unknown[] = cause.payloadDiscriminators;
+  const operation = (cause: unknown, stack: string[] = []): string => {
+    if (!isRecord(cause)) return "unattributed";
+    const discriminators: unknown[] = Array.isArray(cause.payloadDiscriminators)
+      ? cause.payloadDiscriminators
+      : [];
     const target = discriminators.find(
       (pair) =>
         Array.isArray(pair) &&
@@ -555,7 +557,27 @@ function summarizeObserver() {
         typeof pair[1] === "string" &&
         pair[1].startsWith("conversationBindings."),
     );
-    return Array.isArray(target) && typeof target[1] === "string" ? target[1] : "other";
+    if (Array.isArray(target) && typeof target[1] === "string") return target[1];
+    // Frozen314 does not expose discriminators for state-broker execute payloads.
+    // Native generic unbind/touch retain these named caller and worker frames.
+    const frames = [...(isStringArray(cause.originStack) ? cause.originStack : []), ...stack];
+    if (
+      frames.some((frame) =>
+        / at (?:async )?(?:touchCurrentConversationBindingInDatabase|touchGenericCurrentConversationBindingAsync) \(/u.test(
+          frame,
+        ),
+      )
+    )
+      return "conversationBindings.touch";
+    if (
+      frames.some(
+        (frame) =>
+          / at removeCurrentConversationBindingsInDatabase \(/u.test(frame) ||
+          / at async Object\.unbind \(.*\/session-binding-service[^/]*\.mjs:/u.test(frame),
+      )
+    )
+      return "conversationBindings.remove";
+    return "other";
   };
   const increment = (map: Record<string, number>, key: string) => {
     map[key] = (map[key] ?? 0) + 1;
@@ -582,7 +604,14 @@ function summarizeObserver() {
             typeof item.sql === "string" &&
             typeof item.ok === "boolean",
         );
-        sites.set(item.id, { method: item.method, sql: item.sql, ok: item.ok, cause: item.cause });
+        assert.ok(isStringArray(item.stack), "Frozen observer site has no code stack");
+        sites.set(item.id, {
+          method: item.method,
+          sql: item.sql,
+          ok: item.ok,
+          cause: item.cause,
+          stack: item.stack,
+        });
       } else if (isRecord(item) && item.type === "request") {
         assert.ok(typeof item.phase === "string");
         const count = phaseCount(item.phase);
@@ -616,11 +645,11 @@ function summarizeObserver() {
           count.sql++;
           if (main) count.mainSql++;
           if (!hasCause(site.cause)) count.unattributedSql++;
-          increment(count.sqlByOperation, operation(site.cause));
+          increment(count.sqlByOperation, operation(site.cause, site.stack));
           if (/\binsert\s+into\s+"?current_conversation_bindings"?\b/iu.test(sql)) {
             count.bindingUpserts++;
             if (main) count.mainBindingUpserts++;
-            increment(count.bindingUpsertsByOperation, operation(site.cause));
+            increment(count.bindingUpsertsByOperation, operation(site.cause, site.stack));
           }
         }
       }
