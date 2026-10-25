@@ -108,10 +108,6 @@ function createHistoryProgressPane(
     state,
     setState: (changes: Partial<typeof state>) => Object.assign(state, changes),
     request,
-    load: async () => {
-      await loadChatHistory(state, { deferBranches: true });
-      await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(response.card));
-    },
     expectMethods: (...methods: string[]) =>
       expect(request.mock.calls.map(([method]) => method)).toEqual(methods),
     dismiss: () =>
@@ -134,6 +130,17 @@ it("hides the history owner's card only in this pane without rekeying the compos
   expect(request).not.toHaveBeenCalled();
 
   await loadChatHistory(state, { deferBranches: true });
+  expect(request).toHaveBeenCalledWith(
+    "chat.history",
+    {
+      sessionKey: "notes",
+      knownState: {},
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
+    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+  );
   await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(request).toHaveBeenLastCalledWith("progressCard.get", {
     sessionKey: "agent:research:notes",
@@ -179,7 +186,8 @@ it.each(["revision", "card lifetime", "session incarnation"] as const)(
     let currentHistory = history;
     const f = createHistoryProgressPane(undefined, () => currentHistory);
     const { pane, state, progress } = f;
-    await f.load();
+    await loadChatHistory(state, { deferBranches: true });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
     const displayed = expectDefined(pane.chatProps?.progressCard, "displayed progress card");
     const dismiss = expectDefined(pane.chatProps?.onDismissProgressCard, "local hide action");
     const target = { sessionKey: f.card.sessionKey };
@@ -258,8 +266,9 @@ it("retires a hidden card lifetime while the document is parked without reading 
     .mockImplementation(() => visibility);
   onTestFinished(() => visibilityState.mockRestore());
   const f = createHistoryProgressPane();
-  const { pane, request, progress, emit, emitEvent } = f;
-  await f.load();
+  const { pane, state, request, progress, emit, emitEvent } = f;
+  await loadChatHistory(state, { deferBranches: true });
+  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   const target = { sessionKey: f.card.sessionKey };
   const lifetime = progress.getLifetime(target);
   expect(lifetime).toBeDefined();
@@ -349,8 +358,9 @@ it.each([
   "retires the accepted progress identity after %s",
   async (transition, retire) => {
     const f = createHistoryProgressPane();
-    const { pane, request, card } = f;
-    await f.load();
+    const { pane, state, request, card } = f;
+    await loadChatHistory(state, { deferBranches: true });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
     retire(f);
     await pane.updateComplete;
@@ -362,6 +372,19 @@ it.each([
   },
 );
 
+it("does not adopt a stale history reply after navigation", async () => {
+  const old = createDeferred<ChatHistoryResult>();
+  const request = vi.fn(() => old.promise);
+  const { pane, state } = createHistoryProgressPane(request);
+  const load = loadChatHistory(state, { deferBranches: true });
+  state.sessionKey = "scratch";
+  old.resolve(history);
+  expect(await load).toBeUndefined();
+  await pane.updateComplete;
+  expect(pane.chatProps?.progressCard).toBeNull();
+  expect(request).toHaveBeenCalledOnce();
+});
+
 it("keeps accepted progress through a same-session background history refresh", async () => {
   const refreshed = createDeferred<ChatHistoryResult>();
   let historyReads = 0;
@@ -369,7 +392,8 @@ it("keeps accepted progress through a same-session background history refresh", 
     ++historyReads === 1 ? history : refreshed.promise,
   );
   const { pane, state, request, card } = f;
-  await f.load();
+  await loadChatHistory(state, { deferBranches: true });
+  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
 
   const refreshing = loadChatHistory(state, { deferBranches: true });
   await pane.updateComplete;

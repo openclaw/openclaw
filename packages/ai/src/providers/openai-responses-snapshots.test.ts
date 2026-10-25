@@ -16,14 +16,21 @@ function captureResponses() {
     timestamp: 0,
   };
   const events: AssistantMessageEvent[] = [];
+  const signatures: Array<[string, string | undefined]> = [];
   const sink = {
     push(event: AssistantMessageEvent) {
       events.push(event);
+      if (event.type === "text_start" || event.type === "text_delta" || event.type === "text_end") {
+        const block = event.partial?.content[event.contentIndex];
+        signatures.push([event.type, block?.type === "text" ? block.textSignature : undefined]);
+      }
     },
   };
   return {
     output,
     events,
+    signatures: (exclude: string) =>
+      signatures.filter(([type]) => type !== exclude).map(([, value]) => value),
     run: (input: readonly unknown[]) =>
       processResponsesStream(responseEvents(input), output, sink, nativeOpenAIModel),
   };
@@ -45,27 +52,10 @@ function messageAdded(id: string, phase = "final_answer") {
   return { type: "response.output_item.added", item: { type: "message", id, phase } };
 }
 
-function messageDone(id: string, text: string, title?: string) {
+function messageDone(id: string, text: string, phase = "final_answer") {
   return {
     type: "response.output_item.done",
-    item: {
-      type: "message",
-      id,
-      phase: "final_answer",
-      content: [
-        {
-          type: "output_text",
-          text,
-          ...(title
-            ? {
-                annotations: [
-                  { type: "url_citation", url: `https://example.test/${title}`, title },
-                ],
-              }
-            : {}),
-        },
-      ],
-    },
+    item: { type: "message", id, phase, content: [{ type: "output_text", text }] },
   };
 }
 
@@ -220,8 +210,23 @@ it.each(["streamed", "terminal-only"])(
   "collapses annotated cumulative %s snapshots by provider prose and retains earlier citations",
   async (mode) => {
     const { output, events, run } = captureResponses();
-    const first = messageDone("msg_1", "Hello.", "First");
-    const next = messageDone("msg_2", "Hello. More.", "Second");
+    const annotated = (id: string, text: string, title: string) => ({
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id,
+        phase: "final_answer",
+        content: [
+          {
+            type: "output_text",
+            text,
+            annotations: [{ type: "url_citation", url: `https://example.test/${title}`, title }],
+          },
+        ],
+      },
+    });
+    const first = annotated("msg_1", "Hello.", "First");
+    const next = annotated("msg_2", "Hello. More.", "Second");
     const terminal = {
       ...completed,
       response: { ...completed.response, output: [first.item, next.item] },
@@ -259,7 +264,18 @@ it.each(["Hello.", "Changed.", "Hello. Changed."])(
   "recovers an earlier collapsed item's terminal sources only for its own completed prose: %s",
   async (terminalProse) => {
     const { output, events, run } = captureResponses();
-    const earlier = messageDone("msg_1", terminalProse, "First").item;
+    const earlier = {
+      ...messageDone("msg_1", terminalProse).item,
+      content: [
+        {
+          type: "output_text",
+          text: terminalProse,
+          annotations: [
+            { type: "url_citation", url: "https://example.test/First", title: "First" },
+          ],
+        },
+      ],
+    };
     const next = messageDone("msg_2", "Hello. More.");
     const terminal = {
       ...completed,
@@ -303,7 +319,18 @@ it.each(["First. More.", "Other. More."])(
     const { output, events, run } = captureResponses();
     const first = messageDone("msg_1", "First.");
     const other = messageDone("msg_2", "Other.");
-    const earlier = messageDone("msg_1", "First.", "First").item;
+    const earlier = {
+      ...first.item,
+      content: [
+        {
+          type: "output_text",
+          text: "First.",
+          annotations: [
+            { type: "url_citation", url: "https://example.test/First", title: "First" },
+          ],
+        },
+      ],
+    };
     await run([
       messageAdded("msg_1"),
       first,

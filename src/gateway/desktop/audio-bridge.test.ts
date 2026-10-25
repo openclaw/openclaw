@@ -81,16 +81,6 @@ function ingressRequest(url: string, context: RemoteControlUiIngressContext) {
   return req;
 }
 
-function liveIngress(isCurrent: () => boolean) {
-  return createRemoteControlUiIngressTestContext({
-    assertCurrent() {
-      if (!isCurrent()) {
-        throw new Error("ingress revoked");
-      }
-    },
-  });
-}
-
 function fixture(
   requester?: { isCurrent(): boolean; signal?: AbortSignal },
   source?: DesktopAudioSource,
@@ -136,7 +126,7 @@ function fixture(
     }
     return capture;
   };
-  return { observation, peer, start, firstCapture, attach };
+  return { observation, peer, start, captures, firstCapture, attach };
 }
 
 describe("screen-owned desktop audio", () => {
@@ -228,16 +218,29 @@ describe("screen-owned desktop audio", () => {
     },
   );
 
-  it.each(["requester", "ingress"] as const)(
-    "rejects revoked %s authority at pending capture admission",
-    async (authority) => {
+  it.each([
+    [true, "requester"],
+    [false, "requester"],
+    [false, "ingress"],
+  ] as const)(
+    "carries live authority into pending capture admission (%s, %s)",
+    async (allowed, authority) => {
       let current = true;
       const native = createAudioFixture(tempDirs.make("desktop-viewer-admission-"), {
         deferCapture: true,
       });
       const audio = await native.owner.ready;
       const requesterAbort = new AbortController();
-      const ingress = authority === "ingress" ? liveIngress(() => current) : undefined;
+      const ingress =
+        authority === "ingress"
+          ? createRemoteControlUiIngressTestContext({
+              assertCurrent() {
+                if (!current) {
+                  throw new Error("ingress revoked");
+                }
+              },
+            })
+          : undefined;
       const f = fixture(
         { isCurrent: () => authority === "ingress" || current, signal: requesterAbort.signal },
         audio.source,
@@ -247,15 +250,20 @@ describe("screen-owned desktop audio", () => {
       f.observation.activate();
       f.peer.command("start");
       await native.captureSpawned.promise;
-      current = false;
+      current = allowed;
       native.captureAdmission.resolve();
       await native.captureSettled.promise;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(native.captureAdmitted).not.toHaveBeenCalled();
+      expect(native.captureAdmitted).toHaveBeenCalledTimes(allowed ? 1 : 0);
       expect(requesterAbort.signal.aborted).toBe(false);
-      expect(f.peer.sent).toEqual([]);
+      expect(f.peer.sent.filter((frame) => Buffer.isBuffer(frame))).toEqual(
+        allowed ? [Buffer.from([0, 128, 255, 127])] : [],
+      );
+      expect(f.peer.sent.filter((frame) => typeof frame === "string")).toEqual(
+        allowed ? ['{"state":"started"}'] : [],
+      );
       f.observation.close();
       await native.runs[1]!.wait();
       expect(native.runs.map((run) => run.activity.resultSettled)).toEqual([false, true]);
@@ -295,7 +303,13 @@ it("rechecks ingress authority before publishing after observer authentication",
   const authentication = createDeferred();
   peers.authenticate.mockImplementation(() => authentication.promise);
   let current = true;
-  const context = liveIngress(() => current);
+  const context = createRemoteControlUiIngressTestContext({
+    assertCurrent() {
+      if (!current) {
+        throw new Error("ingress revoked");
+      }
+    },
+  });
   const desktop = new PassThrough();
   const transport = new PassThrough();
   const peer = new ObserverPeer();
@@ -307,12 +321,14 @@ it("rechecks ingress authority before publishing after observer authentication",
   });
   const release = vi.fn();
   try {
-    handleDesktopObserveUpgrade(
-      ingressRequest(`/desktop/observe?token=${ticket.token}`, context),
-      transport,
-      Buffer.alloc(0),
-      { registry: { claimStream: () => desktop, attachObserver: () => ({ release }) } },
-    );
+    expect(
+      handleDesktopObserveUpgrade(
+        ingressRequest(`/desktop/observe?token=${ticket.token}`, context),
+        transport,
+        Buffer.alloc(0),
+        { registry: { claimStream: () => desktop, attachObserver: () => ({ release }) } },
+      ),
+    ).toBe(true);
     current = false;
     authentication.resolve();
     await authentication.promise;
@@ -338,13 +354,25 @@ it.each(["observe", "audio"] as const)(
       principal: { kind: "person", profileId: "person-b" },
     });
     const requester = { isCurrent: () => true, remoteIngressPrincipal: source.resolvePrincipal() };
-    const audio = kind === "audio" ? fixture(requester, undefined, source) : undefined;
+    const audio =
+      kind === "audio"
+        ? mintDesktopAudioObserver({
+            requester,
+            source: {
+              start: async () => {
+                throw new Error("Rejected tickets must not start audio");
+              },
+            },
+          })
+        : undefined;
     const req = ingressRequest(
-      audio?.observation.descriptor.wsPath ??
+      audio?.descriptor.wsPath ??
         `/desktop/observe?token=${mintDesktopObserverToken({ ...observerDefaults, requester }).token}`,
       destination,
     );
     const transport = new PassThrough();
+    const chunks: Buffer[] = [];
+    transport.on("data", (chunk: Buffer) => chunks.push(chunk));
     const attachObserver = vi.fn();
     const claimStream = vi.fn();
     try {
@@ -355,13 +383,11 @@ it.each(["observe", "audio"] as const)(
           registry: { attachObserver, claimStream },
         });
       }
-      expect(transport.read()?.toString()).toContain("401 Unauthorized");
+      expect(Buffer.concat(chunks).toString()).toContain("401 Unauthorized");
       expect(attachObserver).not.toHaveBeenCalled();
       expect(claimStream).not.toHaveBeenCalled();
-      if (audio) {
-        expect(audio.start).not.toHaveBeenCalled();
-      }
     } finally {
+      audio?.close();
       transport.destroy();
     }
   },
