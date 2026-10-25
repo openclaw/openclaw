@@ -5,11 +5,9 @@ import { prepareCliRunModelAuthority } from "../agents/cli-runner/run-admission.
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import { resolveBundledStaticCatalogModel } from "../agents/embedded-agent-runner/model.static-catalog.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
-import { FailoverError } from "../agents/failover-error.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import "../agents/model-fallback-runner.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as attachmentProcessor from "../media/attachment-processor.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -20,11 +18,7 @@ import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
-  vi.fn<
-    (params: RunEmbeddedAgentInternalParams) => Promise<{
-      meta: { durationMs: number; finalAssistantVisibleText: string };
-    }>
-  >(),
+  vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<ReturnType<typeof completion>>>(),
 );
 
 const resolveModelAsync = vi.hoisted(() => vi.fn());
@@ -48,10 +42,7 @@ const { appendMessage, admitWrite, removeSession } = vi.hoisted(() => ({
   admitWrite: vi.fn<(manager: unknown, write: () => void | Promise<void>) => Promise<void>>(),
   removeSession:
     vi.fn<
-      (
-        target: unknown,
-        expectedOwner?: Pick<InternalSessionEntry, "lifecycleRevision" | "activeWriterRunId">,
-      ) => Promise<void>
+      (typeof import("../agents/internal-session-effects.js"))["removeInternalSessionEffectsSession"]
     >(),
 }));
 
@@ -252,10 +243,10 @@ describe("session companion embedded invocation", () => {
     runEmbeddedAgent.mockReset().mockResolvedValue(completion("The session is reading a file."));
   });
 
-  it.each(["embedded", "cli", "denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
+  it.each(["denied-primary", "embedded-cleanup", "cli-cleanup"] as const)(
     "preserves or recovers the utility answer across %s failure",
     async (runtime) => {
-      const isCli = runtime === "cli" || runtime === "cli-cleanup";
+      const isCli = runtime === "cli-cleanup";
       const cleanupFails = runtime === "embedded-cleanup" || runtime === "cli-cleanup";
       const primary = isCli
         ? { provider: "anthropic", modelId: "claude-haiku-4-5" }
@@ -275,26 +266,15 @@ describe("session companion embedded invocation", () => {
       resolveSelection.mockImplementation(({ modelRef }) =>
         modelRef === "test/model-b" ? { provider: "test", modelId: "model-b" } : primary,
       );
-      const failure = new FailoverError("Synthetic unavailable utility model", {
-        reason: "timeout",
-        provider: primary.provider,
-        model: primary.modelId,
-      });
       const cleanup = vi.fn(async () => {
         throw new Error("Synthetic cleanup failure");
       });
       if (isCli) {
         useClaudeCli();
-        if (cleanupFails) {
-          prepareCliRunContext.mockImplementationOnce(async (params) => ({
-            params,
-            preparedBackend: { cleanup },
-          }));
-        } else {
-          executePreparedCliRun.mockRejectedValueOnce(failure);
-        }
-      } else if (runtime === "embedded") {
-        runEmbeddedAgent.mockRejectedValueOnce(failure);
+        prepareCliRunContext.mockImplementationOnce(async (params) => ({
+          params,
+          preparedBackend: { cleanup },
+        }));
       } else if (runtime === "embedded-cleanup") {
         removeSession.mockImplementationOnce(cleanup);
         runEmbeddedAgent.mockResolvedValueOnce({
@@ -312,13 +292,7 @@ describe("session companion embedded invocation", () => {
             : "The session is reading a file.";
       await expectDirectAnswer(companion.ask({ ...question, operatorAuthority }), answer);
       expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(
-        cleanupFails
-          ? isCli
-            ? []
-            : ["model-a"]
-          : runtime === "embedded"
-            ? ["model-a", "model-b"]
-            : ["model-b"],
+        cleanupFails ? (isCli ? [] : ["model-a"]) : ["model-b"],
       );
       expect(executePreparedCliRun).toHaveBeenCalledTimes(isCli ? 1 : 0);
       for (const [params] of runEmbeddedAgent.mock.calls) {

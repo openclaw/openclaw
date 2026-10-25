@@ -253,19 +253,7 @@ async function postOversizedChunkedHook(port: number) {
   }
 }
 
-async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  assert(configPath, "expected OPENCLAW_CONFIG_PATH");
-  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
-  await fs.mkdir(transformsDir, { recursive: true });
-  await fs.writeFile(path.join(transformsDir, moduleName), source, "utf8");
-}
-
-async function createBlockedHookTransform(moduleName: string): Promise<{
-  entered: Promise<void>;
-  release: () => void;
-  dispose: () => void;
-}> {
+async function createBlockedHookTransform(moduleName: string) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
   const enteredEvent = `hook-transform:${configPath}:${moduleName}`;
@@ -275,12 +263,15 @@ async function createBlockedHookTransform(moduleName: string): Promise<{
     entered.resolve();
     void released.promise.then(complete);
   };
-  await writeHookTransformModule(
-    moduleName,
+  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
+  await fs.mkdir(transformsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(transformsDir, moduleName),
     `export default async function transform() {
   await new Promise((resolve) => process.emit(${JSON.stringify(enteredEvent)}, resolve));
   return {};
 }`,
+    "utf8",
   );
   process.once(enteredEvent, onEntered);
   return {

@@ -81,7 +81,7 @@ describe("Gateway startup lifetime", () => {
   it.each(["close", "startup failure"] as const)(
     "releases idle prepared donor custody before registry retirement during %s",
     async (entry) => {
-      const state = await createStartupTestState(`gateway-idle-donor-${entry}`);
+      await using state = await createStartupTestState(`gateway-idle-donor-${entry}`);
       startupTraceEventLoopDelay.instances.length = 0;
       state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       const port = await getFreePort();
@@ -179,7 +179,6 @@ describe("Gateway startup lifetime", () => {
         stateSpy?.mockRestore();
         bootstrapSpy.mockRestore();
         restoreActivePluginRegistrySnapshot(previous);
-        await state.cleanup();
       }
     },
   );
@@ -192,7 +191,7 @@ describe("Gateway startup lifetime", () => {
     "closes early startup owners when invalid config prevents bootstrap (SDK failure: $disposalFails, clear failure: $clearFails)",
     async ({ disposalFails, clearFails }) => {
       startupTraceEventLoopDelay.instances.length = 0;
-      const state = await createStartupTestState("gateway-invalid-config-startup-trace");
+      await using state = await createStartupTestState("gateway-invalid-config-startup-trace");
       state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       await state.writeConfig({ gateway: { mode: 42 } });
       state.applyEnv();
@@ -302,13 +301,12 @@ describe("Gateway startup lifetime", () => {
         for (const owner of metadataOwners) {
           await owner.close();
         }
-        await state.cleanup();
       }
     },
   );
 
   it("stops TLS renewal when the started Gateway closes", async () => {
-    const state = await createStartupTestState("gateway-tls-renewal-close");
+    await using state = await createStartupTestState("gateway-tls-renewal-close");
     const port = await getFreePort();
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
@@ -351,7 +349,6 @@ describe("Gateway startup lifetime", () => {
         await server?.close();
       } finally {
         renewalSpy.mockRestore();
-        await state.cleanup();
       }
     }
   });
@@ -360,7 +357,9 @@ describe("Gateway startup lifetime", () => {
     "joins deferred startup failure while reporting %s cleanup independently",
     async (cleanup, { signal }) => {
       const port = await getFreePort();
-      const state = await createStartupTestState(`gateway-deferred-startup-${cleanup}-cleanup`);
+      await using state = await createStartupTestState(
+        `gateway-deferred-startup-${cleanup}-cleanup`,
+      );
       const startupError = new Error("deferred startup failed");
       const cleanupError = new Error("deferred startup cleanup failed");
       const startup = createDeferred();
@@ -375,18 +374,12 @@ describe("Gateway startup lifetime", () => {
       let publishedStartup: Promise<void> | undefined;
       let startupOutcome: Promise<unknown> | undefined;
       let closeOutcome: Promise<unknown> | undefined;
-      const createKernel = createGatewayKernel;
-      const kernelFactory = vi
-        .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await createKernel(...args);
-          return kernel;
-        });
       const startupModule = await import("./server-startup-finish.js");
       const finishStartup = startupModule.finishGatewayStartup;
       const startupFactory = vi
         .spyOn(startupModule, "finishGatewayStartup")
         .mockImplementation(async (...args) => {
+          kernel = args[0].kernelRuntime;
           const result = await finishStartup(...args);
           const operation = result.startupSettled.then(async () => {
             startupEntered.resolve();
@@ -458,11 +451,9 @@ describe("Gateway startup lifetime", () => {
           if (kernel && (!closeOutcome || outcome !== undefined)) {
             await kernel.closeOnStartupFailure();
           }
-          await state.cleanup();
         } finally {
           signal.removeEventListener("abort", releaseStartup);
           startupFactory.mockRestore();
-          kernelFactory.mockRestore();
           vi.restoreAllMocks();
         }
       }
@@ -473,7 +464,7 @@ describe("Gateway startup lifetime", () => {
     "releases post-ready startup work after failure before joining cleanup (cleanup fails: %s)",
     async (cleanupFails) => {
       const port = await getFreePort();
-      const state = await createStartupTestState("gateway-post-ready-startup-failure");
+      await using state = await createStartupTestState("gateway-post-ready-startup-failure");
       startupTraceEventLoopDelay.instances.length = 0;
       state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
       const startupError = new Error("startup failed after post-attach installation");
@@ -578,7 +569,6 @@ describe("Gateway startup lifetime", () => {
           } else {
             await unexpectedServer?.close();
           }
-          await state.cleanup();
         } finally {
           startupFactory.mockRestore();
           vi.restoreAllMocks();
