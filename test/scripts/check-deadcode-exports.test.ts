@@ -116,6 +116,12 @@ describe("check-deadcode-exports", () => {
       "src/infra/daemon-runtime-probe.entry.ts!",
       "src/infra/node-runtime-probe.entry.ts!",
     ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/gateway/worker-environments/workspace-quiescence-scripts.ts!",
+    );
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/infra/update-managed-service-handoff.ts!",
+    );
 
     const { packageCliNodeProbe: _packageCliNodeProbe, ...withoutPackageCliNodeProbe } =
       runtimeProcessScriptEntrypoints;
@@ -423,6 +429,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).toMatch(
       /import \{ PACKAGE_CLI_NODE_PROBE_SOURCE as __dynamic\d+_0 \} from "\.\.\/scripts\/lib\/package-cli-node-probe\.generated\.mjs";/u,
     );
+    expect(compiled).not.toContain("HANDOFF_SCRIPT");
 
     const generatorPath = path.resolve("scripts/generate-runtime-script-assets.mjs");
     const prepareHooksPath = path.resolve("scripts/prepare-git-hooks.mjs");

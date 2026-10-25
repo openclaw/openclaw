@@ -26,13 +26,20 @@ function importedNames(source, specifier) {
   );
 }
 
+function generatesRuntimeScriptAsset(entry) {
+  // Keep this projection aligned with the generator's manifest-driven ASSETS loop.
+  return entry.kind === "data-url" || ("materialize" in entry && entry.materialize);
+}
+
 export function collectRuntimeProcessManifestEntries(scriptEntrypoints, toolingEntrypoints) {
   const entries = new Set(Object.values(toolingEntrypoints));
   for (const entry of Object.values(scriptEntrypoints)) {
     if ("buildSource" in entry) {
       entries.add(entry.buildSource);
     }
-    entries.add(entry.sourceModule);
+    if (generatesRuntimeScriptAsset(entry)) {
+      entries.add(entry.sourceModule);
+    }
   }
   return [...entries];
 }
@@ -187,7 +194,7 @@ function namedImport(names, targetFile, consumerFile, index) {
  *
  * @param {string} source
  * @param {string} filePath
- * @param {Record<string, {sourceModule: string, sourceBinding?: string}>} [scriptEntrypoints]
+ * @param {Record<string, {kind: string, sourceModule: string, sourceBinding?: string, materialize?: boolean}>} [scriptEntrypoints]
  * @returns {string}
  */
 export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints = {}) {
@@ -338,7 +345,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   }
 
   for (const entry of Object.values(scriptEntrypoints)) {
-    if (entry.sourceBinding) {
+    if (generatesRuntimeScriptAsset(entry) && entry.sourceBinding) {
       imports.push(
         namedImport(
           [entry.sourceBinding],
