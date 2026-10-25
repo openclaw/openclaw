@@ -46,6 +46,8 @@ if (values.prepare) {
       cron: { enabled: false },
       memory: { search: { enabled: false } },
       plugins: { enabled: false },
+      logging: { file: path.join(root, "gateway.log") },
+      agents: { defaults: { model: "openai/gpt-4.1" } },
     }),
   );
   const { installDatabaseProcessRole } =
