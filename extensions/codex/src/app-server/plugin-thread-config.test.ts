@@ -1969,13 +1969,7 @@ describe("Codex plugin thread config", () => {
   });
 
   it("keeps installed apps available when unrelated native refreshes fail", async () => {
-    const appCache = new CodexAppInventoryCache();
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) =>
-        codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)], params),
-    });
+    const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: calendarPluginConfig(),
