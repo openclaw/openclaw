@@ -30,7 +30,6 @@ import { isSessionPersonalBootstrapTurn } from "../sessions/session-participant-
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
   revokeAttachGrant,
@@ -147,12 +146,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         runtimeOwnerToken: runtime.ownerToken,
         admittedRunContext,
       });
-      const capture = activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey: "assignment-capture",
-      });
-      expect(capture).toBeDefined();
+      mcp.captureGrant(grant.token, "assignment-capture", runtime.ownerToken);
       const attach = mintAttachGrant({ sessionKey, agentId: "main" });
       const request = async (
         token: string,
@@ -162,13 +156,12 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         const response = await mcp.sendRaw({
           port: runtime.port,
           token,
-          headers: {
-            "content-type": "application/json",
-            ...(attached ? {} : { "x-openclaw-cli-capture-key": "assignment-capture" }),
-          },
+          headers: mcp.jsonHeaders(
+            attached ? {} : { "x-openclaw-cli-capture-key": "assignment-capture" },
+          ),
           body: params
             ? mcp.mcpToolCallBody(params.name, params.arguments)
-            : JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+            : mcp.mcpToolsListBody(),
         });
         return mcp.readOkMcpPayload(response);
       };

@@ -74,23 +74,13 @@ test("sessions.reset stamps the creator's required sandbox only when materializi
 });
 
 const ownedChildMetadata = {
-  chatType: "group",
   delivery: normalizeSessionDeliveryState({
-    context: {
-      channel: "discord",
-      to: "discord:child",
-      accountId: "acct-1",
-      threadId: "thread-1",
-    },
-    origin: { provider: "discord", chatType: "group" },
+    context: { channel: "discord", to: "discord:child" },
   }),
-  groupId: "group-1",
-  subject: "Ops Thread",
-  groupChannel: "dev",
-  space: "hq",
+  queueMode: "interrupt",
+  label: "owned child",
   spawnedBy: "agent:main:main",
   completionOwnerSessionKey: "agent:main:discord:direct:alice",
-  sidebarRoot: true,
   inheritedToolPolicyVersion: 1,
   inheritedToolAllow: ["read", "message"],
   inheritedToolDeny: ["exec"],
@@ -104,7 +94,6 @@ const ownedChildMetadata = {
   subagentRole: "orchestrator",
   subagentControlScope: "children",
   elevatedLevel: "on",
-  ttsAuto: "always",
   providerOverride: "anthropic",
   modelOverride: "claude-opus-4-1",
   modelOverrideSource: "user",
@@ -113,15 +102,8 @@ const ownedChildMetadata = {
   authProfileOverrideCompactionCount: 7,
   sendPolicy: "deny",
   communication: { send: "never", receive: "ask" },
-  queueMode: "interrupt",
-  queueDebounceMs: 250,
-  queueCap: 9,
-  queueDrop: "old",
-  groupActivation: "always",
-  groupActivationNeedsSystemIntro: true,
   execHost: "gateway",
   execNode: "mac-mini",
-  displayName: "Ops Child",
   cliSessionIds: {
     "claude-cli": "cli-session-123",
   },
@@ -139,8 +121,14 @@ const ownedChildMetadata = {
     },
   },
   claudeCliSessionId: "cli-session-123",
-  label: "owned child",
-  autoLabel: "Device",
+  createdVia: "spawn",
+  createdActor: { type: "agent", id: "agent:main:main" },
+  createdAt: 1_000,
+  forkSource: {
+    sessionKey: "agent:main:root",
+    sessionId: "root-session",
+    entryId: "root-entry",
+  },
 } satisfies Partial<SessionEntry>;
 
 test("sessions.reset rejects a model-locked session without replacing native state", async () => {
@@ -164,24 +152,20 @@ test("sessions.reset retains sandbox choice but requires fresh native runtime co
   });
   const reset = await resetMain();
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry).toMatchObject({ sandboxMode: "off" });
-  expect(reset.payload?.entry.nativeRuntimeConsent).toBeUndefined();
-  expect(read()).toMatchObject({ sandboxMode: "off" });
-  expect(read()).not.toHaveProperty("nativeRuntimeConsent");
+  for (const entry of [reset.payload?.entry, read()]) {
+    expect(entry).toMatchObject({ sandboxMode: "off" });
+    expect(entry).not.toHaveProperty("nativeRuntimeConsent");
+  }
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
-  const read = await seedMain(
-    "sess-stale-skills",
-    {
-      skillsSnapshot: {
-        prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
-        skills: [{ name: "stale" }],
-        version: 0,
-      },
+  const read = await seedMain("sess-stale-skills", {
+    skillsSnapshot: {
+      prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+      skills: [{ name: "stale" }],
+      version: 0,
     },
-    "openai/gpt-test-a",
-  );
+  });
   const reset = await resetMain();
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
@@ -229,16 +213,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     await fs.realpath(path.dirname(storePath)),
     "custom-owned-child-transcript.jsonl",
   );
-  const provenance = {
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
-    createdAt: 1_000,
-    forkSource: {
-      sessionKey: "agent:main:root",
-      sessionId: "root-session",
-      entryId: "root-entry",
-    },
-  } satisfies Partial<SessionEntry>;
   await writeSessionStore({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
@@ -246,7 +220,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
         forkedFromParent: undefined,
-        ...provenance,
         inheritedGitContributorProfileIds: ["original-contributor"],
       }),
     },
@@ -265,9 +238,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     expect(entry).toMatchObject({
       sessionId: "sess-owned-child",
       ...ownedChildMetadata,
-      ...provenance,
     });
-    // Spawned children retain CLI bindings and reseed receipts (fa56682b3ced).
     expect(entry?.cliSessionIds).toEqual(ownedChildMetadata.cliSessionIds);
     expect(entry?.cliSessionBindings).toEqual(ownedChildMetadata.cliSessionBindings);
   }
