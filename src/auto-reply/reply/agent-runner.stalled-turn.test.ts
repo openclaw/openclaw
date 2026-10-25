@@ -305,7 +305,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     attempt.beginWait({
       kind: "retry",
       deadlineAtMs: Date.now() + 60_000,
-      rateLimitRetries: 9,
+      rateLimitStopMessage: "Rate-limit recovery stopped after 9 automatic retries.",
       isCurrent: () => true,
     });
     await stallBeforeOutput(stalled);

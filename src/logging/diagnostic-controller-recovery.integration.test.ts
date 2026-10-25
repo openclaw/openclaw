@@ -85,14 +85,14 @@ it("reports a 54-second stall without requesting recovery from an observing cont
 });
 
 it.each([
-  { kind: "request", deadlineAtMs: 396_000, rateLimitRetries: undefined },
-  { kind: "retry", deadlineAtMs: 396_000, rateLimitRetries: undefined },
-  { kind: "retry", deadlineAtMs: 396_000, rateLimitRetries: 9 },
-  { kind: "backend", deadlineAtMs: 366_000, rateLimitRetries: undefined },
-  { kind: "tool", deadlineAtMs: 1_296_000, rateLimitRetries: undefined },
+  { kind: "request", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: false },
+  { kind: "retry", deadlineAtMs: 396_000, rateLimited: true },
+  { kind: "backend", deadlineAtMs: 366_000, rateLimited: false },
+  { kind: "tool", deadlineAtMs: 1_296_000, rateLimited: false },
 ] as const)(
-  "uses the controller-owned $kind allowance through its exact boundary (rate-limit retries: $rateLimitRetries)",
-  async ({ kind, deadlineAtMs, rateLimitRetries }) => {
+  "uses the controller-owned $kind allowance through its exact boundary (rate-limited: $rateLimited)",
+  async ({ kind, deadlineAtMs, rateLimited }) => {
     const ref = {
       sessionKey: "agent:main:heartbeat-allowance",
       sessionId: "allowance-session",
@@ -126,11 +126,11 @@ it.each([
     } else if (kind === "tool") {
       // Explicit execution plus the existing 15-minute quiet-tool grace.
       attempt.beginTool({ toolName: "exec", toolCallId: "owned-command", deadlineAtMs: 396_000 });
-    } else if (rateLimitRetries !== undefined) {
+    } else if (rateLimited) {
       beginDiagnosticRetryWait({
         owner,
         deadlineAtMs,
-        rateLimitRetries,
+        rateLimitStopMessage: renderRateLimitRetryExhaustion(9),
         signal: operation.abortSignal,
         assertCurrent() {},
       });
@@ -158,7 +158,7 @@ it.each([
     await waitForDiagnosticEventsDrained();
     expect(cancel).toHaveBeenCalledOnce();
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
-    if (rateLimitRetries !== undefined) {
+    if (rateLimited) {
       expect(operation.staleExpiryReason).toBe("rate_limited");
       expect(operation.abortSignal.reason).toMatchObject({
         name: "AbortError",

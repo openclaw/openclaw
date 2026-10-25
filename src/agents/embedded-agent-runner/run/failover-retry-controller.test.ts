@@ -432,6 +432,25 @@ it("reports the scheduled recovery before waiting for backoff", async () => {
   expect(sleep).toHaveBeenCalledWith(500, undefined);
 });
 
+it("hands the watchdog rate-limit copy for the retries already completed", async () => {
+  const onRetryWait = vi.fn(() => vi.fn());
+  controller = createController({ onRetryWait });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "rate_limit" });
+  await checkRetry({ reason: "server_error" });
+  expect(onRetryWait.mock.calls.map((call) => call[2])).toEqual([
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped without a completed model response. Check completed work before trying again.",
+    },
+    {
+      rateLimitStopMessage:
+        "Rate-limit recovery stopped after 1 automatic retry without a completed model response. Check completed work before trying again.",
+    },
+    undefined,
+  ]);
+});
+
 it("continues transient recovery when the retry status callback rejects", async () => {
   const closeRetryWait = vi.fn();
   const onRetryWait = vi.fn(() => closeRetryWait);

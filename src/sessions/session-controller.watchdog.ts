@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { renderRateLimitRecoveryStopped } from "../agents/failover/user-copy.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   decideSessionWatchdog,
@@ -17,7 +16,7 @@ type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "fi
 type OwnedWait = {
   kind: SessionWatchdogWaitKind;
   deadlineAtMs?: number;
-  rateLimitRetries?: number;
+  rateLimitStopMessage?: string;
   isCurrent: () => boolean;
 };
 type OwnedExecution = {
@@ -435,15 +434,15 @@ export function createSessionControllerWatchdog(params: {
     beginWait: (input) => beginWait(input),
     describeStop() {
       // A stop during a rate-limit backoff reports the limit, not a stall.
-      const retries = [...waits].find(
+      const rateLimitMessage = [...waits].find(
         (wait) =>
-          wait.kind === "retry" && wait.rateLimitRetries !== undefined && live(wait.isCurrent),
-      )?.rateLimitRetries;
-      const message =
-        retries === undefined ? "Reply operation stalled" : renderRateLimitRecoveryStopped(retries);
+          wait.kind === "retry" && wait.rateLimitStopMessage !== undefined && live(wait.isCurrent),
+      )?.rateLimitStopMessage;
       return {
-        staleReason: retries === undefined ? "no_activity" : "rate_limited",
-        error: Object.assign(createAbortError(message), { code: "OPENCLAW_SESSION_WATCHDOG" }),
+        staleReason: rateLimitMessage === undefined ? "no_activity" : "rate_limited",
+        error: Object.assign(createAbortError(rateLimitMessage ?? "Reply operation stalled"), {
+          code: "OPENCLAW_SESSION_WATCHDOG",
+        }),
       };
     },
     beginFinalization: beginCleanup,
