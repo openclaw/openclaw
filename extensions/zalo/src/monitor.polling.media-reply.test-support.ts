@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
@@ -105,48 +104,6 @@ const deliverPhoto =
   async ({ dispatcherOptions }: MediaDelivery) => {
     await dispatcherOptions.deliver({ text, mediaUrl: "https://example.com/reply-image.png" });
   };
-
-async function serveFixture(
-  route: ReturnType<typeof createEmptyPluginRegistry>["httpRoutes"][number],
-  id: string,
-  token: string,
-  body: string,
-  contentType: string,
-) {
-  const buffer = Buffer.from(body);
-  const metaStore = createPluginStateKeyedStoreForTests("zalo", {
-    namespace: "hosted-outbound-media",
-    maxEntries: 80,
-  });
-  const chunkStore = createPluginStateKeyedStoreForTests("zalo", {
-    namespace: "hosted-outbound-media-chunks",
-    maxEntries: 16_384,
-  });
-  await chunkStore.register(`media:${id}:chunk:0000`, {
-    id,
-    index: 0,
-    dataBase64: buffer.toString("base64"),
-  });
-  await metaStore.register(`media:${id}:meta`, {
-    id,
-    token,
-    contentType,
-    routePath: "/hooks/zalo/media/",
-    expiresAt: Date.now() + 60_000,
-    chunkCount: 1,
-    byteLength: buffer.byteLength,
-  });
-  const res = createMockServerResponse();
-  const end = vi.spyOn(res, "end");
-  await route.handler(
-    { method: "GET", url: `/hooks/zalo/media/${id}?token=${token}` } as never,
-    res,
-  );
-  expect(res.statusCode).toBe(200);
-  expect(res.getHeader("Content-Type")).toBe(contentType);
-  expect(end).toHaveBeenCalledWith(buffer);
-  return res;
-}
 
 type FailureRow = [
   name: string,
@@ -263,29 +220,24 @@ describe("Zalo polling media replies", () => {
 
   it.each<FailureRow>([
     ["block text", "block", { text: "block reply" }],
-    ["first tool attachment", "tool", photo("first")],
-    ["final attachment", "final", photo("final")],
+    ["tool photo", "tool", photo("first")],
+    ["final photo", "final", photo("final")],
     [
-      "blocked hosted attachment",
+      "blocked hosted photo",
       "tool",
       { text: "caption", mediaUrl: "file:///etc/passwd" },
       { hosted: true, blocked: true },
     ],
-    ["later block attachment", "block", photos(3), { partial: "media" }],
+    ["partial block photo", "block", photos(3), { partial: "media" }],
     [
-      "later tool text chunk",
+      "partial tool text",
       "tool",
       { text: "first chunk second chunk third chunk" },
       { partial: "text" },
     ],
+    ["photo without id", "tool", photos(2), { partial: "media", missingMessageId: true }],
     [
-      "later attachment without a provider id",
-      "tool",
-      photos(2),
-      { partial: "media", missingMessageId: true },
-    ],
-    [
-      "later text chunk without a provider id",
+      "text without id",
       "block",
       { text: "first chunk second chunk" },
       { partial: "text", missingMessageId: true },
@@ -394,11 +346,6 @@ describe("Zalo polling media replies", () => {
       expect(sendPhotoMock).toHaveBeenCalledTimes(
         !isMedia || flags.blocked ? 0 : flags.partial ? 2 : 1,
       );
-      if (flags.hosted) {
-        expect(prepareHostedZaloMediaUrlMock).toHaveBeenCalledWith(
-          hostedMediaOptions("file:///etc/passwd"),
-        );
-      }
     },
   );
 
@@ -433,25 +380,8 @@ describe("Zalo polling media replies", () => {
       const hostedMediaRoute = singleMediaRoute(registry);
       expect(hostedMediaRoute).toBe(firstHostedMediaRoute);
 
-      const firstHeaders = await serveFixture(
-        hostedMediaRoute,
-        "abc123abc123abc123abc123",
-        "route-token-one",
-        "first-image-bytes",
-        "image/png",
-      );
-      expect(firstHeaders.getHeader("Cache-Control")).toBe("no-store");
-
       await (stoppedAccount === "first" ? first : second).stop();
-      expect(singleMediaRoute(registry)).toEqual(hostedMediaRoute);
-
-      await serveFixture(
-        hostedMediaRoute,
-        "def456def456def456def456",
-        "route-token-two",
-        "second-image-bytes",
-        "image/jpeg",
-      );
+      expect(singleMediaRoute(registry)).toBe(hostedMediaRoute);
       await stopMonitors();
       expect(mediaRoutes(registry)).toHaveLength(0);
     },

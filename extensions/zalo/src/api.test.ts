@@ -2,7 +2,6 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-// Zalo tests cover api plugin behavior.
 import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 
 const effectGate = await vi.hoisted(async () =>
@@ -80,20 +79,11 @@ function signalAbortedZaloJsonResponse(signal: AbortSignal, onAbort: () => void)
 }
 
 function createOkFetcher() {
-  return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
+  return vi.fn<ZaloFetch>(async () => Response.json({ ok: true, result: {} }));
 }
 
-async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) => Promise<unknown>) {
-  const fetcher = createOkFetcher();
-  await run("test-token", fetcher);
-  expect(fetcher).toHaveBeenCalledTimes(1);
-  const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo request");
-  if (!init) {
-    throw new Error("expected Zalo request init");
-  }
-  expect(init.method).toBe("POST");
-  expect(init.headers).toEqual({ "Content-Type": "application/json" });
-}
+const text = { chat_id: "chat-123", text: "hello" };
+const photo = (url: string) => ({ chat_id: "chat-123", photo: url });
 
 describe("Zalo API request methods", () => {
   it.each([false, true])(
@@ -113,15 +103,10 @@ describe("Zalo API request methods", () => {
         dispatched.resolve();
         return response.promise;
       });
-      const sending = callZaloApi(
-        "sendMessage",
-        "test-token",
-        { chat_id: "chat-123", text: "hello" },
-        {
-          fetch,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
-      ).then(
+      const sending = callZaloApi("sendMessage", "test-token", text, {
+        fetch,
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
@@ -180,66 +165,69 @@ describe("Zalo API request methods", () => {
     ).rejects.toThrow(expectedError);
   });
 
-  it("uses POST for getWebhookInfo", async () => {
-    await expectPostJsonRequest(getWebhookInfo);
+  it.each([getWebhookInfo, deleteWebhook])("uses JSON POST for %s", async (run) => {
+    const fetcher = createOkFetcher();
+    await run("test-token", fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const init = fetcher.mock.calls[0]?.[1];
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual({ "Content-Type": "application/json" });
   });
 
-  it("keeps POST for deleteWebhook", async () => {
-    await expectPostJsonRequest(deleteWebhook);
-  });
-
-  it("keeps the default request deadline active while reading a hanging send response body", async () => {
-    vi.useFakeTimers();
-    try {
-      let bodyAborted = false;
-      const fetcher = vi.fn<ZaloFetch>(async (_input, init) => {
-        const signal = init?.signal;
-        if (!(signal instanceof AbortSignal)) {
-          throw new Error("expected Zalo request abort signal");
-        }
-        return signalAbortedZaloJsonResponse(signal, () => {
-          bodyAborted = true;
+  it.each(["body", "photo"] as const)(
+    "keeps the %s deadline active until completion",
+    async (kind) => {
+      vi.useFakeTimers();
+      try {
+        const aborted = vi.fn();
+        let requestSignal: AbortSignal | undefined;
+        const fetcher = vi.fn<ZaloFetch>(async (_input, init) => {
+          const signal = expectDefined(init?.signal, "Zalo request abort signal");
+          requestSignal = signal;
+          if (kind === "body") {
+            return signalAbortedZaloJsonResponse(signal, aborted);
+          }
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted();
+                reject(new Error("photo aborted"));
+              },
+              { once: true },
+            );
+          });
         });
-      });
-
-      const promise = sendMessage(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          text: "hello",
-        },
-        fetcher,
-      );
-      const rejected = expect(promise).rejects.toThrow("zalo body aborted");
-
-      await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
-
-      await rejected;
-      const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo send request");
-      if (!init?.signal) {
-        throw new Error("expected Zalo send request abort signal");
+        const promise =
+          kind === "body"
+            ? sendMessage("test-token", text, fetcher)
+            : sendPhoto("test-token", photo("https://example.com/image.png"), fetcher);
+        const rejected = expect(promise).rejects.toThrow(
+          kind === "body" ? "zalo body aborted" : "photo aborted",
+        );
+        await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
+        if (kind === "photo") {
+          expect(requestSignal?.aborted).toBe(false);
+          await vi.advanceTimersByTimeAsync(
+            ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS - ZALO_DEFAULT_REQUEST_TIMEOUT_MS,
+          );
+        }
+        await rejected;
+        expect(requestSignal?.aborted).toBe(true);
+        expect(aborted).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
       }
-      expect(init.signal.aborted).toBe(true);
-      expect(bodyAborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("caps oversized sendChatAction timeouts before scheduling the timer", async () => {
     const setTimeoutMock = vi.spyOn(globalThis, "setTimeout");
     try {
-      const fetcher = vi.fn<ZaloFetch>(
-        async () => new Response(JSON.stringify({ ok: true, result: {} })),
-      );
-
       await sendChatAction(
         "test-token",
-        {
-          chat_id: "chat-123",
-          action: "typing",
-        },
-        fetcher,
+        { chat_id: "chat-123", action: "typing" },
+        createOkFetcher(),
         MAX_TIMER_TIMEOUT_MS + 1_000_000,
       );
 
@@ -264,42 +252,6 @@ describe("Zalo API request methods", () => {
     }
   });
 
-  it("keeps URL-only photo sends past the default and bounds the media window", async () => {
-    vi.useFakeTimers();
-    try {
-      let requestSignal: AbortSignal | undefined;
-      const fetcher = vi.fn<ZaloFetch>(
-        (_input, init) =>
-          new Promise<Response>((_resolve, reject) => {
-            requestSignal = init?.signal ?? undefined;
-            requestSignal?.addEventListener("abort", () => reject(new Error("photo aborted")), {
-              once: true,
-            });
-          }),
-      );
-
-      const promise = sendPhoto(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          photo: "https://example.com/image.png",
-        },
-        fetcher,
-      );
-      await vi.advanceTimersByTimeAsync(ZALO_DEFAULT_REQUEST_TIMEOUT_MS);
-      expect(requestSignal?.aborted).toBe(false);
-
-      const rejected = expect(promise).rejects.toThrow("photo aborted");
-      await vi.advanceTimersByTimeAsync(
-        ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS - ZALO_DEFAULT_REQUEST_TIMEOUT_MS,
-      );
-      await rejected;
-      expect(requestSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("blocks private-network photo URLs before they reach the Zalo API", async () => {
     const fetcher = createOkFetcher();
     resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
@@ -309,10 +261,7 @@ describe("Zalo API request methods", () => {
     await expect(
       sendPhoto(
         "test-token",
-        {
-          chat_id: "chat-123",
-          photo: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-        },
+        photo("http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
         fetcher,
       ),
     ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
@@ -327,19 +276,10 @@ describe("Zalo API request methods", () => {
       "not a url",
       "Zalo photo URL must be an absolute HTTP or HTTPS URL",
     ],
-  ] as const)("%s", async (_name, photo, expectedError) => {
+  ] as const)("%s", async (_name, photoUrl, expectedError) => {
     const fetcher = createOkFetcher();
 
-    await expect(
-      sendPhoto(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          photo,
-        },
-        fetcher,
-      ),
-    ).rejects.toThrow(expectedError);
+    await expect(sendPhoto("test-token", photo(photoUrl), fetcher)).rejects.toThrow(expectedError);
 
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
