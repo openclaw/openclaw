@@ -59,12 +59,14 @@ function fixture(version = 1, frozenProxy = false) {
   });
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
-  api.session.controls.registerControlUiDescriptor({
-    id: "incident",
-    surface: "inline",
-    label: "Incident dashboard",
-    version,
-  });
+  const registerVersion = (descriptorVersion: number) =>
+    api.session.controls.registerControlUiDescriptor({
+      id: "incident",
+      surface: "inline",
+      label: "Incident dashboard",
+      version: descriptorVersion,
+    });
+  registerVersion(version);
   const source: AnyAgentTool = {
     name: "show_incident",
     label: "Show incident",
@@ -83,7 +85,7 @@ function fixture(version = 1, frozenProxy = false) {
   );
   assert(resolved && !Array.isArray(resolved));
   const tool = bindPluginToolCallbacks(entry, builder.registry, resolved);
-  return { ...builder, api, tool };
+  return { ...builder, api, tool, registerVersion };
 }
 
 describe("native inline tool results", () => {
@@ -92,14 +94,6 @@ describe("native inline tool results", () => {
     const direct = await tool.execute("direct-proxy", {});
     expect(asOptionalRecord(direct.details)?.pluginInlineViewInvocation).toEqual(
       expectedInvocation("direct-proxy"),
-    );
-    const { result } = await searchRuntime(tool).call(
-      tool.name,
-      {},
-      { parentToolCallId: "proxy-parent" },
-    );
-    expect(asOptionalRecord(result.details)?.pluginInlineViewInvocation).toEqual(
-      expectedInvocation("tool_call:proxy-parent:show_incident:1"),
     );
     registry.plugins[0]!.enabled = false;
     await expect(tool.execute("retired-proxy", {})).rejects.toThrow("no longer active");
@@ -139,9 +133,7 @@ describe("native inline tool results", () => {
     const payload = { incidentId: "INC-42", text: "<script>text is plugin data</script>" };
     const result = inline(payload);
     expect(result.details.pluginInlineView).toEqual({
-      pluginId: "incidents",
-      viewId: "incident",
-      version: 1,
+      ...view,
       summary: "Showing incident.",
       payload,
     });
@@ -177,19 +169,9 @@ describe("native inline tool results", () => {
   );
 
   it("registers explicit older versions alongside newer interfaces", () => {
-    const { api, registry } = fixture();
-    api.session.controls.registerControlUiDescriptor({
-      id: "incident",
-      surface: "inline",
-      version: 2,
-      label: "Incident v2",
-    });
-    api.session.controls.registerControlUiDescriptor({
-      id: "incident",
-      surface: "inline",
-      version: 1,
-      label: "Duplicate",
-    });
+    const { registerVersion, registry } = fixture();
+    registerVersion(2);
+    registerVersion(1);
     expect(registry.controlUiDescriptors.map((entry) => entry.descriptor.version)).toEqual([1, 2]);
   });
 

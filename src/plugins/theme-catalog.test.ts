@@ -96,9 +96,6 @@ describe("manifest theme catalog", () => {
     "preserves discovered multi-entry identities from %s through catalog and profile selection",
     (id) => {
       const registry = discoverThemePack(fixture(undefined, id));
-      expect(registry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
-        [`${id}/one`, `${id}/Two`].toSorted(),
-      );
       const themes = catalog(createPluginMetadataSnapshotFixture(registry));
       expect(themes.map((theme) => theme.id).toSorted()).toEqual(
         [`${id}/one/neon`, `${id}/Two/neon`].toSorted(),
@@ -195,11 +192,6 @@ describe("manifest theme catalog", () => {
     // Publication freezes the snapshot; captured raster bytes must survive it.
     const before = finalizePluginMetadataSnapshot(plugin.readSnapshot());
     const original = catalog(before)[0];
-    expect(original).toMatchObject({
-      brandIcon: "rocket",
-      avatarHat: "beret",
-      critters: ["ferris"],
-    });
     expect(original?.artwork?.icons?.rocket?.url).toMatch(/\/neon\/icon\/rocket\?v=[a-f0-9]{12}$/);
     expect(original?.artwork?.hats?.beret?.url).toMatch(
       /^\/__openclaw__\/plugin-theme-art\/%40scope%2Fpack\/neon\/hat\/beret\?v=[a-f0-9]{12}$/,

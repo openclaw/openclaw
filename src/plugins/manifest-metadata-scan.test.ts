@@ -230,31 +230,24 @@ describe("listOpenClawPluginManifestMetadata", () => {
     ["non-object JSON", "[]", "invalid", "plugin manifest must be an object"],
     ["non-regular file", undefined, "unreadable", "path does not have the required file type"],
     ["missing file", undefined, undefined, undefined],
-  ])("skips %s with at most one warning across cache hits", (name, contents, kind, error) => {
+    ["JSON5", "{ id: 'invalid-plugin', }", undefined, undefined],
+  ])("handles %s with at most one warning across cache hits", (name, contents, kind, error) => {
     const { pluginDir, manifestPath, env } = createPluginFixture("invalid-plugin", contents);
     if (name === "non-regular file") {
       fs.mkdirSync(manifestPath);
     }
     for (let scan = 0; scan < 2; scan++) {
-      expect(
-        listOpenClawPluginManifestMetadata(env).find((record) => record.pluginDir === pluginDir),
-      ).toBeUndefined();
+      const record = listOpenClawPluginManifestMetadata(env).find(
+        (entry) => entry.pluginDir === pluginDir,
+      );
+      expect(record).toEqual(
+        name === "JSON5"
+          ? { pluginDir, manifest: { id: "invalid-plugin" }, origin: "global" }
+          : undefined,
+      );
     }
     expect(warningMessagesForPath(manifestPath)).toEqual(
       kind ? [`Ignoring ${kind} plugin manifest at ${manifestPath}: ${error}`] : [],
     );
-  });
-
-  it("accepts JSON5 manifests without warning when strict JSON parsing fails", () => {
-    const contents = "{ id: 'json5-plugin', }";
-    const { pluginDir, manifestPath, env } = createPluginFixture("json5-plugin", contents);
-    const records = listOpenClawPluginManifestMetadata(env);
-
-    expect(records).toContainEqual({
-      pluginDir,
-      manifest: { id: "json5-plugin" },
-      origin: "global",
-    });
-    expect(warningMessagesForPath(manifestPath)).toEqual([]);
   });
 });

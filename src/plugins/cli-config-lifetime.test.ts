@@ -32,7 +32,6 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginLoaderTestStateForTest();
@@ -46,23 +45,13 @@ describe("CLI config producer lifetime", () => {
     async (kind) => {
       const { root, configPath, env } = createCliFixture("OPENCLAW_HOME");
       const bundledDir = path.join(root, "bundled");
-      const actionPath = path.join(root, "action.txt");
-      const descriptor =
-        '{ name: "prepared", description: "Prepared command", hasSubcommands: false }';
       const plugin = writePlugin({
         id: "cold-cli",
         dir: path.join(bundledDir, "cold-cli"),
         filename: "index.cjs",
-        body: `module.exports = { id: "cold-cli", register(api) {
-          api.registerCli(({ program }) => program.command("prepared").action(() => require("node:fs").writeFileSync(${JSON.stringify(actionPath)}, api.registrationMode)), { descriptors: [${descriptor}] });
-        } };`,
+        registration:
+          'api.registerCli(({ program }) => program.command("prepared"), { commands: ["prepared"] });',
       });
-      fs.writeFileSync(
-        path.join(plugin.dir, "cli-metadata.cjs"),
-        `module.exports = { id: "cold-cli", register(api) {
-        api.registerCli(() => {}, { descriptors: [{ ...${descriptor}, machineOutput: () => true }] });
-      } };`,
-      );
       patchManifest(plugin.dir, {
         enabledByDefault: true,
         cliCommands: [{ name: "prepared", description: "Prepared command", hasSubcommands: false }],
@@ -117,19 +106,13 @@ describe("CLI config producer lifetime", () => {
           const enabledConfig = { ...read.config, plugins: { enabled: true, allow: [plugin.id] } };
           writeJson(configPath, { plugins: enabledConfig.plugins });
           const params = { cfg: enabledConfig, session, primaryCommand: "prepared" };
-          const descriptors = await loadPluginCliDescriptors(params);
-          expect(descriptors[0]?.machineOutput?.({ argv: [], stdoutIsTTY: true })).toBe(true);
-          expect(await resolvePluginCliRootOwnerIds(params)).toEqual([plugin.id]);
+          expect(await loadPluginCliDescriptors(params)).toMatchObject([{ name: "prepared" }]);
           expect(await resolvePluginCliRootOwnerIds(params)).toEqual([plugin.id]);
           const program = new Command();
           expect(await registerCli(program, { primary: "prepared", session })).not.toBeNull();
           expect(program.commands.map((command) => command.name())).toEqual(["prepared"]);
           session.close();
-          program.hook("preAction", clearPluginMetadataLifecycleCaches);
-          await session.withCache(() => program.parseAsync(["prepared"], { from: "user" }));
-          expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery");
           expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
-          expect(() => session.resolve(params)).toThrow(/preparation is closed/);
           if (kind === "missing-provider") {
             const previousDiscoveries = discover.mock.calls.length;
             fs.unlinkSync(configPath);

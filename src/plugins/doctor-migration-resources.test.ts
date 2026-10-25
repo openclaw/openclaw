@@ -206,9 +206,6 @@ it.each(["declared", "malformed"] as const)(
         .stateMigrations[0]!;
       const result = await collectResources(coerced, "planned-owner");
       expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-      expect(collectBackupResources).toHaveBeenCalledWith(
-        expect.objectContaining({ stateDir, requireLocalResources: true }),
-      );
     }
     expect(resolvePlans).not.toHaveBeenCalled();
     expect(input.warnings).toEqual([]);

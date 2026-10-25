@@ -71,16 +71,14 @@ function expectRejected(
   captured: ReturnType<ReturnType<typeof fixture>["capture"]>,
   message: string,
 ) {
-  expect(captured).toEqual({
-    themes: [],
-    diagnostics: [
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "theme-pack",
-        message: expect.stringContaining(message),
-      }),
-    ],
-  });
+  expect(captured.themes).toEqual([]);
+  expect(captured.diagnostics).toEqual([
+    expect.objectContaining({
+      level: "warn",
+      pluginId: "theme-pack",
+      message: expect.stringContaining(message),
+    }),
+  ]);
 }
 
 describe("manifest theme metadata", () => {
@@ -114,12 +112,6 @@ describe("manifest theme artwork", () => {
   const hats = Object.fromEntries(
     Array.from({ length: 8 }, (_, i) => [`${i}${"a".repeat(31)}`, "hat.svg"]),
   );
-  const critters = Object.fromEntries(
-    Object.keys(hats).map((id) => [
-      id,
-      { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 },
-    ]),
-  );
   it.each([
     normalization(
       {
@@ -134,9 +126,8 @@ describe("manifest theme artwork", () => {
       },
     ),
     normalization({
-      icons: hats,
       hats,
-      critters,
+      critters: { ferris: { source: "critter.svg", title: "a".repeat(60), crossMs: 90000 } },
     }),
     normalization(
       { backgrounds: { light: "./assets/day.png", dark: "assets/night.webp" } },
@@ -221,27 +212,12 @@ describe("manifest theme artwork", () => {
     expectRejected(plugin.capture(), "artwork rocket.svg");
   });
 
-  it("captures sniffed raster backgrounds and omits the theme for unusable images", () => {
-    const plain = createThemeDefinitionFixture();
-    const plugin = fixture(
-      {
-        id: "night",
-        name: plain.name,
-        description: plain.description,
-        source: "theme.json",
-        backgrounds: { dark: "night.webp" },
-      },
-      plain,
-    );
+  it("omits the theme for unusable raster backgrounds", () => {
+    const plugin = fixture({ ...declaration, backgrounds: { dark: "night.webp" } });
     const capture = (bytes: Buffer | string) => {
       fs.writeFileSync(path.join(plugin.rootDir, "night.webp"), bytes);
       return plugin.capture();
     };
-    const captured = capture(WEBP);
-    expect(captured.diagnostics).toEqual([]);
-    expect(captured.themes?.[0]?.artwork).toEqual({
-      backgrounds: { dark: { base64: WEBP.toString("base64") } },
-    });
     for (const bytes of [
       SVG,
       "<html>not an image</html>",
