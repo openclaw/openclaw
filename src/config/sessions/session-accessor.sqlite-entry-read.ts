@@ -32,7 +32,7 @@ import {
   readWithCanonicalSessionAdmission,
 } from "./session-canonical-key.js";
 import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,
@@ -55,7 +55,7 @@ export function parseReadableSessionEntryData(
 ): SessionEntry | null {
   const parsed: SessionEntry | null =
     projection === "delivery"
-      ? parseSqliteSessionEntryRecord(row)
+      ? parseCanonicalSqliteSessionEntry(row)
       : parseSessionEntryRow(row, projection);
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.
@@ -576,7 +576,7 @@ export function readQualifiedSessionEntryRow(
 }
 
 // SQLite's default trim removes only spaces; legacy ID matching used String.trim().
-const SESSION_ID_TRIM_CHARACTERS =
+export const SESSION_ID_TRIM_CHARACTERS =
   "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
 /** Uses the native current-ID and trimmed legacy-ID winner order inside the reader owner. */

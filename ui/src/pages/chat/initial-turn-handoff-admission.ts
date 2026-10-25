@@ -3,6 +3,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   keepVolatileQueuedMessage,
   readChatQueueForScope,
@@ -10,7 +11,11 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { waitForQueuedChatHistory } from "./chat-send-queue-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
+import { admitChatSubmission } from "./history-merge.ts";
 import { takeInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { adoptStartedChatRun } from "./run-lifecycle.ts";
 
 export function admitInitialTurnHandoff(host: ChatHost, sessionKey: string): boolean {
   const handoff = takeInitialTurnHandoff(host, sessionKey);
@@ -22,6 +27,7 @@ export function admitInitialTurnHandoff(host: ChatHost, sessionKey: string): boo
   const alreadyQueued = queue.some((entry) => entry.id === item.id);
   if (!alreadyQueued) {
     keepVolatileQueuedMessage(host, sessionKey, item, item.agentId, { retryable: true });
+    reportChatComposerDraftStorageError(host);
   }
   if (retryAfter) {
     const expected = readQueuedMessageById(host, item.id);
@@ -66,4 +72,38 @@ export function admitInitialTurnHandoff(host: ChatHost, sessionKey: string): boo
       });
   }
   return !alreadyQueued;
+}
+
+/** The run sessions.create acknowledged for the retained first prompt. Read it
+ *  before transcript hydration or admission: a cached receipt retires the prompt. */
+export function readAcknowledgedInitialRun(host: Parameters<typeof adoptStartedChatRun>[0]) {
+  const initial = host.chatSubmissions?.readInitial(
+    host.sessionKey,
+    host.client ?? null,
+    host.currentSessionId,
+  );
+  return initial?.pending
+    ? {
+        id: initial.pendingRunId,
+        startedAt: initial.message.timestamp,
+        sessionId: initial.sessionId,
+      }
+    : undefined;
+}
+
+/** Restore initial-turn presentation after the caller has applied cached history or agent scope. */
+export function admitInitialChatTurn(
+  host: ChatPageHost,
+  run: ReturnType<typeof readAcknowledgedInitialRun>,
+): void {
+  admitInitialTurnHandoff(host, host.sessionKey);
+  admitChatSubmission(host, getChatPendingInputs(host)?.page.items);
+  // Cached history can bind a replacement physical session; only adopt this session's ACK.
+  if (
+    run &&
+    !host.chatRunId &&
+    (!run.sessionId || !host.currentSessionId || run.sessionId === host.currentSessionId)
+  ) {
+    adoptStartedChatRun(host, run.id, run.startedAt);
+  }
 }

@@ -12,28 +12,9 @@ import {
   type IncludeResolver,
   resolveConfigIncludes as resolveIncludes,
 } from "./includes.js";
+import { CONFIG_FILE, ROOT_DIR, configPath, createMockResolver } from "./includes.test-support.js";
 
-const ROOT_DIR = path.parse(process.cwd()).root;
-const CONFIG_DIR = path.join(ROOT_DIR, "config");
 const SHARED_DIR = path.join(ROOT_DIR, "shared");
-
-const CONFIG_FILE = path.join(CONFIG_DIR, "openclaw.json");
-
-function configPath(...parts: string[]) {
-  return path.join(CONFIG_DIR, ...parts);
-}
-
-function createMockResolver(files: Record<string, unknown>): IncludeResolver {
-  return {
-    readFile: (filePath: string) => {
-      if (filePath in files) {
-        return JSON.stringify(files[filePath]);
-      }
-      throw new Error(`ENOENT: no such file: ${filePath}`);
-    },
-    parseJson: JSON.parse,
-  };
-}
 
 function resolve(obj: unknown, files: Record<string, unknown> = {}) {
   return resolveIncludes(obj, CONFIG_FILE, createMockResolver(files));
@@ -71,8 +52,8 @@ async function withFiles(files: Record<string, unknown> = {}) {
   return {
     at,
     write,
-    scan: (parsed: unknown, allowedRoots?: string[]) =>
-      collectIncludePathsRecursive({ configPath: filename, parsed, allowedRoots }),
+    scan: (parsed: unknown, env?: NodeJS.ProcessEnv) =>
+      collectIncludePathsRecursive({ configPath: filename, parsed, env }),
     resolve: (parsed: unknown, options?: Parameters<typeof resolveIncludes>[3]) =>
       resolveIncludes(parsed, filename, undefined, options),
   };
@@ -294,7 +275,8 @@ it("honors explicitly allowed include roots", async () => {
   const { at, scan } = await withFiles();
   const sharedIncludePath = at("shared/shared.json5");
   await writeFixture(sharedIncludePath, "{ shared: true }\n", true);
-  expect(await scan({ $include: sharedIncludePath }, [at("shared")])).toEqual([
+  const env = { OPENCLAW_INCLUDE_ROOTS: at("shared") };
+  expect(await scan({ $include: sharedIncludePath }, env)).toEqual([
     await fs.realpath(sharedIncludePath),
   ]);
 });

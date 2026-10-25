@@ -1,12 +1,7 @@
 import { stripChannelTargetPrefix } from "openclaw/plugin-sdk/channel-core";
 import { normalizeTwitchChannel } from "./utils/twitch.js";
 
-type ParsedTwitchMessagingTarget = {
-  channelTarget: string;
-  isDirectMessage: boolean;
-};
-
-function parseTwitchMessagingTarget(target: string): ParsedTwitchMessagingTarget {
+function parseTwitchMessagingTarget(target: string) {
   const providerTarget = stripChannelTargetPrefix(target, "twitch", "twitch-chat");
   const kindMatch = /^(user|dm|channel|group|conversation|room):/i.exec(providerTarget);
   const kind = kindMatch?.[1]?.toLowerCase();

@@ -60,7 +60,7 @@ export function splitFormAwareCredentialValue(token: string): { secret: string; 
     : { secret: token.slice(0, pairBoundary), suffix: token.slice(pairBoundary) };
 }
 
-export function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
+export function maskSecretValue(token: string): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
-  return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
+  return `${maskToken(maskable)}${suffix}`;
 }

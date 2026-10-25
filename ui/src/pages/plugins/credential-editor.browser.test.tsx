@@ -275,6 +275,20 @@ it("retries a failed inspection without remounting the credential input", async 
   });
 });
 
+it("retries inspection after a saved credential without retaining the command error", async () => {
+  const { editor, context, scope, input } = await mount();
+  scope.client.request.mockRejectedValueOnce(new Error("Saved key inspection unavailable"));
+  editInput(input, "synthetic-saved-key");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await vi.waitFor(() => expect(editor.textContent).toContain("Saved key inspection unavailable"));
+
+  button(editor, "Retry").click();
+  await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
+  expect(editor.querySelector("input")).toBe(input);
+  expect(context.onCommit).toHaveBeenCalledExactlyOnceWith(path, "synthetic-saved-key");
+});
+
 it("commits when focus leaves for another credential, but not its own reveal button", async () => {
   const first = await mount();
   const second = await mount();
@@ -396,6 +410,32 @@ it("retains the reference draft and Cancel until a failed write's retry succeeds
     id: "CHANGED_KEY",
   });
   click("Save");
+  await vi.waitFor(() => expect(modal(editor)).toBeNull());
+});
+
+it("clears a rejected discard while retrying without losing the reference draft", async () => {
+  const { editor, context, text } = await mount(reference());
+  const retried = createDeferred<boolean>();
+  vi.mocked(context.onCommit).mockResolvedValueOnce(false);
+  vi.mocked(context.onDiscard)
+    .mockRejectedValueOnce(new Error("Discard unavailable"))
+    .mockReturnValueOnce(retried.promise);
+  await open(editor);
+  const id = dialogInputs(editor)[1]!;
+  editInput(id, "CHANGED_KEY");
+  await vi.waitFor(() => expect(button(editor, "Save").disabled).toBe(false));
+  button(editor, "Save").click();
+  await vi.waitFor(() => expect(text('[role="alert"]')).toContain("could not be saved"));
+  button(editor, "Cancel").click();
+  await vi.waitFor(() => expect(text('[role="alert"]')).toContain("Discard unavailable"));
+
+  button(editor, "Cancel").click();
+  await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
+  await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
+  expect(dialogInputs(editor)[1]).toBe(id);
+  expect(id.value).toBe("CHANGED_KEY");
+  expect(modal(editor)).not.toBeNull();
+  retried.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });
 

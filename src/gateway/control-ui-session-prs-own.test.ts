@@ -428,11 +428,13 @@ it.each(["grant", "unsubscribe"] as const)(
 );
 
 it.each([
-  ["snapshot", false],
-  ["snapshot", true],
-  ["checks", false],
-  ["checks", true],
-] as const)("keeps own-PR %s transport scoped (retired=%s)", async (mode, retired) => {
+  ["snapshot", "unchanged"],
+  ["snapshot", "grant"],
+  ["checks", "unchanged"],
+  ["checks", "grant"],
+  ["checks", "draft"],
+] as const)("keeps own-PR %s transport scoped (%s)", async (mode, change) => {
+  const retired = change === "grant";
   await withOwnFixture(async (f, remote) => {
     await f.seed(sessionKey, f.profile.id, { worktree });
     await syncCanonicalGitHubIdentity({
@@ -484,6 +486,8 @@ it.each([
       pending = mode === "snapshot" ? f.subscriptions.pollNow() : readChecks(f, respond);
       await awaitGateBeforeSettlement(entered.promise, pending, "Selected transport never started");
       if (retired) {
+        await f.changeReader("grant");
+      } else if (change === "draft") {
         await f.changeReader("visibility");
       }
       release.resolve();

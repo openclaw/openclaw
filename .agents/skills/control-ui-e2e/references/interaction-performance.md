@@ -32,8 +32,10 @@
    only when supported by the selected instrumentation.
 4. **Verify capture.** Apply the main skill's artifact rules. Save per-step trace
    JSON, CPU profile, source-mapped hotspots, screenshot, status, and errors.
-   Label trace/profiler overhead. `control-ui-cold-load-probes.ts` also wraps Lit
-   updates and message delivery: disclose those changes and simulated delays.
+   Label trace/profiler overhead. `ui/src/test-helpers/control-ui-cold-load-probes.ts` records Solid
+   pane render passes, explicit lifecycle notifications, and message delivery;
+   fine-grained bindings and page snapshot computations are outside those render
+   counts. Disclose instrumentation and simulated delays.
    Close CDP, browser, and server resources on success and failure.
    **Done:** artifacts are nonempty and readable, screenshots show the asserted
    states, mapping coverage is reported, and failed attempts remain inspectable.
@@ -54,7 +56,12 @@
   environment caveat in step 2.
 - `ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts`: stream and idle budgets.
 - `ui/src/e2e/cron-search.e2e.test.ts`: interaction-scoped tracing.
-- `ui/src/e2e/chat-model-controls.e2e.test.ts`: large-catalog input measurements.
+- `scripts/bench-control-ui-interactions.ts`: large-catalog input and sidebar measurements; `ui/src/e2e/chat-model-controls.e2e.test.ts` retains the behavior assertions.
+- Use `--trace` for per-task source-mapped attribution (`longTaskDetails`), and
+  separate `--thread-cpu-time` paired runs for actual renderer CPU deltas on a
+  loaded host. A base/base comparison is the A/A control. `--first-pair-screenshots`
+  retains each cell's representative captures and every failure without repeating
+  identical screenshots across timing pairs.
 - `ui/src/e2e/new-session-page.input-latency.e2e.test.ts`: input-latency proof.
 
 Preserve the relevant behavior assertions and structural budgets in these tests.

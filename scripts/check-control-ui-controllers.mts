@@ -1,7 +1,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as ts from "typescript/ast";
-import { isTest, readInventorySources } from "./control-ui-solid-inventory.mts";
+import {
+  isTest,
+  PLUGIN_UI_SOURCE_ROOTS,
+  readInventorySources,
+} from "./control-ui-solid-inventory.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   parseRatchetArgs,
@@ -19,6 +23,14 @@ const PATTERNS = [
   "manualImport",
 ] as const;
 type Pattern = (typeof PATTERNS)[number];
+const SURFACES = [
+  { title: "Control UI", baseline: "control-ui", roots: ["ui/src"] },
+  {
+    title: "Plugin UI",
+    baseline: "plugin-ui",
+    roots: PLUGIN_UI_SOURCE_ROOTS,
+  },
+];
 const GUIDANCE =
   "Use Solid ownership, derivations, refs, and shared primitives; see .agents/skills/solid/references/refactor-checklist.md.";
 
@@ -41,7 +53,9 @@ const COMPUTATIONS = new Set([
 function isViewModule(file: string) {
   return (
     !file.startsWith("ui/src/lib/reactive/") &&
-    (file.endsWith(".tsx") || /^ui\/src\/(?:app|components|pages|plugins)\//u.test(file))
+    (file.endsWith(".tsx") ||
+      /^ui\/src\/(?:app|components|pages|plugins)\//u.test(file) ||
+      /^extensions\/[^/]+\/browser\//u.test(file))
   );
 }
 
@@ -134,7 +148,7 @@ const DOM_ISLANDS = new Set([
   "ui/src/components/link-reader-markdown.tsx", // parsed article HTML
   "ui/src/components/link-reader-panel-owner.ts", // rendered article anchors
   "ui/src/components/link-reader-prefetch-owner.ts", // rendered Markdown links
-  "ui/src/components/lobster-image.ts", // parsed sprite SVG
+  "ui/src/components/lobster-image.ts", // computed-style snapshot of trusted SVG artwork
   "ui/src/components/markdown-blocks-owner.ts",
   "ui/src/components/markdown-code-blocks.ts",
   "ui/src/components/markdown-mermaid.tsx",
@@ -528,22 +542,24 @@ function retiredControllerUsers(root: string, sources: ReadonlyMap<string, strin
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
-    const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
+    const current = readInventorySources(root, {
+      staged: args.staged,
+      roots: SURFACES.flatMap((surface) => surface.roots),
+    });
     const retiredUsers = retiredControllerUsers(root, current);
     if (
       reportRatchetFailures(
         [
           {
-            title:
-              "Retired Control UI controller host modules and contracts must not be reintroduced:",
+            title: "Retired UI controller host modules and contracts must not be reintroduced:",
             entries: [...retiredUsers.hosts],
           },
           {
-            title: "Retired Control UI requestUpdate contracts must not be reintroduced:",
+            title: "Retired UI requestUpdate contracts must not be reintroduced:",
             entries: [...retiredUsers.redraws],
           },
           {
-            title: "Retired Control UI controller patterns must not be reintroduced:",
+            title: "Retired UI controller patterns must not be reintroduced:",
             entries: [...retiredUsers.patterns],
           },
         ],
@@ -555,31 +571,40 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const currentPatterns = solidPatterns(root, current);
     if (
       reportRatchetFailures(
-        [{ title: "Forbidden Control UI Solid patterns:", entries: currentPatterns.forbidden }],
+        [{ title: "Forbidden UI Solid patterns:", entries: currentPatterns.forbidden }],
         GUIDANCE,
       )
     ) {
       return 1;
     }
     let result = 0;
-    for (const pattern of PATTERNS) {
-      const baselinePath = `config/control-ui-${pattern}-baseline.txt`;
-      const checked = runPerFileCountRatchet(root, argv, {
-        baselinePath,
-        baselineHeader: `# Control UI ${pattern} calls; shrink only.\n# Run pnpm check:control-ui-controllers --prune after removing calls.\n`,
-        renameSourceRoots: ["ui/src"],
-        collectCurrent: () => currentPatterns.counts[pattern],
-        // The initial census covers all existing calls; unlisted debt has no allowance.
-        countAtRef: () => 0,
-        messages: {
-          increaseTitle: `Control UI ${pattern} calls must not increase:`,
-          expansionTitle: `Control UI ${pattern} allowances must not increase:`,
-          guidance: GUIDANCE,
-          countNoun: `${pattern} calls`,
-          successTitle: `Control UI ${pattern} ratchet OK`,
-        },
-      });
-      result ||= checked;
+    for (const surface of SURFACES) {
+      for (const pattern of PATTERNS) {
+        const baselinePath = `config/${surface.baseline}-${pattern}-baseline.txt`;
+        const checked = runPerFileCountRatchet(root, argv, {
+          baselinePath,
+          baselineHeader: `# ${surface.title} ${pattern} calls; shrink only.\n# Run pnpm check:control-ui-controllers --prune after removing calls.\n`,
+          renameSourceRoots: surface.roots,
+          collectCurrent: () =>
+            new Map(
+              [...currentPatterns.counts[pattern]].filter(([file]) =>
+                surface.roots.some(
+                  (sourceRoot) => file === sourceRoot || file.startsWith(`${sourceRoot}/`),
+                ),
+              ),
+            ),
+          // The initial census covers all existing calls; unlisted debt has no allowance.
+          countAtRef: () => 0,
+          messages: {
+            increaseTitle: `${surface.title} ${pattern} calls must not increase:`,
+            expansionTitle: `${surface.title} ${pattern} allowances must not increase:`,
+            guidance: GUIDANCE,
+            countNoun: `${pattern} calls`,
+            successTitle: `${surface.title} ${pattern} ratchet OK`,
+          },
+        });
+        result ||= checked;
+      }
     }
     if (result) {
       return result;

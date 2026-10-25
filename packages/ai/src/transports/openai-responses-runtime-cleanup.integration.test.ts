@@ -21,6 +21,7 @@ vi.mock("openai/resources/responses/ws.js", async (importOriginal) => {
 
 import { WebSocketServer } from "ws";
 import { createApiRegistry, type ApiStreamFunction } from "../api-registry.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -75,17 +76,12 @@ function isRuntimeStream(value: unknown): value is AssistantMessageEventStreamCo
 
 function model(params: { provider: string; baseUrl: string }): Model<"openai-responses"> {
   return {
-    id: "scripted-model",
-    name: "Scripted Model",
-    api: "openai-responses",
-    provider: params.provider,
-    baseUrl: params.baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    compat: { supportsResponsesContinuation: true },
+    ...makeProviderModel("openai-responses", params.provider, "scripted-model", {
+      name: "Scripted Model",
+      baseUrl: params.baseUrl,
+      contextWindow: 200_000,
+      compat: { supportsResponsesContinuation: true },
+    }),
     [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
   };
 }

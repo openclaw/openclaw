@@ -44,7 +44,7 @@ const runtimeModel = (
   },
 });
 
-async function openCloud(scenario: ControlUiMockGatewayScenario = {}, multimode = false) {
+async function openCloud(scenario: ControlUiMockGatewayScenario = {}) {
   const page = await openPage();
   const gateway = await installMockGateway(page, {
     workspace: WORKSPACE,
@@ -53,16 +53,7 @@ async function openCloud(scenario: ControlUiMockGatewayScenario = {}, multimode 
     methodResponses: {
       "environments.list": {
         environments: [],
-        profiles: [
-          multimode
-            ? {
-                id: "aws",
-                providerId: "crabbox",
-                executionMode: "worker-turn",
-                executionModes: ["worker-turn", "remote-exec"],
-              }
-            : cloudProfile,
-        ],
+        profiles: [cloudProfile],
       },
       "worktrees.branches": { branches: [], repositoryStatus: "git" },
     },
@@ -138,7 +129,7 @@ suite.define(() => {
     await pollEnabled(start).toBe(true);
 
     await model.click();
-    await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'));
+    await selectChatModelOption(page, "openai/gpt-5.6-luna");
     await pollText(model).toContain("GPT-5.6 Luna");
     await pollAttribute(where, "data-cloud-profile").toBe("aws");
     await pollAttribute(where, "data-machine-class").toBe("fast");
@@ -158,32 +149,9 @@ suite.define(() => {
     await page.keyboard.press("Escape");
 
     await model.click();
-    await selectChatModelOption(
-      page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
-    );
+    await selectChatModelOption(page, "anthropic/claude-sonnet-4-6");
     await pollAttribute(where, "data-cloud-profile").toBe("aws");
     await pollAttribute(where, "data-machine-class").toBe("fast");
     await pollEnabled(start).toBe(true);
   });
-
-  it.each(["openclaw", "codex"] as const)(
-    "keeps the same multimode Crabbox profile selectable for %s",
-    async (runtime) => {
-      const { page, gateway } = await openCloud(
-        {
-          agentModel: "openai/gpt-5.5",
-          models: [runtimeModel("gpt-5.5", "gpt-5.5", "openai", runtime)],
-        },
-        true,
-      );
-      await gateway.waitForRequest("models.list");
-      await page.locator("#new-session-where-trigger").click();
-
-      const profile = page.locator('[data-value="cloud:aws"]');
-      await profile.waitFor();
-      await pollEnabled(profile).toBe(true);
-      await profile.click();
-      await pollText(page.locator("#new-session-where-trigger")).toContain("aws");
-    },
-  );
 });

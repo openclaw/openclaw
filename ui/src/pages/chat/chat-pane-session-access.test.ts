@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -19,7 +20,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 
 async function createHeaderDraftPane(row: GatewaySessionRow) {
   const fixture = createTestChatPane({
@@ -27,12 +31,7 @@ async function createHeaderDraftPane(row: GatewaySessionRow) {
       request: async (method) => {
         switch (method) {
           case "agents.list":
-            return {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [{ id: "main" }],
-            };
+            return makeBootRoster();
           case "sessions.list":
             return sessionsResult([row], 1);
           case "sessions.describe":
@@ -454,13 +453,14 @@ describe("chat pane session access", () => {
         container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
       ).toBe(false),
     );
-    container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    const menu = container.querySelector(".chat-pane__sharing-menu")!;
+    await openNativeMenu(menu, "access");
+    expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(
-        true,
+      expect(container.querySelector<HTMLButtonElement>('[data-value="access"]')?.disabled).toBe(
+        false,
       ),
     );
-    expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
     const access = container.querySelector<HTMLButtonElement>('[data-value="access"]');
     expect(access).not.toBeNull();
     access!.click();

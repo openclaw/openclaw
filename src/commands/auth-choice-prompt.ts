@@ -45,26 +45,6 @@ function groupMatchesProvider(group: AuthChoiceGroup, provider: string | undefin
   return candidates.some((candidate) => normalizeProviderId(candidate) === provider);
 }
 
-function groupToOption(
-  group: AuthChoiceGroup,
-  configuredProvider: string | undefined,
-  detectedProviderIds: ReadonlySet<string> | undefined,
-): WizardSelectOption {
-  const configured = groupMatchesProvider(group, configuredProvider);
-  const detected = [...(detectedProviderIds ?? [])].some((provider) =>
-    groupMatchesProvider(group, provider),
-  );
-  const statuses = [
-    ...(detected ? ["detected"] : []),
-    ...(configured ? ["currently configured"] : []),
-  ];
-  return {
-    value: group.value,
-    label: statuses.length > 0 ? `${group.label} (${statuses.join(", ")})` : group.label,
-    hint: group.hint,
-  };
-}
-
 /** Prompt for a provider group and auth method, with fallback flat selection when needed. */
 export function promptAuthChoiceGrouped(
   params: PromptAuthChoiceGroupedParams & { allowKeepCurrentProvider: true },
@@ -136,9 +116,21 @@ export async function promptAuthChoiceGrouped(
   while (true) {
     const searchable = showingMore || !hasFeaturedGroups;
     const pageGroups = searchable ? moreGroups : featuredGroups;
-    const options: WizardSelectOption[] = pageGroups.map((group) =>
-      groupToOption(group, configuredProvider, params.detectedProviderIds),
-    );
+    const options: WizardSelectOption[] = pageGroups.map((group) => {
+      const configured = groupMatchesProvider(group, configuredProvider);
+      const detected = [...(params.detectedProviderIds ?? [])].some((provider) =>
+        groupMatchesProvider(group, provider),
+      );
+      const statuses = [
+        ...(detected ? ["detected"] : []),
+        ...(configured ? ["currently configured"] : []),
+      ];
+      return {
+        value: group.value,
+        label: statuses.length > 0 ? `${group.label} (${statuses.join(", ")})` : group.label,
+        hint: group.hint,
+      };
+    });
     if (showingMore) {
       options.push({ value: BACK_VALUE, label: "Back" });
     } else {

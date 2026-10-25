@@ -1,6 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import { validateSessionsGoalMutationResult as validateReceipt } from "../../../packages/gateway-protocol/src/session-result-validators.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -28,7 +27,7 @@ import type {
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   captureLifecycleDatabaseScope,
   getSessionKysely,
@@ -48,8 +47,6 @@ import {
 import type { SessionEntry, SessionGoal } from "./types.js";
 
 export type { SessionGoalOperation, SessionGoalOperationResult } from "./goals-operations.types.js";
-
-const validateReceipt = lazyCompile<SessionGoalOperationResult>(SessionsGoalMutationResultSchema);
 
 export { SessionGoalOperationError } from "./goals-operations.types.js";
 

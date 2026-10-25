@@ -10,9 +10,11 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { bindSessionEntryNumericChanges } from "../../../config/sessions/session-accessor.sqlite-session-row.js";
 import { normalizeStatus } from "../../../config/sessions/session-accessor.sqlite-status.js";
 import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "../../../config/sessions/session-entry-json.js";
+import { SESSION_ENTRY_NUMERIC_FIELDS } from "../../../config/sessions/session-entry-numeric-snapshot.js";
 import { attachSessionEntrySnapshots } from "../../../config/sessions/session-entry-snapshot-values.js";
 import {
   sessionEntrySnapshotColumns,
@@ -49,7 +51,10 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
-import { migrateLegacySessionRunOutcome } from "./session-entry-shape.js";
+import {
+  migrateLegacySessionRunOutcome,
+  type SessionEntryStateRepair,
+} from "./session-entry-shape.js";
 
 const DOCTOR_SESSION_REWRITE_BATCH_SIZE = 64;
 
@@ -94,6 +99,7 @@ export function scanDoctorSessionEntryRecords(
                   OR key IN ('provider', 'lastProvider', 'room')
                   OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
                   OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
+                  OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND json_typeof(value) = 'string')
               ) WHEN entry_json IS JSON THEN FALSE ELSE TRUE END`
               : /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
             SELECT 1 FROM json_each(entry_json)
@@ -101,6 +107,7 @@ export function scanDoctorSessionEntryRecords(
               OR key IN ('provider', 'lastProvider', 'room')
               OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
               OR (key = 'status' AND value IN ('running', 'queued'))
+              OR (key IN (${sql.join(SESSION_ENTRY_NUMERIC_FIELDS)}) AND type = 'text')
           ) ELSE 1 END`,
           ),
       )) {
@@ -183,7 +190,9 @@ export async function repairLegacySessionRunOutcomes(
       return rewriteDoctorSessionEntries({
         scope,
         sessionKeys,
-        rawTransform: migrateLegacySessionRunOutcome,
+        rawTransform: (entry, sessionKey, updatedAt) => ({
+          entry: migrateLegacySessionRunOutcome(entry, sessionKey, updatedAt),
+        }),
         expectedIdentity,
         assertCurrent,
       });
@@ -213,7 +222,7 @@ export function rewriteDoctorSessionEntries(
           entry: Record<string, unknown>,
           sessionKey: string,
           updatedAt: number,
-        ) => Record<string, unknown>;
+        ) => SessionEntryStateRepair;
         transform?: never;
       }
   ),
@@ -256,6 +265,7 @@ export function rewriteDoctorSessionEntries(
           let nextEntry: SessionEntry | undefined;
           let deliveryProjectionEntry: SessionEntry | undefined;
           let runOutcome: { status?: unknown; endedAt?: unknown } | undefined;
+          let numericProjection: ReturnType<typeof bindSessionEntryNumericChanges> | undefined;
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
           if (params.rawTransform) {
@@ -269,7 +279,11 @@ export function rewriteDoctorSessionEntries(
             const previousFields = new Map(
               Object.entries(entry).map(([key, value]) => [key, JSON.stringify(value)]),
             );
-            const transformed = params.rawTransform(entry, sessionKey, row.updated_at);
+            const repair = params.rawTransform(entry, sessionKey, row.updated_at);
+            const transformed = repair.entry;
+            numericProjection = repair.numericChanges
+              ? bindSessionEntryNumericChanges(repair.numericChanges)
+              : undefined;
             if (
               transformed.sessionId !== previousSessionId ||
               transformed.updatedAt !== previousUpdatedAt
@@ -307,7 +321,10 @@ export function rewriteDoctorSessionEntries(
               runOutcome = transformed;
             }
             // Invalid identities remain for canonical-key repair; scalar migration cannot certify them.
-            const parsedEntry = parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson });
+            const parsedEntry = parseSqliteSessionEntryRecord({
+              ...row,
+              entry_json: entryJson,
+            });
             if (!parsedEntry) {
               entryValid = 0;
             } else if (
@@ -352,6 +369,7 @@ export function rewriteDoctorSessionEntries(
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                ...numericProjection?.node,
                 ...predicateColumns,
                 session_started_at: /* kysely-allow-raw: exact int64 bind; generated INTEGER reads are numbers. */ sql<
                   number | null
@@ -372,12 +390,12 @@ export function rewriteDoctorSessionEntries(
                   channel: sessionDeliveryChannel(projected) ?? null,
                 }
               : undefined;
-          if (deliveryProjection || runProjection) {
+          if (deliveryProjection || runProjection || numericProjection?.window) {
             executeSqliteQuerySync(
               database.db,
               db
                 .updateTable("session_windows")
-                .set({ ...deliveryProjection, ...runProjection })
+                .set({ ...numericProjection?.window, ...deliveryProjection, ...runProjection })
                 .where("session_id", "=", row.current_session_id),
             );
           }

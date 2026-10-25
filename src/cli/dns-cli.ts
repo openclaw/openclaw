@@ -250,7 +250,7 @@ export function registerDnsCli(program: Command) {
           ``,
         ].filter((line): line is string => Boolean(line));
 
-        replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
+        await replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
       }
 
       defaultRuntime.log("");

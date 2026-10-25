@@ -35,6 +35,7 @@ type JoinedSpawn = {
   toolCallId?: string;
   claimed: boolean;
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  subagentProfile?: import("../../../plugins/subagent-profile.types.js").RegisteredSubagentProfile;
 };
 const joinedSpawns = new AsyncLocalStorage<JoinedSpawn>();
 
@@ -174,6 +175,7 @@ export async function runWithJoinedCollectorSpawn<T>(
   assertCurrent: () => void,
   run: () => Promise<T>,
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"],
+  subagentProfile?: JoinedSpawn["subagentProfile"],
 ): Promise<T> {
   const owner = getAgentToolAvailabilityBinding(tool);
   if (!owner || !spawnCapabilities.has(owner)) {
@@ -185,6 +187,7 @@ export async function runWithJoinedCollectorSpawn<T>(
     active: true,
     claimed: false,
     nativePluginOwner,
+    subagentProfile,
   };
   return await joinedSpawns.run(joined, async () => {
     try {
@@ -197,7 +200,7 @@ export async function runWithJoinedCollectorSpawn<T>(
 }
 
 /** Only the exact claimed native spawn can carry SDK provenance into registration. */
-export function captureCollectorPluginOwner(tool: object, toolCallId: string) {
+function captureCollectorPluginOwner(tool: object, toolCallId: string) {
   const joined = joinedSpawns.getStore();
   if (
     !joined ||
@@ -209,6 +212,17 @@ export function captureCollectorPluginOwner(tool: object, toolCallId: string) {
   }
   assertJoinedSpawn(joined);
   return joined.nativePluginOwner ? { ...joined.nativePluginOwner } : undefined;
+}
+
+/** Capture host-only SDK context once at the exact claimed invocation. */
+export function captureCollectorPluginContext(tool: object, toolCallId: string) {
+  const nativePluginOwner = captureCollectorPluginOwner(tool, toolCallId);
+  const profile = joinedSpawns.getStore()?.subagentProfile;
+  return {
+    nativePluginOwner,
+    subagentProfile:
+      nativePluginOwner && profile?.pluginId === nativePluginOwner.pluginId ? profile : undefined,
+  };
 }
 
 /** Bind the private context to the catalog's exact invocation before awaited hooks. */

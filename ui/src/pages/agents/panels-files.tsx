@@ -186,14 +186,18 @@ export function AgentFiles(
         fallback={
           <AgentFileStatus
             request={params.readData().agentFileOutcome}
-            fallback={(message) => <div class="callout danger">{message}</div>}
+            fallback={(message) => (
+              <div class="callout danger" role="alert">
+                {message}
+              </div>
+            )}
           >
             <AgentReadNotice request={params.listRead} />
           </AgentFileStatus>
         }
       >
         {(name) => (
-          <div class="callout danger">
+          <div class="callout danger" role="alert">
             <AgentFileStatus
               request={params.readData().agentFileOutcome}
               fallback={(message) => <span>{message}</span>}
@@ -266,7 +270,7 @@ export function AgentFiles(
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
                   variant: "sub",
-                  onSelect: params.onSelectFile,
+                  onSelect: (name) => void params.onSelectFile(name),
                 }}
               />
               {creatableFiles().length === 0 ? undefined : (
@@ -280,7 +284,7 @@ export function AgentFiles(
                     const name = select.value;
                     select.value = "";
                     if (name) {
-                      params.onSelectFile(name);
+                      void params.onSelectFile(name);
                     }
                   }}
                 >

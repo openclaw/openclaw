@@ -317,7 +317,7 @@ it("recovers an untransferred requester cohort after restart in one write", asyn
     expect(restored.requesterSettleWake).toBeUndefined();
     const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
     context.resolveGatewayContext = () => context;
-    await activateSubagentRegistry(context.resolveGatewayContext);
+    await activateSubagentRegistry(context.resolveGatewayContext).settled;
     expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
     expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
     expect(subagentRuns.get(restored.runId)?.requesterSettleWake).toMatchObject({

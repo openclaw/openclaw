@@ -241,11 +241,15 @@ it("expires a task's admission budget without poisoning its successor or resourc
     ...taskContext(admission.port),
     databaseAdmissionDeadlineAtMs: Date.now() - 1,
   });
-  expect(port.postMessage).toHaveBeenCalledWith({
-    status: "failed",
-    taskId: 1,
-    error: "SQLite admission facts exchange timed out; the host did not reply",
-  });
+  expect(port.postMessage).toHaveBeenCalledWith(
+    {
+      status: "failed",
+      taskId: 1,
+      error: "SQLite admission facts exchange timed out; the host did not reply",
+      diagnostics: undefined,
+    },
+    [],
+  );
   expectCalls(0, admission.exchanges);
   port.emit("message", { closeResource: true, resourcePort: receipt });
   await receipt.closed;

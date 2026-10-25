@@ -76,7 +76,9 @@ async function grantStarts(): Promise<void> {
         (work.preparation && preparations >= MAX_CONCURRENT_PREPARATIONS) ||
         (!work.independentRead && blockedConnections.has(work.connection.id))
       ) {
-        blockedConnections.add(work.connection.id);
+        if (!work.independentRead) {
+          blockedConnections.add(work.connection.id);
+        }
         return false;
       }
       return true;
@@ -139,11 +141,12 @@ export function scheduleGatewayRequestStart(
   return runOutsideGatewayRootWorkAdmission(() => {
     // Handshakes bypass this queue. Yield before each snapshot/replay start so
     // ready upgrade/hello I/O runs before another preparation resumes on the main thread.
+    const params = asOptionalRecord(request.params);
     const preparation =
-      request.method === "sessions.subscribe" ||
+      (request.method === "sessions.subscribe" &&
+        Object.keys(params ?? {}).some((key) => key !== "includeMessageBodies")) ||
       request.method === "models.list" ||
-      (request.method === "sessions.messages.subscribe" &&
-        asOptionalRecord(request.params)?.includeApprovals === true);
+      (request.method === "sessions.messages.subscribe" && params?.includeApprovals === true);
     const lifecycle =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
       (request.method === "gateway.suspend.prepare" ||
@@ -154,12 +157,21 @@ export function scheduleGatewayRequestStart(
         request.method === "update.status" ||
         request.method === "update.run");
     const independentRead =
+      request.method === "models.list" ||
       request.method === "chat.history" ||
+      request.method === "board.get" ||
+      request.method === "sessions.resolve" ||
+      request.method === "sessions.describe" ||
       request.method === "sessions.list" ||
+      request.method === "users.list" ||
+      request.method === "agents.list" ||
+      request.method === "agent.identity.get" ||
+      request.method === "plugins.controlUi.list" ||
       request.method === "cron.list" ||
       request.method === "push.web.vapidPublicKey" ||
       request.method === "sessions.github.options" ||
       request.method === "workboard.cards.list" ||
+      request.method === "workboard.boards.list" ||
       request.method === "github.preview" ||
       request.method === "gateway.suspend.status" ||
       request.method === "update.status";
@@ -167,8 +179,7 @@ export function scheduleGatewayRequestStart(
       lifecycle ||
       (frameBytes <= MAX_CONTROL_FRAME_BYTES &&
         (request.method === "sessions.messages.unsubscribe" ||
-          (request.method === "sessions.messages.subscribe" &&
-            asOptionalRecord(request.params)?.includeApprovals !== true)));
+          (request.method === "sessions.messages.subscribe" && params?.includeApprovals !== true)));
     const budget = control ? controlBudget : workBudget;
     const connection = budget.connections.get(connId);
     // Parked preparations still consume waiting capacity, never a runnable start.

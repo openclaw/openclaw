@@ -28,6 +28,7 @@ import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-prefli
 import { registerAgentTurnSourceAdmission } from "../agent-turn/agent-turn-source-admission.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
@@ -97,17 +98,7 @@ it.each(["chat", "projected"] as const)(
       const runId = `describe-${owner}-run`;
       await upsertSessionEntryCore(scope, {
         status: "done",
-        goal: {
-          schemaVersion: 1,
-          id: "active-goal",
-          objective: "Finish the task",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        goal: createSessionGoalFixture("active-goal", "Finish the task"),
       });
       await initializeSessionReadContext(context);
       const assertActivity = activityReader(context, client, runId, owner === "projected");

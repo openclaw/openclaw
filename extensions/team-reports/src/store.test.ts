@@ -5,6 +5,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { describePeriod } from "./periods.js";
+import { reportMember } from "./reports-data.test-support.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
@@ -36,15 +37,9 @@ function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {
       github: counts(logins.length),
       discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
     },
-    members: logins.map((login) => ({
-      login,
-      display: login,
-      access: [],
-      areas: [],
-      aliases: [],
-      github: { ...counts(1), items: [] },
-      discord: { total: 2, channels: { general: 2 }, excerpts: [] },
-    })),
+    members: logins.map((login) =>
+      reportMember(login, { discord: { total: 2, channels: { general: 2 }, excerpts: [] } }),
+    ),
     otherActors: [],
     unmatchedDiscord: [],
     sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },

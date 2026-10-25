@@ -19,7 +19,6 @@ import {
 } from "./manager-postgres-reindex.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
-  resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
@@ -60,11 +59,17 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
     if (!state) {
       return;
     }
-    await state.shadow.closeShadow();
-    this.reindexState = undefined;
-    if (!state.shadow.postgresStageId) {
-      state.shadow.assertShadowPath();
-      await removeMemoryDatabaseFiles(state.tempDbPath);
+    try {
+      if (state.progress.cacheWritesPendingPrune) {
+        await this.withPublishedDatabase(() => this.pruneEmbeddingCacheIfNeeded());
+      }
+    } finally {
+      await state.shadow.closeShadow();
+      this.reindexState = undefined;
+      if (!state.shadow.postgresStageId) {
+        state.shadow.assertShadowPath();
+        await removeMemoryDatabaseFiles(state.tempDbPath);
+      }
     }
   }
 
@@ -135,6 +140,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
         publishedIdentity: originalDatabase.facts.serialized,
         progress: {
           memoryComplete: false,
+          cacheWritesPendingPrune: false,
           completedSessionFiles: new Set(),
           changedSessionFiles: new Set(),
           changedSessionTargets: new Map(),
@@ -194,11 +200,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
             ? this.syncProviderGeneration.providerKey
             : this.providerKey!,
           sources: resolveConfiguredSourcesForMeta(this.sources),
-          scopeHash: resolveConfiguredScopeHash({
-            workspaceDir: this.workspaceDir,
-            extraPaths: this.settings.extraPaths,
-            multimodal: this.settings.multimodal,
-          }),
+          scopeHash: this.resolveConfiguredMemoryScopeHash(),
           chunkTokens: this.settings.chunking.tokens,
           chunkOverlap: this.settings.chunking.overlap,
           chunkingVersion: MEMORY_CHUNKING_VERSION,
@@ -274,9 +276,10 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
-      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
-      // cache only after successful publication so failed rebuilds retain their work.
+      // Rebuild writes must not evict unread hits. After publication the ordinary
+      // policy can prefer vectors no longer referenced by the replacement index.
       await this.pruneEmbeddingCacheIfNeeded();
+      state.progress.cacheWritesPendingPrune = false;
       this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);

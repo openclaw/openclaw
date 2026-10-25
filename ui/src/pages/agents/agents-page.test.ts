@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesListResult,
   CronJob,
@@ -10,6 +10,7 @@ import type {
   ModelCatalogEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
@@ -436,43 +437,91 @@ describe("AgentsPage gateway lifecycle", () => {
       const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
       const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
       const oldResult = deferred<{ models: ModelCatalogEntry[] }>();
-      const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
-      const nextClient = new GatewayBrowserClient({ url: "ws://gateway.test" });
-      const oldRequest = vi
-        .spyOn(client, "request")
-        .mockReturnValueOnce(oldResult.promise)
-        .mockResolvedValue({ models: nextModels });
-      const nextRequest = vi.spyOn(nextClient, "request").mockResolvedValue({ models: nextModels });
-      const initial = mountPage(client);
+      let oldModelReads = 0;
+      const oldRequest = vi.fn((method: string) => {
+        if (method === "agents.list") {
+          return Promise.resolve(agentsList);
+        }
+        if (method === "models.list") {
+          return oldModelReads++ === 0
+            ? oldResult.promise
+            : Promise.resolve({ models: nextModels });
+        }
+        throw new Error(`Unexpected gateway method: ${method}`);
+      });
+      const nextRequest = vi.fn(async (method: string) => {
+        if (method === "agents.list") {
+          return agentsList;
+        }
+        if (method === "models.list") {
+          return { models: nextModels };
+        }
+        throw new Error(`Unexpected gateway method: ${method}`);
+      });
+      const client = createTestGatewayClient(oldRequest);
+      const nextClient = createTestGatewayClient(nextRequest);
+      const owners: Array<() => void> = [];
+      const mountOwnedPage = async () => {
+        const currentGateway = gateway(snapshot(client));
+        const agents = createAgentCapability(currentGateway);
+        const selection = createAgentSelectionCapability(
+          currentGateway,
+          agents,
+          undefined,
+          undefined,
+          { requireConfiguredAgent: true },
+        );
+        owners.push(() => {
+          selection.dispose();
+          agents.dispose();
+        });
+        await agents.ensureList();
+        return mountPage(client, "overview", {
+          gateway: currentGateway,
+          agents,
+          settingsAgentSelection: selection,
+        });
+      };
+      const initial = await mountOwnedPage();
       let page = initial.page;
       const currentGateway = initial.currentGateway;
 
-      refreshPanel(page);
-      if (replacement === "publication") {
-        emitCatalogChanged(currentGateway);
-      } else {
-        if (replacement === "reconnect") {
-          emitGatewaySnapshot(currentGateway, snapshot(client, false));
-        }
-        if (replacement === "gateway source") {
-          page.dispose();
-          ({ page } = mountPage(client));
-        } else {
-          emitGatewaySnapshot(
-            currentGateway,
-            snapshot(replacement === "client" ? nextClient : client),
-          );
-        }
+      try {
         refreshPanel(page);
+        if (replacement === "publication") {
+          emitCatalogChanged(currentGateway);
+        } else {
+          if (replacement === "reconnect") {
+            emitGatewaySnapshot(currentGateway, snapshot(client, false));
+          }
+          if (replacement === "gateway source") {
+            page.dispose();
+            ({ page } = await mountOwnedPage());
+          } else {
+            emitGatewaySnapshot(
+              currentGateway,
+              snapshot(replacement === "client" ? nextClient : client),
+            );
+          }
+          refreshPanel(page);
+        }
+
+        await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
+        oldResult.resolve({ models: oldModels });
+        await oldResult.promise;
+        await Promise.resolve();
+
+        expect(page.read().overview.modelCatalog).toEqual(nextModels);
+        expect(
+          [...oldRequest.mock.calls, ...nextRequest.mock.calls].filter(
+            ([method]) => method === "models.list",
+          ),
+        ).toHaveLength(2);
+      } finally {
+        oldResult.resolve({ models: oldModels });
+        page.dispose();
+        owners.forEach((dispose) => dispose());
       }
-
-      await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
-      oldResult.resolve({ models: oldModels });
-      await oldResult.promise;
-      await Promise.resolve();
-
-      expect(page.read().overview.modelCatalog).toEqual(nextModels);
-      expect(oldRequest.mock.calls.length + nextRequest.mock.calls.length).toBe(2);
     },
   );
 
@@ -718,22 +767,31 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.read().readData().cron.cronJobs).toEqual([job]);
   });
 
-  it("preserves matching initial route data, then resets it on provider replacement", () => {
+  it("reads the current owner roster across provider replacement", () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
     const selection = settingsSelection(agentsList);
     const agents = agentsCapability(async () => files("main", "unused"));
-    agents.state.agentsList = null;
+    agents.state.agentsList = {
+      ...agentsList,
+      agents: [...agentsList.agents, { id: "ordinary-looking-id", kind: "system" }],
+    };
     const route = agentsRouteData(currentGateway, agentsList, "main", selection);
     const context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
+    const ensureIdentities = vi.fn(async () => {});
+    context.agentIdentity.ensure = ensureIdentities;
     const page = createAgentsPage(context, route);
-    expect(page.read().readData().agentsList).toBe(agentsList);
+    expect(page.read().readData().agentsList).toBe(agents.state.agentsList);
     expect(page.read().selectedAgentId).toBe("main");
+    expect(ensureIdentities).toHaveBeenLastCalledWith(["main"]);
 
     page.dispose();
+    const replacementAgents = agentsCapability(async () => files("main", "unused"));
+    replacementAgents.state.agentsList = null;
     const replacement = createAgentsPage(
       {
         ...context,
+        agents: replacementAgents,
         gateway: gateway(snapshot(client, false)),
         settingsAgentSelection: settingsSelection(null, null),
       },
@@ -743,7 +801,7 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(replacement.read().selectedAgentId).toBeNull();
   });
 
-  it("rejects preloaded data after a same-client gateway source replacement", async () => {
+  it("loads the current owner after a same-client gateway source replacement", async () => {
     const client = {} as GatewayBrowserClient;
     const preloadedSnapshot = snapshot(client);
     const preloadedGateway = gateway(preloadedSnapshot);
@@ -842,7 +900,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await agents.ensureList();
     const { page } = mountPage(client, "files", { gateway: currentGateway, agents });
     try {
-      page.read().agentFiles.onSelectFile("cached.md");
+      await page.read().agentFiles.onSelectFile("cached.md");
       await waitForFast(() =>
         expect(agentFileValues(page.read().readData(), "content")).toEqual({ "cached.md": "keep" }),
       );

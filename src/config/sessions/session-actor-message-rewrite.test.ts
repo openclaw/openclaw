@@ -24,6 +24,7 @@ import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionMessageRewriteSelection } from "./session-transcript-mutation.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: The fixture owns its database and transcript maintenance lifetime.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -33,13 +34,7 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const message = { role: "user", content: "Original question" };
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  timestamp: "2026-01-01T00:00:01Z",
-  message,
-};
+const question = timedMessageEvent("question", null, "2026-01-01T00:00:01Z", message);
 
 function fixture(f: Fixture, pretty = false, sideEvents = 0) {
   const header = {

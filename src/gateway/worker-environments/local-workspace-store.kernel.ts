@@ -1,4 +1,3 @@
-import type { Selectable, Updateable } from "kysely";
 import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents/worktrees/run-lease-store.kernel.js";
 import {
   executeSqliteQuerySync,
@@ -10,27 +9,13 @@ import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type {
+  LocalWorkspaceMutation,
+  LocalWorkspaceProjection,
+} from "./local-workspace-store.types.js";
 
 const table = "local_workspace_projections";
 const nodes = "local_workspace_manifest_nodes";
-export type LocalWorkspaceProjection = Selectable<DB[typeof table]>;
-export type LocalWorkspaceManifestMutation = {
-  records: LocalWorkspaceManifestRecord[];
-  removed: string[];
-  previousRoot: string | null;
-  resultingRoot: string;
-  replace?: boolean;
-};
-export type LocalWorkspaceMutation =
-  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
-  | {
-      kind: "update";
-      revision: number;
-      patch: Updateable<DB[typeof table]>;
-      manifest?: LocalWorkspaceManifestMutation;
-    }
-  | { kind: "delete"; revision: number };
 const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, typeof table | typeof nodes>>(db);
 

@@ -48,6 +48,46 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     readyToScroll = false;
     label?.classList.remove("hover-marquee--scrolling");
   };
+  const active = () =>
+    host &&
+    (host.matches(":hover, :focus-visible") ||
+      (host.contains(label.ownerDocument.activeElement) &&
+        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
+      // Touch menus keep revealing their trigger while focus moves into the portal.
+      (options.loop && host.getAttribute("aria-expanded") === "true"));
+  const start = () => {
+    if (timer === undefined && !label.classList.contains("hover-marquee--scrolling")) {
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        readyToScroll = true;
+        schedule();
+      }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+    }
+  };
+  const enter = () => {
+    // Resize/content observers own the resting fade; brief navigation needs no geometry.
+    if (
+      !options.stationary &&
+      !stationaryHost &&
+      visible &&
+      !motion?.matches &&
+      label.classList.contains("hover-marquee--overflowing")
+    ) {
+      start();
+    }
+  };
+  const leave = (event: Event) => {
+    if (
+      event instanceof FocusEvent &&
+      event.relatedTarget instanceof Node &&
+      host?.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    if (!active()) {
+      stop();
+    }
+  };
   const clearOverflow = () => {
     label.classList.toggle("hover-marquee--overflowing", false);
     stop();
@@ -87,8 +127,11 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
         return undefined;
       }
       if (!stationaryHost) {
-        for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-          stopListeners.push(listen(host, event, schedule));
+        for (const event of ["pointerenter", "focusin"]) {
+          stopListeners.push(listen(host, event, enter));
+        }
+        for (const event of ["pointerleave", "focusout"]) {
+          stopListeners.push(listen(host, event, leave));
         }
         motion = matchMedia("(prefers-reduced-motion: reduce)");
         stopListeners.push(listen(motion, "change", schedule));
@@ -132,13 +175,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     if (!clipped) {
       return clearOverflow;
     }
-    const active =
-      host.matches(":hover, :focus-visible") ||
-      (host.contains(label.ownerDocument.activeElement) &&
-        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
-      // Touch menus keep revealing their trigger while focus moves into the portal.
-      (options.loop && host.getAttribute("aria-expanded") === "true");
-    if (options.stationary || stationaryHost || !active || !visible || motion?.matches) {
+    if (options.stationary || stationaryHost || !active() || !visible || motion?.matches) {
       return () => {
         label.classList.toggle("hover-marquee--overflowing", clipped);
         stop();
@@ -167,12 +204,8 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       if (readyToScroll) {
         readyToScroll = false;
         label.classList.add("hover-marquee--scrolling");
-      } else if (timer === undefined && !scrolling) {
-        timer = window.setTimeout(() => {
-          timer = undefined;
-          readyToScroll = true;
-          schedule();
-        }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+      } else {
+        start();
       }
     };
   };

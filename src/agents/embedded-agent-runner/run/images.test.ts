@@ -20,6 +20,7 @@ import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import { log } from "../logger.js";
+import { describedImageUnderstanding } from "./image-description.test-support.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -281,14 +282,7 @@ describe("detectAndLoadPromptImages", () => {
       prompt: `[media attached: ${imagePath} (image/png)]`,
       media: buildInboundMediaNoteProjection({
         media: [{ path: imagePath, contentType: "image/png" }],
-        MediaUnderstanding: [
-          {
-            kind: "image.description",
-            attachmentIndex: 0,
-            text: "already described",
-            provider: "test",
-          },
-        ],
+        MediaUnderstanding: describedImageUnderstanding(),
       }).media,
       workspaceDir,
     });

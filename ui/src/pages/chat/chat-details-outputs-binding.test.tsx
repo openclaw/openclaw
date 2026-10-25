@@ -89,8 +89,7 @@ function mountOutputs(
     showDashboard: openDashboard,
   };
   let binding = createDetailsOutputsBinding(context, state, workspace, board.provider, acquired);
-  const icons = { renderArtifactIcon: () => null, renderViewAllIcon: () => null };
-  const read = () => projectDetailsOutputs(binding, workspace, readBoard(), icons).outputs!;
+  const read = () => projectDetailsOutputs(binding, workspace, readBoard()).outputs!;
   const openArtifact = vi.fn();
   const [outputs, setOutputs] = createSignal<ChatDetailsOutputs>({
     ...read(),

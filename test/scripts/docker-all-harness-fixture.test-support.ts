@@ -5,17 +5,13 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const preparedArchives = new Map<string, Buffer>();
 let fixturePnpm: string | undefined;
 const sha256File = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
-
-function writeJson(file: string, value: unknown) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(value));
-}
 
 function writePackageArchive(
   packageDir: string,
@@ -25,7 +21,7 @@ function writePackageArchive(
   const key = JSON.stringify(manifest);
   let archive = preparedArchives.get(key);
   if (!archive) {
-    writeJson(path.join(packageDir, "package.json"), manifest);
+    fixtureFiles(packageDir).json("package.json", manifest);
     archive = execFileSync("tar", ["-czf", "-", "-C", path.dirname(packageDir), "package"]);
     preparedArchives.set(key, archive);
   }
@@ -100,7 +96,7 @@ fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
         `#!/usr/bin/env bash\nexec node ${quote(path.join(dir, "marker.cjs"))} ${leaf === "test-live-build-docker.sh" ? "live-build" : ""}\n`,
       );
     }
-    writeJson(path.join(dir, "package.json"), {
+    fixtureFiles(dir).json("package.json", {
       name: "openclaw",
       version,
       ...(corepack && { packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0" }),
@@ -129,7 +125,7 @@ fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
   const pluginTarball = path.join(fixture.registry, "codex.tgz");
   writePackageArchive(packageDir, pluginTarball, { name: "@openclaw/codex", version });
   const registryManifest = path.join(fixture.registry, "prepublish-plugin-registry.json");
-  writeJson(registryManifest, {
+  fixtureFiles(fixture.registry).json("prepublish-plugin-registry.json", {
     schema: "openclaw.prepublish-plugin-registry/v1",
     schemaVersion: 1,
     sourceSha: selectedSha,

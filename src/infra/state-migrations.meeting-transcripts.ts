@@ -44,6 +44,7 @@ import {
 import { insertMeetingTranscriptSnapshots } from "./state-migrations.meeting-transcripts-insert.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 export { detectLegacyMeetingTranscripts } from "./state-migrations.meeting-transcripts-detection.js";
 
@@ -591,6 +592,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
     result = {
       changes: recoveryChanges,
       warnings: [`Failed migrating meeting transcripts: ${String(error)}`],
+      ...(error instanceof Utf8InputError ? { warningDisposition: "recoverable" as const } : {}),
     };
   }
   const warnings = [
@@ -616,7 +618,9 @@ export async function migrateLegacyMeetingTranscripts(params: {
     // durable, so Doctor reports them and keeps going instead of refusing over
     // scratch it can drop. A lock the migration could not hand back still refuses,
     // as state-migrations.lock.ts does for the same event.
-    ...(result.warnings.length === 0 && !releaseError && warnings.length > 0
+    ...((result.warnings.length === 0 || result.warningDisposition === "recoverable") &&
+    !releaseError &&
+    warnings.length > 0
       ? { warningDisposition: "recoverable" as const }
       : {}),
   };

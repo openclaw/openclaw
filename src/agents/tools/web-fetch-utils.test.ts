@@ -6,6 +6,21 @@ const extractText = async (html: string) =>
   (await extractBasicHtmlContent({ html, extractMode: "text" }))?.text;
 
 describe("web-fetch-utils", () => {
+  it.each(["~~~", "~~~~"])("preserves literal text inside %s fences", (fence) => {
+    const code =
+      "# heading\n- literal\n1. literal\n[label](https://example.com)\n`value`\n```literal```\n    two  spaces";
+    expect(markdownToText(`Before\n\n${fence}text\n${code}\n${fence}\n\nAfter`)).toBe(
+      `Before\n\n${code}\n\nAfter`,
+    );
+    expect(markdownToText(`${fence}text\n${code}`)).toBe(code);
+    expect(markdownToText(`\`\`\`inline\`\`\`\n${fence}\n# heading\n${fence}`)).toBe(
+      "inline\n# heading",
+    );
+    expect(markdownToText(`\`\`\`text\n${fence}\n\`\`\`\n${fence}\n# heading\n${fence}`)).toBe(
+      `${fence}\n\n# heading`,
+    );
+  });
+
   it.each([
     "<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>",
     "<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>",
@@ -103,6 +118,17 @@ describe("web-fetch-utils", () => {
   ])("preserves title parsing around literal/nested markup: %s", (html, text, title) => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
+
+  it.each(["markdown", "text"] as const)(
+    "separates definition-list terms in %s mode",
+    async (extractMode) => {
+      const result = await extractBasicHtmlContent({
+        html: "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>",
+        extractMode,
+      });
+      expect(result?.text).toBe("Region\nEMEA\nUnits\n120");
+    },
+  );
 
   it("separates HTML table cells and preserves preformatted code whitespace", () => {
     const html =

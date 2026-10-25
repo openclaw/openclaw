@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, lazy, Loading, Show, type Accessor } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show, type Accessor } from "solid-js";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -15,9 +15,11 @@ import {
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { resolveAvatarHat } from "../agent-avatar-hat.ts";
+import type { AgentSelectOption } from "../agent-select-types.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
 import { ThemeBrandIcon } from "../theme-brand-icon.tsx";
 import { AVATAR_HAT_ARTWORK } from "../theme-flair-artwork.tsx";
+import { Icon } from "./icon.tsx";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useAvatarGatewayContext, useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/identity-avatar.css";
@@ -75,9 +77,11 @@ export function AgentIdentityAvatar(props: {
           <Show
             when={props.agent.textAvatar}
             fallback={
-              <Loading>
-                <AgentAvatarFace agentId={props.agent.id} />
-              </Loading>
+              <Errored fallback={<span class="identity-avatar__text" data-avatar="?" />}>
+                <Loading>
+                  <AgentAvatarFace agentId={props.agent.id} />
+                </Loading>
+              </Errored>
             }
           >
             <span class="identity-avatar__text" data-avatar={props.agent.textAvatar} />
@@ -87,6 +91,38 @@ export function AgentIdentityAvatar(props: {
           <AgentAvatarHat agentId={props.agent.id} branding={branding.read()} />
         </Show>
       </span>
+    </Show>
+  );
+}
+
+export function AgentOptionAvatar(props: {
+  option: AgentSelectOption;
+  avatar?: {
+    image: string | null;
+    textAvatar: string | null;
+    onError?: () => void;
+  };
+}) {
+  return (
+    <Show
+      when={props.avatar?.image ? undefined : props.option.icon}
+      fallback={
+        <AgentIdentityAvatar
+          agent={{
+            id: props.option.agent?.id ?? props.option.value,
+            avatar: props.avatar?.image ?? null,
+            textAvatar: props.avatar?.textAvatar ?? null,
+          }}
+          class="agent-select__avatar"
+          onImageError={props.avatar?.onError}
+        />
+      }
+    >
+      {(icon) => (
+        <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
+          <Icon name={icon()} />
+        </span>
+      )}
     </Show>
   );
 }
@@ -142,6 +178,7 @@ function SystemAgentAvatar(props: {
           src={inferControlUiPublicAssetPath("favicon.svg")}
           alt={props.name ?? ""}
           aria-hidden={props.name ? undefined : "true"}
+          decoding="async"
         />
       }
     >

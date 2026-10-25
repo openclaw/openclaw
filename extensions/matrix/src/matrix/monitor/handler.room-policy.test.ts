@@ -18,7 +18,54 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+function roomMessage(eventId: string, body: string) {
+  return createMatrixTextMessageEvent({
+    eventId,
+    sender: "@user:example.org",
+    body,
+    originServerTs: 123_456,
+  });
+}
+
 describe("Matrix inbound room identity", () => {
+  it("does not tag an ordinary authorized room message as a text command", async () => {
+    const { handler, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      groupAllowFrom: ["@user:example.org"],
+      cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
+      roomsConfig: { "!room:example.org": { requireMention: false } },
+      shouldHandleTextCommands: () => true,
+      hasControlCommand: (text) => text === "/status",
+    });
+
+    await handler("!room:example.org", roomMessage("$ordinary-message", "FYI: no reply needed"));
+
+    const ctxPayload = runPrepared.mock.calls[0]?.[0].ctxPayload;
+    expect(ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+      CommandTurn: { kind: "normal", source: "message" },
+    });
+    expect(ctxPayload?.CommandSource).toBeUndefined();
+  });
+
+  it("keeps text-command metadata for an authorized control command", async () => {
+    const { handler, runPrepared } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      groupAllowFrom: ["@user:example.org"],
+      cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
+      roomsConfig: { "!room:example.org": { requireMention: false } },
+      shouldHandleTextCommands: () => true,
+      hasControlCommand: (text) => text === "/status",
+    });
+
+    await handler("!room:example.org", roomMessage("$control-command", "/status"));
+
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
+      CommandSource: "text",
+      CommandTurn: { kind: "text-slash", source: "text", authorized: true },
+    });
+  });
+
   it("keeps the display name for presentation and the room id for policy", async () => {
     const { handler, runPrepared } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
@@ -26,15 +73,7 @@ describe("Matrix inbound room identity", () => {
       getRoomInfo: async () => ({ name: "#trusted:example.org", altAliases: [] }),
     });
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$room-policy",
-        sender: "@user:example.org",
-        body: "hello",
-        originServerTs: 123_456,
-      }),
-    );
+    await handler("!room:example.org", roomMessage("$room-policy", "hello"));
 
     expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
       GroupSubject: "#trusted:example.org",
@@ -70,15 +109,7 @@ describe("Matrix inbound room identity", () => {
       getRoomInfo: async () => ({ name: "Operations", altAliases: [] }),
     });
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$alias-policy",
-        sender: "@user:example.org",
-        body: "hello",
-        originServerTs: 123_456,
-      }),
-    );
+    await handler("!room:example.org", roomMessage("$alias-policy", "hello"));
 
     expect(runPrepared.mock.calls[0]?.[0].ctxPayload).toMatchObject({
       GroupChannel: "!room:example.org",

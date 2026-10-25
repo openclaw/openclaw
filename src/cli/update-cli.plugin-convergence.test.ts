@@ -55,8 +55,7 @@ import {
 } from "./update-cli/update-cli-config.test-support.js";
 import {
   mockUnbuiltRecoveryFixture,
-  recoveryVerificationStep,
-  recoveryVersionMismatch,
+  recoveryObservationStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -473,12 +472,14 @@ describe("update-cli", () => {
 
     await expect(updateCommand({ json: true, restart: false })).rejects.toEqual(new ExitError(1));
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(lastWriteJsonCall()).toMatchObject({
+    const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result?.verification).toEqual({});
+    expect(result).toMatchObject({
       status: "error",
       reason: "post-update-failed",
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
-        recoveryVerificationStep([recoveryVersionMismatch]),
+        recoveryObservationStep(),
       ],
     });
   });

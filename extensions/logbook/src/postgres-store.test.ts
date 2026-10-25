@@ -3,10 +3,14 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
-import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  openEngineStore,
+  withEngineStoreAdmission,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createLogbookDatabase, logbookEngineSchema } from "./store-schema-admission.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 import type { LogbookCardDraft } from "./types.js";
 
@@ -64,6 +68,61 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
       }
     } finally {
       await observer?.end();
+    }
+  });
+
+  it("upgrades version 1 index ordering once while retaining standups and nullable indexes", async () => {
+    const pathname = path.join(tempDirs.make("logbook-index-upgrade-"), "logbook.sqlite");
+    const input = { connection: connection!, schemaPrefix: "logbook_upgrade" };
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...logbookEngineSchema,
+          ...logbookEngineSchema.postgresMigrations![0]!.fromSchema,
+          version: 1,
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare("INSERT INTO standups VALUES (?, ?, ?)").run(DAY, "Retained standup", 1);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const indexes = async () =>
+      (
+        await observer.query(
+          `SELECT relname AS name, oid::text, pg_get_indexdef(oid) AS definition
+       FROM pg_class WHERE relnamespace = $1::regnamespace
+       AND relname IN ('idx_logbook_frames_captured_at', 'idx_logbook_frames_unbatched')
+       ORDER BY relname`,
+          [schema],
+        )
+      ).rows;
+    try {
+      const before = await indexes();
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      const after = await indexes();
+      expect(after[0]!.definition).not.toContain("NULLS FIRST");
+      expect(after[0]!.oid).not.toBe(before[0]!.oid);
+      expect(after[1]).toEqual(before[1]);
+      expect((await observer.query(`SELECT text FROM "${schema}".standups`)).rows).toEqual([
+        { text: "Retained standup" },
+      ]);
+      expect(
+        (await observer.query(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`))
+          .rows,
+      ).toEqual([{ version: 2 }]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      expect(await indexes()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
     }
   });
 

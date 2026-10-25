@@ -67,7 +67,13 @@ it("shows first-read readiness and retries a failed read through the cron owner"
     expect(ui.retry()?.disabled).toBe(false);
   });
   ui.retry()!.click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(ui.panel()?.getAttribute("aria-busy")).toBe("true");
+    expect(ui.text()).toContain("Loading automations…");
+    expect(ui.text()).not.toContain("Couldn't load automations.");
+    expect(ui.retry()).toBeNull();
+  });
   retry.resolve(
     cronJobsListResponse([createCronJob("recovered", "Recovered automation")], { limit: 20 }),
   );
@@ -256,4 +262,25 @@ it("appends the next owner page without replacing the selected automation", asyn
     expect(ui.panel()?.getAttribute("aria-busy")).toBe("false");
     expect(ui.retry()).toBeNull();
   });
+});
+
+it("names a scheduled plugin command instead of its reserved placeholder", async () => {
+  const placeholder = "[plugin-command-scheduled-turn:v1]";
+  const request = createGatewayRequestMock(async () =>
+    cronJobsListResponse(
+      [
+        createCronJob("scheduled-command", "Watch workflow", {
+          payload: { kind: "agentTurn", message: placeholder },
+          payloadSource: { kind: "pluginCommand", pluginId: "watcher", command: "watch" },
+        }),
+      ],
+      { limit: 20 },
+    ),
+  );
+  const ui = mount(connect(request));
+  await waitForSolid(() => {
+    expect(ui.name()?.textContent).toBe("Watch workflow");
+    expect(ui.text()).toContain("Plugin command: /watch (watcher)");
+  });
+  expect(ui.text()).not.toContain(placeholder);
 });

@@ -21,14 +21,12 @@ export function parseReplyDirectives(
   options: {
     currentMessageId?: string;
     extractMarkdownImages?: boolean;
-    extractMediaDirectives?: boolean;
     preserveTrailingWhitespace?: boolean;
     onAudioDirective?: () => void;
   } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
-    extractMediaDirectives: options.extractMediaDirectives,
     preserveTrailingWhitespace: options.preserveTrailingWhitespace,
     onAudioDirective: options.onAudioDirective,
   });

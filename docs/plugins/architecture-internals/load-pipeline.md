@@ -186,6 +186,13 @@ the registry retires or the load cache is cleared.
 Validation, full registration, and CLI metadata loads have separate cache entries;
 validating a module cannot satisfy a later request for its registrations.
 
+An uncached inspection releases its execution authority immediately, while borrowed
+registrations keep physical resources alive until the last claim releases them.
+After registration cleanup, instance retirement, work drains, and donor releases
+finish, the inspection drops its retirement callback, registry, and cleanup captures.
+Keeping a released handle does not keep those completed discovery graphs alive.
+Pending disposal and failures that retain resource custody keep their references.
+
 Outbound channel bootstrap remembers successful and unavailable senders within
 the selected plugin cache and metadata scope. Inventory replacement or metadata
 invalidation permits a fresh attempt; repeated deliveries within the same scope

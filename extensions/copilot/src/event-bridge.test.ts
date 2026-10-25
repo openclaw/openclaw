@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { SessionEvent } from "@github/copilot-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { buildAssistantMessage } from "./event-bridge-transcript.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
 
@@ -127,6 +128,24 @@ function emitDelta(session: FakeSession, deltaContent: string, messageId: string
 }
 
 describe("attachEventBridge", () => {
+  it("defaults missing usage fields to zero in the rich assistant block only", () => {
+    expect(
+      buildAssistantMessage({
+        assistantTexts: [],
+        modelRef: MODEL_REF,
+        now: () => 9,
+        usage: { input: 4 },
+      }).usage,
+    ).toEqual({
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+      input: 4,
+      output: 0,
+      totalTokens: 0,
+    });
+  });
+
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const onAssistantDelta = vi.fn();
     const onAgentEvent = vi.fn();

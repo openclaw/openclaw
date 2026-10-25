@@ -15,6 +15,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
@@ -26,6 +27,7 @@ import type { FollowupRun } from "./queue/types.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 import { resolveReplyToolAuthorityContext } from "./reply-tool-authority.js";
+import type { ScheduledSessionAutomation } from "./session-event-contract.js";
 
 const state = vi.hoisted(() => ({
   admitReply: vi.fn(),
@@ -54,13 +56,14 @@ vi.mock("./agent-runner-auto-fallback.js", async (importOriginal) => ({
   resolveRunAfterAutoFallbackPrimaryProbeRecheck: state.recheckFallbackProbe,
 }));
 
-// mock-isolation: The fixture controls preflight rotation and failure without running compaction or session writes.
-vi.mock("./reply-turn-preflight.js", () => ({ prepareReplyTurnContext: state.preflight }));
+vi.mock("./agent-runner-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-memory.js")>()),
+  runSessionCompactionIfNeeded: state.preflight,
+}));
 
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: state.resolveConfig,
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 
 // mock-isolation: Preparation cases supply an owned or rejected turn without admitting a second real controller operation.
@@ -638,6 +641,52 @@ it("keeps the model selected at admission when preferences change during source 
   expect(queued.run.model).toBe("next-turn-model");
 });
 
+it("takes only the scheduled fallback policy selected at admission", async () => {
+  const policy = (sessionModelOverrideSource?: "user") => ({
+    useSubagentFallbacks: false,
+    inheritDefaultFallbacksForAgentStringModel: false,
+    sessionModelOverrideSource,
+  });
+  const scheduled = (job: string, sessionModelOverrideSource?: "user") =>
+    ({
+      occurrence: TEST_SCHEDULED_OCCURRENCE,
+      job: { id: job } as ScheduledSessionAutomation["job"],
+      admissionSource: "operator-schedule",
+      assertCurrent: () => {},
+      modelFallbackPolicy: policy(sessionModelOverrideSource),
+    }) satisfies ScheduledSessionAutomation;
+  const enqueued = scheduled("enqueued", "user");
+  const atAdmission = scheduled("other");
+  const queued = createRun();
+  queued.run.scheduledAutomation = enqueued;
+  const ordinary = createRun();
+  // Settings writers replace the waiting source's policy; an ordinary run must not gain one.
+  for (const source of [queued, ordinary]) {
+    state.admitReply.mockImplementationOnce(async ({ captureRunSelection }) => {
+      source.run.scheduledAutomation = atAdmission;
+      captureRunSelection();
+      return { status: "owned", operation: createOperation() };
+    });
+  }
+
+  const { run } = (
+    await admitted(
+      prepare(queued, {
+        opts: {
+          onQueuedFollowupAdmitted: async () => {
+            queued.run.scheduledAutomation = scheduled("later", "user");
+          },
+        },
+      }),
+    )
+  ).queued;
+  expect(run.scheduledAutomation?.modelFallbackPolicy).toBe(atAdmission.modelFallbackPolicy);
+  // The occurrence's job and authority keep the bindings the turn was enqueued with.
+  expect(run.scheduledAutomation?.job).toBe(enqueued.job);
+  expect(run.scheduledAutomation?.assertCurrent).toBe(enqueued.assertCurrent);
+  expect((await admitted(prepare(ordinary))).queued.run.scheduledAutomation).toBeUndefined();
+});
+
 it("refreshes send policy and goal context after preflight rotates the generation", async () => {
   const { initialEntry, start } = sessionFixture();
   const rotatedEntry = makeEntry({ sessionId: "compacted-session", updatedAt: 2 });
@@ -760,5 +809,4 @@ it("retains the preflight owner's public recovery guidance for a queued turn", a
   );
   const turn = await admitted(prepare());
   expect(turn).toMatchObject({ preflightFailurePayload: { text: userMessage } });
-  expect(state.buildPreflightFailureText).not.toHaveBeenCalled();
 });

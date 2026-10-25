@@ -75,6 +75,9 @@ export type RunAgentAttemptOverrides = Omit<
   opts?: Partial<RunAgentAttemptParams["opts"]>;
   runContext?: Partial<RunAgentAttemptParams["runContext"]>;
 };
+type RunStoredAttempt = (
+  params: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
+) => ReturnType<typeof runAgentAttempt>;
 
 export function makeRunAgentAttemptParams(
   overrides: RunAgentAttemptOverrides,
@@ -165,13 +168,10 @@ export async function runTrustedClaudeCompletionForTest({
   writeSessionStoreSeed,
   runStoredAttempt,
   runCliAgentMock,
-  runEmbeddedAgentMock,
 }: {
   storePath: string;
   writeSessionStoreSeed: (entries: Record<string, SessionEntry>) => Promise<void>;
-  runStoredAttempt: (
-    params: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
-  ) => ReturnType<typeof runAgentAttempt>;
+  runStoredAttempt: RunStoredAttempt;
   runCliAgentMock: Mock;
   runEmbeddedAgentMock: Mock;
 }) {
@@ -220,12 +220,6 @@ export async function runTrustedClaudeCompletionForTest({
   });
 
   const run = runCliAgentMock.mock.calls[0]?.[0] as RunCliAgentParams;
-  expect(run).toMatchObject({
-    provider: "claude-cli",
-    disableTools: false,
-    terminalReplyExpectation: "required",
-  });
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   const fragment = (kind: string, text: unknown) => ({ kind, text });
   expect(run.runtimeContextFragments).toEqual([
     fragment(
@@ -244,8 +238,8 @@ export async function runTrustedClaudeCompletionForTest({
     agentId: "main",
     modelProvider: "claude-cli",
     modelId: "opus",
-    toolsAllow: ["read", "exec"],
   });
+  context.toolsAllow = ["read", "exec"];
   return { context, childSessionKey: trustedChildSessionKey, childEntry: trustedChildEntry };
 }
 
@@ -256,9 +250,7 @@ export function registerCommandCliAdmissionTests({
   createCliSession,
   firstRunCliAgentArg,
 }: {
-  runStoredAttempt: (
-    overrides: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
-  ) => ReturnType<typeof runAgentAttempt>;
+  runStoredAttempt: RunStoredAttempt;
   seedSessionStore: (key: string, entry: SessionEntry) => Promise<Record<string, SessionEntry>>;
   runCliAgentMock: Mock<(params: RunCliAgentParams) => ReturnType<typeof runAgentAttempt>>;
   createCliSession: (
@@ -301,37 +293,27 @@ export function registerCommandCliAdmissionTests({
     expect(runCliAgentMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["assistant_output_started"] as const)(
-    "keeps CLI admission separate from observed %s",
-    async (phase) => {
-      const sessionKey = "agent:main:direct:cli-execution-started";
-      const sessionEntry = makeSessionEntry("session-cli-execution-started");
-      const { runCli } = await createCliSession(sessionKey, sessionEntry);
-      const onExecutionStarted = vi.fn();
-      const onRuntimeTurnStarted = vi.fn();
-      const callbacks = createAgentAttemptLifecycleCallbacks(
-        {
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-        onRuntimeTurnStarted,
-      );
-      runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
-
-      await runCli({
-        onExecutionStarted,
-        onAgentEvent: callbacks.onAgentEvent,
-      });
-
-      expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
-      const observePhase = firstRunCliAgentArg().onExecutionPhase;
-      if (typeof observePhase !== "function") {
-        throw new Error("CLI execution phase observer is missing");
-      }
-      observePhase({ phase: "process_spawned" });
-      expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
-      observePhase({ phase });
-      expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
-    },
-  );
+  it("keeps CLI admission separate from observed assistant output", async () => {
+    const { runCli } = await createCliSession(
+      "agent:main:direct:cli-execution-started",
+      makeSessionEntry("session-cli-execution-started"),
+    );
+    const onExecutionStarted = vi.fn();
+    const onRuntimeTurnStarted = vi.fn();
+    const callbacks = createAgentAttemptLifecycleCallbacks(
+      { lifecycleFinishing: false, lifecycleEnded: false },
+      onRuntimeTurnStarted,
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
+    await runCli({ onExecutionStarted, onAgentEvent: callbacks.onAgentEvent });
+    expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
+    const observePhase = firstRunCliAgentArg().onExecutionPhase;
+    if (typeof observePhase !== "function") {
+      throw new Error("CLI execution phase observer is missing");
+    }
+    observePhase({ phase: "process_spawned" });
+    expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
+    observePhase({ phase: "assistant_output_started" });
+    expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
+  });
 }

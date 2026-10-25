@@ -16,20 +16,8 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
 import type { ProviderCatalogContext } from "./provider-catalog-shared.js";
-import type { ModelDefinitionConfig } from "./provider-model-shared.js";
+import { buildCatalogModel as buildModel } from "./provider-catalog.test-support.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
-
-function buildModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
 
 function buildFetchGuard(body: unknown): {
   fetchGuard: LiveModelCatalogFetchGuard;
@@ -795,27 +783,31 @@ it.each([false, true])("isolates cached HTTP caps inside acquisition=%s", async 
   }
 });
 
-it("does not let an immediate row timeout join its enclosing long pending load", async () => {
+it("keeps an immediate row timeout even with a configured provider timeout", async () => {
   clearLiveCatalogCacheForTests();
   const completion = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
   const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(() => completion.promise);
-  await withProviderCatalogDiscoveryBudget(180_000, async () => {
-    const read = (timeoutMs?: number) =>
-      getCachedLiveProviderModelRows({
-        providerId: "zero-cap",
-        endpoint: "https://zero.example.test/models",
-        timeoutMs,
-        fetchGuard,
+  await withProviderCatalogDiscoveryBudget(
+    180_000,
+    async () => {
+      const read = (timeoutMs?: number) =>
+        getCachedLiveProviderModelRows({
+          providerId: "zero-cap",
+          endpoint: "https://zero.example.test/models",
+          timeoutMs,
+          fetchGuard,
+        });
+      const long = read();
+      const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
+      completion.resolve({
+        response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
+        finalUrl: "https://zero.example.test/models",
+        release: async () => undefined,
       });
-    const long = read();
-    const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
-    completion.resolve({
-      response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
-      finalUrl: "https://zero.example.test/models",
-      release: async () => undefined,
-    });
-    await immediate;
-    expect(await long).toEqual([{ id: "healthy" }]);
-    expect(fetchGuard).toHaveBeenCalledOnce();
-  });
+      await immediate;
+      expect(await long).toEqual([{ id: "healthy" }]);
+      expect(fetchGuard).toHaveBeenCalledOnce();
+    },
+    { "zero-cap": 15_000 },
+  );
 });

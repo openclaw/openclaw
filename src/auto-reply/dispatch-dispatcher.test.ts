@@ -3,12 +3,46 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   registerReplyDispatcherSettledTask,
   settleReplyDispatcher as settleSourceDispatcher,
+  waitForReplyDispatcherSettlement,
 } from "./dispatch-dispatcher.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   createReplyDispatcher,
 } from "./reply/reply-dispatcher.js";
+
+it("joins in-flight settled work without running it from the waiting owner", async () => {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const failure = new Error("recording failed");
+  const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+  const calls: string[] = [];
+  registerReplyDispatcherSettledTask(dispatcher, async () => {
+    calls.push("recording");
+    entered.resolve();
+    await release.promise;
+    throw failure;
+  });
+  registerReplyDispatcherSettledTask(dispatcher, () => {
+    calls.push("cleanup");
+  });
+  let ownerSettled = false;
+  const owner = waitForReplyDispatcherSettlement(dispatcher).then(() => {
+    ownerSettled = true;
+  });
+  expect(calls).toEqual([]);
+  const settle = settleSourceDispatcher({ dispatcher });
+  const rejected = expect(settle).rejects.toBe(failure);
+  const concurrent = settleSourceDispatcher({ dispatcher });
+  const concurrentRejected = expect(concurrent).rejects.toBe(failure);
+  await entered.promise;
+  expect(ownerSettled).toBe(false);
+  release.resolve();
+  await Promise.all([rejected, concurrentRejected, owner]);
+  expect(calls).toEqual(["recording", "cleanup"]);
+  expect(ownerSettled).toBe(true);
+  await settleSourceDispatcher({ dispatcher });
+});
 
 it("settles source-owned resources once through a separately loaded SDK after delivery", async () => {
   const entered = createDeferred();

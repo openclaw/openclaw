@@ -145,7 +145,7 @@ describe("chat composer suggestion accessibility", () => {
     expectAbsent(container.querySelector(".agent-chat__composer-combobox"), "aria-expanded");
   });
 
-  it("keeps a stable composer name when attachments change its placeholder", async () => {
+  it("keeps a stable composer name and placeholder when attachments change", async () => {
     const harness = createReactiveDraftHarness();
     const textarea = getComposerTextarea(harness.container);
     const initialPlaceholder = textarea.placeholder;
@@ -157,7 +157,7 @@ describe("chat composer suggestion accessibility", () => {
     await waitForSolid(() =>
       expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
     );
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
+    expect(textarea.placeholder).toBe(initialPlaceholder);
     expectComposerName(textarea);
 
     harness.renderCurrent({ attachments: [] });
@@ -257,4 +257,27 @@ describe("chat composer suggestion accessibility", () => {
     };
     textarea.value = "$queued";
   });
+});
+
+it.each(["A mobile draft", "/res"])("leaves mobile Return for editing %s", async (draft) => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  replaceSlashCommands([
+    { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
+  ]);
+  const onSend = vi.fn();
+  const { container } = createReactiveDraftHarness({ onSend });
+  inputDraftAtEnd(container, draft);
+  if (draft.startsWith("/")) {
+    await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  }
+  const textarea = getComposerTextarea(container)!;
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = keydownComposer(container, "Enter", modifiers);
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  }
 });

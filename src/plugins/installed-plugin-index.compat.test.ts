@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
@@ -13,7 +14,9 @@ import {
   loadInstalledPluginIndexWithDiscovery,
 } from "./installed-plugin-index.js";
 import { listAvailableManifestContractValues } from "./manifest-contract-eligibility.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 const PLUGIN_ID = "contract-provider";
 afterEach(clearPluginMetadataLifecycleCaches);
@@ -59,26 +62,30 @@ function setMode(env: NodeJS.ProcessEnv, mode: "compat" | "allowlist") {
   clearBundledDiscoveryModeMemo();
 }
 
-it("passes the caller environment through manifest validation", () => {
+it("keeps host eligibility separate while sharing a captured discovery generation", async () => {
   const { candidate, env } = createFixture();
-  const index = loadInstalledPluginIndex({
-    candidates: [
-      {
-        ...candidate,
-        origin: "global",
-        packageDir: candidate.rootDir,
-        packageManifest: {
-          install: {
-            npmSpec: "@openclaw/contract-provider",
-            minHostVersion: ">=2099.1.1",
-          },
-        },
-      },
-    ],
-    env: { ...env, OPENCLAW_VERSION: "2099.1.1" },
+  fs.writeFileSync(
+    path.join(candidate.rootDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/contract-provider",
+      openclaw: { extensions: ["./index.ts"], install: { minHostVersion: ">=2099.1.1" } },
+    }),
+  );
+  const config = captureRuntimeConfig({ plugins: { load: { paths: [candidate.rootDir] } } });
+  await using cache = createPluginCache();
+  withPluginCache(cache, () => {
+    for (const [version, expected] of [
+      ["2098.1.1", []],
+      ["2099.1.1", [PLUGIN_ID]],
+      ["2098.1.1", []],
+    ] as const) {
+      const index = loadInstalledPluginIndex({
+        config,
+        env: { ...env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_VERSION: version },
+      });
+      expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(expected);
+    }
   });
-
-  expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual([PLUGIN_ID]);
 });
 
 it("applies fresh and dynamic policy to a contract-only provider", () => {
@@ -106,6 +113,27 @@ it("applies fresh and dynamic policy to a contract-only provider", () => {
   expect(listValues()).toEqual([PLUGIN_ID]);
   const denied = { plugins: { ...config.plugins, deny: [PLUGIN_ID] } };
   expect(isInstalledPluginEnabled(index, PLUGIN_ID, denied, env)).toBe(false);
+});
+
+it("owns passthrough install metadata before freezing a shared inventory", async () => {
+  const { candidate, env } = createFixture();
+  const metadata = { note: "original" };
+  const installRecords = {
+    [PLUGIN_ID]: { source: "path" as const, installPath: candidate.rootDir, metadata },
+  };
+  const config = captureRuntimeConfig({ plugins: { load: { paths: [candidate.rootDir] } } });
+  await using cache = createPluginCache();
+  withPluginCache(cache, () => {
+    const snapshot = loadPluginMetadataSnapshot({
+      config,
+      env: { ...env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      installRecords,
+    });
+    metadata.note = "edited by caller";
+    expect(snapshot.index.installRecords[PLUGIN_ID]).toMatchObject({
+      metadata: { note: "original" },
+    });
+  });
 });
 
 it("keeps bundled compatibility separate from external policy in each batch", () => {

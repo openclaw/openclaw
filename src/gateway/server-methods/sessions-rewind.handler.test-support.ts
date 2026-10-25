@@ -12,6 +12,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type {
   GatewayClient,
@@ -143,12 +144,7 @@ export async function restrictedOperator(
       }),
       scopes: ["operator.write"],
     },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as GatewayClient;
   const roles = sessionRoleConfig("guest", {
     sessions: { others: "view" },

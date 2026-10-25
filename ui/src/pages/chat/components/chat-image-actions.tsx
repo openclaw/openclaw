@@ -1,10 +1,13 @@
 import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import { downloadImageBlob } from "../../../lib/image-download.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 let nextMenuId = 0;
 

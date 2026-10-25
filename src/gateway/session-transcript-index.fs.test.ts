@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { createArchiveSourceSnapshotFixture } from "./session-transcript-archive.test-support.js";
 import {
   readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
@@ -159,14 +160,7 @@ test("batches a page and rejects a rewrite while its pinned descriptor is being 
   ]);
 });
 
-const archiveSnapshot: SessionTranscriptSourceSnapshot = {
-  indexedSeq: -1,
-  activeEventCount: 0,
-  totalMessages: 0,
-  generation: undefined,
-  tailEventSeq: undefined,
-  resetSeq: null,
-};
+const archiveSnapshot: SessionTranscriptSourceSnapshot = createArchiveSourceSnapshotFixture();
 
 function sourcePage(reader: ArchivedTranscriptReader, cursor?: SessionTranscriptSourceCursor) {
   return reader.readSourcePage({ mode: "page", cursor }, archiveSnapshot);

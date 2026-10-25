@@ -627,15 +627,14 @@ describe("session companion embedded invocation", () => {
       await vi.waitFor(() => expect(admitWrite).toHaveBeenCalledOnce());
       await queued.promise;
       controller.abort();
-      await expect(pending).rejects.toThrow();
+      const failed = expect(pending).rejects.toThrow();
       expect(removeSession).not.toHaveBeenCalled();
       resume.resolve();
-      await vi.waitFor(() =>
-        expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
-          lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
-          activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
-        }),
-      );
+      await failed;
+      expect(removeSession).toHaveBeenCalledWith(preparedTarget, {
+        lifecycleRevision: preparedTarget.sessionEntry.lifecycleRevision,
+        activeWriterRunId: preparedTarget.sessionEntry.activeWriterRunId,
+      });
       expect(appendMessage).not.toHaveBeenCalled();
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     } finally {

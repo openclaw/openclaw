@@ -41,14 +41,27 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
-WebChat keeps the `message` reaction description and schema stable between runs
-in the same conversation, including runs without a current-prompt reaction grant.
+Client-capability tool listing uses the session's recorded operator declaration.
+Internal wake and restart-recovery turns retain the same tool definitions and
+Code Mode catalog, including `screen`, without borrowing execution authority.
+The next operator declaration updates that session fact; current-turn execution
+gates and the live requesting-browser check still enforce calls.
+
+The `message` description and schema use the session's channel, bound account,
+and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
+announcement turns in the same conversation keep identical definitions,
+including turns without a current-prompt reaction grant. Scheduled sessions retain
+their creator's account scope; sessions without a bound account use the configured default.
 Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
 changes. Its current callable index and capability guidance follow the stable
 prompt prefix; supported in-history prompt updates append changes to the
 conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
+
+Isolated settled-turn finalization uses a separate cache key scoped to the run.
+Its tool-free prompt and full transcript differ from the conversation request,
+so it does not replace the conversation's cache or history-diagnostic baseline.
 
 ## Keep replayed tool results stable
 
@@ -70,10 +83,11 @@ identity when available. Retiring earlier history therefore preserves the IDs of
 retained failed-turn markers. Error diagnostics remain transcript metadata and do
 not enter the provider request.
 
-Internal browser conversations reuse their opaque session cache key for private
-subagent completions, so the completion does not switch to a different affinity
-key between chat turns. The key remains scoped to the agent, provider, model,
-and conversation and does not expose the conversation identifier.
+OpenAI requests use the session ID and the authoritative transcript's reset and
+compaction boundary count as their cache key unless the caller supplies an
+explicit key. Operator, WebChat, private subagent completion, requester-settle,
+and recovery turns share this session-boundary identity. The current client and
+reply delivery route do not select a different cache key.
 
 ## Primary knobs
 
@@ -520,7 +534,7 @@ For encoded provider requests, `providerPrefix` compares the serialized instruct
 
 A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
 
-OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, is excluded from history fingerprints because it is not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Mutable SDK content and rebuilt wrappers remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
+OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, and the persisted `display` visibility flag are excluded from history fingerprints because they are not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications, including deeply frozen messages shared during hydration, reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Sealed record fingerprints retain only packed diagnostic hashes and field layouts; primitive revision tracking is released when a record becomes immutable. Mutable SDK content and rebuilt wrappers remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
 
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.

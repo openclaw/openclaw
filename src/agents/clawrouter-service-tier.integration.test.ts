@@ -1,7 +1,7 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamSimple } from "../llm/stream.js";
@@ -559,12 +559,11 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
     const controller = new AbortController();
     const result = call({ override: { fastMode: true } }, { signal: controller.signal });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         held.promise,
-        result.then(() => {
-          throw new Error("Request completed before the held HTTP response");
-        }),
-      ]);
+        result,
+        "Request completed before the held HTTP response",
+      );
       controller.abort();
       expect((await result).stopReason).toBe("aborted");
       await peerClosed.promise;

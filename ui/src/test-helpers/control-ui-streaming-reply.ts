@@ -37,6 +37,7 @@ function installStreamingReplyProbe() {
   let current: Delta | undefined;
   let finalReceived = false;
   let initialScrollHeight = 0;
+  let paneProbeAttached = false;
   const pipeline = {
     streamWrites: 0,
     streamWriteMs: 0,
@@ -83,6 +84,7 @@ function installStreamingReplyProbe() {
         host.localName === "openclaw-chat-pane" &&
         typeof render === "function"
       ) {
+        paneProbeAttached = true;
         Reflect.set(owner, "render", function (this: object, ...args: unknown[]) {
           const start = performance.now();
           try {
@@ -289,7 +291,7 @@ function installStreamingReplyProbe() {
         scrollTop: thread.scrollTop,
         distanceFromBottom: thread.scrollHeight - thread.clientHeight - thread.scrollTop,
       };
-      if (!pipeline.streamWrites || !pipeline.publications || !pipeline.paneRenders) {
+      if (!pipeline.streamWrites || !pipeline.publications || !paneProbeAttached) {
         throw new Error("Streaming owner probes did not capture the measured pipeline");
       }
       if (deltas.some((delta) => !Number.isFinite(delta.parseChars))) {

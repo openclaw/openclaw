@@ -129,6 +129,39 @@ describe("universal verbs — yaml dispatch", () => {
   });
 });
 
+describe("universal verbs — yaml timestamp keys", () => {
+  it.each(["timestamp only", "timestamp first", "string first"] as const)(
+    "does not redirect edits after cloning: %s",
+    (order) => {
+      const spelling = new Date("2001-12-15T00:00:00Z").toString();
+      const timestampRow = "2001-12-15: original";
+      const stringRow = `${JSON.stringify(spelling)}: untouched`;
+      const rows =
+        order === "timestamp only"
+          ? [timestampRow]
+          : order === "timestamp first"
+            ? [timestampRow, stringRow]
+            : [stringRow, timestampRow];
+      const raw = `%YAML 1.1\n---\n${rows.join("\n")}\n`;
+      const ast = parseYaml(raw);
+      const targetPath = parseOcPath(`oc://x.yaml/${JSON.stringify(spelling)}`);
+      expect(resolveOcPath(ast, targetPath)).toMatchObject({
+        valueText: order === "string first" ? "untouched" : "original",
+        line: 3,
+      });
+      if (order === "string first") {
+        const result = setOcPath(ast, targetPath, "updated");
+        expect(result.raw).toBe(raw.replace(": untouched", ": updated"));
+      } else {
+        expect(() => setOcPath(ast, targetPath, "updated")).toThrow(
+          expect.objectContaining({ reason: "unresolved" }),
+        );
+      }
+      expect(ast.raw).toBe(raw);
+    },
+  );
+});
+
 describe("universal verbs — yaml insertion", () => {
   it.each([
     ["items: []\n", "items/+", '"a"', "items: [ a ]"],

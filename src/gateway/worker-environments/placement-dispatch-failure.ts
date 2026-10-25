@@ -100,6 +100,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
+  | "reclaim"
   | "get"
   | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"

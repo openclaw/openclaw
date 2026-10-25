@@ -23,5 +23,9 @@ export type ConfirmDialogOptions = {
   canConfirm?: () => boolean;
 };
 
-export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & { alternativeLabel: string };
+export type ConfirmDialogChoiceOptions = ConfirmDialogOptions & {
+  alternativeLabel: string;
+  /** Keep related choices together, with Cancel below them on compact screens. */
+  groupChoicesOnMobile?: boolean;
+};
 export type ConfirmDialogChoice = "confirm" | "alternative" | null;

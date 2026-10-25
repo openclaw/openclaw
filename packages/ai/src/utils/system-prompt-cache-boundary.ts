@@ -6,12 +6,28 @@ export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\
 export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";
 export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END = "\n<!-- /OPENCLAW-RELOCATABLE-BOUNDARY -->";
 
+// Request conversion and egress observation strip the same session prompt every turn.
+const strippedSystemPrompts = new Map<string, string>();
+const MAX_STRIPPED_SYSTEM_PROMPTS = 32;
+
 export function stripSystemPromptCacheBoundary(text: string): string {
-  return stripSystemPromptRelocatableBoundary(
-    text
-      .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n")
-      .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY.trim(), ""),
-  );
+  let stripped = strippedSystemPrompts.get(text);
+  if (stripped === undefined) {
+    // Marker removal is ordered: one removal can join text into the next marker.
+    stripped = stripSystemPromptRelocatableBoundary(
+      text
+        .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n")
+        .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY.trim(), ""),
+    );
+    for (const oldest of strippedSystemPrompts.keys()) {
+      if (strippedSystemPrompts.size < MAX_STRIPPED_SYSTEM_PROMPTS) {
+        break;
+      }
+      strippedSystemPrompts.delete(oldest);
+    }
+    strippedSystemPrompts.set(text, stripped);
+  }
+  return stripped;
 }
 
 /** Reject ambiguous markers from workspace or hook text instead of moving instructions. */

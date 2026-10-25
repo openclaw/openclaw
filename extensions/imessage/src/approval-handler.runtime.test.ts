@@ -333,7 +333,6 @@ describe("imessageApprovalNativeRuntime", () => {
       channel: "imessage",
       accountId: ACCOUNT_ID,
       senderId: HANDLE,
-      gatewayUrl: undefined,
     });
     await expect(react(HANDLE)).resolves.toBe(false);
     expect(approvalGatewayMock.resolve).toHaveBeenCalledTimes(1);

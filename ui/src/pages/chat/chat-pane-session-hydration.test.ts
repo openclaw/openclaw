@@ -5,12 +5,13 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 
-function createSecondaryHydrationPane() {
+function createSecondaryHydrationPane(scopes = ["operator.admin"]) {
   const secondaryResponse = new Promise<never>(() => {});
   const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
   const listBranches = vi.fn(() => secondaryResponse);
@@ -27,25 +28,27 @@ function createSecondaryHydrationPane() {
   });
   state.assistantAgentId = "main";
   state.sessionKey = "agent:work:current";
-  pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
-    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-    "session.discussion.info",
-    "sessions.patch",
-    "system.info",
-  ]);
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    [
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "session.discussion.info",
+      "sessions.patch",
+      "system.info",
+      "sessions.companion.state",
+    ],
+    scopes,
+  );
   const commitEffects: AfterCommitEffect[] = [];
   const afterCommit = (effect: AfterCommitEffect) => {
     commitEffects.push(effect);
     return () => undefined;
   };
   state.renderLifecycle = { afterCommit };
-  const frames = new Map<number, FrameRequestCallback>();
-  let nextFrame = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    frames.set(++nextFrame, callback);
-    return nextFrame;
-  });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(framesClock.request);
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(framesClock.cancel);
   const paintFrame = async () => {
     const callbacks = [...frames.values()];
     frames.clear();
@@ -100,6 +103,16 @@ function createSecondaryHydrationPane() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+it("skips companion hydration for a session-only connection after transcript paint", async () => {
+  const f = createSecondaryHydrationPane(["operator.sessions.write"]);
+  await f.deferTranscript()();
+  f.commit();
+  await f.paintFrame();
+  await f.paintFrame();
+  expect(f.listBranches).toHaveBeenCalledOnce();
+  expect(f.request).not.toHaveBeenCalledWith("sessions.companion.state", expect.anything());
+});
 
 it.each([
   [false, true],

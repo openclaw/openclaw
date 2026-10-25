@@ -110,12 +110,13 @@ describe("Codex rate-limit cache", () => {
     try {
       const addNotificationHandler = vi.spyOn(harness.client, "addNotificationHandler");
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+      const initialHandlerCount = addNotificationHandler.mock.calls.length;
 
       vi.resetModules();
       const nextRuntime = await import("./client-runtime.js");
       const nextCache = await import("./rate-limit-cache.js");
       nextRuntime.ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
-      expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+      expect(addNotificationHandler).toHaveBeenCalledTimes(initialHandlerCount);
 
       const notificationObserved = new Promise<void>((resolve) => {
         stopObserving = harness.client.addNotificationHandler((notification) => {

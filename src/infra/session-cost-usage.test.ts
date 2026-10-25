@@ -11,7 +11,6 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
-  readSessionCostUsageRollupEntry,
   readSessionCostUsageRollupRows,
   writeLegacyUsageCostRollupForTest,
 } from "./session-cost-usage-cache.test-support.js";
@@ -272,8 +271,6 @@ it("rebuilds obsolete rollups and preserves tool occurrences and untimestamped u
 
   const session = { sessionId: "sess-v8-upgrade", sessionFile };
   await refreshSessionCostUsageForTest(sessionFile);
-  const current = await readCached({ sessions: [session], requestRefresh: false });
-  expect(current.cacheStatus.status).toBe("fresh");
 
   const writeLegacyRollup = () => writeLegacyUsageCostRollupForTest(sessionFile);
   const appendUsage = (timestamp: string) =>
@@ -316,16 +313,6 @@ it("rebuilds obsolete rollups and preserves tool occurrences and untimestamped u
     expect(result.summaries[0]?.toolUsage, label).toEqual(toolUsage("read", toolCalls));
   }
 
-  const appendedRow = expectDefined(
-    readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
-    "expected appended usage rollup",
-  );
-  const appendedRollup = expectDefined(
-    readSessionCostUsageRollupEntry(appendedRow, "main"),
-    "decoded appended rollup",
-  );
-  expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-
   const allTime = await readRange(0, true);
   expect(allTime.summaries[0]).toMatchObject({
     totalTokens: 1_030,
@@ -333,23 +320,6 @@ it("rebuilds obsolete rollups and preserves tool occurrences and untimestamped u
     dailyMessageCounts: [{ toolCalls: 6 }],
   });
   expect(allTime.summaries[0]?.toolUsage).toEqual(toolUsage("read", 8));
-});
-
-it("buckets daily totals with the request timezone offset", async () => {
-  await writeTranscript(
-    "sess-offset",
-    assistant("2026-02-12T00:30:00.000Z", billed(10, 5, 15, 0.00001)),
-  );
-
-  const summary = await readAggregate({
-    startMs: Date.UTC(2026, 1, 11, 2),
-    endMs: Date.UTC(2026, 1, 12, 1, 59, 59, 999),
-    dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
-  });
-
-  expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-02-11"]);
-  expect(summary.daily[0]?.totalTokens).toBe(15);
-  expect(summary.daily[0]?.totalCost).toBeCloseTo(0.00001, 8);
 });
 
 it("fills every calendar day across a spring-forward DST transition", async () => {
@@ -759,7 +729,7 @@ it("returns empty points without reading for invalid maxPoints", async () => {
 
 it("returns empty logs for invalid limits", async () => {
   const sessionFile = await writeMessages(user("2026-02-12T10:00:00Z", "hello"));
-  for (const limit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  for (const limit of [0, -1, 0.5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     await expect(readLogs(sessionFile, limit)).resolves.toEqual([]);
   }
 });

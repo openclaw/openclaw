@@ -117,10 +117,7 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-export function resolveServiceEntrypointIndex(
-  programArguments: readonly string[],
-): number | undefined {
-  const args = [...programArguments];
+export function resolveServiceEntrypointIndex(args: readonly string[]): number | undefined {
   const { position: script } = resolveRuntimeScriptPosition(args);
   if (typeof script !== "number" && script.kind === "other") {
     return undefined;

@@ -1,4 +1,9 @@
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../../worker/node-workspace-protocol.js";
+// Native script generation reads this static fragment without a TypeScript resolver.
+import {
+  WORKSPACE_QUIESCENCE_PROCESS_PROBE_JS as REMOTE_QUIESCENCE_PROBE_JS,
+  WORKSPACE_QUIESCENCE_PROCESS_IDENTITY_JS as REMOTE_QUIESCENCE_PROCESS_IDENTITY_JS,
+} from "./workspace-quiescence-process-probe.ts";
 
 const REMOTE_QUIESCENCE_CONTEXT_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
@@ -10,36 +15,7 @@ const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
 const leaseDirectory = path.join(os.homedir(), ".openclaw-worker", "quiescence");
 const windowsLeaseDatabasePath = path.join(leaseDirectory, "windows-shared-host.sqlite");`;
 
-const REMOTE_QUIESCENCE_PS_JS = String.raw`function createProcessProbe() {
-  // Share 30s across probes: tolerate multi-second stalls on slow hosts while leaving
-  // the node transport's 60s command deadline room to deliver the failure and cleanup.
-  const deadline = performance.now() + 30000;
-  let warned = false;
-  return (args, maxBuffer) => {
-    let timeout = 2000;
-    for (;;) {
-      const remaining = Math.ceil(deadline - performance.now());
-      if (remaining <= 0) {
-        const message = "workspace quiescence process check budget exhausted after 30000 ms; check host load and ps availability";
-        process.stderr.write(message + "\n");
-        throw Object.assign(new Error(message), { code: "WORKSPACE_PROBE_BUDGET_EXHAUSTED" });
-      }
-      try {
-        // SIGTERM can be ignored; SIGKILL keeps even a stuck probe bounded.
-        return require("node:child_process").execFileSync("ps", args, {
-          encoding: "utf8", maxBuffer, timeout: Math.min(timeout, remaining), killSignal: "SIGKILL",
-        });
-      } catch (error) {
-        if (!error || error.code !== "ETIMEDOUT") throw error;
-        if (!warned) {
-          process.stderr.write("workspace quiescence: slow ps check; retrying within the shared 30000 ms budget\n");
-          warned = true;
-        }
-        timeout *= 2;
-      }
-    }
-  };
-}
+const REMOTE_QUIESCENCE_PS_JS = String.raw`${REMOTE_QUIESCENCE_PROBE_JS}
 let processProbe = createProcessProbe();
 function processes() {
   const output = processProbe(["-axo", "pid=,ppid=,uid=,stat=,lstart="], 4 * 1024 * 1024);
@@ -65,27 +41,7 @@ function ancestors(rows) {
   }
   return result;
 }
-function processIdentity(pid, withState = false) {
-  try {
-    const output = processProbe(["-o", withState ? "stat=,lstart=" : "lstart=", "-p", String(pid)], 4096).trim();
-    if (!withState) return output || null;
-    const match = /^(\S+)\s+(.+)$/u.exec(output);
-    return match ? { state: match[1], start: match[2] } : null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-function reportPendingProcesses(entries, exhausted = false) {
-  const pids = entries.filter((entry) => Number.isSafeInteger(entry?.pid) && entry.pid > 0).map((entry) => entry.pid);
-  // Match workspaceSyncError's single-line display in the retained diagnostic, while
-  // preserving raw ps padding in lease identities used by signal guards and older watchdogs.
-  const message = (exhausted
-    ? "workspace quiescence recovery exhausted after 4 check passes (30000 ms each, 7000 ms total backoff); check host load and ps availability, then retry workspace recovery; unfinished workers (PID/start): "
-    : "workspace quiescence recovery pending PIDs: " + pids.join(", ") + "; unfinished workers (PID/start): ") + JSON.stringify(entries).replace(/\s+/gu, " ");
-  process.stderr.write(message + "\n");
-  return message;
-}
+${REMOTE_QUIESCENCE_PROCESS_IDENTITY_JS}
 // EPERM on SIGCONT implies the target was never ours to freeze: signal permission checks
 // are identical for SIGSTOP and SIGCONT, so every process we stopped can be resumed.
 function resumeProcesses(entries) {
@@ -115,6 +71,15 @@ function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
       !row.state.startsWith("Z") &&
       !row.state.startsWith("X"),
   );
+}`;
+
+const REMOTE_QUIESCENCE_PERSIST_LEASE_JS = String.raw`function persistLease(targetPath, lease, verifyCurrent) {
+  const fs = require("node:fs");
+  const crypto = require("node:crypto");
+  if (verifyCurrent) verifyCurrent(JSON.parse(fs.readFileSync(targetPath, "utf8")));
+  const temporary = targetPath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
+  fs.writeFileSync(temporary, JSON.stringify(lease), { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, targetPath);
 }`;
 
 const REMOTE_QUIESCENCE_LEASE_JS = String.raw`function validProcessReference(value) {
@@ -154,14 +119,7 @@ function parseWindowsLease(raw, nonce, options) {
   }
   return lease;
 }
-function persistLease(targetPath, lease, verifyCurrent) {
-  const fs = require("node:fs");
-  const crypto = require("node:crypto");
-  if (verifyCurrent) verifyCurrent(JSON.parse(fs.readFileSync(targetPath, "utf8")));
-  const temporary = targetPath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
-  fs.writeFileSync(temporary, JSON.stringify(lease), { mode: 0o600, flag: "wx" });
-  fs.renameSync(temporary, targetPath);
-}
+${REMOTE_QUIESCENCE_PERSIST_LEASE_JS}
 function withWindowsWorkspaceLease(databasePath, workspaceKey, run) {
   const { DatabaseSync } = require("node:sqlite");
   const database = new DatabaseSync(databasePath);
@@ -271,7 +229,7 @@ function assertWatchdogActive() {
     throw new Error("workspace quiescence watchdog identity changed unexpectedly");
   }
   try { process.kill(input.watchdog.pid, 0); } catch (error) {
-    if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
+    if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly", { cause: error });
     throw error;
   }
 }
@@ -330,7 +288,7 @@ function resumeWorkspaceLease(ownedWatchdog, watchdogReference) {
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 if (process.platform === "win32") {
   withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
-    if (raw === null) return;
+    if (raw === null) return undefined;
     parseWindowsLease(raw, nonce);
     return null;
   });
@@ -353,6 +311,103 @@ resumeLeaseProcesses(input, ownedWatchdog);
 try { fs.unlinkSync(leasePath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
 return "";
 }
+`;
+
+const REMOTE_QUIESCENCE_WATCHDOG_JS = String.raw`${REMOTE_QUIESCENCE_PROBE_JS}
+let processProbe;
+${REMOTE_QUIESCENCE_PROCESS_IDENTITY_JS}
+${REMOTE_QUIESCENCE_PERSIST_LEASE_JS}
+function watchdogMain(watchedLeasePath, watchedNonce) {
+  let retryDelayMs = 1000;
+  // Four 30s passes plus 1+2+4s backoff allow slow hosts 127s of recovery work.
+  // A total cap prevents endless fresh budgets from silently leaving workers stopped.
+  let failedPasses = 0;
+  // Keep unfinished references across exhausted passes: replaying a resumed prefix
+  // can consume every budget and leave later workers stopped forever.
+  let remainingProcesses;
+  const check = () => {
+    const watchdogFs = require("node:fs");
+    let canResume;
+    try {
+      const lease = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
+      if (
+        !lease ||
+        lease.version !== 1 ||
+        lease.nonce !== watchedNonce ||
+        !Array.isArray(lease.processes) ||
+        !Number.isSafeInteger(lease.expiresAtMs)
+      ) { return; }
+      const remainingMs = lease.expiresAtMs - Date.now();
+      if (remainingMs > 0) {
+        remainingProcesses = undefined;
+        processProbe = undefined;
+        failedPasses = 0;
+        retryDelayMs = 1000;
+        setTimeout(check, Math.min(remainingMs, 60 * 1000));
+        return;
+      }
+      // A renewal during a slow probe must win before either thaw or lease removal.
+      canResume = () => {
+        const current = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
+        if (!current || current.version !== 1 || current.nonce !== watchedNonce || !Array.isArray(current.processes) || !Number.isSafeInteger(current.expiresAtMs)) return false;
+        const remaining = current.expiresAtMs - Date.now();
+        if (remaining <= 0) return current;
+        remainingProcesses = undefined;
+        processProbe = undefined;
+        failedPasses = 0;
+        retryDelayMs = 1000;
+        setTimeout(check, Math.min(remaining, 60 * 1000));
+        return false;
+      };
+      if (!canResume()) return;
+      processProbe ??= createProcessProbe();
+      remainingProcesses ??= lease.processes;
+      while (remainingProcesses.length > 0) {
+        const entry = remainingProcesses[0];
+        if (
+          !entry ||
+          !Number.isSafeInteger(entry.pid) ||
+          entry.pid < 1 ||
+          typeof entry.start !== "string"
+        ) { remainingProcesses.shift(); continue; }
+        const start = processIdentity(entry.pid);
+        if (!canResume()) return;
+        if (start === entry.start) {
+          try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+        }
+        remainingProcesses.shift();
+      }
+      if (canResume()) watchdogFs.unlinkSync(watchedLeasePath);
+    } catch (error) {
+      // A missing ps also throws ENOENT; only a missing lease means someone else finished.
+      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) { return; }
+      // An unreadable lease is terminal: the pids to resume live in that file, so retrying
+      // cannot recover them and would leave this detached process alive forever.
+      if (error instanceof SyntaxError) { return; }
+      const current = canResume?.();
+      if (canResume && !current) return;
+      failedPasses += 1;
+      if (failedPasses >= 4) {
+        if (!current || current.watchdog?.pid !== process.pid) throw error;
+        const unfinished = remainingProcesses ?? current.processes;
+        persistLease(watchedLeasePath, {
+          ...current, processes: unfinished, recoveryError: reportPendingProcesses(unfinished, true),
+        });
+        process.exitCode = 1;
+        return;
+      }
+      if (error && error.code === "WORKSPACE_PROBE_BUDGET_EXHAUSTED") {
+        reportPendingProcesses(remainingProcesses);
+        processProbe = undefined;
+      }
+      // Retry only unfinished work; terminal exhaustion remains available to Gateway callers.
+      setTimeout(check, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 60000);
+    }
+  };
+  check();
+}
+watchdogMain(process.argv[1], process.argv[2]);
 `;
 
 // Signal sites tolerate ESRCH (gone) without aborting the protocol. EPERM (exists but
@@ -464,7 +519,7 @@ if (!sharedHost && sawUnverifiedEmptyLeaseWatchdog) {
 writeLease();
 const watchdog = ownedWatchdog ? { pid: process.pid } : childProcess.spawn(
   process.execPath,
-  ["-e", createProcessProbe.toString() + "\nlet processProbe;\n" + persistLease.toString() + "\n" + reportPendingProcesses.toString() + "\n" + processIdentity.toString() + "\n(" + watchdogMain.toString() + ")(process.argv[1], process.argv[2])", leasePath, nonce],
+  ["-e", ${JSON.stringify(REMOTE_QUIESCENCE_WATCHDOG_JS)}, leasePath, nonce],
   { detached: true, stdio: "ignore" },
 );
 if (!ownedWatchdog) watchdog.unref();
@@ -507,96 +562,6 @@ try {
 }
 }
 acquireWorkspaceLease();
-function watchdogMain(watchedLeasePath, watchedNonce) {
-  let retryDelayMs = 1000;
-  // Four 30s passes plus 1+2+4s backoff allow slow hosts 127s of recovery work.
-  // A total cap prevents endless fresh budgets from silently leaving workers stopped.
-  let failedPasses = 0;
-  // Keep unfinished references across exhausted passes: replaying a resumed prefix
-  // can consume every budget and leave later workers stopped forever.
-  let remainingProcesses;
-  const check = () => {
-    const watchdogFs = require("node:fs");
-    let canResume;
-    try {
-      const lease = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-      if (
-        !lease ||
-        lease.version !== 1 ||
-        lease.nonce !== watchedNonce ||
-        !Array.isArray(lease.processes) ||
-        !Number.isSafeInteger(lease.expiresAtMs)
-      ) { return; }
-      const remainingMs = lease.expiresAtMs - Date.now();
-      if (remainingMs > 0) {
-        remainingProcesses = undefined;
-        processProbe = undefined;
-        failedPasses = 0;
-        retryDelayMs = 1000;
-        setTimeout(check, Math.min(remainingMs, 60 * 1000));
-        return;
-      }
-      // A renewal during a slow probe must win before either thaw or lease removal.
-      canResume = () => {
-        const current = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-        if (!current || current.version !== 1 || current.nonce !== watchedNonce || !Array.isArray(current.processes) || !Number.isSafeInteger(current.expiresAtMs)) return false;
-        const remaining = current.expiresAtMs - Date.now();
-        if (remaining <= 0) return current;
-        remainingProcesses = undefined;
-        processProbe = undefined;
-        failedPasses = 0;
-        retryDelayMs = 1000;
-        setTimeout(check, Math.min(remaining, 60 * 1000));
-        return false;
-      };
-      if (!canResume()) return;
-      processProbe ??= createProcessProbe();
-      remainingProcesses ??= lease.processes;
-      while (remainingProcesses.length > 0) {
-        const entry = remainingProcesses[0];
-        if (
-          !entry ||
-          !Number.isSafeInteger(entry.pid) ||
-          entry.pid < 1 ||
-          typeof entry.start !== "string"
-        ) { remainingProcesses.shift(); continue; }
-        const start = processIdentity(entry.pid);
-        if (!canResume()) return;
-        if (start === entry.start) {
-          try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
-        }
-        remainingProcesses.shift();
-      }
-      if (canResume()) watchdogFs.unlinkSync(watchedLeasePath);
-    } catch (error) {
-      // A missing ps also throws ENOENT; only a missing lease means someone else finished.
-      if (error && error.code === "ENOENT" && error.path === watchedLeasePath) { return; }
-      // An unreadable lease is terminal: the pids to resume live in that file, so retrying
-      // cannot recover them and would leave this detached process alive forever.
-      if (error instanceof SyntaxError) { return; }
-      const current = canResume?.();
-      if (canResume && !current) return;
-      failedPasses += 1;
-      if (failedPasses >= 4) {
-        if (!current || current.watchdog?.pid !== process.pid) throw error;
-        const unfinished = remainingProcesses ?? current.processes;
-        persistLease(watchedLeasePath, {
-          ...current, processes: unfinished, recoveryError: reportPendingProcesses(unfinished, true),
-        });
-        process.exitCode = 1;
-        return;
-      }
-      if (error && error.code === "WORKSPACE_PROBE_BUDGET_EXHAUSTED") {
-        reportPendingProcesses(remainingProcesses);
-        processProbe = undefined;
-      }
-      // Retry only unfinished work; terminal exhaustion remains available to Gateway callers.
-      setTimeout(check, retryDelayMs);
-      retryDelayMs = Math.min(retryDelayMs * 2, 60000);
-    }
-  };
-  check();
-}
 if (ownedWatchdog) {
   let active = true;
   let retired = false;
@@ -684,17 +649,18 @@ const REMOTE_WORKSPACE_RESUME_JS = String.raw`${REMOTE_QUIESCENCE_CONTROL_CONTEX
 process.stdout.write(resumeWorkspaceLease(process.argv[3] === "owned"));
 `;
 
-export function workspaceQuiescenceArgv(
+export const workspaceQuiescenceScripts = {
+  acquire: REMOTE_WORKSPACE_QUIESCE_JS,
+  renew: REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+  release: REMOTE_WORKSPACE_RESUME_JS,
+} as const;
+
+export function workspaceQuiescenceArguments(
   root: string,
   operation: NodeWorkerWorkspaceQuiescenceInput,
   hostMode: "shared-host" | "dedicated",
   watchdogLifetime?: "owned",
 ): string[] {
-  const scripts = {
-    acquire: REMOTE_WORKSPACE_QUIESCE_JS,
-    renew: REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-    release: REMOTE_WORKSPACE_RESUME_JS,
-  };
   const args =
     operation.action === "acquire"
       ? [String(operation.timeoutMs), hostMode]
@@ -704,5 +670,19 @@ export function workspaceQuiescenceArgv(
   if (watchdogLifetime && operation.action !== "renew") {
     args.push(watchdogLifetime, ...(operation.action === "acquire" ? [operation.nonce] : []));
   }
-  return ["node", "-e", scripts[operation.action], root, ...args];
+  return [root, ...args];
+}
+
+export function workspaceQuiescenceArgv(
+  root: string,
+  operation: NodeWorkerWorkspaceQuiescenceInput,
+  hostMode: "shared-host" | "dedicated",
+  watchdogLifetime?: "owned",
+): string[] {
+  return [
+    "node",
+    "-e",
+    workspaceQuiescenceScripts[operation.action],
+    ...workspaceQuiescenceArguments(root, operation, hostMode, watchdogLifetime),
+  ];
 }

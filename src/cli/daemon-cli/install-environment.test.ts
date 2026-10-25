@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import { createSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { mergeInstallInvocationEnv } from "./install.js";
@@ -41,24 +41,23 @@ describe("mergeInstallInvocationEnv", () => {
 
   it("uses only the current shell's HOMEBREW_PREFIX", () => {
     const existingServiceEnv = { HOMEBREW_PREFIX: "/opt/homebrew" };
-    const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv, platform: "darwin" });
+    const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv });
     expect(env.HOMEBREW_PREFIX).toBeUndefined();
     const current = mergeInstallInvocationEnv({
       env: { HOMEBREW_PREFIX: "/usr/local" },
       existingServiceEnv,
-      platform: "darwin",
     });
     expect(current.HOMEBREW_PREFIX).toBe("/usr/local");
   });
 
   it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
+    vi.stubGlobal("process", { ...process, platform: "win32" });
     const env = mergeInstallInvocationEnv({
       env: {
         Path: "C:\\Windows\\System32",
         openai_api_key: "service-openai-key",
         NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
       },
-      platform: "win32",
     });
 
     expect(env).toMatchObject({
@@ -77,6 +76,7 @@ describe("mergeInstallInvocationEnv", () => {
   ])(
     "preserves installed additive Node CA trust without unsafe overrides on $platform",
     ({ platform, caKey }) => {
+      vi.stubGlobal("process", { ...process, platform });
       const env = mergeInstallInvocationEnv({
         env: { PATH: "/usr/bin" },
         existingServiceEnv: {
@@ -88,7 +88,6 @@ describe("mergeInstallInvocationEnv", () => {
           LD_PRELOAD: "/tmp/untrusted.so",
           OPENAI_API_KEY: "existing-service-key",
         },
-        platform,
       });
 
       expect(env).toMatchObject({
@@ -113,12 +112,12 @@ describe("mergeInstallInvocationEnv", () => {
   ])(
     "lets the current shell override installed Node CA trust on $platform",
     ({ platform, shellKey }) => {
+      vi.stubGlobal("process", { ...process, platform });
       const env = mergeInstallInvocationEnv({
         env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
         existingServiceEnv: {
           NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
         },
-        platform,
       });
 
       expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");

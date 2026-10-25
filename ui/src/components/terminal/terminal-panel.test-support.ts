@@ -2,7 +2,7 @@ import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser
 import { vi, type Mock } from "vitest";
 import { createTerminalController } from "./terminal-controller.test-support.ts";
 export { createTerminalController } from "./terminal-controller.test-support.ts";
-import { TerminalPanelHost } from "./terminal-panel-registration.ts";
+import { TerminalPanelHost } from "./terminal-panel-registration.tsx";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const factories = new Map<string, CreateGhosttyTerminalMock>();

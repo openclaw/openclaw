@@ -14,7 +14,7 @@ import {
   sessionPlacementUsesWorkerInference,
 } from "../../agents/session-placement-admission.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
-import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
+import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -27,6 +27,8 @@ import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { isCompetingSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -318,12 +320,14 @@ describe("worker turn launcher local placement", () => {
       }
       const { databaseClaim } = await loadSessionEntryForAdmission(fx.sessionTarget);
       const operation = createReplyOperation({ ...claim, resetTriggered: false });
-      const binding = bindReplyOperationDatabaseAdmission(
+      bindReplyAdmissionRelease({
         operation,
-        claim,
-        undefined,
+        sessionKey: claim.sessionKey,
+        sessionId: operation.sessionId,
+        admission: undefined,
+        recoveryOwnerLease: undefined,
         databaseClaim,
-      );
+      });
       const projection = vi.spyOn(fx.placements, "readProjection");
       const standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
       const acquire = fx.placements.claimTurn.bind(fx.placements);
@@ -333,7 +337,7 @@ describe("worker turn launcher local placement", () => {
         return acquire(...args);
       });
       try {
-        expect(binding.operationAdmission.reader).toBeDefined();
+        expect(getReplyOperationSessionReader(operation)).toBeDefined();
         await localProvider.executeTurn(
           claim,
           { ...fx.turn(claim.runId), replyOperation: operation },
@@ -350,10 +354,10 @@ describe("worker turn launcher local placement", () => {
         standaloneEntry.mockRestore();
         projection.mockRestore();
         operation.complete();
-        await binding.releaseWorkerDatabaseClaim?.();
-        if (!binding.releaseWorkerDatabaseClaim) {
-          await databaseClaim.release();
-        }
+        expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
+          settled: true,
+        });
+        expect(databaseClaim.isCurrent()).toBe(false);
       }
     },
   );

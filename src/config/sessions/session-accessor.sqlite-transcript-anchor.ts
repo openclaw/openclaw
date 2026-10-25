@@ -7,9 +7,11 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
-  getSessionKysely,
+  selectActiveTranscriptIdentityRows,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
+import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
@@ -42,16 +44,9 @@ export function readActiveTranscriptEntryIdentityInSnapshot(
   projection: CurrentTranscriptProjection,
   entryId: string,
 ) {
-  const db = getSessionKysely(projection.database.db);
   return executeSqliteQueryTakeFirstSync(
     projection.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
+    selectActiveTranscriptIdentityRows(projection.database)
       .select(["identity.seq", "identity.parent_id as parentId"])
       .where("identity.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_id", "=", entryId)
@@ -210,13 +205,7 @@ function selectActiveTranscriptEntryAnchor(
   projection?: CurrentTranscriptProjection,
   includeVersion = false,
 ) {
-  const query = getSessionKysely(params.database.db)
-    .selectFrom("transcript_event_identities as identity")
-    .innerJoin("session_transcript_active_events as active", (join) =>
-      join
-        .onRef("active.session_id", "=", "identity.session_id")
-        .onRef("active.event_seq", "=", "identity.seq"),
-    )
+  const query = selectActiveTranscriptIdentityRows(params.database)
     .select([
       "identity.seq",
       "identity.parent_id",

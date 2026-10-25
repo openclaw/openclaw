@@ -19,7 +19,6 @@ import {
   enqueueSystemEvent,
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
-  holdSystemEventDelivery,
   isSystemEventContextChanged as contextChanged,
   peekDeliverableSystemEventEntries as peekDeliverable,
   peekSystemEventEntries as peekEntries,
@@ -102,21 +101,15 @@ describe("delivery-owned system event selection", () => {
       "ordinary owner",
     );
     enqueueSystemEvent("Passive notice", { sessionKey });
-    const held = enqueueEntry("Exec finished (gateway id=uncertain, code 0)", sessionKey);
-    holdSystemEventDelivery(sessionKey, [held]);
     expect(peekDeliverable(sessionKey).map(({ text }) => text)).toEqual(["Passive notice"]);
     const prompt = await drainFormattedEvents(sessionKey);
     expect(prompt).toContain("Passive notice");
     expect(prompt).not.toContain("Task completed");
     expect(prompt).not.toContain("Sibling completed");
-    expect(peekEntries(sessionKey).map(({ id }) => id)).toEqual([
-      occurrence.id,
-      sibling.id,
-      held.id,
-    ]);
+    expect(peekEntries(sessionKey).map(({ id }) => id)).toEqual([occurrence.id, sibling.id]);
     expect(cancelled).not.toHaveBeenCalled();
     owner.start();
-    expect(peekEntries(sessionKey).map(({ id }) => id)).toEqual([held.id]);
+    expect(peekEntries(sessionKey)).toEqual([]);
     expect(cancelled).not.toHaveBeenCalled();
     expect(owner.cancel()).toBe(false);
   });
@@ -646,6 +639,24 @@ describe("system events (session routing)", () => {
     expect(peekSdkSystemEventEntries(beta).map((event) => event.text)).toEqual(["Hook finished"]);
     expect(peekSdkSystemEventEntries(alpha).map((event) => event.text)).toEqual([
       "Later alpha event",
+    ]);
+  });
+
+  it("preserves deferred occurrences when consuming through the SDK", () => {
+    enqueueSdkSystemEvent("Deferred", { sessionKey: key });
+    enqueueSdkSystemEvent("Consumed", { sessionKey: key });
+    const captured = peekSdkSystemEventEntries(key);
+    const deferredId = expectDefined(captured[0]?.id, "deferred event ID");
+    enqueueSdkSystemEvent("Late arrival", { sessionKey: key });
+
+    expect(
+      consumeSdkSystemEventEntries(key, captured, { deferredEventIds: [deferredId] }).map(
+        (event) => event.text,
+      ),
+    ).toEqual(["Deferred", "Consumed"]);
+    expect(peekSdkSystemEventEntries(key).map((event) => event.text)).toEqual([
+      "Deferred",
+      "Late arrival",
     ]);
   });
 

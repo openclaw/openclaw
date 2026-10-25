@@ -117,12 +117,13 @@ function sdkFixture(
 ) {
   const host = writeFakeOpenClawPackage(root);
   const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
+  const moduleUrl = pathToFileURL(host.loaderModulePath).href;
   return {
     ...host,
     root,
     externalPluginEntry,
     requireFromPlugin: createRequire(externalPluginEntry),
-    options: { modulePath: host.loaderModulePath, pluginModulePath: externalPluginEntry },
+    options: { moduleUrl, pluginModulePath: externalPluginEntry },
   };
 }
 
@@ -304,10 +305,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         `const entryPath = ${JSON.stringify(entryPath)};`,
         "const originalResolver = Module._resolveFilename;",
         "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });",
-        "installOpenClawPluginSdkNativeResolver({ modulePath: aliasFreeLoaderPath });",
+        "installOpenClawPluginSdkNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });",
         "const aliasFreeUnchanged = Module._resolveFilename === originalResolver;",
         "installOpenClawPluginSdkNativeResolver({",
-        "  modulePath: loaderModulePath,",
+        "  moduleUrl: pathToFileURL(loaderModulePath).href,",
         "  pluginModulePath: entryPath,",
         '  pluginSdkResolution: "dist",',
         "});",
@@ -354,6 +355,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "internal/tool-schema",
         "internal/runtime",
         "internal/openai-responses-payload-policy",
+        "internal/google",
         "internal/google-model-family",
         "internal/retry-after",
       ],
@@ -396,7 +398,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     });
     for (const { entry } of owners) {
       installOpenClawPluginSdkNativeResolver({
-        modulePath: loaderModulePath,
+        moduleUrl: pathToFileURL(loaderModulePath).href,
         pluginModulePath: entry,
         pluginSdkResolution: "dist",
       });

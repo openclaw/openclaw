@@ -1,4 +1,5 @@
 import { SESSION_TITLE_TARGET_SELECTOR } from "../components/session-progress-hovercard-target.ts";
+import { markdownContentHtml, type MarkdownContent } from "./markdown-content.ts";
 
 /** A renderer supplies only the lifecycle of its retained media island. */
 export type MarkdownMediaRoot = {
@@ -14,6 +15,7 @@ export type MarkdownDomMedia = {
 type MarkdownSessionTitleRegistration = (target: HTMLElement, label: HTMLElement) => () => void;
 
 type CanonicalNode = {
+  prepared?: Node;
   key: string | number;
   canonical: string;
   tag?: string;
@@ -39,8 +41,9 @@ type RenderedNode = DomRange & {
   releaseSessionTitles?: () => void;
 };
 type Fragment = DomRange & {
-  html: string;
+  html: MarkdownContent;
   prefix: string;
+  parsedHtml?: MarkdownContent;
   incremental: boolean;
   canonical: CanonicalNode[];
   children: RenderedNode[];
@@ -91,13 +94,18 @@ function hasParagraphContent(node: Node): boolean {
 }
 
 function parseCanonical(
-  html: string,
+  html: MarkdownContent,
   prefix: string,
   incremental: boolean,
   sessionTitles: boolean,
 ): CanonicalNode[] {
   const template = document.createElement("template");
-  template.innerHTML = html;
+  const prepared = typeof html !== "string";
+  if (prepared) {
+    template.content.append(html.fragment.cloneNode(true));
+  } else {
+    template.innerHTML = html;
+  }
   const slots = new Map<Node, number>();
   const mediaAncestors = new Set<Node>();
   if (prefix) {
@@ -169,6 +177,7 @@ function parseCanonical(
           element.localName.includes("-")),
       );
       return {
+        prepared: prepared && opaque ? node.cloneNode(true) : undefined,
         key: key && counts.get(key) === 1 ? key : index,
         canonical: `${node.nodeType}:${element ? element.outerHTML : node.textContent}`,
         tag: element?.localName,
@@ -184,8 +193,8 @@ function parseCanonical(
       };
     });
   };
-  // Only strings and plain descriptors survive parsing. Retained parsed nodes
-  // would keep obsolete trees alive through their parent pointers.
+  // Opaque prepared nodes are detached clones: descriptors must not retain the
+  // parsed tree through parent pointers after its content has been replaced.
   return children(template.content);
 }
 
@@ -221,20 +230,32 @@ function patchAttributes(
     if (name === "class") {
       const oldTokens = new Set(oldValue?.split(/\s+/).filter(Boolean));
       const tokens = new Set(value?.split(/\s+/).filter(Boolean));
-      for (const token of oldTokens) {
-        if (!tokens.has(token)) {
-          element.classList.remove(token);
-        }
-      }
-      for (const token of tokens) {
-        if (!oldTokens.has(token)) {
-          element.classList.add(token);
-        }
+      // Canonical tokens keep their serialized order; reader-owned state survives.
+      const retained = [...element.classList].filter(
+        (token) => !oldTokens.has(token) && !tokens.has(token),
+      );
+      const classes = [...tokens, ...retained].join(" ");
+      if (value === undefined && !classes) {
+        element.removeAttribute(name);
+      } else {
+        element.setAttribute(name, classes);
       }
     } else if (value === undefined) {
       element.removeAttribute(name);
     } else {
       element.setAttribute(name, value);
+    }
+  }
+  // An attribute added midway through a stream must take its one-shot position.
+  if (before.map(([name]) => name).join("\0") !== after.map(([name]) => name).join("\0")) {
+    const ordered = after.map(([name]) => [name, element.getAttribute(name)] as const);
+    for (const [name] of ordered) {
+      element.removeAttribute(name);
+    }
+    for (const [name, value] of ordered) {
+      if (value !== null) {
+        element.setAttribute(name, value);
+      }
     }
   }
 }
@@ -272,21 +293,23 @@ export class MarkdownDomReconciler {
   update(
     messageKey: string,
     source: string,
-    [stableHtml, tailHtml]: readonly [string, string],
+    [stableContent, tailContent]: readonly [MarkdownContent, MarkdownContent],
     media?: MarkdownDomMedia,
   ): void {
+    const stableHtml = markdownContentHtml(stableContent);
+    const tailHtml = markdownContentHtml(tailContent);
     if (this.messageKey !== messageKey) {
       this.releaseMedia();
     }
     if (
       this.messageKey !== messageKey ||
       !source.startsWith(this.source) ||
-      !stableHtml.startsWith(this.stableHtml)
+      (stableHtml !== this.stableHtml && !stableHtml.startsWith(this.stableHtml))
     ) {
       this.reset();
     }
     if (stableHtml.length > this.stableHtml.length) {
-      const completed = stableHtml.slice(this.stableHtml.length);
+      const completed = this.stableHtml ? stableHtml.slice(this.stableHtml.length) : stableContent;
       if (this.tail) {
         // Promotion retains the same DOM owner and its reader state.
         this.tail.html = completed;
@@ -297,9 +320,9 @@ export class MarkdownDomReconciler {
     }
     if (tailHtml) {
       if (this.tail) {
-        this.tail.html = tailHtml;
+        this.tail.html = tailContent;
       } else {
-        this.tail = this.createFragment(tailHtml, true);
+        this.tail = this.createFragment(tailContent, true);
         this.fragments.push(this.tail);
       }
     } else if (this.tail) {
@@ -315,7 +338,7 @@ export class MarkdownDomReconciler {
   }
 
   /** A standalone fragment uses the same canonical-tree and media ownership. */
-  updateHtml(html: string, media?: MarkdownDomMedia, incremental = false): void {
+  updateHtml(html: MarkdownContent, media?: MarkdownDomMedia, incremental = false): void {
     let fragment = this.fragments[0];
     if (!fragment || fragment.incremental !== incremental) {
       this.reset();
@@ -349,7 +372,7 @@ export class MarkdownDomReconciler {
     this.mediaSlots.clear();
   }
 
-  private createFragment(html: string, incremental: boolean): Fragment {
+  private createFragment(html: MarkdownContent, incremental: boolean): Fragment {
     return {
       ...createRange(this.range.end.parentNode!, this.range.end),
       html,
@@ -362,19 +385,19 @@ export class MarkdownDomReconciler {
 
   private renderFragments(media?: MarkdownDomMedia): void {
     this.usedSlots = new Set();
+    const prefix = media?.prefix ?? "";
     for (const fragment of this.fragments) {
-      const prefix = media?.prefix ?? "";
-      // Canonical strings also memoize completed fragments without retaining a
-      // detached DOM tree. Media policy still refreshes on every update.
-      const canonical = `${prefix}\0${fragment.html}`;
-      if (fragment.prefix !== canonical) {
+      // Retain the inputs separately so completed fragments need no combined key.
+      // Media policy still refreshes on every update.
+      if (fragment.prefix !== prefix || fragment.parsedHtml !== fragment.html) {
         fragment.canonical = parseCanonical(
           fragment.html,
           prefix,
           fragment.incremental,
           Boolean(this.registerSessionTitle),
         );
-        fragment.prefix = canonical;
+        fragment.prefix = prefix;
+        fragment.parsedHtml = fragment.html;
       } else if (!media) {
         continue;
       }
@@ -483,9 +506,13 @@ export class MarkdownDomReconciler {
       if (source.tag) {
         const template = document.createElement("template");
         // Serializing parsed HTML restores literal CRs; encode them before another parse.
-        template.innerHTML = source.canonical
-          .slice(source.canonical.indexOf(":") + 1)
-          .replaceAll("\r", "&#13;");
+        if (source.prepared) {
+          template.content.append(source.prepared.cloneNode(true));
+        } else {
+          template.innerHTML = source.canonical
+            .slice(source.canonical.indexOf(":") + 1)
+            .replaceAll("\r", "&#13;");
+        }
         const registerSessionTitle = this.registerSessionTitle;
         const targets = registerSessionTitle
           ? [...template.content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)]

@@ -23,6 +23,20 @@ import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
 
+function createDispatchingFlowSend(order: string[]) {
+  return vi.fn(
+    async (
+      _peer: string,
+      _text: string,
+      context: { onPlatformSendDispatch?: () => Promise<void> },
+    ) => {
+      await context.onPlatformSendDispatch?.();
+      order.push("send");
+      return "01JZ0000000000000000000200";
+    },
+  );
+}
+
 afterEach(resetFlowStoresForTests);
 
 describe("reefOutboundAdapter", () => {
@@ -45,17 +59,7 @@ describe("reefOutboundAdapter", () => {
 
   it("normalizes the SDK target and delegates only message content/context to the guarded flow", async () => {
     const order: string[] = [];
-    const send = vi.fn(
-      async (
-        _peer: string,
-        _text: string,
-        context: { onPlatformSendDispatch?: () => Promise<void> },
-      ) => {
-        await context.onPlatformSendDispatch?.();
-        order.push("send");
-        return "01JZ0000000000000000000200";
-      },
-    );
+    const send = createDispatchingFlowSend(order);
     const onPlatformSendDispatch = vi.fn(async () => {
       order.push("dispatch");
     });
@@ -89,17 +93,7 @@ describe("reefOutboundAdapter", () => {
 
   it("marks message-adapter dispatch before encrypted transport I/O", async () => {
     const order: string[] = [];
-    const send = vi.fn(
-      async (
-        _peer: string,
-        _text: string,
-        context: { onPlatformSendDispatch?: () => Promise<void> },
-      ) => {
-        await context.onPlatformSendDispatch?.();
-        order.push("send");
-        return "01JZ0000000000000000000200";
-      },
-    );
+    const send = createDispatchingFlowSend(order);
     createReefRuntimeAuthority().activate({ flow: { send }, friends: {}, reviews: {} } as never);
 
     await reefMessageAdapter.send.text({

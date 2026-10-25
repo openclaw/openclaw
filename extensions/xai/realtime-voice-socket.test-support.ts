@@ -5,11 +5,13 @@ type Listener = (...args: unknown[]) => void;
 
 export class FakeWebSocket {
   static readonly OPEN = 1;
+  static readonly CONNECTING = 0;
   static readonly CLOSED = 3;
   static instances: FakeWebSocket[] = [];
+  static onCreate: ((socket: FakeWebSocket) => void) | undefined;
 
   readonly listeners = new Map<string, Listener[]>();
-  readyState = 0;
+  readyState = FakeWebSocket.CONNECTING;
   sent: string[] = [];
   closed = false;
   terminated = false;
@@ -17,9 +19,14 @@ export class FakeWebSocket {
   pendingClose: { code: number; reason: Buffer } | undefined;
   args: unknown[];
 
-  constructor(...args: unknown[]) {
+  readonly url?: string;
+  readonly options?: { headers?: Record<string, string>; maxPayload?: number };
+
+  constructor(...args: [url?: string, options?: FakeWebSocket["options"]]) {
     this.args = args;
+    [this.url, this.options] = args;
     FakeWebSocket.instances.push(this);
+    FakeWebSocket.onCreate?.(this);
   }
 
   on(event: string, listener: Listener): this {
@@ -27,6 +34,17 @@ export class FakeWebSocket {
     listeners.push(listener);
     this.listeners.set(event, listeners);
     return this;
+  }
+
+  once(event: string, listener: Listener): this {
+    const once: Listener = (...args) => {
+      this.listeners.set(
+        event,
+        (this.listeners.get(event) ?? []).filter((entry) => entry !== once),
+      );
+      listener(...args);
+    };
+    return this.on(event, once);
   }
 
   emit(event: string, ...args: unknown[]): void {

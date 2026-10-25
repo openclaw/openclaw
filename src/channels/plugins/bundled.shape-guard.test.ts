@@ -188,10 +188,9 @@ describe("bundled channel entry shape guards", () => {
         await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
       return {
         ...actual,
-        listBundledChannelPluginMetadata: (params: {
-          includeChannelConfigs: boolean;
-          includeSyntheticChannelConfigs: boolean;
-        }) =>
+        listBundledChannelPluginMetadata: (
+          params: Parameters<typeof actual.listBundledChannelPluginMetadata>[0],
+        ) =>
           actual
             .listBundledChannelPluginMetadata(params)
             .filter((metadata) => metadata.manifest.id === "slack"),

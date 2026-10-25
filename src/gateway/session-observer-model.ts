@@ -24,7 +24,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { pruneMapToMaxSize, touchBoundedSet } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
@@ -173,15 +173,7 @@ export function rememberSessionObserverDormantRun(
 }
 
 export function rememberSessionObserverDisabledRun(runs: Set<string>, runId: string): void {
-  runs.delete(runId);
-  runs.add(runId);
-  while (runs.size > MAX_DISABLED_RUNS) {
-    const oldest = runs.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    runs.delete(oldest);
-  }
+  touchBoundedSet(runs, runId, MAX_DISABLED_RUNS);
 }
 
 export function markSessionObserverRunSuperseded(

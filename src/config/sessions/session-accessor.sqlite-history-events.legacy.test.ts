@@ -19,7 +19,10 @@ import {
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  transcriptMessage,
+  messageEvent as createMessageEvent,
+} from "./transcript-message.test-support.js";
 
 afterAll(clearRuntimeConfigSnapshot);
 const scope = useHistoryEventScope();
@@ -41,20 +44,15 @@ async function seedRows(jsonRows: string[], updatedAt = 100) {
 }
 
 function toolResult(id: string, parentId: string, content: string, details?: unknown) {
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: {
-      role: "toolResult",
-      toolCallId: id === "kept-result" ? "call-1" : id,
-      toolName: "read",
-      content: [{ type: "text", text: content }],
-      isError: false,
-      timestamp: id === "kept-result" ? 1 : 2,
-      ...(details === undefined ? {} : { details }),
-    },
-  };
+  return createMessageEvent(id, parentId, {
+    role: "toolResult",
+    toolCallId: id === "kept-result" ? "call-1" : id,
+    toolName: "read",
+    content: [{ type: "text", text: content }],
+    isError: false,
+    timestamp: id === "kept-result" ? 1 : 2,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 const openDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
@@ -73,17 +71,18 @@ const notice = (id: string, parentId: string, content: string, display = true) =
 it("resolves large anchor sets without parsing unrelated non-object legacy rows", async () => {
   const ignored = [null, 0, [], "ignored"];
   const anchors = Array.from({ length: 33 }, (_, index) => `anchor-${index}`);
-  const activities = anchors.map((afterEntryId, index) => ({
-    type: "message",
-    id: `activity-${index}`,
-    parentId: index === 0 ? anchors.at(-1) : `activity-${index - 1}`,
-    message: historyActivity({
-      scopeId: `scope-${index}`,
-      afterEntryId,
-      startOrder: index,
-      toolCallId: `call-${index}`,
-    }),
-  }));
+  const activities = anchors.map((afterEntryId, index) =>
+    createMessageEvent(
+      `activity-${index}`,
+      index === 0 ? anchors.at(-1) : `activity-${index - 1}`,
+      historyActivity({
+        scopeId: `scope-${index}`,
+        afterEntryId,
+        startOrder: index,
+        toolCallId: `call-${index}`,
+      }),
+    ),
+  );
   const events = await seedRows(
     [
       ...ignored,
@@ -127,15 +126,14 @@ it.each(["boundary", "paired-result"])(
       { type: "session", version: 3, id: scope.sessionId },
       messageEvent("discarded", null, "Discard this older question."),
       messageEvent("kept-user", "discarded", "Keep this question and its completed tool call."),
-      {
-        type: "message",
-        id: "kept-assistant",
-        parentId: "kept-user",
-        message: makeAgentAssistantMessage({
+      createMessageEvent(
+        "kept-assistant",
+        "kept-user",
+        makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
           stopReason: "toolUse",
         }),
-      },
+      ),
       toolResult(
         "kept-result",
         "kept-assistant",

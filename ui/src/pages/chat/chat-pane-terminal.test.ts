@@ -81,10 +81,13 @@ it.each(["session", "owner", "target", "client", "reconnect"] as const)(
 
     await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
     paint(row);
-    const command =
-      container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
-        ?.textContent ?? "";
-    expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+    const command = await waitForSolid(() => {
+      const text =
+        container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
+          ?.textContent ?? "";
+      expect(text).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+      return text;
+    });
     expect(decodeResumeHandoff(command.slice("openclaw resume --handoff ".length))).toEqual({
       version: 1,
       sessionKey: "agent:row-agent:bare-session",

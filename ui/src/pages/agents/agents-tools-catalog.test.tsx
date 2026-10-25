@@ -9,13 +9,12 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  agentsCapability,
   agentsList,
   agentsRouteData,
   createAgentsPage,
   emitGatewaySnapshot,
   gateway,
-  pageContext,
+  ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
@@ -38,33 +37,42 @@ function catalog(agentId: string, label: string): ToolsCatalogResult {
   };
 }
 
-function mountCatalog(
+async function mountCatalog(
   readCatalog: () => Promise<ToolsCatalogResult>,
   panel: AgentsPanel = "tools",
 ) {
-  const request = vi.fn(async (method: string) =>
-    method === "tools.catalog"
-      ? readCatalog()
-      : {
-          profile: "full",
-          groups: [
-            {
-              id: "core",
-              label: "Built-in tools",
-              source: "core",
-              tools: [{ id: "read", label: "read", description: "Read", source: "core" }],
-            },
-          ],
-        },
-  );
+  const request = vi.fn(async (method: string) => {
+    if (method === "agents.list") {
+      return {
+        ...agentsList,
+        agents: [...agentsList.agents, { id: "research", name: "Research" }],
+      };
+    }
+    if (method === "agents.files.list") {
+      return { agentId: "main", workspace: "", files: [] };
+    }
+    if (method === "tools.catalog") {
+      return readCatalog();
+    }
+    if (method === "tools.effective") {
+      return {
+        profile: "full",
+        groups: [
+          {
+            id: "core",
+            label: "Built-in tools",
+            source: "core",
+            tools: [{ id: "read", label: "read", description: "Read", source: "core" }],
+          },
+        ],
+      };
+    }
+    throw new Error(`Unexpected gateway method: ${method}`);
+  });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
-  const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
-  agents.state.agentsList = {
-    ...agentsList,
-    agents: [...agentsList.agents, { id: "research", name: "Research" }],
-  };
-  const context = pageContext(currentGateway, agents);
+  const context = await ownedAgentsContext(currentGateway);
+  const agents = context.agents;
   const route = (nextPanel: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
@@ -107,7 +115,7 @@ describe("Agents tools catalog read", () => {
       .fn<() => Promise<ToolsCatalogResult>>()
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    const view = mountCatalog(read, "files");
+    const view = await mountCatalog(read, "files");
     expect(view.catalogCalls()).toHaveLength(0);
 
     view.setPanel("tools");
@@ -188,7 +196,7 @@ describe("Agents tools catalog read", () => {
 
   it("retains a successful catalog across a same-client reconnect", async () => {
     const read = vi.fn(async () => catalog("main", "cached-tool"));
-    const view = mountCatalog(read);
+    const view = await mountCatalog(read);
     await waitForSolid(() =>
       expect(view.container.querySelector(".agent-tool-title")?.textContent?.trim()).toBe(
         "cached-tool",
@@ -213,7 +221,7 @@ describe("Agents tools catalog read", () => {
       .fn<() => Promise<ToolsCatalogResult>>()
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    const view = mountCatalog(read);
+    const view = await mountCatalog(read);
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(1));
     first.reject(new Error("temporarily unavailable"));
     await waitForSolid(() =>
@@ -243,7 +251,7 @@ describe("Agents tools catalog read", () => {
       .fn<() => Promise<ToolsCatalogResult>>()
       .mockReturnValueOnce(old.promise)
       .mockReturnValue(current.promise);
-    const view = mountCatalog(read);
+    const view = await mountCatalog(read);
     await waitForSolid(() => expect(view.catalogCalls()).toHaveLength(1));
 
     if (change === "client replacement") {

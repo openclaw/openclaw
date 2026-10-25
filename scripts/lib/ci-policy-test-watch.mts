@@ -10,6 +10,7 @@ import {
 import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
+  includeDotPaths?: boolean;
   ownerGlobs?: readonly string[];
   sourceOnly?: boolean;
   testFile: string;
@@ -57,6 +58,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
+  {
+    includeDotPaths: true,
+    testFile: "test/scripts/lint-suppressions.test.ts",
+    // The inventory includes JavaScript test suffixes that sourceOnly would exclude.
+    watchGlobs: ["{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+  },
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [
@@ -400,7 +407,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/agents/sandbox/registry-read.test.ts",
     watchGlobs: [
       "src/agents/sandbox/registry-write.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
+      "src/state/openclaw-state-read-handlers.ts",
       "src/state/openclaw-state-read.worker.ts",
     ],
   },
@@ -1157,7 +1164,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/infra/telemetry.test.ts",
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
-      "src/infra/telemetry-store.kernel.ts",
       "src/infra/telemetry-store.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],
@@ -1236,7 +1242,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/sessions/session-state-events.worker.ts",
       "src/sessions/session-upstream-links.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
+      "src/state/openclaw-state-read-handlers.ts",
       "src/state/openclaw-state-read.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],
@@ -2007,7 +2013,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "test/scripts/tsgo-core-test-shards.test.ts",
     watchGlobs: [
-      "src/{auto-reply,infra/outbound}/**/*.test.{ts,tsx}",
+      "src/{auto-reply,infra/outbound,media}/**/*.test.{ts,tsx}",
       "tsconfig.json",
       "test/tsconfig/tsconfig.test.json",
       "test/tsconfig/tsconfig.core.test*.json",
@@ -2089,10 +2095,22 @@ const literalPolicyPatterns = new Set(
     .filter(isPlainRepoRelativePath),
 );
 
-function matchesPolicyPattern(changedPath: string, pattern: string, literalPath: boolean) {
-  return literalPath && literalPolicyPatterns.has(pattern)
-    ? changedPath === pattern
-    : matchesGlob(changedPath, pattern);
+function matchesPolicyPattern(
+  changedPath: string,
+  pattern: string,
+  literalPath: boolean,
+  includeDotPaths = false,
+) {
+  if (literalPath && literalPolicyPatterns.has(pattern)) {
+    return changedPath === pattern;
+  }
+  const candidate = includeDotPaths
+    ? changedPath
+        .split("/")
+        .map((segment) => (segment.startsWith(".") ? `_${segment.slice(1)}` : segment))
+        .join("/")
+    : changedPath;
+  return matchesGlob(candidate, pattern);
 }
 
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
@@ -2105,13 +2123,17 @@ export function resolvePolicyTestTargets(
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs, sourceOnly }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly, includeDotPaths }) =>
       paths.some(
         ({ changedPath, literal }) =>
           (!sourceOnly || !isTestFileTarget(changedPath)) &&
-          watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
+          watchGlobs.some((watchGlob) =>
+            matchesPolicyPattern(changedPath, watchGlob, literal, includeDotPaths),
+          ) &&
           (!options.completeOwnersOnly ||
-            ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),
+            ownerGlobs?.some((ownerGlob) =>
+              matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
+            )),
       ),
     )
     .map(({ testFile }) => testFile);
@@ -2120,7 +2142,9 @@ export function resolvePolicyTestTargets(
 /** True when the policy tests are the complete bounded owner for this path. */
 export function isPolicyTestOwnedPath(changedPath: string): boolean {
   const literal = isPlainRepoRelativePath(changedPath);
-  return policyTestWatches.some(({ ownerGlobs }) =>
-    ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal)),
+  return policyTestWatches.some(({ ownerGlobs, includeDotPaths }) =>
+    ownerGlobs?.some((ownerGlob) =>
+      matchesPolicyPattern(changedPath, ownerGlob, literal, includeDotPaths),
+    ),
   );
 }

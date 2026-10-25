@@ -1,6 +1,7 @@
 import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import type {
   DiagnosticEventInput,
   DiagnosticModelCallContent,
@@ -51,7 +52,11 @@ type ModelCallObservationState = {
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
 type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
-type PromptStringLengthPass = { previous: PromptStringLengths; current: PromptStringLengths };
+type PromptStringLengthPass = {
+  previous: PromptStringLengths;
+  current: PromptStringLengths;
+  owned: WeakMap<object, number>;
+};
 
 function jsonLength(
   value: unknown,
@@ -59,8 +64,24 @@ function jsonLength(
   promptStringLengths?: PromptStringLengthPass,
 ): number | undefined {
   try {
-    let stringLengths = 0;
+    let omittedChars = 0;
     const serialized = JSON.stringify(value, function (this: object, key, part: unknown) {
+      if (
+        !utf8 &&
+        promptStringLengths &&
+        part !== null &&
+        typeof part === "object" &&
+        isOwnedTranscriptPayload(part)
+      ) {
+        const chars = promptStringLengths.owned.get(part) ?? jsonLength(part, false);
+        if (chars !== undefined) {
+          promptStringLengths.owned.set(part, chars);
+          // Owned roots are deeply frozen JSON. Native serialization still owns
+          // the surrounding keys, separators and mutable envelope semantics.
+          omittedChars += chars - 2;
+          return "";
+        }
+      }
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
@@ -74,15 +95,15 @@ function jsonLength(
       }
       if (!utf8 && promptStringLengths) {
         const fields = promptStringLengths.current.get(this) ?? new Map();
-        fields.set(key, { text: part, chars });
+        fields.set(key, cached?.text === part ? cached : { text: part, chars });
         promptStringLengths.current.set(this, fields);
       }
-      stringLengths += chars;
+      omittedChars += chars;
       return "";
     });
     return serialized === undefined
       ? undefined
-      : stringLengths + (utf8 ? Buffer.byteLength(serialized, "utf8") : serialized.length);
+      : omittedChars + (utf8 ? Buffer.byteLength(serialized, "utf8") : serialized.length);
   } catch {
     return undefined;
   }
@@ -137,9 +158,10 @@ export function createModelPromptStats() {
   // The attempt owns this cache; each field's exact text is its revision. Keep
   // walking containers so compaction and in-place hook edits retain JSON semantics.
   let previous: PromptStringLengths = new WeakMap();
+  const owned = new WeakMap<object, number>();
   return (streamContext: ModelCallRequestContext) => {
     const current: PromptStringLengths = new WeakMap();
-    const stats = streamContextModelPromptStats(streamContext, { previous, current });
+    const stats = streamContextModelPromptStats(streamContext, { previous, current, owned });
     // Drop deleted fields and compacted history even if their holders remain alive.
     previous = current;
     return stats;
@@ -248,6 +270,7 @@ function observeModelResponse(
   startedAt: number,
   value: unknown,
   kind: "chunk" | "result",
+  captureByteStats: boolean,
 ): void {
   // A result decorator can settle long after the terminal stream chunk. Do not
   // label that bookkeeping delay as new provider activity. Result-only adapters
@@ -264,7 +287,7 @@ function observeModelResponse(
       state.outputMessages = [cloneDiagnosticContentValue(value)];
     }
   }
-  if (kind === "chunk" || state.responseStreamBytes === 0) {
+  if (captureByteStats && (kind === "chunk" || state.responseStreamBytes === 0)) {
     const bytes = kind === "chunk" ? responseStreamChunkByteLength(value) : jsonLength(value, true);
     if (bytes !== undefined) {
       state.responseStreamBytes += bytes;
@@ -319,6 +342,7 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
+  captureByteStats: boolean;
   measurePromptStats?: ReturnType<typeof createModelPromptStats>;
 }) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
@@ -336,16 +360,16 @@ export function createModelObserver(params: {
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload: unknown) {
-      const bytes = jsonLength(payload, true);
+      const bytes = params.captureByteStats ? jsonLength(payload, true) : undefined;
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
     observeResponseChunk(startedAt: number, chunk: unknown) {
-      observeModelResponse(state, startedAt, chunk, "chunk");
+      observeModelResponse(state, startedAt, chunk, "chunk", params.captureByteStats);
     },
     observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
-      observeModelResponse(state, startedAt, result, "result");
+      observeModelResponse(state, startedAt, result, "result", params.captureByteStats);
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {

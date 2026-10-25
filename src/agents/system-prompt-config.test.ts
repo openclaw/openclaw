@@ -1,7 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as ttsSettings from "../tts/tts-settings.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
@@ -100,6 +107,76 @@ function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: stri
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each<[string, string, OpenClawConfig, boolean]>([
+    ["disabled routes", "discord", { commands: { text: false, native: false } }, false],
+    [
+      "channel disables native",
+      "discord",
+      {
+        commands: { text: false, native: true },
+        channels: { discord: { commands: { native: false } } },
+      },
+      false,
+    ],
+    [
+      "channel enables native",
+      "discord",
+      {
+        commands: { text: false, native: false },
+        channels: { discord: { commands: { native: true } } },
+      },
+      true,
+    ],
+    ["native auto on", "discord", { commands: { text: false } }, true],
+    ["native auto off", "slack", { commands: { text: false } }, false],
+    ["text enabled", "discord", { commands: { native: false } }, true],
+    ["text-only surface", "webchat", { commands: { text: false, native: false } }, true],
+  ])("renders reasoning command guidance for %s", (_name, channel, config, enabled) => {
+    const registry = createTestRegistry(
+      ["discord", "slack"].map((id) => ({
+        pluginId: id,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id,
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          commands: { nativeCommandsAutoEnabled: id === "discord" },
+        },
+      })),
+    );
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
+    // Command routing consumes process-level channel metadata.
+    setActivePluginRegistry(registry);
+    const prompt = buildConfiguredAgentSystemPrompt({
+      config,
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel },
+      reasoningLevel: "stream",
+    });
+    expect(prompt).toContain("Reasoning=stream; hidden unless on/stream.");
+    expect(prompt.includes("Toggle /reasoning")).toBe(enabled);
+    expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "does not recommend disabled update or restart commands with tools $toolNames",
+    ({ toolNames }) => {
+      const params = { workspaceDir: "/tmp/openclaw", toolNames };
+      const disabled = buildConfiguredAgentSystemPrompt({
+        ...params,
+        config: { commands: { restart: false } },
+      });
+      expect(disabled).not.toContain("`/update`");
+      expect(disabled).not.toContain("`/restart`");
+      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
+      const enabled = buildConfiguredAgentSystemPrompt({ ...params, config: {} });
+      expect(enabled).toContain("`/update`");
+    },
+  );
+
   it.each(["minimal", "none"] as const)(
     "skips full-only preparation in %s mode and refreshes the next full prompt",
     (promptMode) => {
@@ -194,15 +271,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         {},
         {
           plugins: { enabled: false },
-          models: {
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "https://custom.invalid/v1",
-                models: [],
-              },
-            },
-          },
+          ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
         },
       ),
     },

@@ -45,7 +45,7 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   return { ...actual, getSecretTargetRegistry: actual.getCoreSecretTargetRegistry };
 });
 
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { collectSecurityWarnings, noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -95,7 +95,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         configPath,
         sourceConfigValid: true,
         options: { nonInteractive: true },
-        prompter: makePrompter(false),
+        prompter: makePrompter(false, true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         env: process.env,
       };

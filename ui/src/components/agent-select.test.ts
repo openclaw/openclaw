@@ -7,7 +7,8 @@ import { i18n, t } from "../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { AgentSelectElement, AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 import "./agent-select-registration.ts";
 
 const AGENT_SELECT_TEST_TAG = "openclaw-agent-select";
@@ -153,8 +154,11 @@ it("does not let a removed option's image error poison its replacement lease", a
   );
 });
 
-it("fetches local avatars with the bearer credential when token auth is active", async () => {
-  const createObjectURL = vi.fn(() => "blob:agent-avatar");
+it("keeps both option routes and the selected avatar with token auth", async () => {
+  const createObjectURL = vi
+    .fn()
+    .mockReturnValueOnce("blob:alpha")
+    .mockReturnValueOnce("blob:beta");
   const revokeObjectURL = vi.fn();
   vi.stubGlobal(
     "URL",
@@ -164,22 +168,31 @@ it("fetches local avatars with the bearer credential when token auth is active",
     },
   );
   const response = createDeferred<Response>();
-  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(response.promise);
+  const fetchMock = vi.fn<typeof fetch>(async () => (await response.promise).clone());
   vi.stubGlobal("fetch", fetchMock);
 
   setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
   const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+    identityById: {
+      alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }),
+      beta: createIdentity("beta", { avatar: "/avatar/beta" }),
+    },
   });
 
   try {
     const avatar = element.querySelector(".agent-select__trigger .agent-select__avatar");
     expect(avatar?.classList).toContain("is-pending");
     expect(avatar?.classList).not.toContain("is-fallback");
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-      credentials: "include",
-      headers: { Authorization: "Bearer tok" },
-      signal: expect.any(AbortSignal),
+    await waitForFast(() => {
+      expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
+        headers: { Authorization: "Bearer tok" },
+        signal: expect.any(AbortSignal),
+      });
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${globalThis.location.origin}/avatar/alpha`,
+        `${globalThis.location.origin}/avatar/beta`,
+      ]);
     });
 
     response.resolve(
@@ -188,7 +201,8 @@ it("fetches local avatars with the bearer credential when token auth is active",
     await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),
-      ).toBe("blob:agent-avatar");
+      ).toBe("blob:alpha");
+      expect(element.querySelector('[value="beta"] img')?.getAttribute("src")).toBe("blob:beta");
     });
     expect(avatar?.classList).toContain("is-pending");
     avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
@@ -197,12 +211,13 @@ it("fetches local avatars with the bearer credential when token auth is active",
     await element.updateComplete;
     expect(avatar?.classList).not.toContain("is-pending");
     expect(avatar?.classList).not.toContain("is-fallback");
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(createObjectURL).toHaveBeenCalledTimes(2);
 
     element.remove();
     expect(revokeObjectURL).not.toHaveBeenCalled();
     setAvatarGatewayOrigin(null);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:agent-avatar");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:alpha");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:beta");
   } finally {
     response.resolve(new Response(null, { status: 404 }));
     element.remove();
@@ -286,7 +301,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
   });
 
   try {
-    expect(avatarCalls()).toHaveLength(1);
+    await waitForFast(() => expect(avatarCalls()).toHaveLength(1));
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;
     await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
@@ -318,107 +333,67 @@ it("aborts the stale request on auth rotation without duplicating the current fe
   }
 });
 
-it("aborts a stalled local avatar fetch after the request deadline", async () => {
-  vi.useFakeTimers();
-  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), milliseconds);
-    return controller.signal;
-  });
-  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-    const signal = init?.signal;
-    if (!signal) {
-      throw new Error("missing agent avatar fetch signal");
-    }
-    return await new Promise<Response>((_resolve, reject) => {
-      signal.addEventListener(
-        "abort",
-        () => {
-          reject(signal.reason as Error);
-        },
-        { once: true },
-      );
+it.each(["fetch", "body"] as const)(
+  "aborts a stalled local avatar %s after the request deadline",
+  async (stage) => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), milliseconds);
+      return controller.signal;
     });
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-  });
-
-  try {
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
-    expect(fetchInit?.signal?.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(fetchInit?.signal?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fetchInit?.signal?.aborted).toBe(true);
-
-    await waitForFast(() => {
-      expect(element.querySelector(".agent-select__avatar img")).toBeNull();
-      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
-    });
-    expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    element.remove();
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  }
-});
-
-it("aborts a stalled local avatar body after the request deadline", async () => {
-  vi.useFakeTimers();
-  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), milliseconds);
-    return controller.signal;
-  });
-  const blob = vi.fn<() => Promise<Blob>>();
-  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-    const signal = init?.signal;
-    if (!signal) {
-      throw new Error("missing agent avatar fetch signal");
-    }
-    blob.mockImplementation(
-      () =>
-        new Promise<Blob>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("avatar body read aborted")), {
+    const blob = vi.fn<() => Promise<Blob>>();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("missing agent avatar fetch signal");
+      }
+      const waitForAbort = () =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("avatar request aborted")), {
             once: true,
           });
-        }),
-    );
-    return { ok: true, blob } as unknown as Response;
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-  setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
-  const element = await createAgentSelect({
-    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
-  });
-
-  try {
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await waitForFast(() => expect(blob).toHaveBeenCalledTimes(1));
-    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(fetchInit?.signal?.aborted).toBe(true);
-    await waitForFast(() => {
-      expect(element.querySelector(".agent-select__avatar img")).toBeNull();
-      expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
+        });
+      if (stage === "fetch") {
+        return await waitForAbort();
+      }
+      blob.mockImplementation(waitForAbort);
+      return { ok: true, blob } as unknown as Response;
     });
-    expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    element.remove();
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  }
-});
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    setAvatarGatewayOrigin(globalThis.location.origin, ["tok"]);
+    const element = await createAgentSelect({
+      identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      if (stage === "body") {
+        expect(blob).toHaveBeenCalledTimes(1);
+      }
+      const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+      expect(fetchInit?.signal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(fetchInit?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchInit?.signal?.aborted).toBe(true);
+
+      await waitForFast(() => {
+        expect(element.querySelector(".agent-select__avatar img")).toBeNull();
+        expect(element.querySelector(".identity-avatar__agent-face")).not.toBeNull();
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      element.remove();
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("fetches a local avatar image without a header when token auth is not active", async () => {
   vi.stubGlobal(
@@ -438,10 +413,12 @@ it("fetches a local avatar image without a header when token auth is not active"
   });
 
   try {
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-      credentials: "include",
-      signal: expect.any(AbortSignal),
-    });
+    await waitForFast(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),

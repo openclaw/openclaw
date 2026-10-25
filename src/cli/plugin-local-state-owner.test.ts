@@ -485,9 +485,10 @@ describe("synthetic plugin commands respect the local state owner", () => {
           return backfillExecution();
         });
       } else if (family === "search") {
-        fixture.searchClose.mockImplementationOnce(async () => {
+        fixture.search.mockImplementationOnce(async () => {
           entered.resolve();
           await finish.promise;
+          return [];
         });
       } else {
         fixture.status.mockImplementationOnce(async () => {

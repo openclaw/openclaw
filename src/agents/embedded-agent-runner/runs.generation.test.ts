@@ -35,7 +35,6 @@ import {
   prepareEmbeddedAgentRunCompletionClaim,
   getActiveEmbeddedRunSnapshot,
   updateActiveEmbeddedRunSnapshot,
-  resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile as resolveRunByFile,
   resolveActiveEmbeddedRunOwnerByRunId,
   attachActiveEmbeddedRun as registerActiveEmbeddedRun,
@@ -393,7 +392,6 @@ describe("embedded run registry lifecycle generations", () => {
       expect(stale.queueMessage).not.toHaveBeenCalled();
       expect(stale.abort).toHaveBeenCalledWith("restart");
       expect(listActiveSessionRunIds()).not.toContain(staleId);
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
     },
   );
 
@@ -466,8 +464,6 @@ describe("embedded run registry lifecycle generations", () => {
       await expectCurrentRun(current, "shared-session", "current survives");
       expect(stale.queueMessage).not.toHaveBeenCalled();
       expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:current")).toBe("shared-session");
-      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
       expect(resolveRunByFile("/tmp/stale-session.jsonl")).toBeUndefined();
     },
   );

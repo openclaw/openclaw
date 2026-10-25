@@ -91,7 +91,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("env.runtimeId === 'openclaw'");
     expect(flow).toContain("initialRequests[0].errorCode === 'context_length_exceeded'");
     expect(flow).toContain("initialRequests.length === 2");
-    expect(flow).toContain("compactionSummaryRequests.length === 2");
+    expect(flow).toContain("compactionSummaryRequests.length === 3");
     expectContains(
       flow,
       `compactionSummaryRequests[0].compactionSummaryFaultMode === config.faultMode`,

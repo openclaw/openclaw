@@ -18,12 +18,12 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
+import { listTranscriptInstancesFromDatabase } from "./session-history-read.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 

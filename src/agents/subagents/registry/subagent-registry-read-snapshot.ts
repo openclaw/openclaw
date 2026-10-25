@@ -5,7 +5,9 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { shouldPreserveSubagentForMaintenance } from "./subagent-delivery-state.js";
 import {
+  getSubagentActivationRuns,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
   isSubagentRunPayloadEvicted,
@@ -332,43 +334,40 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   };
 }
 
-export type PreparedSubagentMaintenanceRead = {
-  capture(): ReadonlyMap<string, SubagentRunMaintenanceRecord>;
-};
-
-/** One complete maintenance snapshot advances through the registry owner's publications. */
+/** Maintenance consumes current publications synchronously into its own protected-key snapshot. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
   options?: { live?: true },
-): Promise<PreparedSubagentMaintenanceRead> {
+) {
   const context = shouldReadPersistedSubagentRuns()
     ? captureOpenClawStateWorkerContext()
     : undefined;
   const signal = getAsyncWorkSignal();
-  const assertCurrent = () => {
+  function* capture(persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) {
     signal?.throwIfAborted();
     getAsyncWorkSignal()?.throwIfAborted();
     if (context) {
       assertSubagentReadContext(context);
     }
-  };
-  const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
-    assertCurrent();
     const state = context ? selectSubagentCacheStateForRead(cache.state, context) : {};
-    const runs = new Map<string, SubagentRunMaintenanceRecord>(state.snapshot ?? persisted);
-    for (const [runId, { entry }] of state.changes ?? []) {
-      if (entry) {
-        runs.set(runId, entry);
-      } else {
-        runs.delete(runId);
+    for (const entry of (state.snapshot ?? persisted).values()) {
+      if (!inMemoryRuns.has(entry.runId) && !state.changes?.has(entry.runId)) {
+        yield entry;
       }
     }
-    for (const [runId, entry] of inMemoryRuns) {
-      runs.set(runId, entry);
+    for (const [runId, { entry }] of state.changes ?? []) {
+      if (entry && !inMemoryRuns.has(runId)) {
+        yield entry;
+      }
     }
-    return runs;
-  };
+    // Every protected live row already belongs to the registry's unfinished-work index.
+    for (const entry of getSubagentActivationRuns(inMemoryRuns)) {
+      if (shouldPreserveSubagentForMaintenance(entry)) {
+        yield entry;
+      }
+    }
+  }
   if (!context) {
     return {
       capture: () => capture(new Map()),
@@ -385,14 +384,17 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       if (reply && reply.projection !== "maintenance") {
         throw new Error("Unexpected subagent maintenance read result");
       }
-      return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      const runs = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      for (const [runId, entry] of runs) {
+        if (!shouldPreserveSubagentForMaintenance(entry)) {
+          runs.delete(runId);
+        }
+      }
+      return runs;
     },
     context,
   );
   return {
-    capture() {
-      // The owner publishes committed changes before the final maintenance grant.
-      return capture(persisted);
-    },
+    capture: () => capture(persisted),
   };
 }

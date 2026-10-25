@@ -30,7 +30,6 @@ const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
 const activeInstalls = new Map<string, Promise<"source_missing" | void>>();
 
-type CopyServiceApp = (sourcePath: string, targetPath: string) => Promise<void>;
 type InspectServiceApp = (appPath: string) => Promise<CodexComputerUseServiceIdentity | undefined>;
 
 type CodexComputerUseServiceIdentity = {
@@ -68,7 +67,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
   platform?: NodeJS.Platform;
   appServerCommand?: string;
   sourceAppCandidates?: readonly string[];
-  copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
 }): Promise<"source_missing" | void> {
@@ -110,7 +108,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   ownershipRoot: string;
   targetParent: string;
   sourceAppCandidates: readonly string[];
-  copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
 }): Promise<"source_missing" | void> {
@@ -145,7 +142,10 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   );
   let backupCreated = false;
   try {
-    await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
+    await runExec("/usr/bin/ditto", ["--noqtn", sourcePath, stagedPath], {
+      logOutput: false,
+      timeoutMs: COPY_TIMEOUT_MS,
+    });
     assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     assertDirectoryIdentityStable(stagingRootIdentity, "Computer Use service staging directory");
     await assertNotSymlink(stagedPath, "Copied Computer Use service app");
@@ -327,11 +327,4 @@ function readCodeSignField(output: string, field: string): string {
   const prefix = `${field}=`;
   const line = output.split(/\r?\n/u).find((candidate) => candidate.startsWith(prefix));
   return line?.slice(prefix.length).trim() ?? "";
-}
-
-async function copyServiceAppWithDitto(sourcePath: string, targetPath: string): Promise<void> {
-  await runExec("/usr/bin/ditto", ["--noqtn", sourcePath, targetPath], {
-    logOutput: false,
-    timeoutMs: COPY_TIMEOUT_MS,
-  });
 }

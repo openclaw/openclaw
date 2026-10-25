@@ -183,7 +183,11 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     });
     fixture.context.dedupe.clear();
     const durableRetry = await fixture.send();
-    expect(durableRetry.mock.calls[0]?.[0]).toBe(false);
+    expect(durableRetry.mock.calls[0]).toMatchObject({
+      0: true,
+      1: { status: "ok", runId: fixture.params.idempotencyKey },
+      3: { cached: true },
+    });
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(runtime.execute).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
@@ -283,7 +287,11 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     fixture.context.dedupe.clear();
     rotateAgentEventLifecycleGeneration();
     const afterRestart = await fixture.send();
-    expect(afterRestart.mock.calls[0]?.[0]).toBe(false);
+    expect(afterRestart.mock.calls[0]).toMatchObject({
+      0: true,
+      1: { status: "ok", runId: fixture.params.idempotencyKey },
+      3: { cached: true },
+    });
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);

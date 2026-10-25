@@ -34,9 +34,8 @@ import {
 } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-// Board widgets own their rendering tests; these tests keep the real pane, page
-// state, settings, session capability, and header/menu composition.
-vi.mock("../../components/board/board-view.ts", () => {
+// mock-isolation: Board widgets have their own tests; isolate their rendering from pane settings and menus.
+vi.mock("../../components/board/board-view.tsx", () => {
   if (!customElements.get("openclaw-board-view")) {
     customElements.define("openclaw-board-view", class extends HTMLElement {});
   }
@@ -94,7 +93,7 @@ describe("dashboard default activation and personal layout persistence", () => {
   );
 
   it("relocates a visible full-width singleton in split and fullscreen views when a task menu exists", async () => {
-    await import("../../components/board/board-view.ts");
+    await import("../../components/board/board-view.tsx");
     const { pane } = createDashboardHarness();
     const board = { ...pane.resolveBoardView(), activeTabId: "research" };
     const resolveBoard = vi.spyOn(pane, "resolveBoardView").mockReturnValue(board);
@@ -127,6 +126,45 @@ describe("dashboard default activation and personal layout persistence", () => {
     pane.visuallyPresented = true;
     pane.state.sessionsResult = null;
     expect(pane.pageBoardWidgetMenu(expanded)).toBeUndefined();
+  });
+
+  it("admits relocated widget actions only through the current mounted board", async () => {
+    await import("../../components/board/board-view.tsx");
+    const { pane, state } = createDashboardHarness();
+    state.sidebarLayout = openDashboardPresentation({ columns: [] }, "expanded");
+    const board = { ...pane.resolveBoardView(), activeTabId: "research" };
+    const resolveBoard = vi.spyOn(pane, "resolveBoardView").mockReturnValue(board);
+    const menu = expectDefined(pane.pageBoardWidgetMenu(state.sidebarLayout), "page menu");
+    const selectItem = vi.fn();
+    const view = Object.assign(document.createElement("openclaw-board-view"), {
+      snapshot: board.snapshot,
+      session: { sessionKey: key, agentId: "main" },
+      selectPageWidgetMenuItem: selectItem,
+    });
+    Reflect.set(pane, "boardView", view);
+    menu.onSelect("remove");
+    expect(selectItem).not.toHaveBeenCalled();
+    document.body.append(view);
+    menu.onSelect("remove");
+    expect(selectItem).toHaveBeenCalledExactlyOnceWith(
+      menu.widget.name,
+      menu.widget.revision,
+      "remove",
+    );
+    resolveBoard.mockReturnValue({ ...board, provider: { ...board.provider } });
+    menu.onSelect("remove");
+    resolveBoard.mockReturnValue({
+      ...board,
+      snapshot: {
+        ...board.snapshot,
+        widgets: board.snapshot.widgets.map((widget) => ({ ...widget })),
+      },
+    });
+    menu.onSelect("remove");
+    resolveBoard.mockReturnValue(board);
+    view.session = { ...view.session, sessionKey: "agent:main:replacement" };
+    menu.onSelect("remove");
+    expect(selectItem).toHaveBeenCalledTimes(1);
   });
 
   it("opens the personal expanded preference through the registered keyboard handler", () => {

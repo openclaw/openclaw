@@ -1,19 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  Client,
-  type Transport,
-  type Tool,
-  type McpSubscription,
-} from "@modelcontextprotocol/client";
+import type { Tool } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
-import {
-  projectBundleMcpServerCatalog,
-  projectBundleMcpCatalogFailure,
-} from "./agent-bundle-mcp-catalog-projection.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
@@ -21,10 +12,15 @@ import {
 } from "./agent-bundle-mcp-request-context.js";
 import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
-import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
+import type {
+  BundleMcpSession,
+  CreateSessionMcpRuntime,
+  ServerMcpRuntime,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpRequestOptions,
   McpToolCatalog,
+  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -32,17 +28,10 @@ import {
   listAllMcpTools,
   listMcpServerItems,
 } from "./mcp-catalog-listing.js";
-import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
-import {
-  ensureMcpSessionConnected,
-  createMcpRequestLifecycle,
-  disposeMcpClient,
-  isMcpHttpSessionExpired,
-} from "./mcp-client-lifecycle.js";
+import { MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import { applyMcpConnectionOverride } from "./mcp-connection-resolver.js";
-import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
-import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
+import { createMcpRequestLifecycle } from "./mcp-request-lifecycle.js";
 import {
   mcpCallToolResultSchema,
   mcpGetPromptResultSchema,
@@ -59,35 +48,13 @@ import {
   McpStartupBackoffError,
   resetMcpStartupBackoff,
 } from "./mcp-startup-backoff.js";
-import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
-import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
-import { resolveMcpTransport } from "./mcp-transport.js";
-import { observeNativeMcpProbe } from "./native-mcp-connect.js";
-import { createNativeMcpClientBridge } from "./native-mcp-runtime-client.js";
+import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import {
   acquireNativeMcpServer,
   nativeMcpRuntimeBindings,
   type NativeMcpClientContext,
 } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-
-type BundleMcpSession = {
-  serverName: string;
-  client: Client;
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  requestTimeoutMs: number;
-  connected: boolean;
-  disconnectReason?: string;
-  retiring: boolean;
-  connectPromise?: Promise<void>;
-  disposePromise?: Promise<void>;
-  detachStderr?: () => void;
-  toolMetadata?: McpToolCatalogMetadata;
-  withElicitation?: ReturnType<typeof bindMcpClientElicitation>;
-  nativeBridge?: ReturnType<typeof createNativeMcpClientBridge>;
-  nativeSubscription?: McpSubscription;
-};
 
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
@@ -99,15 +66,16 @@ type McpServerBackoffState = {
   retryAfterMs?: number;
 };
 
-export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
-
-type ServerMcpRuntime = SessionMcpRuntime & {
-  readonly pluginOwned: boolean;
-  resetStartupBackoff: () => void;
-  readonly nativeContextKey: string | undefined;
-  readonly nativeCapabilityContext: object | undefined;
-  readonly nativeViewCount: number;
-};
+function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+): McpToolCatalog {
+  return {
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
+    generatedAt: Date.now(),
+    diagnostics: [diagnostic],
+  };
+}
 
 export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
@@ -181,7 +149,8 @@ function createServerMcpRuntime(
     if (session.disposePromise) {
       return session.disposePromise;
     }
-    const closing = disposeMcpClient(session)
+    const closing = import("./mcp-client-lifecycle.js")
+      .then(({ disposeMcpClient }) => disposeMcpClient(session))
       .then((outcome) => {
         if (outcome === "uncertain") {
           cleanupFailed = true;
@@ -271,6 +240,13 @@ function createServerMcpRuntime(
       }
       return result;
     } catch (error) {
+      const [{ isMcpHttpSessionExpired }, { redactMcpDiagnosticError }] = await Promise.all([
+        import("./mcp-client-lifecycle.js"),
+        import("./mcp-error.js"),
+      ]);
+      if (currentSession !== session || session.retiring) {
+        throw error;
+      }
       // A stateful server uses HTTP 404 to invalidate an expired MCP session.
       // Reinitialize a fresh client, but never replay a possibly mutating call.
       const sessionExpired = isMcpHttpSessionExpired(session, error);
@@ -327,6 +303,28 @@ function createServerMcpRuntime(
       return catalogInFlight;
     }
     const inFlight = (async (): Promise<McpToolCatalog> => {
+      const [
+        { Client },
+        { projectBundleMcpServerCatalog },
+        { bindMcpClientElicitation },
+        { ensureMcpSessionConnected, isMcpHttpSessionExpired },
+        { isMcpMethodNotFoundError, redactMcpDiagnosticError },
+        { createMcpJsonSchemaValidator },
+        { resolveMcpTransport },
+        { observeNativeMcpProbe },
+        { createNativeMcpClientBridge },
+      ] = await Promise.all([
+        import("@modelcontextprotocol/client"),
+        import("./agent-bundle-mcp-catalog-projection.js"),
+        import("./mcp-client-elicitation.runtime.js"),
+        import("./mcp-client-lifecycle.js"),
+        import("./mcp-error.js"),
+        import("./mcp-json-schema-validator.js"),
+        import("./mcp-transport.js"),
+        import("./native-mcp-connect.js"),
+        import("./native-mcp-runtime-client.js"),
+      ]);
+      failIfDisposed();
       const rawServer = loaded.mcpServers[serverName]!;
       const override = params.connectionOverrides?.get(serverName);
       const transportSource = override
@@ -490,10 +488,7 @@ function createServerMcpRuntime(
               await initializing.detach();
             }
           };
-          const probe =
-            nativeContext && session.transport instanceof OpenClawStdioClientTransport
-              ? observeNativeMcpProbe(session.transport)
-              : undefined;
+          const probe = nativeContext ? observeNativeMcpProbe(session.transport) : undefined;
           try {
             await connectWithMcpStartupBackoff(
               startupKey,
@@ -879,7 +874,9 @@ function createServerMcpRuntime(
       await Promise.allSettled(pendingDisposals);
       if (cleanupFailed) {
         recordAgentCleanupFailure();
-        throw new Error("MCP runtime cleanup could not confirm closure");
+        const error = new Error("MCP runtime cleanup could not confirm closure");
+        recordModelFallbackStop(error);
+        throw error;
       }
     },
     dispose() {

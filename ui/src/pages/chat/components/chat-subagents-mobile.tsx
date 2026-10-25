@@ -1,45 +1,24 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
-import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-subagents-mobile.css";
-import { SubagentDesktopAvatar } from "./chat-subagents-panel-desktop.tsx";
+import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
+import { MobileStop, type ChatSubagentMobileStop } from "./chat-subagent-mobile-header.tsx";
 import type { SubagentStopControl } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
-
-export type ChatSubagentMobileStop = {
-  label: string;
-  accessibleLabel: string;
-  disabled: boolean;
-  pending: boolean;
-  disabledReason?: string;
-  confirmation: {
-    title: string;
-    message: string;
-    confirmLabel: string;
-    cancelLabel: string;
-    signal?: AbortSignal;
-  };
-  /** Bound to this session/run; the native owner revalidates it after confirmation. */
-  onConfirm: () => void | Promise<void>;
-};
 
 export type ChatSubagentMobileItem = {
   key: string;
   title: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
-  activity?: string;
-  /** Localized native count, including the lower-bound marker when not exact. */
-  calls?: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
   elapsed?: JSX.Element;
-  elapsedLabel?: string;
   /** Omitted when the native owner does not offer Stop for this run. */
   stop?: ChatSubagentMobileStop;
 };
@@ -58,20 +37,11 @@ export type ChatSubagentsMobileListProps = {
   notice?: JSX.Element;
   empty?: JSX.Element;
   loading: boolean;
+  emptyLoading?: boolean;
   createStop: (key: () => string) => SubagentStopControl;
   /** The navigation owner retains/restores list scroll across child navigation. */
   listRef?: (element: HTMLDivElement, firstButton: () => HTMLButtonElement | undefined) => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
-};
-
-type ChatSubagentMobileHeaderProps = {
-  title: string;
-  sessionKey: string;
-  backLabel: string;
-  onBack: () => void;
-  stop?: ChatSubagentMobileStop;
-  /** Preserve any native child-pane actions, such as Details. */
-  actions?: JSX.Element;
 };
 
 const statusIcons: Record<Exclude<ChatSubagentMobileItem["status"], "running">, IconName> = {
@@ -81,34 +51,6 @@ const statusIcons: Record<Exclude<ChatSubagentMobileItem["status"], "running">, 
   failed: "alertTriangle",
   stopped: "stop",
 };
-
-function MobileStop(props: { action: ChatSubagentMobileStop; control?: SubagentStopControl }) {
-  const pending = () => Boolean(props.control?.stopping()) || props.action.pending;
-  const confirmStop = async () => {
-    const action = props.action;
-    if (action.disabled || pending()) {
-      return;
-    }
-    // Capture the native target-bound callback before the modal can outlive a row update.
-    const onConfirm = props.control?.capture() ?? action.onConfirm;
-    if (await showConfirmDialog({ ...action.confirmation, danger: true })) {
-      await onConfirm();
-    }
-  };
-  return (
-    <button
-      class="chat-subagents-mobile__stop"
-      type="button"
-      disabled={props.action.disabled || pending()}
-      aria-busy={pending() ? "true" : "false"}
-      aria-label={pending() ? t("chat.subagentsPanel.stopping") : props.action.accessibleLabel}
-      onClick={() => void confirmStop()}
-    >
-      <Icon name="stop" />
-      <span>{pending() ? t("chat.subagentsPanel.stopping") : props.action.label}</span>
-    </button>
-  );
-}
 
 function MobileRow(props: {
   item: ChatSubagentMobileItem;
@@ -185,6 +127,7 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
   return (
     <div
       class="chat-subagents-mobile"
+      style={{ padding: props.emptyLoading ? "0" : undefined }}
       ref={[(element) => props.listRef?.(element, firstButton), elementRef(props.onScrollPortRef)]}
       aria-busy={props.loading ? "true" : "false"}
     >
@@ -252,38 +195,6 @@ export function ChatSubagentsMobileList(props: ChatSubagentsMobileListProps) {
           </div>
         </section>
       </Show>
-    </div>
-  );
-}
-
-function MobileTitle(props: { title: string }) {
-  const titleRef = useScrollState(true, false);
-  return (
-    <span class="chat-subagents-mobile__title" ref={titleRef}>
-      {props.title}
-    </span>
-  );
-}
-
-export function ChatSubagentMobileHeader(props: ChatSubagentMobileHeaderProps) {
-  return (
-    <div class="chat-subagents-mobile__header">
-      <button
-        class="chat-subagents-mobile__back"
-        type="button"
-        aria-label={props.backLabel}
-        onClick={() => props.onBack()}
-      >
-        <Icon name="chevronLeft" />
-      </button>
-      <SubagentDesktopAvatar sessionKey={props.sessionKey} />
-      <Show when={props.title} keyed>
-        {(title) => <MobileTitle title={title} />}
-      </Show>
-      <Show when={props.stop && !props.stop.disabled ? props.stop : undefined}>
-        {(stop) => <MobileStop action={stop()} />}
-      </Show>
-      {props.actions}
     </div>
   );
 }

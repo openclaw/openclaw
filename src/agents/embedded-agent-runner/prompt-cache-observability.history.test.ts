@@ -1,20 +1,25 @@
 import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
 } from "../../config/sessions/transcript-json.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
+import { fingerprintMessage } from "./prompt-cache-history.js";
 import {
   completePromptCacheObservation,
   declarePromptHistoryRewrite,
@@ -39,6 +44,54 @@ describe("prompt cache history fingerprints", () => {
     vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["string", "blocks"] as const)(
+    "preserves exact %s fingerprints across transcript ownership and in-place edits",
+    (kind) => {
+      const message: Message = {
+        role: "user",
+        timestamp: 7,
+        content:
+          kind === "string"
+            ? "hello\ud800"
+            : [
+                { type: "text", text: "hello\ud800" },
+                { type: "image", data: "abc", mimeType: "image/png" },
+              ],
+      };
+      const bytes = (value: ReturnType<typeof fingerprintMessage>) =>
+        JSON.stringify([value.role, value.identityLength, value.layout, value.packed]);
+      const first = fingerprintMessage(message);
+      const expected =
+        kind === "string"
+          ? "952b1fd8442799227af3738b7fc271a7125a43e7d10e741c5eb309e27cf7f739"
+          : "5fa03c23839ba6dc13453dad87798714e09144cabab7b39f199a210530b6a3a8";
+      expect(crypto.hash("sha256", bytes(first), "hex")).toBe(expected);
+      for (const ownership of ["append", "sealed"] as const) {
+        const copy = structuredClone(message);
+        normalizeTranscriptJsonValue(ownership === "sealed" ? { message: copy } : copy, "");
+        expect(bytes(fingerprintMessage(copy))).toBe(bytes(first));
+        expect(fingerprintMessage(copy, first)).toBe(first);
+      }
+
+      message.timestamp++;
+      if (typeof message.content === "string") {
+        message.content = "edited";
+      } else {
+        const block = message.content[0];
+        if (block?.type === "text") {
+          block.text = "edited";
+        }
+      }
+      const edited = fingerprintMessage(message, first);
+      expect(bytes(edited)).not.toBe(bytes(first));
+      expect(bytes(edited)).toBe(bytes(fingerprintMessage(structuredClone(message))));
+      // Sealing an already observed record must discard revision state without changing bytes.
+      normalizeTranscriptJsonValue(message, "");
+      expect(fingerprintMessage(message, edited)).toBe(edited);
+      expect(bytes(fingerprintMessage(message))).toBe(bytes(edited));
+    },
+  );
 
   it.each([
     ["model context", "openai-responses"],
@@ -125,14 +178,7 @@ describe("prompt cache history fingerprints", () => {
           stopReason: "toolUse",
           timestamp: 3,
         }),
-        {
-          role: "toolResult",
-          toolCallId: "read-1",
-          toolName: "read",
-          content: [{ type: "text", text: "fixture result" }],
-          isError: false,
-          timestamp: 4,
-        },
+        makeTextToolResult("read-1", "read", "fixture result", false, 4),
       );
       const loop = await request();
       source.push(
@@ -157,6 +203,47 @@ describe("prompt cache history fingerprints", () => {
       for (const [observation] of observed.mock.calls) {
         expect(observation.changes).toBeNull();
       }
+    });
+  });
+
+  it("keeps recovered coordination history stable when persistence adds display metadata", async () => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const model = makeProviderModelFixture({
+        api: "openai-responses",
+        provider: "openai",
+        id: "test-model",
+        baseUrl: "https://example.test",
+      });
+      const live = makeAgentAssistantMessage({
+        api: "openai-responses",
+        provider: "openai",
+        model: "test-model",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+        timestamp: 1,
+      });
+      const persisted = projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: true,
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        message: live,
+      });
+      const before = convertToLlm([live]);
+      const recovered = convertToLlm([structuredClone(persisted)]);
+      expect(live).not.toHaveProperty("display");
+      expect(recovered[0]).toHaveProperty("display", false);
+      const wire = (messages: Message[]) =>
+        JSON.stringify(convertProviderResponsesMessages(model, { messages }, new Set(["openai"])));
+      expect(wire(recovered)).toBe(wire(before));
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey("recovered-coordination"), streamStrategy: "test" },
+        () => {},
+      );
+      await observer.onModelRequest(model, { messages: before });
+      recovered.push({ role: "user", content: "Continue after recovery", timestamp: 2 });
+      expect(await observer.onModelRequest(model, { messages: recovered })).toMatchObject({
+        prefixUnchanged: true,
+        changes: null,
+      });
     });
   });
 
@@ -202,6 +289,44 @@ describe("prompt cache history fingerprints", () => {
       await expect(observer.onModelRequest(model, { messages })).rejects.toThrow(
         "changed fields: content[0].arguments",
       );
+    });
+  });
+
+  it("prepares shared frozen hydration without retaining mutable revision state", async () => {
+    const publish = (path: string) => {
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path } }],
+        timestamp: 1,
+      });
+      normalizeTranscriptJsonValue(message, "");
+      return Object.freeze(message);
+    };
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("frozen-hydration"), streamStrategy: "test" },
+      () => {},
+    );
+    const entries = [{ message: publish("frozen-hydration-fixture") }];
+    const request = () => {
+      const hydrated = cloneTranscriptView(entries);
+      expect(hydrated[0]!.message).toBe(entries[0]!.message);
+      return observer.onModelRequest(model, {
+        messages: convertToLlm(hydrated.map(({ message }) => message)),
+      });
+    };
+    expect(isOwnedTranscriptPayload(entries[0]!.message)).toBe(false);
+    await request();
+    expect(
+      vi
+        .mocked(crypto.hash)
+        .mock.calls.some(
+          ([, text]) => typeof text === "string" && text.includes("frozen-hydration-fixture"),
+        ),
+    ).toBe(false);
+    expect(await request()).toMatchObject({ prefixUnchanged: true, changes: null });
+    entries[0]!.message = publish("replacement");
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      await expect(request()).rejects.toThrow("changed fields: content[0].arguments");
     });
   });
 

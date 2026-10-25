@@ -32,6 +32,7 @@ export interface SessionOrganizerDependencies {
   pruneSidebarSessionEntry(key: string): void;
   reconciledSidebarZone(): {
     sidebarEntries: readonly string[];
+    sessionRows: ReadonlyMap<string, SidebarRecentSession>;
   };
   selectSession(sessionKey: string): void;
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter;

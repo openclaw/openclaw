@@ -52,7 +52,7 @@ it("admits real producer plugin host, dependency and basename links without trav
     });
     try {
       await rehearsal.prepareRuntime(() => {});
-      const params = {
+      const params: Parameters<typeof inspectPreparedDoctorRehearsal>[0] = {
         ...rehearsal,
         env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },
         assertCurrent() {},
@@ -67,6 +67,43 @@ it("admits real producer plugin host, dependency and basename links without trav
       const host = rehearsal.pluginCodeLinks!.find((fact) => fact.target?.path === candidate)!;
       expect(host).toBeDefined();
       const admitted = await inspectPreparedDoctorRehearsal(params);
+      admitted.assertPrepared();
+
+      for (const key of [
+        "HOME",
+        "USERPROFILE",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_WORKSPACE_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_SKIP_CRON",
+        "OPENCLAW_SKIP_GMAIL_WATCHER",
+        "OPENCLAW_SKIP_CANVAS_HOST",
+        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM",
+        "OPENCLAW_NO_AUTO_UPDATE",
+        "NODE_DISABLE_COMPILE_CACHE",
+      ]) {
+        const original = params.env[key];
+        params.env[key] = "changed";
+        try {
+          expect(() => admitted.assertCurrent()).toThrow(/isolated environment changed/);
+          await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(
+            /isolated environment changed|not a prepared disposable copy/,
+          );
+        } finally {
+          params.env[key] = original;
+        }
+      }
       admitted.assertPrepared();
 
       // A producer-owned code edge still cannot authorize migration data, either

@@ -128,7 +128,7 @@ export function registerSharedClientInferenceTests(
     }
     expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
     // Physical process shutdown must revoke the confidential context, not just stop discovery.
-    const registration = prepared.route.context.register({
+    const registration = await prepared.route.context.register({
       threadId: "parent",
       text: "private workspace instructions",
       signal: new AbortController().signal,

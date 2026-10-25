@@ -42,19 +42,26 @@ refreshes its session-hosting declaration and current worker slots. The Gateway
 waits for that fresh declaration before making the host available again; the
 app or node-host process does not need to restart.
 
-When a session first needs the current worker build, the Gateway sends its sealed
-worker artifact to the paired host. The node verifies the exact content hash,
+After a Gateway update or reconnect, supported persistent paired hosts prefetch
+the current sealed worker archive in the background. Prefetch downloads and verifies
+the archive only; it does not extract, prewarm, or launch a worker. A session arriving
+during prefetch takes priority and cancels the background transfer if needed.
+Prefetch failures produce a warning and leave normal session installation available.
+Older nodes and cloud-enrolled nodes keep session-owned installation.
+
+When a session first needs the current worker build, the node reuses a valid
+prefetched archive or acquires it from the paired Gateway. It verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
 not install packages or execute lifecycle scripts. Runtime chunks are sealed and
 verified with the artifact, and cold workers complete admission before loading
-the turn runtime. Installation belongs to the
-session request and receives its cancellation signal. Reconnect maintenance does
-not install or prewarm a worker build.
+the turn runtime. Installation belongs to the session request and receives its
+cancellation signal.
 
 Once installed, persistent nodes retain one current worker artifact per Gateway
-namespace, even with no sessions. Older builds remain only while a live or
-recoverable placement needs them; normal maintenance removes unreferenced builds.
+namespace, even with no sessions. Prefetched archives use the same bounded retention.
+Older builds remain only while a live or recoverable placement needs them;
+normal maintenance removes unreferenced builds.
 Each new dispatch still validates the installed artifact and reuses it when valid,
 avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
 installation and retention lifecycle.
@@ -257,6 +264,16 @@ to receive this protection; installing a new worker bundle alone does not update
 the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
+
+Windows node hosts record when the native Job launcher contains a worker tree
+with kill-on-close ownership. If that node host dies, Windows terminates the Job;
+after restart, recovery waits until the recorded supervisor and worker are gone,
+checking their PIDs and process creation times. It then allows one second for
+the remaining Job members to exit before interrupting the launch and releasing
+its slot. A descendant that broke away from the Job or is unusually slow to die
+could briefly overlap the next turn; this is an accepted recovery tradeoff.
+Older receipts and launches without the native helper retain conservative cleanup
+checks.
 
 Installed node hosts package the POSIX launch helpers separately to reduce
 per-turn startup work. Update and restart the node host to receive this

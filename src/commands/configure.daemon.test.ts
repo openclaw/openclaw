@@ -74,8 +74,8 @@ vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive: vi.fn(async () => {}),
 }));
 
-function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["daemonRuntime"]) {
-  return maybeInstallDaemon({ port: 18789, daemonRuntime });
+function runInstall() {
+  return maybeInstallDaemon({ port: 18789 });
 }
 
 function reinstall() {
@@ -250,35 +250,32 @@ it("shows restart scheduled when a loaded service defers restart handoff", async
   expectUncalled(readPin, service.readCommand, service.install);
   expect(progressSetLabel).toHaveBeenLastCalledWith("Gateway service restart scheduled.");
 });
-it.each([undefined, "node"] as const)(
-  "carries installed pin intent through setup (explicit=%s)",
-  async (daemonRuntime) => {
-    const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
-    const expected = { revision: "installed-pin", stored: true, pin };
-    const existingCommand = {
-      programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
-      environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
-    };
-    service.readCommand.mockResolvedValue(existingCommand);
-    readPin.mockReturnValue(expected);
-    reinstall();
-    await runInstall(daemonRuntime);
-    const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
-    expect(plan).toEqual(
-      expect.objectContaining({
-        runtime: daemonRuntime ?? "bun",
-        runtimeExplicit: true,
-        pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
-        existingCommand,
-        env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
-      }),
-    );
-    expect(plan).not.toHaveProperty("token");
-    expect(service.uninstall).not.toHaveBeenCalled();
-    expect(service.install.mock.calls[0]?.[0]?.runtimePinUpdate).toEqual({
-      expected,
-      pin: daemonRuntime ? undefined : pin,
-    });
-    expect(select).toHaveBeenCalledTimes(1);
-  },
-);
+it("carries installed pin intent through setup", async () => {
+  const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
+  const expected = { revision: "installed-pin", stored: true, pin };
+  const existingCommand = {
+    programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+    environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
+  };
+  service.readCommand.mockResolvedValue(existingCommand);
+  readPin.mockReturnValue(expected);
+  reinstall();
+  await runInstall();
+  const plan = buildGatewayInstallPlan.mock.calls[0]?.[0];
+  expect(plan).toEqual(
+    expect.objectContaining({
+      runtime: "bun",
+      runtimeExplicit: true,
+      pinnedRuntimePath: pin.path,
+      existingCommand,
+      env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
+    }),
+  );
+  expect(plan).not.toHaveProperty("token");
+  expect(service.uninstall).not.toHaveBeenCalled();
+  expect(service.install.mock.calls[0]?.[0]?.runtimePinUpdate).toEqual({
+    expected,
+    pin,
+  });
+  expect(select).toHaveBeenCalledTimes(1);
+});

@@ -14,7 +14,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveEventSessionKey,
-  scopedHeartbeatWakeOptions,
   isUnscopedSessionKeySentinel,
   scopeLegacySessionKeyToAgent,
   toAgentStoreSessionKey,
@@ -126,39 +125,6 @@ it("keeps non-Signal opaque-looking group ids lowercase", () => {
       peerId: "MiXeDGroup",
     }),
   ).toBe("agent:main:telegram:group:mixedgroup");
-});
-
-it("preserves durable cron base sessions in heartbeat wake options", () => {
-  const result = scopedHeartbeatWakeOptions("agent:main:cron:backup", { reason: "exec:123:exit" });
-  expect(result).toEqual({ reason: "exec:123:exit", sessionKey: "agent:main:cron:backup" });
-});
-
-it("strips sessionKey for global-scope sessions to preserve unscoped wake behavior", () => {
-  // A targeted global wake cannot resolve; preserve the unscoped queue.
-  const result = scopedHeartbeatWakeOptions("global", { reason: "hook:wake" });
-  expect(result).toEqual({ reason: "hook:wake" });
-  expect("sessionKey" in result).toBe(false);
-});
-
-it("drops sessionKey but preserves agentId for cron-run wakes when scope is global", () => {
-  const result = scopedHeartbeatWakeOptions(
-    "agent:ops:cron:job-1:run:xyz",
-    { reason: "exec-event" },
-    undefined,
-    "global",
-  );
-  expect(result).toEqual({ reason: "exec-event", agentId: "ops" });
-  expect("sessionKey" in result).toBe(false);
-});
-
-it("threads custom mainKey for cron-run wakes under per-sender scope", () => {
-  const result = scopedHeartbeatWakeOptions(
-    "agent:main:cron:backup:run:abc",
-    { reason: "exec-event" },
-    "primary",
-    "per-sender",
-  );
-  expect(result).toEqual({ reason: "exec-event", sessionKey: "agent:main:primary" });
 });
 
 it("preserves durable cron base event session keys", () => {

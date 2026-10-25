@@ -12,9 +12,10 @@ import {
   clearCliSessionInStore,
   buildCliSessionForkRunParams,
   persistCliSessionBindingResult,
+  persistStoppedFirstCliSessionInStore,
   restoreCliSessionForkInStore,
 } from "./cli-session-store.js";
-import { resolveCliSessionReuse } from "./cli-session.js";
+import { getCliSessionBinding, resolveCliSessionReuse } from "./cli-session.js";
 import {
   createRunResult,
   loadPersistedSessionEntry,
@@ -449,3 +450,57 @@ it.for(["present", "missing-before-run", "missing-after-run", "missing-cache"] a
     }
   },
 );
+
+it.for([
+  ["fills an empty binding", makeSessionEntry(), undefined, "stopped-first-session"],
+  [
+    "keeps a binding bound meanwhile",
+    makeSessionEntry(),
+    boundEntry("bound-meanwhile"),
+    "bound-meanwhile",
+  ],
+  [
+    "skips a reset session",
+    makeSessionEntry(),
+    makeSessionEntry({ sessionId: "openclaw-session-after-reset" }),
+    undefined,
+  ],
+  [
+    "skips a released writer",
+    makeSessionEntry({ activeWriterRunId: "stopped-run" }),
+    makeSessionEntry({ activeWriterRunId: "next-run" }),
+    undefined,
+  ],
+] as const)(
+  "persists a stopped first CLI session: %s",
+  async ([_case, working, durable, expected], { f }) => {
+    await f.seed({ ...working }, durable ? { ...durable } : { ...working });
+
+    await persistStoppedFirstCliSessionInStore({
+      ...f.target,
+      binding: { sessionId: "stopped-first-session", authEpochVersion: 7 },
+      expectedSession: { ...working },
+      assertSettlementCurrent: () => {},
+    });
+
+    expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(expected);
+  },
+);
+
+it("refuses a stopped first CLI session after its turn owner closed", async ({ f }) => {
+  const working = makeSessionEntry();
+  await f.seed({ ...working });
+  const closed = new Error("settlement closed");
+
+  await expect(
+    persistStoppedFirstCliSessionInStore({
+      ...f.target,
+      binding: { sessionId: "stopped-first-session" },
+      expectedSession: working,
+      assertSettlementCurrent: () => {
+        throw closed;
+      },
+    }),
+  ).rejects.toBe(closed);
+  expect(getCliSessionBinding(f.read(), "claude-cli")).toBeUndefined();
+});

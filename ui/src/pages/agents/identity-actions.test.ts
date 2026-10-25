@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -169,14 +170,7 @@ describe("agent identity actions", () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
         order.push(method);
-        return {
-          config,
-          sourceConfig: config,
-          raw: JSON.stringify(config),
-          hash,
-          valid: true,
-          issues: [],
-        };
+        return sourceConfigSnapshot(config, hash);
       }
       if (method === "config.set") {
         order.push(method);

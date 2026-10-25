@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
 import { isToolResultError } from "../tool-result-error.js";
 import {
@@ -65,10 +66,22 @@ describe("structured_output", () => {
     expect(Value.Check(tool.parameters, { result })).toBe(true);
     expect(tool.description).toContain('"count"');
     await expect(submit(result)).rejects.toThrow("Retry once");
-    expectRejected(await submit(result));
-    expectRejected(await submit('{"count":3}'));
-    expect(peek(runId)).toMatchObject({ structured: undefined, invalidAttempts: 2 });
-    expect(peek(runId)?.schemaError).toBeTruthy();
+    const retry = await submit(result);
+    expectRejected(retry);
+    expect(retry.details).toMatchObject({ schemaError: expect.any(String) });
+    const frozen = peek(runId);
+    expect(frozen).toMatchObject({ structured: undefined, invalidAttempts: 2 });
+    expect(frozen?.schemaError).toBeTruthy();
+    // A valid payload after the budget is spent is reported as unevaluated, not
+    // as failing the previous attempt's validation.
+    const exhausted = await submit('{"count":3}');
+    expectRejected(exhausted);
+    expect(exhausted.details).toMatchObject({
+      reason: "retry_budget_exhausted",
+      error: expect.stringContaining("not evaluated"),
+    });
+    expect(exhausted.details).not.toHaveProperty("schemaError");
+    expect(peek(runId)).toEqual(frozen);
   });
 
   it.each([{ result: ["one", "two"] }, { result: '["one","two"]' }])(
@@ -126,21 +139,17 @@ describe("structured_output", () => {
   });
 
   it("publishes one acknowledged result when tool calls overlap", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const persist = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const gate = createEnteredGate();
+    const persist = vi.fn(gate.wait);
     const { submit } = makeTool({ schema: {}, onStateChange: persist });
     const first = submit({ answer: "first" });
-    await entered.promise;
+    await gate.entered;
     const duplicate = expect(submit({ answer: "second" })).rejects.toThrow("already recorded");
     try {
       expect(peek(runId)).toBeUndefined();
       expect(persist).toHaveBeenCalledOnce();
     } finally {
-      release.resolve();
+      gate.release();
     }
     expect((await first).details).toEqual({ status: "recorded" });
     await duplicate;

@@ -64,6 +64,12 @@ const UNCLOSED_CODE =
   '# literal\n- literal\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True';
 const INLINE_FENCE = "Use ``` to start a code block.\nNext paragraph.";
 const PAGES: Record<string, string> = {
+  "/zero-scale": [
+    "<p>Visible article.</p>",
+    '<div style="transform:scale(0, 0)">Hidden flat content</div>',
+    '<div style="transform:scale3d(0, 0, 0)">Hidden 3D content</div>',
+    '<p style="transform:scale(0.5, 0.5)">Visible scaled content.</p>',
+  ].join(""),
   "/markdown-code": MARKDOWN_CODE,
   "/markdown-unclosed": `\`\`\`text\n${UNCLOSED_CODE}`,
   "/markdown-inline-fence-prose": INLINE_FENCE,
@@ -130,6 +136,18 @@ describe("web_fetch content fidelity through the real tool execute path", () => 
       for (const hidden of excludes) {
         expect(text).not.toContain(hidden);
       }
+    },
+  );
+
+  it.each(["markdown", "text"] as const)(
+    "omits zero-scale content from the real fetch in %s mode",
+    async (mode) => {
+      const { envelope, text } = await extract("/zero-scale", mode);
+      expect(envelope).toMatchObject({ status: 200, extractor: "raw-html" });
+      expect(text).toContain("Visible article.");
+      expect(text).toContain("Visible scaled content.");
+      expect(text).not.toContain("Hidden flat content");
+      expect(text).not.toContain("Hidden 3D content");
     },
   );
 

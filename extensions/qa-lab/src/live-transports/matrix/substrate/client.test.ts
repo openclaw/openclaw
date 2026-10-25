@@ -90,11 +90,9 @@ describe("matrix driver client", () => {
     const userId = "@observer:matrix-qa.test";
     await client.inviteUserToRoom({ roomId, userId });
     await client.kickUserFromRoom({ roomId, userId, reason: "topology reset" });
-    await client.leaveRoom(roomId);
     expect(requests).toEqual([
       { url: roomEndpoint + "/invite", body: { user_id: userId } },
       { url: roomEndpoint + "/kick", body: { reason: "topology reset", user_id: userId } },
-      { url: roomEndpoint + "/leave", body: {} },
     ]);
   });
 

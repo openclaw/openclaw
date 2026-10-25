@@ -150,6 +150,15 @@ describe("ollama embedding provider", () => {
     },
   );
 
+  it("preserves a host-applied query instruction instead of adding the family template", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+    const { provider } = await createEmbeddingProvider();
+    await provider.embed("custom: hello", { inputType: "query", queryInstructionApplied: true });
+    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
+      input: "custom: hello",
+    });
+  });
+
   it("resolves configured base URL and headers without sending local marker auth", async () => {
     const { fetchMock } = await embedTestQuery({
       config: createProviderConfig({

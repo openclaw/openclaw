@@ -21,6 +21,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
+import { captureSessionRowChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
@@ -58,6 +59,7 @@ import {
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
 import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-transcript-publication.worker.js";
+import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
@@ -462,8 +464,14 @@ export function createSessionActorWorker(
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
-          const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+          const admit: AgentWorkerOperationContext["admit"] = (
+            stage,
+            publication,
+            transferList,
+          ) => {
+            withoutSqliteDatabaseWriteScope(opened.db, () =>
+              context.admit(stage, publication, transferList),
+            );
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
@@ -508,7 +516,7 @@ export function createSessionActorWorker(
               }
               return operation(opened);
             },
-            admit(stage, publication) {
+            admit(stage, publication, transferList) {
               if (stage === "commit") {
                 commitPublication = publication;
                 // An append shares this transaction and message owner. Its final
@@ -517,16 +525,23 @@ export function createSessionActorWorker(
                   return;
                 }
               }
-              admit(stage, {
-                kind: "session-actor-admission",
-                snapshot: projectSessionActorAuthority(working.hot),
-                publication,
-              });
+              admit(
+                stage,
+                {
+                  kind: "session-actor-admission",
+                  snapshot: projectSessionActorAuthority(working.hot),
+                  publication,
+                },
+                transferList,
+              );
             },
           };
           return withSessionActorTransactionState(opened, working, () => {
             phaseStarted = performance.now();
-            const applied = applySessionActorPhase(command, working, borrowed);
+            const changes = captureSessionRowChanges(opened.db, () =>
+              applySessionActorPhase(command, working, borrowed),
+            );
+            const applied = changes.result;
             recordPhase("actorApplyMs");
             const { value } = applied;
             working.hot.version = {
@@ -553,6 +568,7 @@ export function createSessionActorWorker(
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
               conversationPublication: readStagedConversationPublications(opened),
+              entryMetadata: captureSessionEntryMetadataReceipts(changes.changes),
               applied,
             });
             if (

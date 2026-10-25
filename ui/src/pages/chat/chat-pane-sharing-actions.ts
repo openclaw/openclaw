@@ -23,13 +23,13 @@ import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import {
   canManageChatSessionSharing,
+  type PreparedChatSessionSharing,
   type ChatSessionSharingOutcome,
   type ChatSessionSharingProps,
   type ChatSessionSharingState,
-} from "./components/chat-session-sharing.solid.tsx";
+} from "./components/chat-session-sharing-shared.tsx";
 
 registerChatSessionEnglish();
 

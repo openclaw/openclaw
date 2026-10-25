@@ -159,6 +159,7 @@ function manifestWriterFixture(plan: unknown, drain: unknown = { children: {} })
         env: {
           ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
           PATH: process.env.PATH,
+          RELEASE_STATE_SCRIPT: resolve("scripts/full-release-validation-state.mjs"),
           RUNNER_TEMP: directory,
           RELEASE_EXECUTION_PLAN_PATH: planPath,
           DIAGNOSTIC_DRAIN_PATH: drainPath,

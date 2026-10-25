@@ -5,6 +5,7 @@ import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as config from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -67,12 +68,7 @@ afterEach(async () => {
       env.restore();
     });
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Subagent completion replay cleanup failed");
-  }
+  throwCollectedErrors(failures, "Subagent completion replay cleanup failed");
 });
 
 async function reopenOwners() {
@@ -274,10 +270,10 @@ it("rechecks blocked completion after wake admission", async ({ signal }) => {
   driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
     runWake(
       entry,
-      async () => {
+      async (releasePreparation) => {
         admitted.resolve(undefined);
         await release.promise;
-        return run();
+        return run(releasePreparation);
       },
       isCurrent,
     );

@@ -2,9 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   openEngineStore,
+  postgresIndexOrderingMigration,
   withEngineStoreAdmission,
+  withLegacyPostgresIndexOrdering,
   type DatabaseEngineInput,
   type EngineConnection,
+  type StoreSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   configureSqliteConnectionPragmas,
@@ -23,7 +26,24 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { TEAM_REPORTS_POSTGRES_SCHEMA_SQL } from "./store-postgres-schema.js";
-import { TEAM_REPORTS_SCHEMA_SQL } from "./store-schema.js";
+import { TEAM_REPORTS_SCHEMA_SQL, TEAM_REPORTS_SCHEMA_VERSION } from "./store-schema.js";
+
+export const teamReportsEngineSchema: StoreSchema = {
+  id: "team-reports",
+  version: TEAM_REPORTS_SCHEMA_VERSION,
+  sqlite: TEAM_REPORTS_SCHEMA_SQL,
+  postgres: TEAM_REPORTS_POSTGRES_SCHEMA_SQL,
+  postgresMigrations: [
+    {
+      version: 2,
+      fromSchema: { postgres: withLegacyPostgresIndexOrdering(TEAM_REPORTS_POSTGRES_SCHEMA_SQL) },
+      schema: { postgres: TEAM_REPORTS_POSTGRES_SCHEMA_SQL },
+      sql: `${postgresIndexOrderingMigration(TEAM_REPORTS_POSTGRES_SCHEMA_SQL)}
+        INSERT INTO team_reports_schema_migrations (id, applied_at)
+        VALUES ('schema-2', CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint));`,
+    },
+  ],
+};
 
 const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   name: "teamReports.schema",
@@ -69,17 +89,12 @@ export function openTeamReportsConnection(dbPath: string, input?: DatabaseEngine
       openEngineStore({
         anchor,
         input,
-        schema: {
-          id: "team-reports",
-          version: 1,
-          sqlite: TEAM_REPORTS_SCHEMA_SQL,
-          postgres: TEAM_REPORTS_POSTGRES_SCHEMA_SQL,
-        },
+        schema: teamReportsEngineSchema,
         admitPostgres: (db, fresh) => {
           if (fresh) {
             db.prepare(
               "INSERT INTO team_reports_schema_migrations (id, applied_at) VALUES (?, ?)",
-            ).run("schema-1", Date.now());
+            ).run(`schema-${TEAM_REPORTS_SCHEMA_VERSION}`, Date.now());
           }
         },
         inspectSqlite: () => {
@@ -121,7 +136,7 @@ export function openTeamReportsConnection(dbPath: string, input?: DatabaseEngine
             query
               .selectFrom("team_reports_schema_migrations")
               .select("id")
-              .where("id", "=", "schema-1"),
+              .where("id", "=", `schema-${TEAM_REPORTS_SCHEMA_VERSION}`),
           );
           if (!migration) {
             migrateSqliteSchemaToStrict(anchor, TEAM_REPORTS_SCHEMA_SQL, {
@@ -131,7 +146,7 @@ export function openTeamReportsConnection(dbPath: string, input?: DatabaseEngine
               anchor,
               query
                 .insertInto("team_reports_schema_migrations")
-                .values({ id: "schema-1", applied_at: Date.now() })
+                .values({ id: `schema-${TEAM_REPORTS_SCHEMA_VERSION}`, applied_at: Date.now() })
                 .onConflict((conflict) => conflict.column("id").doNothing()),
             );
           }

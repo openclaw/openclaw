@@ -88,21 +88,12 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
     void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
-  return withAbortListener(signal, () => promise, createAbortableError);
-}
-
-/** Start work under an already-checked signal, preserving the caller's abort error contract. */
-export function withAbortListener<T>(
-  signal: AbortSignal,
-  start: () => Promise<T>,
-  createError: (signal: AbortSignal) => Error,
-): Promise<T> {
   return racePromiseWithAbortSignal(
     () =>
-      start().catch((err: unknown) => {
+      promise.catch((err: unknown) => {
         throw toErrorObject(err, "Non-Error rejection");
       }),
     signal,
-    createError,
+    createAbortableError,
   );
 }

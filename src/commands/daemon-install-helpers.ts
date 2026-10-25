@@ -15,14 +15,10 @@ import {
   resolveGatewayProgramArguments,
   resolveOpenClawWrapperPath,
 } from "../daemon/program-args.js";
-import {
-  addServiceEnvPlanEntries,
-  compactServiceEnvPlanValueSources,
-  createMutableServiceEnvPlan,
-} from "../daemon/service-env-plan.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
+  normalizeServiceEnvKey,
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
@@ -187,7 +183,7 @@ async function buildGatewayInstallEnvironment(params: {
   const containsConfigSecretRef =
     hasSecretRefCandidate(params.config, params.config?.secrets?.defaults) ||
     collectEnvSecretRefIds(params.config).size > 0;
-  const configEnvKeys = new Set<string>();
+  const secretRefEnvKeys = new Set<string>();
   const configSecretRefEnvironment: Record<string, string> = {};
   {
     const { env, config, warn } = params;
@@ -220,11 +216,11 @@ async function buildGatewayInstallEnvironment(params: {
           const surface =
             gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
           if (surface?.active) {
-            configEnvKeys.add(key.toUpperCase());
+            secretRefEnvKeys.add(key.toUpperCase());
           }
           continue;
         }
-        configEnvKeys.add(key.toUpperCase());
+        secretRefEnvKeys.add(key.toUpperCase());
         if (Object.hasOwn(stateDirDotEnvEnvironment, key)) {
           continue;
         }
@@ -236,7 +232,6 @@ async function buildGatewayInstallEnvironment(params: {
       }
     }
   }
-  const configSecretRefKeys = [...configEnvKeys];
   let authStore = params.authStore;
   if (!authStore) {
     // Keep the daemon install cold path cheap when there is no auth store to read.
@@ -360,6 +355,9 @@ async function buildGatewayInstallEnvironment(params: {
       );
       continue;
     }
+    if (params.platform === "linux") {
+      secretRefEnvKeys.add(key.toUpperCase());
+    }
     const value = params.env[key]?.trim();
     if (!value) {
       continue;
@@ -455,33 +453,61 @@ async function buildGatewayInstallEnvironment(params: {
       (!key.startsWith("OPENCLAW_") || PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS.has(key)) &&
       !existingManagedKeys.has(key),
   );
-  const plan = createMutableServiceEnvPlan();
-  addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
+  const environment: Record<string, string | undefined> = {};
+  const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource | undefined> =
+    {};
+  function addServiceEnvPlanEntries(
+    entries: Record<string, string | undefined>,
+    options: {
+      includeRawKeys?: boolean;
+      includeKeys?: ReadonlySet<string>;
+      valueSource?:
+        | GatewayServiceEnvironmentValueSource
+        | ((params: { normalizedKey: string }) => GatewayServiceEnvironmentValueSource | undefined);
+    },
+  ): void {
+    for (const [rawKey, rawValue] of Object.entries(entries)) {
+      if (typeof rawValue !== "string" || !rawValue.trim()) {
+        if (options.includeRawKeys) {
+          // Preserve explicit blank raw keys only when callers need round-trip
+          // visibility in generated service env.
+          environment[rawKey] = rawValue;
+          environmentValueSources[rawKey] = "inline";
+        }
+        continue;
+      }
+      const normalizedKey = normalizeServiceEnvKey(rawKey);
+      if (!normalizedKey || (options.includeKeys && !options.includeKeys.has(normalizedKey))) {
+        continue;
+      }
+      environment[rawKey] = rawValue;
+      const valueSource =
+        typeof options.valueSource === "function"
+          ? options.valueSource({ normalizedKey })
+          : options.valueSource;
+      environmentValueSources[rawKey] = valueSource ?? "inline";
+    }
+  }
+  addServiceEnvPlanEntries(preservedExistingEnvironment, {
     valueSource: ({ normalizedKey }) =>
       readEnvironmentValueSource(params.existingEnvironmentValueSources, normalizedKey) ?? "inline",
   });
-  addServiceEnvPlanEntries(plan, ambientProviderApiKeyEnvironment, { valueSource: "file" });
-  addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, {});
-  addServiceEnvPlanEntries(plan, configEnvironment, {});
-  addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
-  addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, {});
-  addServiceEnvPlanEntries(plan, authProfileEnvironment, {});
-  const configSecretRefKeyEnvironment = Object.fromEntries(
-    configSecretRefKeys.map((key) => [key, "1"]),
+  addServiceEnvPlanEntries(ambientProviderApiKeyEnvironment, { valueSource: "file" });
+  addServiceEnvPlanEntries(stateDirDotEnvEnvironment, {});
+  addServiceEnvPlanEntries(configEnvironment, {});
+  addServiceEnvPlanEntries(execSecretRefPassEnvEnvironment, {});
+  const secretRefKeyEnvironment = Object.fromEntries(
+    [...secretRefEnvKeys].map((key) => [key, "1"]),
   );
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
       ...durableEnvironment,
-      ...configSecretRefKeyEnvironment,
-      ...configSecretRefEnvironment,
+      ...secretRefKeyEnvironment,
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const configSecretRefKeySet = new Set(configSecretRefKeys);
   const existingSecretRefRenderEnvironment = omitEnvironmentEntriesShadowedBy(
-    collectExistingServiceEnvVars(params.existingEnvironment, (key) =>
-      configSecretRefKeySet.has(key),
-    ),
+    collectExistingServiceEnvVars(params.existingEnvironment, (key) => secretRefEnvKeys.has(key)),
     [
       stateDirDotEnvRenderEnvironment,
       configSecretRefEnvironment,
@@ -492,10 +518,14 @@ async function buildGatewayInstallEnvironment(params: {
   const { serviceEnvironment, platform } = params;
   const launchAgent =
     platform === "darwin" && Boolean(serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim());
-  writeManagedServiceEnvKeysToEnvironment(plan.environment, managedServiceEnvKeys);
-  if (plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
-    plan.environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
+  writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
+  if (environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
+    environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
   }
+  // Managed-key replacement clears values; publish credentials after that cleanup.
+  addServiceEnvPlanEntries(authProfileEnvironment, {
+    valueSource: platform === "linux" ? "file" : "inline",
+  });
   const managedKeys = readManagedServiceEnvKeysFromEnvironment({
     OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedServiceEnvKeys,
   });
@@ -503,23 +533,23 @@ async function buildGatewayInstallEnvironment(params: {
     // Preserve installed values for active SecretRefs, migrating legacy inline values
     // into the supervisor's owner-only env file before the service is rewritten.
     if (launchAgent || platform === "linux") {
-      addServiceEnvPlanEntries(plan, existingSecretRefRenderEnvironment, {
+      addServiceEnvPlanEntries(existingSecretRefRenderEnvironment, {
         includeKeys: managedKeys,
         valueSource: "file",
       });
     }
     if (launchAgent) {
-      addServiceEnvPlanEntries(plan, stateDirDotEnvRenderEnvironment, {
+      addServiceEnvPlanEntries(stateDirDotEnvRenderEnvironment, {
         includeKeys: managedKeys,
         valueSource: "inline",
       });
     }
-    addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {
+    addServiceEnvPlanEntries(configSecretRefEnvironment, {
       includeKeys: managedKeys,
       valueSource: platform === "linux" ? "file" : "inline",
     });
   }
-  addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
+  addServiceEnvPlanEntries(params.serviceEnvironment, {
     includeRawKeys: true,
   });
   const mergedPath = mergeServicePath(
@@ -529,14 +559,15 @@ async function buildGatewayInstallEnvironment(params: {
     params.platform,
   );
   if (mergedPath) {
-    plan.environment.PATH = mergedPath;
-    plan.environmentValueSources.PATH = "inline";
+    environment.PATH = mergedPath;
+    environmentValueSources.PATH = "inline";
   }
-  compactServiceEnvPlanValueSources(plan);
-  return {
-    environment: plan.environment,
-    environmentValueSources: plan.environmentValueSources,
-  };
+  for (const key of Object.keys(environmentValueSources)) {
+    if (!Object.hasOwn(environment, key)) {
+      delete environmentValueSources[key];
+    }
+  }
+  return { environment, environmentValueSources };
 }
 
 export async function buildGatewayInstallPlan(params: {

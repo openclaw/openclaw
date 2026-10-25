@@ -33,8 +33,6 @@ const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
-type SearxngEndpointMode = "selfHosted" | "strict";
-
 type SearxngResult = {
   url: string;
   title: string;
@@ -64,31 +62,6 @@ function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {
   return normalizeBaseUrl(process.env[SEARXNG_BASE_URL_ENV_VAR]);
 }
 
-function normalizeSearxngResult(value: unknown): SearxngResult | null {
-  const candidate = asOptionalObjectRecord(value);
-  if (typeof candidate?.url !== "string" || typeof candidate.title !== "string") {
-    return null;
-  }
-
-  return {
-    url: candidate.url,
-    title: candidate.title,
-    content: typeof candidate.content === "string" ? candidate.content : undefined,
-    img_src: typeof candidate.img_src === "string" ? candidate.img_src : undefined,
-  };
-}
-
-function shouldRetryEmptyCategorySearchWithGeneral(categories: string | undefined): boolean {
-  if (!categories) {
-    return false;
-  }
-  const normalized = categories
-    .split(",")
-    .map((category) => category.trim().toLowerCase())
-    .filter((category) => category.length > 0);
-  return normalized.length > 0 && !normalized.includes("general");
-}
-
 async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> {
   if (isBlockedHostnameOrIp(url.hostname)) {
     return true;
@@ -106,7 +79,7 @@ async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> 
   }
 }
 
-async function validateSearxngBaseUrl(baseUrl: string): Promise<SearxngEndpointMode> {
+async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "strict"> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -130,38 +103,12 @@ async function validateSearxngBaseUrl(baseUrl: string): Promise<SearxngEndpointM
   return (await searxngEndpointTargetsPrivateNetwork(parsed)) ? "selfHosted" : "strict";
 }
 
-function parseSearxngResponseText(text: string, count: number): SearxngResult[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("SearXNG returned invalid JSON.");
-  }
-
-  const rawResults = asOptionalObjectRecord(parsed)?.results;
-  const results: SearxngResult[] = [];
-
-  for (const rawResult of Array.isArray(rawResults) ? rawResults : []) {
-    const result = normalizeSearxngResult(rawResult);
-    if (result) {
-      results.push(result);
-    }
-    if (results.length >= count) {
-      break;
-    }
-  }
-
-  return results;
-}
-
 export async function runSearxngSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
   categories?: string;
   language?: string;
-  timeoutSeconds?: number;
-  cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
@@ -181,11 +128,11 @@ export async function runSearxngSearch(params: {
     );
   const baseUrl = resolveSearxngBaseUrl(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(
-    params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
+    params.config?.tools?.web?.search?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
   const cacheTtlMs = resolveCacheTtlMs(
-    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
+    params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
 
@@ -258,15 +205,51 @@ export async function runSearxngSearch(params: {
         if (body.truncated) {
           throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
         }
-        return parseSearxngResponseText(body.text, count);
+        const text = body.text;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error("SearXNG returned invalid JSON.");
+        }
+
+        const rawResults = asOptionalObjectRecord(parsed)?.results;
+        const results: SearxngResult[] = [];
+
+        for (const rawResult of Array.isArray(rawResults) ? rawResults : []) {
+          const candidate = asOptionalObjectRecord(rawResult);
+          const result =
+            typeof candidate?.url !== "string" || typeof candidate.title !== "string"
+              ? null
+              : {
+                  url: candidate.url,
+                  title: candidate.title,
+                  content: typeof candidate.content === "string" ? candidate.content : undefined,
+                  img_src: typeof candidate.img_src === "string" ? candidate.img_src : undefined,
+                };
+          if (result) {
+            results.push(result);
+          }
+          if (results.length >= count) {
+            break;
+          }
+        }
+
+        return results;
       },
     );
   };
   let results = await fetchSearxngResults(categories);
   params.signal?.throwIfAborted();
-  if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
-    results = await fetchSearxngResults("general");
-    params.signal?.throwIfAborted();
+  if (results.length === 0 && categories) {
+    const normalized = categories
+      .split(",")
+      .map((category) => category.trim().toLowerCase())
+      .filter((category) => category.length > 0);
+    if (normalized.length > 0 && !normalized.includes("general")) {
+      results = await fetchSearxngResults("general");
+      params.signal?.throwIfAborted();
+    }
   }
 
   const payload = {

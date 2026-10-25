@@ -14,103 +14,32 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it.each(["content", "destination"] as const)(
-  "the native detail bridge retires a held transfer before %s publication",
-  async (change) => {
-    const held = createDeferredCore<SessionFileDownload | null>();
-    const fetcher = vi.fn(async () => new Response("Retired bytes"));
-    vi.stubGlobal("fetch", fetcher);
-    const attachments: ChatAttachment[] = [];
-    let balance = 0;
-    let signal: AbortSignal | undefined;
-    const chat = createComposerProps({
-      getAttachments: () => attachments,
-      onAttachmentsChange: (next) => {
-        attachments.splice(0, attachments.length, ...next);
-      },
-      onPendingReadsChange: (delta) => {
-        balance += delta;
-      },
-    });
-    const panel = document.createElement("openclaw-chat-detail-panel");
-    panel.attachmentRuntime = { connectionEpoch: 1 };
-    panel.attachmentChat = chat;
-    panel.content = {
-      kind: "markdown",
-      content: "Synthetic file preview",
-      fileDownload: {
-        path: "notes.md",
-        name: "notes.md",
-        download: (nextSignal) => {
-          signal = nextSignal;
-          return held.promise;
-        },
-      },
-    };
-    const container = createChatSidebarContainer();
-    container.append(panel);
-    document.body.append(container);
-    await panel.updateComplete;
-    await waitForSolid(() =>
-      expect(panel.querySelector('[aria-label="More file actions"]')).not.toBeNull(),
-    );
-    panel.querySelector<HTMLButtonElement>('[aria-label="More file actions"]')!.click();
-    let attach: HTMLElement | undefined;
-    await waitForSolid(() => {
-      attach = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-        (item) => item.textContent?.includes("Attach to session"),
-      );
-      expect(attach).toBeDefined();
-    });
-    attach!.click();
-    expect(balance).toBe(1);
-    await Promise.resolve();
-    if (change === "content") {
-      panel.content = { kind: "markdown", content: "Replacement preview" };
-    } else {
-      panel.attachmentChat = { ...chat, sessionKey: "agent:main:replacement" };
-    }
-    expect(signal?.aborted).toBe(true);
-    expect(balance).toBe(0);
-    await panel.updateComplete;
-    held.resolve({
-      filename: "notes.md",
-      url: "/api/artifacts/download/synthetic-notes/synthetic-ticket",
-    });
-    await held.promise;
-    await Promise.resolve();
-    expect(fetcher).not.toHaveBeenCalled();
-    expect(attachments).toEqual([]);
-    expect(balance).toBe(0);
-  },
-);
-
-it("keeps a held native transfer when the detail panel is reparented within the same turn", async () => {
+async function startHeldTransfer(responseText: string, previewText: string) {
   const held = createDeferredCore<SessionFileDownload | null>();
-  const fetcher = vi.fn(async () => new Response("Moved panel bytes"));
+  const fetcher = vi.fn(async () => new Response(responseText));
   vi.stubGlobal("fetch", fetcher);
   const attachments: ChatAttachment[] = [];
-  let balance = 0;
-  let signal: AbortSignal | undefined;
-  const panel = document.createElement("openclaw-chat-detail-panel");
-  panel.attachmentRuntime = { connectionEpoch: 1 };
-  panel.attachmentChat = createComposerProps({
+  const observation: { balance: number; signal?: AbortSignal } = { balance: 0 };
+  const chat = createComposerProps({
     getAttachments: () => attachments,
     onAttachmentsChange: (next) => {
       attachments.splice(0, attachments.length, ...next);
     },
     onPendingReadsChange: (delta) => {
-      balance += delta;
+      observation.balance += delta;
     },
   });
+  const panel = document.createElement("openclaw-chat-detail-panel");
+  panel.attachmentRuntime = { connectionEpoch: 1 };
+  panel.attachmentChat = chat;
   panel.content = {
     kind: "markdown",
-    content: "Synthetic movable preview",
+    content: previewText,
     fileDownload: {
       path: "notes.md",
       name: "notes.md",
       download: (nextSignal) => {
-        signal = nextSignal;
+        observation.signal = nextSignal;
         return held.promise;
       },
     },
@@ -131,15 +60,49 @@ it("keeps a held native transfer when the detail panel is reparented within the 
     expect(attach).toBeDefined();
   });
   attach!.click();
-  expect(balance).toBe(1);
-  await Promise.resolve();
+  expect(observation.balance).toBe(1);
+  return { held, fetcher, attachments, chat, panel, container, observation };
+}
+
+it.each(["content", "destination"] as const)(
+  "the native detail bridge retires a held transfer before %s publication",
+  async (change) => {
+    const { held, fetcher, attachments, chat, panel, observation } = await startHeldTransfer(
+      "Retired bytes",
+      "Synthetic file preview",
+    );
+    if (change === "content") {
+      panel.content = { kind: "markdown", content: "Replacement preview" };
+    } else {
+      panel.attachmentChat = { ...chat, sessionKey: "agent:main:replacement" };
+    }
+    expect(observation.signal?.aborted).toBe(true);
+    expect(observation.balance).toBe(0);
+    await panel.updateComplete;
+    held.resolve({
+      filename: "notes.md",
+      url: "/api/artifacts/download/synthetic-notes/synthetic-ticket",
+    });
+    await held.promise;
+    await Promise.resolve();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(attachments).toEqual([]);
+    expect(observation.balance).toBe(0);
+  },
+);
+
+it("keeps a held native transfer when the detail panel is reparented within the same turn", async () => {
+  const { held, fetcher, attachments, panel, container, observation } = await startHeldTransfer(
+    "Moved panel bytes",
+    "Synthetic movable preview",
+  );
 
   const destination = document.createElement("section");
   container.append(destination);
   destination.append(panel);
   await panel.updateComplete;
-  expect(signal?.aborted).toBe(false);
-  expect(balance).toBe(1);
+  expect(observation.signal?.aborted).toBe(false);
+  expect(observation.balance).toBe(1);
 
   held.resolve({
     filename: "notes.md",
@@ -147,7 +110,7 @@ it("keeps a held native transfer when the detail panel is reparented within the 
   });
   await waitForSolid(() => {
     expect(attachments).toHaveLength(1);
-    expect(balance).toBe(0);
+    expect(observation.balance).toBe(0);
   });
   expect(fetcher).toHaveBeenCalledOnce();
 });

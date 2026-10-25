@@ -56,36 +56,28 @@ export async function ensureDeviceToken(params: {
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
   isIssuanceCurrent?: () => boolean;
-  baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
-  const { baseDir, isIssuanceCurrent, ...input } = params;
-  return readCurrentPairedDevice(
-    input.deviceId,
-    (device) => {
-      if (isIssuanceCurrent?.() === false) {
-        return null;
-      }
-      const reusable = reusablePairedDeviceToken(device, input);
-      if (reusable) {
-        return reusable;
-      }
-      return executeDevicePairingMutation(
-        { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
-        {
-          baseDir,
-          onAuthorityRefused: () => null,
-          assertCurrent: () => {
-            if (isIssuanceCurrent?.() === false) {
-              throw new DevicePairingAuthorityRefusedError(
-                "Device token issuance authority changed",
-              );
-            }
-          },
+  const { isIssuanceCurrent, ...input } = params;
+  return readCurrentPairedDevice(input.deviceId, (device) => {
+    if (isIssuanceCurrent?.() === false) {
+      return null;
+    }
+    const reusable = reusablePairedDeviceToken(device, input);
+    if (reusable) {
+      return reusable;
+    }
+    return executeDevicePairingMutation(
+      { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
+      {
+        onAuthorityRefused: () => null,
+        assertCurrent: () => {
+          if (isIssuanceCurrent?.() === false) {
+            throw new DevicePairingAuthorityRefusedError("Device token issuance authority changed");
+          }
         },
-      );
-    },
-    baseDir,
-  );
+      },
+    );
+  });
 }
 
 export async function rotateDeviceToken(params: {

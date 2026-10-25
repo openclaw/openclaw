@@ -7,7 +7,6 @@ import {
 import {
   buildStatusOverviewSurfaceRows,
   buildStatusUpdateSurface,
-  buildGatewayStatusJsonPayload,
   redactStatusSecrets,
 } from "./format.js";
 
@@ -198,34 +197,7 @@ describe("status-all format", () => {
     ).toBe(expected);
   });
 
-  it("builds gateway json payloads consistently", () => {
-    expect(
-      buildGatewayStatusJsonPayload({
-        gatewayMode: "remote",
-        gatewayConnection: {
-          url: "wss://gateway.example.com",
-          urlSource: "config",
-        },
-        remoteUrlMissing: false,
-        gatewayReachable: true,
-        gatewayProbe: { connectLatencyMs: 123, error: null },
-        gatewaySelf: { host: "gateway", version: "1.2.3" },
-        gatewayProbeAuthWarning: "warn",
-      }),
-    ).toEqual({
-      mode: "remote",
-      url: "wss://gateway.example.com",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: true,
-      connectLatencyMs: 123,
-      self: { host: "gateway", version: "1.2.3" },
-      error: null,
-      authWarning: "warn",
-    });
-  });
-
-  it("redacts credential-bearing Gateway URLs from text and JSON status", () => {
+  it("redacts credential-bearing Gateway URLs from text status", () => {
     const gatewayConnection = {
       url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
       urlSource: "cli --url",
@@ -239,15 +211,14 @@ describe("status-all format", () => {
       gatewaySelf: baseStatusOverviewSurface.gatewaySelf,
     } as const;
     const summary = getStatusOverviewRowValue("Gateway", params);
-    const json = buildGatewayStatusJsonPayload({ ...params, gatewaySelf: null });
-    const output = JSON.stringify({ summary, json });
+    const output = JSON.stringify({ summary });
 
     expect(summary).toContain("gateway.example/ws");
     expect(output).toContain("gateway.example/ws");
     expect(output).not.toMatch(/password|secret|api-key|signed/);
   });
 
-  it("reports startup phase without an unreachable error in text and JSON", () => {
+  it("reports startup phase without an unreachable error in text", () => {
     const params = {
       ...offlineGateway,
       gatewayProbe: { startupPhase: "plugins", error: null },
@@ -256,11 +227,6 @@ describe("status-all format", () => {
       "still starting (phase plugins)",
     );
     expect(getStatusOverviewRowValue("Gateway", params)).not.toContain("unreachable");
-    expect(buildGatewayStatusJsonPayload(params)).toMatchObject({
-      readiness: "still-starting",
-      startupPhase: "plugins",
-      error: null,
-    });
   });
 
   it("builds shared gateway surface values for node and gateway views", () => {

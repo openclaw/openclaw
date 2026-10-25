@@ -65,14 +65,12 @@ vi.mock("../utils.js", async (importOriginal) => ({
   CONFIG_DIR: "/tmp/openclaw-config",
 }));
 // mock-isolation: Skill command fixtures own workspace selection and config without host state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.config,
-  loadConfig: mocks.config,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.config>) =>
-    async () =>
-      mocks.config(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "config"),
+  };
+});
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
@@ -552,6 +550,18 @@ describe("skills cli commands", () => {
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+  it("canonicalizes a mixed-case --agent before selecting the configured agent", async () => {
+    mocks.explicitAgent.mockImplementation((_config, agent) =>
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
+    );
+    mocks.gateway.mockResolvedValue(mocks.report);
+    await run(["check", "--agent", " Writer ", "--json"]);
+    expect(errors).toEqual([]);
+    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
+    expect(mocks.gateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
+    );
   });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";

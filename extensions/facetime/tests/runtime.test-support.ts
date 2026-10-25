@@ -114,8 +114,8 @@ export const carrierPeer = {
   processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
   connectionGeneration: 7,
 };
-export const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
-export const mutedResult = (outcome: string, muted: boolean) => ({
+const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
+const mutedResult = (outcome: string, muted: boolean) => ({
   outcome,
   muted,
   is_uplink_muted: muted,
@@ -197,22 +197,6 @@ export const pendingDialCancellationResult = (callUUID?: string) => ({
 export const endedCall = (callUUID: string, identity: { dial_id?: string } = {}) => ({
   event: "ft-call-status-changed",
   data: { call_uuid: callUUID, call_status: 6, has_ended: true, is_outgoing: true, ...identity },
-});
-
-export const outgoingCall = (
-  callUUID: string,
-  callStatus = 1,
-  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
-) => ({
-  event: "ft-call-status-changed",
-  data: {
-    call_uuid: callUUID,
-    call_status: callStatus,
-    is_outgoing: true,
-    handle: { value: "owner@example.com" },
-    transport: incomingCall().data.transport,
-    ...identity,
-  },
 });
 
 export const dialReply = (call_uuid = "outbound-call", extra: Record<string, unknown> = {}) => ({

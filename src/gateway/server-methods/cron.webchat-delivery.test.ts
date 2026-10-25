@@ -12,8 +12,7 @@ import {
   resetSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
+import type { CronService } from "../../cron/service.js";
 import type { CronDelivery } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -25,7 +24,6 @@ import {
   createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isRecord } from "../../utils.js";
 import {
@@ -34,6 +32,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient } from "./types.js";
 
@@ -99,13 +98,10 @@ async function withWebchatTool(
       },
     );
     const storePath = state.statePath("cron", "jobs.json");
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const cron = createReadService({
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",
-      log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
       runIsolatedAgentJob: async () => {
         throw new Error("disabled fixture must not run an agent");

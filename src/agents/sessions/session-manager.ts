@@ -30,6 +30,7 @@ import {
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import {
   sameSessionTranscriptTargetBinding,
   captureSessionTranscriptTargetBinding,
@@ -65,7 +66,6 @@ import {
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { openSessionManagerBoundedView } from "./session-manager-reload.js";
-import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
@@ -139,7 +139,12 @@ export class SessionManager extends SessionManagerBranching {
   async [sessionManagerReadInitialContext]() {
     const prepared = this.preparedInitialContext;
     this.preparedInitialContext = undefined;
-    if (!this.persistenceTarget || !this.boundedContextLimits || this.pendingDeliberateAppend) {
+    if (
+      !this.persistenceTarget ||
+      !this.boundedContextLimits ||
+      "compaction" in this.boundedContextLimits ||
+      this.pendingDeliberateAppend
+    ) {
       return this.buildSessionContext();
     }
     // A deliberate local branch owns its view; a concurrent selection must not
@@ -467,27 +472,28 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @internal Prepare legacy compaction without hydrating the same transcript again. */
+  /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
     options: { cwd?: string; signal?: AbortSignal } = {},
   ) {
-    const hydration = prepareSessionTranscriptHydration(target, undefined, options.signal);
+    const { cwd, signal } = options;
+    const limits = { compaction: true } as const;
+    const hydration = prepareSessionTranscriptHydration(target, limits, signal);
     const prepared = await hydration.read({ compaction: true });
-    if (prepared.kind !== "full" || !prepared.compaction) {
+    if (prepared.kind !== "bounded" || !prepared.compaction) {
       throw new Error("Expected a prepared compaction transcript");
     }
-    const entries = prepared.snapshot.events;
-    const header = findSessionTranscriptHeader(entries);
+    const context = prepared.snapshot;
+    const header = findSessionTranscriptHeader(context.events);
     return {
       ...prepared.compaction,
-      eventCount: entries.length,
+      eventCount: context.totalEvents,
       sessionManager: new SessionManager(
-        options.cwd ?? header?.cwd ?? process.cwd(),
+        cwd ?? header?.cwd ?? process.cwd(),
         prepared.compaction.sessionTarget,
-        entries,
-        undefined,
-        prepared.snapshot.version,
+        context.events,
+        { ...context, limits },
       ),
     };
   }

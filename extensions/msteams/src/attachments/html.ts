@@ -15,6 +15,16 @@ import type {
   MSTeamsInboundMedia,
 } from "./types.js";
 
+function collectHtmlAttachmentIds(html: string, ids: Set<string>): void {
+  ATTACHMENT_TAG_RE.lastIndex = 0;
+  for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
+    const id = match[1]?.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+}
+
 /**
  * Extract every `<attachment id="...">` reference from the HTML attachments in
  * the inbound activity. Returns the complete (non-sliced) list; callers that
@@ -24,22 +34,13 @@ export function extractMSTeamsHtmlAttachmentIds(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string[] {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return [];
-  }
   const ids = new Set<string>();
   for (const att of list) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
       continue;
     }
-    ATTACHMENT_TAG_RE.lastIndex = 0;
-    for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
-      const id = match[1]?.trim();
-      if (id) {
-        ids.add(id);
-      }
-    }
+    collectHtmlAttachmentIds(html, ids);
   }
   return Array.from(ids);
 }
@@ -48,9 +49,6 @@ export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return undefined;
-  }
   let htmlAttachments = 0;
   let imgTags = 0;
   let dataImages = 0;
@@ -79,13 +77,7 @@ export function summarizeMSTeamsHtmlAttachments(
       }
     }
 
-    ATTACHMENT_TAG_RE.lastIndex = 0;
-    for (const attachmentMatch of html.matchAll(ATTACHMENT_TAG_RE)) {
-      const id = attachmentMatch[1]?.trim();
-      if (id) {
-        attachmentIds.add(id);
-      }
-    }
+    collectHtmlAttachmentIds(html, attachmentIds);
   }
 
   if (htmlAttachments === 0) {
@@ -129,9 +121,6 @@ export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsInboundMedia[] {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return [];
-  }
   const fileAttachments = list.filter(isAdvertisedFileAttachment);
   const inlineMedia = extractInlineImageReferences(list).map((candidate) =>
     createAdvertisedMediaFact("image", candidate.sourceId),

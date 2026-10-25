@@ -8,6 +8,7 @@ import {
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { ParticipantAvatar } from "../../../components/solid/viewer-facepile.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -15,12 +16,11 @@ import "./chat-details-people.css";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type ChatDetailsPeopleFacts = {
   /** Session people in the parent's order, including its projected owner/creator. */
   people: readonly SessionParticipant[];
-  /** Distinct total for this union, if known; not the raw participantCount. */
-  totalCount?: number;
   /** The loaded identities are not a confirmed complete participant list. */
   partial?: boolean;
 };
@@ -64,14 +64,13 @@ function PeopleAvatar(props: { person: SessionParticipant }) {
 /** Metadata slot only. Details owns the heading, disclosure and in-memory choice. */
 export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
   const people = createMemo(() => uniquePeople(props.people));
-  const total = () => Math.max(people().length, props.totalCount ?? 0);
   const preview = () => people().slice(0, 3);
-  const remaining = () => total() - preview().length;
+  const remaining = () => people().length - preview().length;
   return (
     <span class="chat-details-people__summary">
       <Show when={!props.partial}>
         <span class="sr-only">
-          {t("chat.sessionDetails.peopleCount", { count: String(total()) })}
+          {t("chat.sessionDetails.peopleCount", { count: String(people().length) })}
         </span>
       </Show>
       <Show
@@ -103,7 +102,7 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
             aria-hidden="true"
           >
             <span class="chat-details-desktop-section__count-separator">·</span>
-            {total()}
+            {people().length}
           </span>
         </Show>
       </Show>
@@ -115,7 +114,6 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
 export function ChatDetailsPeople(props: ChatDetailsPeopleProps) {
   const people = createMemo(() => uniquePeople(props.people));
   const ownerKey = () => props.ownerIdentity && sessionParticipantIdentityKey(props.ownerIdentity);
-  const remaining = () => Math.max(0, (props.totalCount ?? people().length) - people().length);
   return (
     <ul class="chat-details-people">
       <For each={people()} keyed={(person) => sessionParticipantIdentityKey(person.identity)}>
@@ -159,11 +157,6 @@ export function ChatDetailsPeople(props: ChatDetailsPeopleProps) {
           );
         }}
       </For>
-      <Show when={remaining() > 0}>
-        <li class="chat-details-people__remaining">
-          {t("chat.sessionDetails.moreParticipants", { count: String(remaining()) })}
-        </li>
-      </Show>
     </ul>
   );
 }

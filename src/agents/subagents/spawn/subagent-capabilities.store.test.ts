@@ -118,7 +118,8 @@ describe("persisted subagent capability lookups", () => {
               const request = { config: cfg, agentId: "main", sessionKey: key };
               const resolve = () => resolveRequesterToolPolicies(request);
               const readPolicy = () => {
-                const { inheritedToolPolicy: inherited, subagentStore: store } = resolve();
+                const { inheritedToolPolicy: inherited } = resolve();
+                const store = resolveStore(key, { cfg });
                 return { policy: inherited, depth: resolveCapabilities(key, { cfg, store }).depth };
               };
               expect(resolve().inheritedToolPolicy).toEqual(policy);

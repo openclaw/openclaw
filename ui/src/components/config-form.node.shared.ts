@@ -6,6 +6,7 @@ import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
+import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -79,10 +80,21 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??
       (showLabel && help ? configFieldId(params.path, "description") : undefined),
   };
+}
+
+export function configFieldRequiresInput(
+  params: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
+): boolean {
+  return (
+    params.isRequired === true &&
+    (params.schema.default === undefined ||
+      !isSupportedConfigValueValid(params.schema, params.schema.default))
+  );
 }
 
 export type SensitiveRenderState = ReturnType<typeof getSensitiveRenderState>;

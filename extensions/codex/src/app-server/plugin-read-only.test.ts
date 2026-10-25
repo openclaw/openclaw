@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import type { CodexPluginDestructivePolicy } from "./config-contracts.shared.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginSummary,
@@ -92,29 +93,22 @@ function fixture(
     },
     build: () =>
       buildCodexPluginThreadConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              sample: {
-                marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                pluginName: "sample",
-                read_only: readOnly,
-                allow_destructive_actions: destructive,
-              },
-              ...(sharedReadOnly === undefined
-                ? {}
-                : {
-                    shared: {
-                      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                      pluginName: "shared",
-                      read_only: sharedReadOnly,
-                      allow_destructive_actions: true,
-                    },
+        pluginConfig: codexPluginConfig({
+          plugins: {
+            sample: curatedPlugin("sample", {
+              read_only: readOnly,
+              allow_destructive_actions: destructive,
+            }),
+            ...(sharedReadOnly === undefined
+              ? {}
+              : {
+                  shared: curatedPlugin("shared", {
+                    read_only: sharedReadOnly,
+                    allow_destructive_actions: true,
                   }),
-            },
+                }),
           },
-        },
+        }),
         request,
         appCache: new CodexAppInventoryCache(),
         appCacheKey: "read-only",

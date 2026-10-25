@@ -3,7 +3,7 @@
 import { createComponent, createSignal, getOwner } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
@@ -288,7 +288,11 @@ async function settleText(container: HTMLElement) {
   }
 }
 
-function mountText(item: AttachmentItem | AttachmentItem[], options: ImageRenderOptions = {}) {
+function mountText(
+  item: AttachmentItem | AttachmentItem[],
+  options: ImageRenderOptions = {},
+  inlineComments = false,
+) {
   const [current, setCurrent] = createSignal(Array.isArray(item) ? item : [item]);
   const [revision, setRevision] = createSignal(0);
   const open = vi.fn();
@@ -304,6 +308,7 @@ function mountText(item: AttachmentItem | AttachmentItem[], options: ImageRender
       },
       onOpenSidebar: open,
       inlinePlayback: false,
+      inlineComments,
     }),
   );
   views.add(view);
@@ -376,8 +381,10 @@ describe("deferred attachment source admission", () => {
             view.container.querySelectorAll(".chat-comment-preview__text--selection"),
           ).toHaveLength(2);
         } else {
-          expect(view.container.textContent).toContain(
-            kind === "comment" ? "hello" : "Visible pasted excerpt",
+          await waitForSolid(() =>
+            expect(view.container.textContent).toContain(
+              kind === "comment" ? "hello" : "Visible pasted excerpt",
+            ),
           );
         }
       }
@@ -403,7 +410,7 @@ describe("deferred attachment source admission", () => {
     },
   );
 
-  it.each(["document", "comment", "paste"] as const)(
+  it.each(["document", "comment", "paste", "inline-comment"] as const)(
     "fences stale %s observations after source replacement and disconnect",
     async (kind) => {
       const fetchMock = fetchResponse(() =>
@@ -414,9 +421,14 @@ describe("deferred attachment source admission", () => {
         ),
       );
       const attachment = () =>
-        kind === "document" ? localAttachment(kind, "file.pdf") : textAttachment(kind);
+        kind === "document"
+          ? localAttachment(kind, "file.pdf")
+          : textAttachment(kind === "inline-comment" ? "comment" : kind);
       const first = attachment();
-      const view = kind === "document" ? mount(first) : mountText(first);
+      const view =
+        kind === "document"
+          ? mount(first)
+          : mountText(first, { messageSendId: "observer-send" }, kind === "inline-comment");
       const settled = () => (kind === "document" ? settle() : settleText(view.container));
       if (kind !== "document") {
         await settled();
@@ -435,11 +447,16 @@ describe("deferred attachment source admission", () => {
       }
       expect(fetchMock).not.toHaveBeenCalled();
       const current = observations.at(-1);
+      if (kind === "inline-comment") {
+        current?.show();
+        await settled();
+        expect(fetchMock).toHaveBeenCalledOnce();
+      }
       view.unmount();
       await settled();
       current?.show();
       await settled();
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(kind === "inline-comment" ? 1 : 0);
     },
   );
 });

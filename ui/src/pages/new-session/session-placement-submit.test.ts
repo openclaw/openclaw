@@ -25,6 +25,7 @@ function recoveryRecord(
 ): SessionPlacementRecovery {
   return {
     sessionKey,
+    sessionId: "physical-startup-session",
     message,
     messageId: `message-${sessionKey.split(":").at(-1)}`,
     target: { kind: "profile", profileId: "aws" },
@@ -103,17 +104,11 @@ describe("session placement draft advancement", () => {
         throw new DOMException("storage disabled", "SecurityError");
       }),
     });
-    const request = vi.fn().mockRejectedValue(new Error("history unavailable"));
-    await expectPaused(
-      request,
-      recovery,
-      {
-        reason: "unconfirmed",
-        error: expect.stringContaining("Keep this page open"),
-      },
-      { mode: "recover" },
-    );
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+    const request = vi.fn().mockRejectedValue(new Error("connection unavailable"));
+    await expect(
+      advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
+    ).resolves.toEqual({ status: "pending", recovery, retryAfterMs: 500 });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
   });
 
   it("normalizes recovered mentions without replacing a newer durable session", async () => {
@@ -132,7 +127,7 @@ describe("session placement draft advancement", () => {
         expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
         return Promise.resolve({ placement: { state: "active", environmentId: "worker-older" } });
       }
-      if (method === "sessions.send") {
+      if (method === "chat.send") {
         return Promise.resolve({ runId: "run-older", status: "started" });
       }
       throw new Error(`unexpected method ${method}`);
@@ -152,7 +147,7 @@ describe("session placement draft advancement", () => {
         { clearRecovery, setRecoveryPhase },
       ),
     ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
-    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true);
+    expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true, "physical-startup-session");
     expect(
       readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
     ).toEqual({
@@ -165,12 +160,14 @@ describe("session placement draft advancement", () => {
     ).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.dispatch",
-      "sessions.send",
+      "chat.send",
     ]);
     expect(request).toHaveBeenCalledWith(
-      "sessions.send",
+      "chat.send",
       {
-        key: sessionKey,
+        sessionKey,
+        sessionId: "physical-startup-session",
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message: "@Alex older task",
         mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
@@ -217,7 +214,7 @@ describe("session placement draft advancement", () => {
       key: "agent:cloud:current",
       agentId: "cloud",
     });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
   });
 
   it.each([
@@ -339,23 +336,17 @@ describe("session placement draft advancement", () => {
     }
   });
 
-  it("pauses uncertain delivery without allocating after terminal placement", async () => {
+  it("reconciles attempted delivery without allocating after terminal placement", async () => {
     const recovery = recoveryRecord("agent:cloud:recovered", "possibly accepted task", {
       phase: "sending",
       target: { kind: "profile", profileId: "aws", machineClass: "fast" },
     });
     storeRecovery(recovery);
-    const request = vi.fn().mockResolvedValueOnce({ messages: [] });
-    await expectPaused(
-      request,
-      recovery,
-      {
-        reason: "unconfirmed",
-        messageId: "message-recovered",
-      },
-      { mode: "recover" },
-    );
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
+    const request = vi.fn().mockResolvedValueOnce({ runId: "message-recovered", status: "ok" });
+    await expect(
+      advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
+    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
   });
 
   it("keeps the visible session after a definitive redispatch rejection", async () => {

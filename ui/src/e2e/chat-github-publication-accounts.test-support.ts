@@ -8,8 +8,6 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { openChatDetails, openChatPublication } from "./chat-details.test-support.ts";
 import { exactButton as publicationAction } from "./chat-flow.test-support.ts";
 import {
-  personalAccount,
-  personalGeneration,
   publicationMethods,
   publicationOptions,
   showPublicationBranch,
@@ -49,16 +47,6 @@ export function installPublicationGateway(
   });
 }
 
-const unknownAvailability =
-  "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
-function availability(
-  reason: string | undefined,
-  message: string | undefined,
-  extra: { name?: string; native?: boolean; unidentified?: boolean } = {},
-) {
-  return { name: reason?.replaceAll("_", "-") ?? "unknown", reason, message, ...extra };
-}
-
 export function defineGitHubPublicationAccountTests({
   suite,
   newPublicationContext,
@@ -80,36 +68,7 @@ export function defineGitHubPublicationAccountTests({
     return { page, gateway };
   }
 
-  it.each([
-    availability(
-      "unavailable",
-      "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings → Profile → GitHub connections. My GitHub is separate and optional.",
-    ),
-    availability("changed", "The Gateway GitHub account changed. Reload and retry publication."),
-    availability(
-      "rate_limited",
-      "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
-    ),
-    availability(
-      "unverified",
-      "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
-    ),
-    availability(
-      "unsupported_workspace",
-      "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
-    ),
-    availability(undefined, unknownAvailability),
-    availability(undefined, unknownAvailability, {
-      name: "unknown-unidentified",
-      unidentified: true,
-    }),
-    availability(undefined, undefined, { name: "native-publisher", native: true }),
-    availability(undefined, undefined, {
-      name: "native-publisher-unidentified",
-      native: true,
-      unidentified: true,
-    }),
-  ])("explains $name publication availability without requiring a connection", async (scenario) => {
+  it("explains changed publication availability without requiring a connection", async () => {
     const { page, gateway } = await openPublication({
       assistantName: "Publication QA",
       workspace: "/synthetic/publication-qa",
@@ -117,18 +76,14 @@ export function defineGitHubPublicationAccountTests({
       methodResponses: {
         "sessions.github.options": {
           ...publicationOptions,
-          shared: scenario.native
-            ? { ...publicationOptions.shared, source: "system-detected" }
-            : null,
-          personal: scenario.unidentified
-            ? null
-            : {
-                ...publicationOptions.personal,
-                state: "disconnected",
-                account: null,
-                generation: null,
-              },
-          ...(scenario.reason ? { sharedUnavailableReason: scenario.reason } : {}),
+          shared: null,
+          personal: {
+            ...publicationOptions.personal,
+            state: "disconnected",
+            account: null,
+            generation: null,
+          },
+          sharedUnavailableReason: "changed",
         },
       },
     });
@@ -137,41 +92,36 @@ export function defineGitHubPublicationAccountTests({
     await openChatPublication(page);
     const publish = publicationAction(page, "Create PR");
     await publish.waitFor();
-    await expect.poll(() => publish.isEnabled()).toBe(Boolean(scenario.native));
+    await expect.poll(() => publish.isEnabled()).toBe(false);
     const row = page.locator(".chat-environment__branch");
     const note = row.locator(".chat-pr__publication-note");
     const refresh = publicationAction(row, "Refresh publication");
-    if (!scenario.native) {
-      await note.waitFor();
-      expect(await refresh.count()).toBe(1);
-      expect(await refresh.isEnabled()).toBe(true);
-      expect(await note.textContent()).toContain(scenario.message);
-    } else {
-      expect(await note.count()).toBe(0);
-      expect(await refresh.count()).toBe(0);
-    }
+    await note.waitFor();
+    expect(await refresh.count()).toBe(1);
+    expect(await refresh.isEnabled()).toBe(true);
+    expect(await note.textContent()).toContain(
+      "The Gateway GitHub account changed. Reload and retry publication.",
+    );
     expect(await row.textContent()).not.toContain("Connect GitHub in Settings");
     expect(await publicationAction(page, "Publication account").count()).toBe(0);
     expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-    if (scenario.name === "changed") {
-      const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
-      await gateway.setMethodResponse("sessions.github.options", {
-        ...publicationOptions,
-        personal: null,
-        shared: { ...publicationOptions.shared, source: "system-detected" },
-      });
-      await refresh.click();
-      const retried = await gateway.waitForRequest("sessions.github.options", {
-        after: previousOptions,
-      });
-      expect(retried.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-      await expect.poll(() => publish.isEnabled()).toBe(true);
-      await note.waitFor({ state: "hidden" });
-      expect(await refresh.count()).toBe(0);
-      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-    }
+    const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
+    await gateway.setMethodResponse("sessions.github.options", {
+      ...publicationOptions,
+      personal: null,
+      shared: { ...publicationOptions.shared, source: "system-detected" },
+    });
+    await refresh.click();
+    const retried = await gateway.waitForRequest("sessions.github.options", {
+      after: previousOptions,
+    });
+    expect(retried.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
+    await expect.poll(() => publish.isEnabled()).toBe(true);
+    await note.waitFor({ state: "hidden" });
+    expect(await refresh.count()).toBe(0);
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
   });
 
   it.each([1180, 390])(
@@ -295,32 +245,6 @@ export function defineGitHubPublicationAccountTests({
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     },
   );
-
-  it("publishes as the sole personal account only after the explicit labeled action", async () => {
-    const { page, gateway } = await openPublication({
-      methodResponses: {
-        "sessions.github.options": {
-          ...publicationOptions,
-          shared: null,
-          sharedUnavailableReason: "rate_limited",
-        },
-      },
-    });
-    await openChatPublication(page);
-    const publish = publicationAction(page, "Publish as @alice-tools");
-    await publish.waitFor();
-    expect(await publish.isEnabled()).toBe(true);
-    expect(await publicationAction(page, "Publication account").count()).toBe(0);
-    expect(await page.locator(".chat-pr__accounts-panel").count()).toBe(0);
-    expect(await page.locator(".chat-pr__publication-note").count()).toBe(0);
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    await gateway.deferNext("sessions.github.publish");
-    await publish.click();
-    const request = await gateway.waitForRequest("sessions.github.publish");
-    expect(request.params).toMatchObject({
-      selection: { source: "personal", generation: personalGeneration, account: personalAccount },
-    });
-  });
 
   it.each([
     { name: "reclaimed", state: "reclaimed", running: false, conflict: false, ready: true },

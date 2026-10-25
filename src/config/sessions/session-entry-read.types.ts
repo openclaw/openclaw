@@ -111,7 +111,17 @@ export type SessionExactEntriesWorkerSelection =
       projection: "list";
     };
 
-export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+export type SessionExactEntriesWorkerRequest = (
+  | SessionExactEntriesWorkerSelection
+  | {
+      sessionKeys: readonly string[];
+      selection: {
+        kind: "transcript-aliases";
+        sessionIds: readonly string[];
+      };
+      projection: "list";
+    }
+) & {
   /** Validate current entry and conversation predicates in one reader snapshot. */
   sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };

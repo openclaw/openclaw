@@ -128,6 +128,7 @@ describe("resolveApplicationStartupSettings", () => {
 
 describe("gateway settings and layout persistence", () => {
   installSettingsStorageLifecycle();
+
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
     vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({

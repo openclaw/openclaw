@@ -1,9 +1,8 @@
 // Prove Feishu DM routing against the real SDK, token exchange, and HTTP transport.
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import * as Lark from "@larksuiteoapi/node-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { sendMediaFeishu } from "./media.js";
 import { feishuOutbound } from "./outbound.js";
@@ -116,32 +115,14 @@ it("Feishu DM delivery preserves routing, card byte envelopes and physical-send 
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
 
-  const loopbackOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  // Keep the production Feishu domain: the SDK treats a :port in a custom
-  // base URL as an API path parameter. The real Axios request interceptor
-  // redirects both its token POST and authenticated message transport.
-  const loopbackInterceptor = Lark.defaultHttpInstance.interceptors.request.use(
-    (options) => {
-      const upstream = new URL(options.url ?? "");
-      if (upstream.hostname === "open.feishu.cn") {
-        options.url = new URL(`${upstream.pathname}${upstream.search}`, loopbackOrigin).toString();
-      }
-      return options;
-    },
-    undefined,
-    { synchronous: true },
-  );
-
+  const loopbackOrigin = `http://127.0.0.1:${port}`;
   try {
     const account = (appId: string) => ({
       appId,
       appSecret: "loopback-placeholder", // pragma: allowlist secret
-      domain: "feishu",
+      domain: loopbackOrigin,
     });
     const cfg = {
       channels: {
@@ -329,7 +310,6 @@ it("Feishu DM delivery preserves routing, card byte envelopes and physical-send 
     });
     expect(callbacks).toBe(2);
   } finally {
-    Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });

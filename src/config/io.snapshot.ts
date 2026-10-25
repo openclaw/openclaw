@@ -5,6 +5,7 @@ import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -40,7 +41,6 @@ import {
 } from "./io.snapshot-preparation.js";
 import type { ValidationRequest } from "./io.snapshot-preparation.types.js";
 import {
-  collectInvalidConfigLegacyIssues,
   createConfigFileSnapshot,
   finalizeReadConfigSnapshotInternalResult,
 } from "./io.snapshot-shared.js";
@@ -54,7 +54,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -293,10 +292,17 @@ async function readConfigSnapshot(
         options.allowCurrentPluginMetadata !== false
           ? getProcessGatewayPluginMetadataSnapshot()
           : undefined);
-      const collect = () =>
-        context.options.pluginValidation === "core-only"
-          ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
-          : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
+      // Cold Doctor contracts need worker-owned policy and inventory facts before derivation.
+      const preparePluginDiagnostics = availableSnapshot
+        ? undefined
+        : () => preparePluginMetadataMachineStateAsync({ env: deps.env });
+      const collect = async () => {
+        const { collectInvalidConfigLegacyIssues } = await import("./io.legacy-issues.runtime.js");
+        return collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed, {
+          coreOnly: context.options.pluginValidation === "core-only",
+          preparePluginDiagnostics,
+        });
+      };
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {

@@ -68,6 +68,7 @@ export function createPlacementStartupHarness(
   } as unknown as SessionCapability;
   const recovery: Parameters<typeof writeSessionPlacementRecovery>[0] = {
     sessionKey,
+    sessionId: "physical-startup-session",
     messageId: "message-stable",
     message: "fix the cloud task",
     target: { kind: "profile", profileId: "aws" },

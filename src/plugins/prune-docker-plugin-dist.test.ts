@@ -198,6 +198,8 @@ describe("pruneDockerPluginDist", () => {
   it("links retained externally distributed plugin dependencies under their packaged roots", () => {
     const repoRoot = fs.realpathSync(makeRepoRoot("openclaw-docker-plugin-dist-links-"));
     writeJsonFile(path.join(repoRoot, "package.json"), {
+      name: "openclaw",
+      version: "0.0.0",
       files: [
         "dist/**",
         "!dist/extensions/kept-external/**",
@@ -205,7 +207,7 @@ describe("pruneDockerPluginDist", () => {
       ],
       dependencies: { "root-dep": "1.0.0" },
     });
-    writeNodePackage(repoRoot, "root-dep");
+    writeNodePackage(repoRoot, "root-dep", { version: "1.0.0" });
     for (const pluginId of ["kept-external", "omitted-external", "internal"]) {
       writeDistPluginFile(repoRoot, "dist", pluginId);
       writeJsonFile(path.join(repoRoot, "extensions", pluginId, "package.json"), {
@@ -215,11 +217,20 @@ describe("pruneDockerPluginDist", () => {
           pluginId === "internal"
             ? { "root-dep": "1.0.0" }
             : { "@scope/native-cli": "1.0.0", "plain-dep": "1.0.0" },
+        ...(pluginId === "kept-external"
+          ? {
+              bundleDependencies: ["plain-dep"],
+              optionalDependencies: {
+                "missing-native": "1.0.0",
+                "optional-native": "1.0.0",
+              },
+            }
+          : {}),
       });
     }
     // Isolated pnpm installs link plugin-local packages into the shared virtual store.
     const sourceModules = path.join(repoRoot, "extensions", "kept-external", "node_modules");
-    for (const packageName of ["@scope/native-cli", "plain-dep"]) {
+    for (const packageName of ["@scope/native-cli", "optional-native", "plain-dep"]) {
       const storeDir = path.join(
         repoRoot,
         "node_modules",
@@ -242,6 +253,19 @@ describe("pruneDockerPluginDist", () => {
     });
 
     expect(removed).toEqual(["extensions/omitted-external", "dist/extensions/omitted-external"]);
+    expect(JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"))).toMatchObject({
+      files: ["dist/**", "!dist/extensions/omitted-external/**"],
+      bundleDependencies: ["plain-dep"],
+      dependencies: {
+        "@scope/native-cli": "1.0.0",
+        "plain-dep": "1.0.0",
+        "root-dep": "1.0.0",
+      },
+      optionalDependencies: {
+        "missing-native": "1.0.0",
+        "optional-native": "1.0.0",
+      },
+    });
     const distModules = path.join(repoRoot, "dist", "extensions", "kept-external", "node_modules");
     expect(fs.lstatSync(distModules).isSymbolicLink()).toBe(false);
     expect(fs.lstatSync(path.join(distModules, "@scope")).isSymbolicLink()).toBe(false);
@@ -273,9 +297,49 @@ describe("pruneDockerPluginDist", () => {
         "node_modules/.pnpm/@scope+native-cli@1.0.0/node_modules/@scope/native-cli/package.json",
       ),
     );
+    const requireFromRoot = createRequire(path.join(repoRoot, "package.json"));
+    for (const packageName of ["@scope/native-cli", "optional-native", "plain-dep"]) {
+      expect(requireFromRoot.resolve(`${packageName}/package.json`)).toBe(
+        fs.realpathSync(path.join(sourceModules, packageName, "package.json")),
+      );
+    }
+    expect(() => requireFromRoot.resolve("missing-native/package.json")).toThrow();
     expect(
       fs.existsSync(path.join(repoRoot, "dist", "extensions", "internal", "node_modules")),
     ).toBe(false);
+  });
+
+  it("refuses to replace a different installed root dependency selected by a plugin", () => {
+    const repoRoot = fs.realpathSync(makeRepoRoot("openclaw-docker-plugin-root-conflict-"));
+    writeJsonFile(path.join(repoRoot, "package.json"), {
+      name: "openclaw",
+      version: "0.0.0",
+      files: ["dist/**", "!dist/extensions/kept-external/**"],
+      dependencies: { shared: "1.0.0" },
+    });
+    writeNodePackage(repoRoot, "shared", { version: "1.0.0" });
+    writeDistPluginFile(repoRoot, "dist", "kept-external");
+    const pluginDir = path.join(repoRoot, "extensions", "kept-external");
+    writeJsonFile(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/kept-external",
+      version: "0.0.0",
+      dependencies: { shared: "2.0.0" },
+    });
+    writeNodePackage(repoRoot, "shared", { version: "2.0.0" }, pluginDir);
+    const originalManifest = fs.readFileSync(path.join(repoRoot, "package.json"));
+    const originalRootBinding = fs.realpathSync(path.join(repoRoot, "node_modules", "shared"));
+
+    expect(() =>
+      pruneDockerPluginDist({
+        repoRoot,
+        env: { OPENCLAW_EXTENSIONS: "kept-external" } as NodeJS.ProcessEnv,
+      }),
+    ).toThrow(/root package\.json must declare shared@2\.0\.0/u);
+
+    expect(fs.readFileSync(path.join(repoRoot, "package.json"))).toEqual(originalManifest);
+    expect(fs.realpathSync(path.join(repoRoot, "node_modules", "shared"))).toBe(
+      originalRootBinding,
+    );
   });
 
   it("fails closed when a retained plugin dependency stays unreachable from its packaged root", () => {

@@ -64,9 +64,10 @@ vi.mock("./registry.js", () => ({
     },
   ),
 }));
-vi.mock("./mount-plan.js", () => ({
+vi.mock("./mount-plan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mount-plan.js")>()),
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
-  sandboxMountPlanMatchesContainer: vi.fn(async () => true),
+  compareSandboxMountPlan: vi.fn(async () => "match"),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
 // mock-isolation: simulate container commands and failures without invoking a container engine.
@@ -116,6 +117,9 @@ vi.mock("./container-engine.js", () => ({
         return fixture.terminalState === "unreachable"
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
+      }
+      if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+        return result(`${container.id} true`);
       }
       return result(
         args[2] === "{{.Id}}"

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, lazy, onSettled, Show } from "solid-js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -6,11 +6,11 @@ import { messageClientSourcesLabel } from "../../../lib/chat/message-client-sour
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
-import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { RewindButton } from "./chat-message-confirmation-view.tsx";
@@ -42,11 +42,15 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
-import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
+import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { TurnRecapRow } from "./chat-working-indicator.tsx";
+
+const ActivityGroupContent = lazy(() => import("./chat-message-activity-view.tsx"), {
+  export: "ActivityGroupContent",
+});
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -161,25 +165,27 @@ export function ActivityGroup(props: {
   presentation: "standalone" | "continuation";
 }) {
   return (
-    <ActivityGroupContent
-      {...props}
-      renderEntries={(overrides) => (
-        <For each={props.groups} keyed={(group) => group.key}>
-          {(group) => (
-            <For each={group().messages} keyed={(item) => item.key}>
-              {(item, index) => (
-                <PreparedMessage
-                  group={group()}
-                  item={item()}
-                  index={index()}
-                  options={{ ...props.options, toolCardOverrides: overrides() }}
-                />
-              )}
-            </For>
-          )}
-        </For>
-      )}
-    />
+    <ChatLazyBoundary>
+      <ActivityGroupContent
+        {...props}
+        renderEntries={(overrides) => (
+          <For each={props.groups} keyed={(group) => group.key}>
+            {(group) => (
+              <For each={group().messages} keyed={(item) => item.key}>
+                {(item, index) => (
+                  <PreparedMessage
+                    group={group()}
+                    item={item()}
+                    index={index()}
+                    options={{ ...props.options, toolCardOverrides: overrides() }}
+                  />
+                )}
+              </For>
+            )}
+          </For>
+        )}
+      />
+    </ChatLazyBoundary>
   );
 }
 
@@ -206,7 +212,10 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+        <BrowserTabPreviews
+          previews={selectBrowserTabPreviews([props.group], options())}
+          mediaReadAllowed={options().mediaReadAllowed}
+        />
       )}
     </Show>
   );
@@ -225,6 +234,7 @@ function GroupAvatar(props: {
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
+            mediaReadAllowed={options().mediaReadAllowed}
             role={frame().group.role}
             assistant={{
               agentId: options().agentId,
@@ -454,13 +464,20 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+          <BrowserTabPreviews
+            previews={selectBrowserTabPreviews([props.group], options())}
+            mediaReadAllowed={options().mediaReadAllowed}
+          />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
+              <TurnRecapRow
+                recap={options().turnRecap!}
+                presentation="continuation"
+                hideDuration={options().hideTurnRecapDuration}
+              />
             ) : undefined
           }
         >
@@ -498,10 +515,15 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <ChatAuthorAvatar
-                  sender={props.group.sender}
-                  channelAvatar={options().channelAvatar}
-                />
+                <Show
+                  when={options().mediaReadAllowed !== false}
+                  fallback={<span class="chat-author-avatar" aria-hidden="true" />}
+                >
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                  />
+                </Show>
               ) : undefined}
               <SenderIdentity frame={frame()} />
               <ChatSendStatus status={frame().sendStatus} actions={options()} />

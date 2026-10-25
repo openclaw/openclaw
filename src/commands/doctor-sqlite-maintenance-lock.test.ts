@@ -1,12 +1,11 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockLinuxNamespace } from "../infra/gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  readGatewayLockProcessNamespace,
   type LockPayload,
 } from "../infra/gateway-lock-payload.js";
 import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
@@ -19,7 +18,6 @@ import * as gatewayLockModule from "../infra/gateway-lock.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
-import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
@@ -27,6 +25,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
   DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
   withDoctorSqliteMaintenanceLock,
@@ -127,28 +126,6 @@ async function seedGatewayOwner(
   const now = new Date();
   await fs.utimes(ownerLockPath, now, now);
   return { ownerLockPath, databasePath, raw };
-}
-
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fsSync.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fsSync.readlinkSync.bind(fsSync);
-    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
 }
 
 afterEach(() => {
@@ -467,6 +444,30 @@ describe("doctor SQLite maintenance lock", () => {
       await fs.symlink(targetPath, sidecarPath);
       await expectPathRefused(fixture, sidecarPath, /symbolic-link path/);
       await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("owned target\n");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps mutation roots when observations include a narrower root",
+    async () => {
+      const root = tempDirs.make("openclaw-doctor-observation-root-");
+      const physical = path.join(root, "physical");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(physical);
+      await fs.writeFile(path.join(physical, "selected.sqlite"), "selected");
+      await fs.writeFile(path.join(physical, "held.sqlite"), "held");
+      await fs.symlink(physical, alias, "dir");
+      const selected = path.join(alias, "selected.sqlite");
+      const held = path.join(alias, "held.sqlite");
+
+      expect(() =>
+        assertDoctorSqliteMaintenancePathsNotAliased("session SQLite import", [selected], [root], {
+          paths: [held, selected],
+          ownershipRoots: [alias, root],
+        }),
+      ).toThrow(`symbolic-link path component: ${alias}`);
+      await expect(fs.readFile(selected, "utf8")).resolves.toBe("selected");
+      await expect(fs.readFile(held, "utf8")).resolves.toBe("held");
     },
   );
 

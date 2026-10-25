@@ -45,7 +45,7 @@ import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cach
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
-import { SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION } from "./subagents/completion/subagent-completion-instructions.js";
+import { buildSubagentPrivateCompletionInstruction } from "./subagents/completion/subagent-completion-instructions.js";
 import { startPromptCacheMcpServer } from "./test-helpers/prompt-cache-mcp.test-support.js";
 
 const cases = [
@@ -376,7 +376,7 @@ it.for(cases)(
                     status: "ok",
                     statusLabel: "completed successfully",
                     result: "Synthetic child verification completed.",
-                    replyInstruction: SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+                    replyInstruction: buildSubagentPrivateCompletionInstruction(undefined),
                   },
                 ]
               : undefined;

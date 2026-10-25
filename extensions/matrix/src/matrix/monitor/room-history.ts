@@ -174,10 +174,8 @@ export function createRoomHistoryTracker(
 
   function rememberWatermark(key: string, snapshotIdx: number): void {
     const nextSnapshotIdx = Math.max(agentWatermarks.get(key) ?? 0, snapshotIdx);
-    if (agentWatermarks.has(key)) {
-      // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
-      agentWatermarks.delete(key);
-    }
+    // Refresh insertion order so capped-map eviction removes the stalest pair, not an active one.
+    agentWatermarks.delete(key);
     setBoundedMap(agentWatermarks, key, nextSnapshotIdx, maxWatermarkEntries);
   }
 
@@ -203,10 +201,8 @@ export function createRoomHistoryTracker(
     retryKey: string,
     prepared: PreparedTriggerResult,
   ): PreparedTriggerResult {
-    if (queue.preparedTriggers.has(retryKey)) {
-      // Refresh insertion order so capped eviction keeps actively retried events hot.
-      queue.preparedTriggers.delete(retryKey);
-    }
+    // Refresh insertion order so capped eviction keeps actively retried events hot.
+    queue.preparedTriggers.delete(retryKey);
     setBoundedMap(queue.preparedTriggers, retryKey, prepared, maxPreparedTriggerEntries);
     return prepared;
   }

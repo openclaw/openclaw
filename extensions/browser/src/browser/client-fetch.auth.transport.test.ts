@@ -1,6 +1,5 @@
-import { once } from "node:events";
-import http from "node:http";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
 import { resolveBrowserConfig } from "./config.js";
@@ -36,36 +35,6 @@ const cases = [
   },
 ];
 
-async function startAuthServer(serverAuth: Auth) {
-  const requests: number[] = [];
-  const server = http.createServer((req, res) => {
-    const status = isAuthorizedBrowserRequest(req, serverAuth) ? 200 : 401;
-    requests.push(status);
-    res.writeHead(status, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(status === 200 ? { ok: true } : { error: "Unauthorized" }));
-  });
-  onTestFinished(async () => {
-    if (!server.listening) {
-      server.closeAllConnections();
-      return;
-    }
-    const closed = new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    server.closeAllConnections();
-    await closed;
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected owned loopback listener");
-  }
-  const port = address.port;
-  onTestFinished(() => deleteBridgeAuthForPort(port));
-  return { port, requests };
-}
-
 describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
   beforeEach(() => {
     // Match existing real-HTTP browser fixtures; never route synthetic auth to a proxy.
@@ -99,17 +68,33 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
   });
 
   it.each(cases)("$name", async (testCase) => {
-    const { port, requests } = await startAuthServer(testCase.serverAuth);
-    fixture.configuredAuth = testCase.configuredAuth;
-    setBridgeAuthForPort(port, testCase.bridgeAuth);
-    const request = fetchBrowserJson(`http://127.0.0.1:${port}/`, {
-      headers: testCase.headers,
-    });
-    if (testCase.status === 200) {
-      await expect(request).resolves.toEqual({ ok: true });
-    } else {
-      await expect(request).rejects.toMatchObject({ name: "BrowserServiceError", status: 401 });
-    }
-    expect(requests).toEqual([testCase.status]);
+    const requests: number[] = [];
+    await withServer(
+      (req, res) => {
+        const status = isAuthorizedBrowserRequest(req, testCase.serverAuth) ? 200 : 401;
+        requests.push(status);
+        res.writeHead(status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(status === 200 ? { ok: true } : { error: "Unauthorized" }));
+      },
+      async (baseUrl) => {
+        const port = Number(new URL(baseUrl).port);
+        fixture.configuredAuth = testCase.configuredAuth;
+        setBridgeAuthForPort(port, testCase.bridgeAuth);
+        try {
+          const request = fetchBrowserJson(`${baseUrl}/`, { headers: testCase.headers });
+          if (testCase.status === 200) {
+            await expect(request).resolves.toEqual({ ok: true });
+          } else {
+            await expect(request).rejects.toMatchObject({
+              name: "BrowserServiceError",
+              status: 401,
+            });
+          }
+          expect(requests).toEqual([testCase.status]);
+        } finally {
+          deleteBridgeAuthForPort(port);
+        }
+      },
+    );
   });
 });

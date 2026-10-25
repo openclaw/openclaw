@@ -2,38 +2,12 @@
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ModelProviderAuthMode } from "../../config/types.js";
 
-type OpenRouterModelCapabilities = NonNullable<
-  ReturnType<typeof import("./openrouter-model-capabilities.js").getOpenRouterModelCapabilities>
->;
-
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_LEGACY_BASE_URL = "https://chatgpt.com/backend-api/v1";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
-const XAI_BASE_URL = "https://api.x.ai/v1";
-const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
-const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
-const GOOGLE_VERTEX_BASE_URL = "https://aiplatform.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-const ANTHROPIC_VISION_MODEL_PREFIXES = [
-  "claude-opus-4-7",
-  "claude-opus-4.7",
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-  "claude-opus-4-5",
-  "claude-opus-4.5",
-  "claude-sonnet-4-5",
-  "claude-sonnet-4.5",
-  "claude-haiku-4-5",
-  "claude-haiku-4.5",
-] as const;
 
 type ModelRegistryLike = {
   find: (provider: string, modelId: string) => unknown;
@@ -59,9 +33,7 @@ type NormalizedTransportLike = {
 };
 
 type ProviderRuntimeTestMockOptions = {
-  getOpenRouterModelCapabilities?: (modelId: string) => OpenRouterModelCapabilities | undefined;
   handledDynamicProviders?: readonly string[];
-  loadOpenRouterModelCapabilities?: (modelId: string) => Promise<void>;
 };
 
 function findTemplate(
@@ -128,44 +100,9 @@ function isNativeOpenAICodexBaseUrl(baseUrl?: string): boolean {
   return baseUrl === OPENAI_CODEX_BASE_URL || baseUrl === OPENAI_CODEX_LEGACY_BASE_URL;
 }
 
-function normalizeOpenRouterBaseUrl(baseUrl?: string): string | undefined {
-  const normalized = typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === OPENROUTER_BASE_URL || normalized === OPENROUTER_LEGACY_BASE_URL) {
-    return OPENROUTER_BASE_URL;
-  }
-  return undefined;
-}
-
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
   // This mock mirrors provider-owned normalization contracts that model tests
   // need without loading real plugin runtimes.
-  if (params.provider === "openrouter") {
-    const baseUrl =
-      typeof params.model.baseUrl === "string"
-        ? normalizeOpenRouterBaseUrl(params.model.baseUrl)
-        : undefined;
-    if (baseUrl && baseUrl !== params.model.baseUrl) {
-      return { ...params.model, baseUrl };
-    }
-    return undefined;
-  }
-  if (params.provider === "anthropic" || params.provider === "claude-cli") {
-    const candidates = [params.model.id, params.model.name]
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => lowercasePreservingWhitespace(value))
-      .filter(Boolean);
-    const isKnownVisionModel = candidates.some((candidate) =>
-      ANTHROPIC_VISION_MODEL_PREFIXES.some((prefix) => candidate.startsWith(prefix)),
-    );
-    const hasImageInput = Array.isArray(params.model.input) && params.model.input.includes("image");
-    if (isKnownVisionModel && !hasImageInput) {
-      return { ...params.model, input: ["text", "image"] };
-    }
-    return undefined;
-  }
   if (params.provider !== "openai") {
     return undefined;
   }
@@ -196,36 +133,12 @@ function normalizeTransport(params: {
   const isNativeOpenAiTransport =
     api === "openai-completions" &&
     (baseUrl === OPENAI_BASE_URL || (provider === "openai" && !baseUrl));
-  const isNativeXaiTransport =
-    api === "openai-completions" && (baseUrl === XAI_BASE_URL || (provider === "xai" && !baseUrl));
   const isNativeOpenAICodexTransport =
     provider === "openai" &&
     ((api === "openai-chatgpt-responses" &&
       (!baseUrl || baseUrl === OPENAI_BASE_URL || isNativeOpenAICodexBaseUrl(baseUrl))) ||
       isNativeOpenAICodexBaseUrl(baseUrl));
-  if (api === "google-generative-ai" && baseUrl === "https://generativelanguage.googleapis.com") {
-    return {
-      api,
-      baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
-    };
-  }
-  if (
-    provider === "google" &&
-    api == null &&
-    baseUrl === "https://generativelanguage.googleapis.com"
-  ) {
-    return {
-      api: "google-generative-ai",
-      baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
-    };
-  }
-  if (provider === "google-vertex" && api == null && baseUrl === GOOGLE_VERTEX_BASE_URL) {
-    return {
-      api: "google-vertex",
-      baseUrl: GOOGLE_VERTEX_BASE_URL,
-    };
-  }
-  if (isNativeOpenAiTransport || isNativeXaiTransport) {
+  if (isNativeOpenAiTransport) {
     return {
       api: "openai-responses",
       baseUrl,
@@ -237,62 +150,13 @@ function normalizeTransport(params: {
       baseUrl: OPENAI_CODEX_BASE_URL,
     };
   }
-  const normalizedOpenRouterBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-  if (normalizedOpenRouterBaseUrl && normalizedOpenRouterBaseUrl !== baseUrl) {
-    return {
-      api,
-      baseUrl: normalizedOpenRouterBaseUrl,
-    };
-  }
   return undefined;
 }
 
-function buildDynamicModel(
-  params: DynamicModelContext,
-  getCapabilities: NonNullable<ProviderRuntimeTestMockOptions["getOpenRouterModelCapabilities"]>,
-) {
+function buildDynamicModel(params: DynamicModelContext) {
   const modelId = params.modelId.trim();
   const lower = lowercasePreservingWhitespace(modelId);
   switch (params.provider) {
-    case "openrouter": {
-      const capabilities = getCapabilities(modelId);
-      return {
-        id: modelId,
-        name: capabilities?.name ?? modelId,
-        api: "openai-completions" as const,
-        provider: "openrouter",
-        baseUrl: OPENROUTER_BASE_URL,
-        reasoning: capabilities?.reasoning ?? false,
-        input: capabilities?.input ?? (["text"] as const),
-        ...(capabilities?.supportsTools !== undefined
-          ? { compat: { supportsTools: capabilities.supportsTools } }
-          : {}),
-        cost: capabilities?.cost ?? OPENROUTER_FALLBACK_COST,
-        contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-        maxTokens: capabilities?.maxTokens ?? DEFAULT_MAX_TOKENS,
-      };
-    }
-    case "github-copilot": {
-      const existing = params.modelRegistry.find("github-copilot", lower);
-      if (existing) {
-        return undefined;
-      }
-      const template = findTemplate(params, "github-copilot", ["gpt-5.4"]);
-      if (lower === "gpt-5.4" && template) {
-        return cloneTemplate(template, modelId, {}, {});
-      }
-      return {
-        id: modelId,
-        name: modelId,
-        provider: "github-copilot",
-        api: lower.includes("claude") ? "anthropic-messages" : "openai-responses",
-        reasoning: /^o[13](\b|$)/.test(lower),
-        input: ["text", "image"],
-        cost: OPENROUTER_FALLBACK_COST,
-        contextWindow: 128_000,
-        maxTokens: DEFAULT_MAX_TOKENS,
-      };
-    }
     case "openai": {
       const isLegacyGpt54Alias = lower === "gpt-5.4-codex";
       const isSparkModel = lower === "gpt-5.3-codex-spark";
@@ -482,36 +346,6 @@ function buildDynamicModel(
         modelDefaults(params.provider, "anthropic-messages", ANTHROPIC_BASE_URL),
       );
     }
-    case "google-antigravity": {
-      if (lower !== "claude-opus-4-6-thinking") {
-        return undefined;
-      }
-      return cloneTemplate(
-        undefined,
-        modelId,
-        {},
-        modelDefaults("google-antigravity", "google-gemini-cli", GOOGLE_GEMINI_CLI_BASE_URL, {
-          maxTokens: DEFAULT_MAX_TOKENS,
-        }),
-      );
-    }
-    case "zai": {
-      if (lower !== "glm-5") {
-        return undefined;
-      }
-      const template = findTemplate(params, "zai", ["glm-4.7"]);
-      return cloneTemplate(
-        template,
-        modelId,
-        {
-          provider: "zai",
-          api: "openai-completions",
-          baseUrl: ZAI_BASE_URL,
-          reasoning: true,
-        },
-        modelDefaults("zai", "openai-completions", ZAI_BASE_URL, { input: ["text"] }),
-      );
-    }
     default:
       return undefined;
   }
@@ -529,10 +363,6 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       "zai",
     ],
   );
-  const getOpenRouterModelCapabilities =
-    options.getOpenRouterModelCapabilities ?? (() => undefined);
-  const loadOpenRouterModelCapabilities =
-    options.loadOpenRouterModelCapabilities ?? (async () => {});
 
   return {
     buildProviderUnknownModelHintWithPlugin: (params: { provider: string }) => {
@@ -543,41 +373,16 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
             "See: https://docs.openclaw.ai/providers/ollama"
           );
-        case "vllm":
-          return (
-            "vLLM requires authentication to be registered as a provider. " +
-            'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
-            "See: https://docs.openclaw.ai/providers/vllm"
-          );
         default:
           return undefined;
       }
     },
-    resolveProviderRuntimePlugin: ({ provider }: { provider: string }) =>
-      handledDynamicProviders.has(provider)
-        ? {
-            id: provider,
-            prepareDynamicModel:
-              provider === "openrouter"
-                ? async ({ modelId }: { modelId: string }) => {
-                    await loadOpenRouterModelCapabilities(modelId);
-                  }
-                : undefined,
-            resolveDynamicModel: (ctx: DynamicModelContext) =>
-              buildDynamicModel(ctx, getOpenRouterModelCapabilities),
-            normalizeResolvedModel: (ctx: { provider: string; model: ResolvedModelLike }) =>
-              normalizeDynamicModel(ctx),
-          }
-        : undefined,
     runProviderDynamicModel: (params: {
       provider: string;
       context: Omit<DynamicModelContext, "provider">;
     }) =>
       handledDynamicProviders.has(params.provider)
-        ? buildDynamicModel(
-            { ...params.context, provider: params.provider },
-            getOpenRouterModelCapabilities,
-          )
+        ? buildDynamicModel({ ...params.context, provider: params.provider })
         : undefined,
     shouldPreferProviderRuntimeResolvedModel: (params: {
       provider: string;
@@ -587,13 +392,10 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
-    prepareProviderDynamicModel: async (params: {
+    prepareProviderDynamicModel: async (_params: {
       provider: string;
       context: { modelId: string };
-    }) =>
-      params.provider === "openrouter"
-        ? await loadOpenRouterModelCapabilities(params.context.modelId)
-        : undefined,
+    }) => undefined,
     normalizeProviderResolvedModelWithPlugin: (params: {
       provider: string;
       context: { model: unknown };

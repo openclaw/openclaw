@@ -11,7 +11,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
   type MarkdownFileLinkTarget,
 } from "../../../components/markdown-file-links.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
@@ -24,6 +23,7 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
@@ -53,6 +53,8 @@ import {
 import { SidebarFile } from "./chat-sidebar-file-view.tsx";
 import { SidebarImage, SidebarSvgFile, SidebarFileFallback } from "./chat-sidebar-image-view.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -101,8 +103,6 @@ export type SidebarPanelProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  githubRepo?: MarkdownRenderOptions["githubRepo"];
-  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   attachmentRuntime: AttachmentSidebarRuntime;
   attachmentDownload?: AttachmentDownload;
@@ -356,7 +356,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView &&
-                  (props.content?.kind === "markdown" || props.content?.kind === "attachment") &&
+                  (props.content?.kind === "markdown" ||
+                    (props.content?.kind === "attachment" &&
+                      !props.content.src &&
+                      !props.content.resolveSource)) &&
                   props.content.file
                     ? props.content.file
                     : undefined
@@ -539,8 +542,6 @@ export function SidebarPanel(props: SidebarPanelProps) {
                           content: toSanitizedMarkdownHtml(content().content, {
                             codeBlockInteraction: "interactive",
                             fileLinks: true,
-                            githubRepo: props.githubRepo ?? null,
-                            githubRepositories: props.githubRepositories,
                             interactiveImages: props.onOpenImage !== undefined,
                             sessionLinks: true,
                           }),

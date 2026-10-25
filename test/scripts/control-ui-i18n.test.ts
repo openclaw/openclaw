@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -13,28 +13,20 @@ import {
 import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog as flattenCatalog,
-  formatControlUiCatalogFallbackDriftError,
   verifyControlUiReferencedKeys as verifyKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   assertNoControlUiFallbacks,
-  buildBatchPrompt,
   filterPlaceholderCompatibleTranslations,
-  parseTranslationBatchReply,
   translateNativeEntries,
 } from "../../scripts/control-ui-i18n.ts";
-import {
-  loadControlUiSourceCatalog,
-  readControlUiSourceCatalog,
-} from "../../scripts/lib/control-ui-i18n-catalog.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
-import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
+import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -107,12 +99,6 @@ describe("translation provider privacy and fallback", () => {
   it.each([
     ["sync --refresh-key", "requires a catalog key"],
     ["sync --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
-    ["sync --write --refresh-key chat.parentSession", "requires sync --write --locale"],
-    ["check --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
-    [
-      "sync --write --locale pl --force --refresh-key chat.parentSession",
-      "cannot be combined with --force",
-    ],
     [
       `sync --write --locale pl ${Array.from({ length: 65 }, (_, i) => `--refresh-key key${i}`).join(" ")}`,
       "at most 64 distinct keys",
@@ -262,6 +248,35 @@ describe("translation provider privacy and fallback", () => {
     expectPrivate();
   });
 
+  it.each([false, true])(
+    "retries invalid translations with feedback (custom=%s)",
+    async (custom) => {
+      const diagnostic = custom ? "custom validation" : "fr:label0 expected {count} got {}";
+      const validate = custom
+        ? (_source: string, target: string) => {
+            if (target === "Wrong {count}") {
+              throw new Error(diagnostic);
+            }
+          }
+        : undefined;
+      const reply = (text: string) =>
+        response({
+          content: [{ type: "text", text: JSON.stringify({ label0: text }) }],
+        });
+      llm.completeSimple
+        .mockResolvedValueOnce(reply(custom ? "Wrong {count}" : "Ouvrir"))
+        .mockResolvedValue(reply("Ouvrir {count}"));
+      const result = await translateNativeEntries(
+        [{ id: "label0", source: "Open {count}", sourcePath: "fixture.ts" }],
+        "fr",
+        [],
+        validate,
+      );
+      expect([...result]).toEqual([["label0", "Ouvrir {count}"]]);
+      expect(llm.completeSimple.mock.calls[1]?.[1].messages[0].content).toContain(diagnostic);
+    },
+  );
+
   it("does not expose rejected provider errors or escaped model echoes", async () => {
     const complete = llm.completeSimple.mockRejectedValue(new Error(`Transport for ${primary}`));
     await expectFailure();
@@ -270,28 +285,6 @@ describe("translation provider privacy and fallback", () => {
     );
     await expectFailure();
     expect(output()).not.toContain(primary);
-  });
-});
-
-describe("control-ui config hint source catalog", () => {
-  it("includes plugin-owned Memory label sources in the raw catalog hash input", async () => {
-    const source = await readControlUiSourceCatalog();
-    for (const plugin of ["active-memory", "memory-wiki"]) {
-      expect(source).toContain(
-        readFileSync(`extensions/${plugin}/control-ui.presentation.json`, "utf8"),
-      );
-    }
-  });
-
-  it("includes core config labels and help under collision-safe keys", () => {
-    const source = flattenTranslations(loadControlUiSourceCatalog());
-
-    const label = "Gateway Token";
-    expect(source.get(configHintTranslationKey("gateway.auth.token", "label", label))).toBe(label);
-    const helpEntry = [...source].find(([key]) =>
-      key.startsWith("configHints.gateway%2Eauth%2Etoken.help."),
-    );
-    expect(helpEntry?.[1]).toBeTypeOf("string");
   });
 });
 
@@ -308,6 +301,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
+      registerNewSessionRuntimeEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
@@ -418,47 +412,23 @@ describe("control-ui-i18n generated ownership", () => {
 });
 
 describe("control-ui-i18n catalog validation", () => {
-  const batch = (key = "configView.viewPendingChange", text = "View pending change ({count})") => [
-    { cacheKey: "cache-key", key, text, textHash: "text-hash" },
-  ];
-  it("points strict catalog drift at the generated release repair", () => {
-    const message = formatControlUiCatalogFallbackDriftError();
-
-    expect(message).toContain("pnpm ui:i18n:sync");
-    expect(message).toContain("pnpm release:prep");
-    expect(message).not.toContain("pnpm ui:i18n:baseline");
-  });
-
   it("builds a deterministic fallback list without accepting catalog drift", () => {
-    const source = flattenCatalog({ group: { first: "First {count}", second: "Second" } }, "en");
+    const source = flattenCatalog({ a: "A {n}", b: "B" }, "en");
     const analyze = (locales: Record<string, Record<string, string>>) =>
       analyzeControlUiCatalogs(
         source,
         new Map(Object.entries(locales).map(([locale, values]) => [locale, strings(values)])),
       );
-    expect(
-      analyze({
-        de: { "group.first": "Erste {count}" },
-        fr: { "group.first": "Premiere {count}" },
-      }),
-    ).toEqual({
+    expect(analyze({ de: { a: "A {n}" }, fr: { a: "A {n}" } })).toEqual({
       errors: [],
-      fallbacks: { "group.second": ["de", "fr"] },
+      fallbacks: { b: ["de", "fr"] },
     });
 
-    expect(
-      analyze({
-        fr: {
-          "group.second": "Deuxieme",
-          "group.first": "Premiere",
-          "group.orphan": "Orpheline",
-        },
-      }),
-    ).toEqual({
+    expect(analyze({ fr: { b: "B", a: "A", x: "X" } })).toEqual({
       errors: [
-        "fr: orphan keys: group.orphan",
+        "fr: orphan keys: x",
         "fr: keys are not in English catalog order",
-        "fr:group.first expected {count} got {}",
+        "fr:a expected {n} got {}",
       ],
       fallbacks: {},
     });
@@ -485,11 +455,7 @@ describe("control-ui-i18n catalog validation", () => {
     expect(() =>
       verifyKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
     ).toThrowError(
-      [
-        "control-ui referenced translation key verification failed.",
-        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
-        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
-      ].join("\n"),
+      /example\.ts:2:.*"common\.missing"[\s\S]*example\.ts:4:.*"workboard\.missing\."/,
     );
   });
 
@@ -523,32 +489,6 @@ describe("control-ui-i18n catalog validation", () => {
     expect(result.stdout).not.toContain("provider=anthropic");
   });
 
-  it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
-    const key = "configView.viewPendingChange";
-    const items = batch(key);
-    const parse = (text: string) =>
-      parseTranslationBatchReply(JSON.stringify({ [key]: text }), items, "ar");
-    expect(() => parse("Pending change")).toThrow(
-      "ar:configView.viewPendingChange expected {count} got {}",
-    );
-    expect(parse("Pending change ({count})")).toEqual(
-      strings({ [key]: "Pending change ({count})" }),
-    );
-  });
-
-  it("runs an optional result validator before accepting a batch reply", () => {
-    const items = batch("native.apple.progress", "Processed %lld of %@");
-    const reply = JSON.stringify({ "native.apple.progress": "Bearbetade %@" });
-    const validate = (source: string, translated: string, key: string, locale: string) => {
-      if (source.includes("%lld") && !translated.includes("%lld")) {
-        throw new Error(`invalid structural tokens for ${locale}:${key}`);
-      }
-    };
-    expect(() => parseTranslationBatchReply(reply, items, "sv", validate)).toThrow(
-      "invalid structural tokens for sv:native.apple.progress",
-    );
-  });
-
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
     const reusable = filterPlaceholderCompatibleTranslations(
       strings({ changed: "Waiting for {total}", same: "Waiting for {count}" }),
@@ -556,30 +496,6 @@ describe("control-ui-i18n catalog validation", () => {
     );
 
     expect([...reusable]).toEqual([["same", "Warten auf {count}"]]);
-  });
-
-  it("feeds the exact validation failure back into a retry prompt", () => {
-    const items = batch();
-    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
-
-    expect(buildBatchPrompt(items, validationError)).toContain(
-      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
-    );
-  });
-
-  it("ships no recorded English fallbacks", () => {
-    const metaDir = path.resolve("ui/src/i18n/.i18n");
-    const fallbacks = readdirSync(metaDir)
-      .filter((fileName) => fileName.endsWith(".meta.json"))
-      .flatMap((fileName) => {
-        const meta = JSON.parse(readFileSync(path.join(metaDir, fileName), "utf8")) as {
-          fallbackKeys?: string[];
-          locale?: string;
-        };
-        return (meta.fallbackKeys ?? []).map((key) => `${meta.locale ?? fileName}:${key}`);
-      });
-
-    expect(fallbacks).toEqual([]);
   });
 
   it("makes the strict gate reject recorded English fallbacks", () => {

@@ -1,5 +1,4 @@
 // Cron service store tests cover persisted service state loading and writes.
-import fs from "node:fs/promises";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -7,6 +6,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { createReloadCronJob, expectPathMissing, STORE_TEST_NOW } from "../store.test-support.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
@@ -17,8 +17,6 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
 });
 
-const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
-
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
   await writeJobStore(storePath, [job]);
 }
@@ -28,10 +26,6 @@ async function writeJobStore(storePath: string, jobs: unknown[]) {
     version: 1,
     jobs: jobs as CronJob[],
   });
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
@@ -47,21 +41,6 @@ function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   });
 }
 
-function createReloadCronJob(params?: Partial<CronJob>): CronJob {
-  return {
-    id: "reload-cron-expr-job",
-    name: "reload cron expr job",
-    enabled: true,
-    createdAtMs: STORE_TEST_NOW - 60_000,
-    updatedAtMs: STORE_TEST_NOW - 60_000,
-    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    state: {},
-    ...params,
-  };
-}
 describe("cron service store seam coverage", () => {
   afterEach(() => {
     vi.restoreAllMocks();

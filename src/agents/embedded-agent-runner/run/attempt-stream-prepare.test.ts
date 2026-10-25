@@ -21,6 +21,7 @@ import {
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
+import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -203,6 +204,8 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
   });
+
+  registerReplyPromotionTests();
 
   it.each([
     ["replacement", "steering"],

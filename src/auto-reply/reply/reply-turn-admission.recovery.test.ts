@@ -436,16 +436,6 @@ it("queues detached followups behind direct commands without a reply operation",
   expect(result).toMatchObject({ status: "owned" });
 });
 
-it("does not consume startup recovery's source while monitoring", async () => {
-  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
-  const startup = f.reserve();
-  const result = await f.admit({ kind: "heartbeat" });
-  expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
-  expect(startup.phase).toBe("preparing");
-  expect(startup.retirementRequested).toBeFalsy();
-  expect(f.read()?.sessionId).toBe(sessionId);
-});
-
 it("rejects command adoption without waiting behind a live recovery fence", async () => {
   const f = fencedRecovery("active-run", 0);
   const context = createRecoveryGatewayContext(f.storePath);
@@ -752,14 +742,16 @@ it("hands an interrupt to ordinary recovery ownership when the owed resend canno
   complete(admission);
 });
 
-it("preserves settled recovery delivery residue while monitoring", async () => {
+it("preserves unsettled recovery delivery custody while refusing a queued followup", async () => {
   const f = recoveryFixture({
     abortedLastRun: false,
     restartRecoveryDeliveryRunId: "completed-recovery",
     restartRecoveryRuns: [recoveryRun("completed-recovery")],
   });
-  const result = owned(await f.admit({ kind: "heartbeat" }));
+  const mailboxClaim = await f.claim();
+  const result = await f.admit({ mailboxClaim, kind: "queued_followup" });
+  // A delivery ID and nonterminal fence retain custody even after the abort flag clears.
+  expect(result).toMatchObject({ status: "skipped", reason: "lifecycle-invalidated" });
   expect(f.read()).toMatchObject(f.entry);
   expect(f.read()?.mainRestartRecovery).toBeUndefined();
-  complete(result);
 });

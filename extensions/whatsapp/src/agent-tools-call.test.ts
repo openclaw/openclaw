@@ -1,4 +1,3 @@
-// WhatsApp call tool tests cover requester binding, audio framing, and process cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +7,8 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// WhatsApp call tool tests cover requester binding, audio framing, and process cleanup.
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { registerWhatsAppCallTool } from "./agent-tools-call.js";
 
 const runtimeContextMocks = vi.hoisted(() => ({
@@ -52,16 +53,7 @@ function createApi(params?: {
         })),
       },
       system: {
-        runCommandWithTimeout:
-          params?.runCommand ??
-          vi.fn(async () => ({
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit" as const,
-          })),
+        runCommandWithTimeout: params?.runCommand ?? vi.fn(async () => commandResult()),
       },
     },
   } as unknown as OpenClawPluginApi;
@@ -163,14 +155,7 @@ describe("WhatsApp call tool", () => {
       expect(wav.readUInt32LE(24)).toBe(24_000);
       expect(wav.readUInt32LE(40)).toBe(48_000);
       expect(wav.subarray(44)).toEqual(Buffer.alloc(48_000, 1));
-      return {
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
+      return commandResult();
     }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
     const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
 
@@ -204,14 +189,9 @@ describe("WhatsApp call tool", () => {
 
   it("resolves a requester LID through the active WhatsApp account", async () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
-    const runCommand = vi.fn(async () => ({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    })) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
+    const runCommand = vi.fn(async () =>
+      commandResult(),
+    ) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
     runtimeContextMocks.controllers.set("default", {
       getActiveListener: () => null,
       getCurrentSock: () => ({
@@ -253,14 +233,10 @@ describe("WhatsApp call tool", () => {
     let audioPath: string | undefined;
     const runCommand = vi.fn(async (argv: string[]) => {
       audioPath = argv.at(-1);
-      return {
-        stdout: "",
+      return commandResult({
         stderr: "sensitive upstream diagnostics",
         code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
+      });
     }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
     const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
 
@@ -273,14 +249,14 @@ describe("WhatsApp call tool", () => {
 
   it("does not report success when MeowCaller times out", async () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
-    const runCommand = vi.fn(async () => ({
-      stdout: "",
-      stderr: "",
-      code: 124,
-      signal: "SIGTERM" as const,
-      killed: true,
-      termination: "timeout" as const,
-    })) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
+    const runCommand = vi.fn(async () =>
+      commandResult({
+        code: 124,
+        signal: "SIGTERM" as const,
+        killed: true,
+        termination: "timeout" as const,
+      }),
+    ) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
     const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
 
     await expect(
@@ -296,14 +272,7 @@ describe("WhatsApp call tool", () => {
         const wav = await fs.readFile(argv.at(-1) ?? "");
         expect(wav.subarray(44).length).toBe(4);
         expect(wav.readInt16LE(44)).toBe(0);
-        return {
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
+        return commandResult();
       }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
       const tool = resolveRegisteredCallTool(
         createApi({

@@ -251,17 +251,24 @@ it("does not play a synthesis result after the message is unmounted", async () =
 });
 
 it("shows a Gateway synthesis failure instead of starting another speech provider", async () => {
+  const retry = createDeferred<TtsSpeakResult>();
   request
     .mockRejectedValueOnce(new Error("Local speech endpoint unavailable"))
-    .mockResolvedValue(speech);
+    .mockReturnValueOnce(retry.promise);
   const view = mount();
-  readButton(view).click();
+  const button = readButton(view);
+  button.click();
   await waitForSolid(() =>
     expect(view.getByRole("status").textContent).toContain("Local speech endpoint unavailable"),
   );
   expect(request).toHaveBeenCalledOnce();
   expect(play).toHaveBeenCalledOnce();
-  readButton(view).click();
+  expect(readButton(view)).toBe(button);
+  button.click();
+  await waitForSolid(() => expect(readButton(view, "Stop reading")).toBe(button));
+  expect(view.queryByRole("status")).toBeNull();
+  expect(createUrl).not.toHaveBeenCalled();
+  retry.resolve(speech);
   await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
   expect(view.queryByRole("status")).toBeNull();
   expect(request).toHaveBeenCalledTimes(2);

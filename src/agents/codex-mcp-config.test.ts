@@ -53,6 +53,25 @@ afterEach(async () => {
 });
 
 describe("buildCodexMcpServersConfig", () => {
+  it.each([
+    { label: "empty", args: [], expected: [] },
+    { label: "strings", args: ["", " --flag "], expected: ["", " --flag "] },
+    { label: "mixed", args: ["ok", 2], expected: undefined },
+    { label: "scalar", args: "--flag", expected: undefined },
+    { label: "missing", args: undefined, expected: undefined },
+  ])("keeps MCP args typed and copied ($label)", ({ args, expected }) => {
+    const projected = buildCodexMcpServersConfig({
+      mcpServers: { docs: { command: "mcp", args } },
+    });
+
+    expect(projected.docs?.args).toEqual(expected);
+    if (expected !== undefined) {
+      expect(projected.docs?.args).not.toBe(args);
+    } else {
+      expect(projected.docs).not.toHaveProperty("args");
+    }
+  });
+
   it("keeps native timeout projection within OpenClaw timer bounds", () => {
     expect(
       buildCodexMcpServersConfig({

@@ -7,15 +7,13 @@ import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/pl
 import type { createPluginDiscovery } from "./plugin-discovery.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "./plugin-icon-owner.ts";
 
-type PluginsPageIconsHost = {
+export function createPluginsPageIcons(host: {
   getContext: () => ApplicationContext;
   isConnected: () => boolean;
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
   onChange?: () => void;
-};
-
-export function createPluginsPageIcons(host: PluginsPageIconsHost) {
+}) {
   let authCandidates: string[] = [];
   const tiles = new Set<() => string>();
   const shared = {

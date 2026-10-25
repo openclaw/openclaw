@@ -112,6 +112,28 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
+  it.each([
+    { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
+    { modelMaxTokens: 1024.5, requested: 2048, expected: 1024.5 },
+    { modelMaxTokens: Number.NaN, requested: -0, expected: -0 },
+    { modelMaxTokens: 0, requested: 0.5, expected: 0.5 },
+  ])(
+    "preserves image completion token caps %#",
+    async ({ modelMaxTokens, requested, expected }) => {
+      mockImageModel({
+        provider: openai.provider,
+        id: openai.model,
+        api: "openai-responses",
+        maxTokens: modelMaxTokens,
+      });
+      completeMock.mockResolvedValue(openAiCompletion("ok"));
+      await describeImageWithModelCore(request(openai, { maxTokens: requested }));
+      expect(completeMock).toHaveBeenCalledOnce();
+      const options = expectDefined(completeMock.mock.calls[0], "image cap completion")[2];
+      expect(options.maxTokens).toBe(expected);
+    },
+  );
+
   it("uses a fresh routing identity for each image request", async () => {
     const { options } = stubProviderStream();
     await requestOpencode();

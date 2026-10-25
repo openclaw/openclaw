@@ -1,51 +1,70 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSidebarRegionCallbackMocks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { SidebarPanel } from "./chat-pane-embedded-view.tsx";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { closeSlot, openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 
 const lazyMocks = vi.hoisted(() => ({
   boardImportAttempts: 0,
-  boardRegistered: false,
   workspaceImportAttempts: 0,
-  workspaceRegistered: false,
+  failWorkspace: false,
   importAttempts: 0,
   retryDocument: vi.fn(async () => true),
 }));
 
 // mock-isolation: count lazy registration without mounting the real dashboard renderer.
-vi.mock("../../components/board/board-view.ts", () => {
+vi.mock("../../components/board/board-view.tsx", () => {
   lazyMocks.boardImportAttempts += 1;
-  lazyMocks.boardRegistered = true;
-  return {};
+  return {
+    BoardView: () => (
+      <openclaw-board-view>
+        <input aria-label="Board draft" />
+      </openclaw-board-view>
+    ),
+  };
 });
 
 // mock-isolation: exercise Files registration at the existing panel loader boundary.
 vi.mock("./components/chat-files-panel.tsx", () => {
   lazyMocks.workspaceImportAttempts += 1;
-  lazyMocks.workspaceRegistered = true;
-  return {};
+  return {
+    ChatFilesPanel: () => {
+      if (lazyMocks.failWorkspace) {
+        throw new Error("File renderer unavailable");
+      }
+      return (
+        <openclaw-chat-files-panel>
+          <input aria-label="Files draft" />
+        </openclaw-chat-files-panel>
+      );
+    },
+  };
 });
 
 // mock-isolation: the failed lazy-import fixture must throw before registering or exporting the real region.
 vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   lazyMocks.importAttempts += 1;
-  throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
+  throw new SyntaxError("Synthetic sidebar module export failure");
 });
 
 vi.mock("../../app/stale-chunk-reload.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/stale-chunk-reload.ts")>()),
-  isStaleChunkImportError: () => true,
+  // Vitest wraps rejected mock factories; the original error remains in their cause.
+  isStaleChunkImportError: (error: unknown) =>
+    formatUiError(error).includes("Failed to fetch dynamically imported module"),
   retryStaleChunkReloadWhenReachable: lazyMocks.retryDocument,
   scheduleStaleChunkReload: vi.fn(async () => false),
 }));
 
-import { lazySidebarElements, renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 
 afterEach(() => {
@@ -58,66 +77,58 @@ describe("chat pane lazy sidebar failures", () => {
   it.each(["dashboard", "workspace"] as const)(
     "keeps a saved hidden %s cold and publishes its first visible load",
     async (slot) => {
-      vi.stubGlobal("customElements", {
-        get: (tag: string) => {
-          const registered =
-            slot === "dashboard" ? lazyMocks.boardRegistered : lazyMocks.workspaceRegistered;
-          const targetTag =
-            slot === "dashboard" ? "openclaw-board-view" : "openclaw-chat-files-panel";
-          return tag === targetTag && !registered ? undefined : HTMLElement;
-        },
-      });
+      const { pane, state } = createMountedPanes([]);
+      getPaneTestRuntime(pane).mergedChrome = false;
+      const hidden = openSlot(openSlot({ columns: [] }, slot), "detail");
+      state.sidebarLayout = hidden;
+      const definition = pane
+        .render()
+        .layout!.region.panelDefinitions.find((entry) => entry.slot === slot)!;
+      if (slot === "dashboard") {
+        const data = pane
+          .render()
+          .layout!.region.panelDefinitions.find((entry) => entry.slot === "workspace")!.view!;
+        definition.view = {
+          ...data,
+          dashboard: {
+            error: undefined,
+            surface: {
+              active: true,
+              session: { sessionKey: state.sessionKey },
+              snapshot: undefined,
+              activeTabId: "",
+              canMutate: false,
+              canGrant: false,
+              callbacks: { applyOps: async () => {}, grant: async () => {}, selectTab() {} },
+              widgetFrameUrl: () => "",
+            },
+          },
+        };
+      }
       const attempts = () =>
         slot === "dashboard" ? lazyMocks.boardImportAttempts : lazyMocks.workspaceImportAttempts;
-      const hidden = openSlot(openSlot({ columns: [] }, slot), "detail");
-      let showPanel = () => {};
-      const mounted = mountSolid(() => {
-        const [layout, setLayout] = createSignal(hidden);
-        showPanel = () => setLayout(openSlot(hidden, slot));
-        const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
-        const content = createMemo(() => {
-          elements.read();
-          return renderSidebarRegion({
-            presentationId: "panel-loader-fixture",
-            availableWidth: 1_400,
-            callbacks: {
-              activatePanel: vi.fn(),
-              togglePanelExpanded: vi.fn(),
-              setDock: vi.fn(),
-              closeSlot: vi.fn(),
-              openSlot: vi.fn(),
-              reorderPanel: vi.fn(),
-              resizePanel: vi.fn(),
-              setOpen: vi.fn(),
-            },
-            layout: layout(),
-            narrow: false,
-          });
-        });
-        return (
-          <output>
-            {content().panelDefinitions.find((panel) => panel.slot === slot)?.loadState === null
-              ? "loading"
-              : "ready"}
-          </output>
-        );
-      });
-      flush();
+      const [visible, setVisible] = createSignal(false);
+      const mounted = mountSolid(() => (
+        <SidebarPanel definition={definition} visible={visible()} />
+      ));
       expect(attempts()).toBe(0);
-      expect(lazySidebarElements.snapshot.has(slot)).toBe(false);
-
-      showPanel();
+      state.sidebarLayout = openSlot(hidden, slot);
+      setVisible(true);
+      await waitForSolid(() => expect(mounted.getByRole("textbox")).toBeTruthy());
+      expect(attempts()).toBe(1);
+      const input = mounted.getByRole<HTMLInputElement>("textbox");
+      input.value = "Retained draft";
+      setVisible(false);
       flush();
-      expect(mounted.container.textContent).toBe("loading");
-      await vi.waitFor(() => expect(mounted.container.textContent).toBe("ready"));
-      showPanel();
+      setVisible(true);
       flush();
+      expect(mounted.getByRole("textbox")).toBe(input);
+      expect(input.value).toBe("Retained draft");
       expect(attempts()).toBe(1);
     },
   );
 
   it("keeps failed panels dismissible in their final regions without losing the conversation", async () => {
-    vi.stubGlobal("customElements", { get: vi.fn(() => undefined) });
     const container = document.createElement("div");
     document.body.append(container);
     const initialLayout = promoteSidebarPanel(
@@ -132,22 +143,13 @@ describe("chat pane lazy sidebar failures", () => {
       () => {
         const [layout, setLayout] = createSignal(initialLayout);
         openDetail = () => setLayout((current) => openSlot(current, "detail"));
-        const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
-        const content = createMemo(() => {
-          elements.read();
-          return renderSidebarRegion({
+        const content = () =>
+          renderSidebarRegion({
             presentationId: "sidebar-layout-fixture",
             availableWidth: 1_400,
-            callbacks: {
-              activatePanel: vi.fn(),
-              togglePanelExpanded: vi.fn(),
-              setDock: vi.fn(),
+            callbacks: createSidebarRegionCallbackMocks({
               closeSlot: (slot) => setLayout((current) => closeSlot(current, slot)),
-              openSlot: vi.fn(),
-              reorderPanel: vi.fn(),
-              resizePanel: vi.fn(),
-              setOpen: vi.fn(),
-            },
+            }),
             layout: layout(),
             narrow: false,
             panelDefinitions: sidebarPanelDefinitions().map((definition) =>
@@ -161,7 +163,6 @@ describe("chat pane lazy sidebar failures", () => {
             ),
             primary,
           });
-        });
         return <SidebarRegionView {...content()} />;
       },
       { container },
@@ -191,16 +192,15 @@ describe("chat pane lazy sidebar failures", () => {
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(2);
     expect(container.querySelector("[data-primary]")?.textContent).toContain("Primary chat");
     expect(container.querySelector(".lazy-view-error__detail")?.textContent).toContain(
-      "sidebar-region.js",
+      "Synthetic sidebar module export failure",
     );
     const action = container.querySelector<HTMLButtonElement>(".lazy-view-error__action");
-    expect(action?.textContent).toContain("Reload");
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     await vi.waitFor(() => expect(lazyMocks.retryDocument).toHaveBeenCalledOnce());
     expect(lazyMocks.importAttempts).toBe(1);
     container.querySelector<HTMLButtonElement>('button[aria-label="Close Dashboard"]')?.click();
-    flush();
-    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    await waitForSolid(() => expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1));
     expect(container.querySelector(".sidebar-region__primary")?.getAttribute("data-region")).toBe(
       "main",
     );
@@ -210,52 +210,31 @@ describe("chat pane lazy sidebar failures", () => {
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(container.querySelector("[data-primary]")).toBe(primary);
   });
-  it("shows a failed Files import through the pane loader and its reload action", async () => {
-    lazyMocks.retryDocument.mockClear();
-    // mock-isolation: fail the real module boundary before its element registers.
-    vi.doMock("./components/chat-files-panel.tsx", () => {
-      throw new Error("Failed to fetch dynamically imported module: chat-files-panel.js");
-    });
-    vi.stubGlobal("customElements", {
-      get: (tag: string) => (tag === "openclaw-chat-files-panel" ? undefined : HTMLElement),
-    });
-    try {
-      const mounted = mountSolid(() => {
-        const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
-        const content = createMemo(() => {
-          elements.read();
-          return renderSidebarRegion({
-            presentationId: "files-loader-failure",
-            availableWidth: 1_400,
-            callbacks: {
-              activatePanel: vi.fn(),
-              togglePanelExpanded: vi.fn(),
-              setDock: vi.fn(),
-              closeSlot: vi.fn(),
-              openSlot: vi.fn(),
-              reorderPanel: vi.fn(),
-              resizePanel: vi.fn(),
-              setOpen: vi.fn(),
-            },
-            layout: openSlot({ columns: [] }, "workspace"),
-            narrow: false,
-          });
-        });
-        return (
-          <SidebarPanel
-            definition={content().panelDefinitions.find((panel) => panel.slot === "workspace")!}
-          />
-        );
-      });
-      await waitForSolid(() =>
-        expect(mounted.container.querySelector('[role="alert"]')).not.toBeNull(),
-      );
-      expect(mounted.container.textContent).toContain("chat-files-panel.js");
-      const reload = mounted.getByRole("button", { name: "Reload" });
-      reload.click();
-      await waitForSolid(() => expect(lazyMocks.retryDocument).toHaveBeenCalledOnce());
-    } finally {
-      vi.doUnmock("./components/chat-files-panel.tsx");
-    }
+  it("retries failed Files content without replacing neighboring controls", async () => {
+    const { pane, state } = createMountedPanes([]);
+    getPaneTestRuntime(pane).mergedChrome = false;
+    state.sidebarLayout = openSlot({ columns: [] }, "workspace");
+    const definition = pane
+      .render()
+      .layout!.region.panelDefinitions.find((entry) => entry.slot === "workspace")!;
+    lazyMocks.failWorkspace = true;
+    const mounted = mountSolid(() => (
+      <>
+        <input aria-label="Conversation draft" />
+        <SidebarPanel definition={definition} visible />
+      </>
+    ));
+    const draft = mounted.getByRole<HTMLInputElement>("textbox", { name: "Conversation draft" });
+    draft.value = "Keep this conversation";
+    await waitForSolid(() =>
+      expect(mounted.getByRole("alert").textContent).toContain("File renderer unavailable"),
+    );
+    lazyMocks.failWorkspace = false;
+    mounted.container.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+    await waitForSolid(() =>
+      expect(mounted.getByRole("textbox", { name: "Files draft" })).toBeTruthy(),
+    );
+    expect(mounted.getByRole("textbox", { name: "Conversation draft" })).toBe(draft);
+    expect(draft.value).toBe("Keep this conversation");
   });
 });

@@ -331,7 +331,6 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         if (mode !== "retained-exact") {
           // The bound native-parent fixture replaces model admission. Retire the
           // selected occurrence through the ordinary prompt-adoption boundary.
-          const admittedEvents: string[] = [];
           const admittedContext = await drainFormattedSystemEvents({
             cfg: bound.cfg,
             agentId: original.agentId,
@@ -339,12 +338,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             isMainSession: true,
             isNewSession: false,
             events: [event],
-            onEventsAdmitted: (events) =>
-              admittedEvents.push(
-                ...events.map((entry) => expectDefined(entry.id, "admitted occurrence id")),
-              ),
           });
-          expect(admittedEvents).toEqual([event.id]);
           expect(admittedContext).toContain(event.text);
           expect(
             peekSystemEventEntries(original.sessionKey).map((selected) => selected.id),

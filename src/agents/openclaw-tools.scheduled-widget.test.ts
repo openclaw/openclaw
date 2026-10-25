@@ -3,6 +3,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEmbeddedAttemptToolConstructionPlan } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -33,13 +34,7 @@ it("applies tool policy to recovered dashboard authoring", () => {
   const options = {
     sessionKey: "agent:main:dashboard:recovered",
     pinnedWidgetAuthoring: true,
-    toolConstructionPlan: {
-      includeBaseCodingTools: false,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: true,
-      includePluginTools: false,
-    },
+    toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
   };
   expectPinnedOnlySchema(createOpenClawCodingTools(options));
   const deniedTools = createOpenClawCodingTools({

@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestMessage,
+  createSmsTestPhoneNumber,
+} from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
@@ -18,16 +22,7 @@ function mockTwilioFetch(fetchImpl: typeof fetch) {
 }
 
 function createWebhookResponse(overrides: Record<string, string> = {}) {
-  return {
-    incoming_phone_numbers: [
-      {
-        phone_number: "+15557654321",
-        sms_url: "https://gateway.example.com/webhooks/sms",
-        sms_method: "POST",
-        ...overrides,
-      },
-    ],
-  };
+  return { incoming_phone_numbers: [createSmsTestPhoneNumber(overrides)] };
 }
 
 function createFetch(responses: Array<unknown>): typeof fetch {
@@ -73,18 +68,7 @@ function expectUnavailable(result: Awaited<ReturnType<typeof probe>>, error: str
 }
 
 function inbound(sid: string, extra: Record<string, unknown> = {}) {
-  return {
-    messages: [
-      {
-        sid,
-        direction: "inbound",
-        status: "received",
-        to: "+15557654321",
-        from: "+15551234567",
-        ...extra,
-      },
-    ],
-  };
+  return { messages: [createSmsTestMessage({ sid, ...extra })] };
 }
 
 function probeService(use_inbound_webhook_on_number: boolean) {

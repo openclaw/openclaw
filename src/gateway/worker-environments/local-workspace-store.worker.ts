@@ -7,10 +7,8 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
-import {
-  mutateLocalWorkspaceProjection,
-  type LocalWorkspaceMutation,
-} from "./local-workspace-store.kernel.js";
+import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
+import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
 export const localWorkspaceOperations = {
   "localWorkspace.mutate": (
@@ -29,11 +27,11 @@ export const localWorkspaceOperations = {
     ) {
       throw new Error("Local workspace mutation requires reconciliation custody");
     }
-    // The host owns this internal wire shape. Decode before entering the transaction;
+    // The workspace owner prepares this wire shape. Decode before entering the transaction;
     // current leases and registry predicates still gate the actual commit below.
     const mutation: LocalWorkspaceMutation =
       input.mutation instanceof Uint8Array
-        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The host serialized a LocalWorkspaceMutation.
+        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {

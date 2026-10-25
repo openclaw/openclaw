@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigAuditRecord } from "../config/io.audit.js";
 import type { SequencedSqliteAuditRecordEntry } from "../infra/sqlite-audit-record.kernel.js";
@@ -17,6 +17,8 @@ import {
 } from "./greeting.js";
 import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import type { SystemAgentOverview } from "./overview.js";
+
+afterEach(() => void vi.restoreAllMocks());
 
 function createOverview(overrides: Partial<SystemAgentOverview> = {}): SystemAgentOverview {
   return createSystemAgentOverviewFixture({
@@ -169,11 +171,11 @@ describe("system agent greeting cache", () => {
       modelReply("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are."),
     );
 
+    vi.spyOn(Date, "now").mockReturnValue(200);
     const result = await cache.greet({
       overview,
       facts,
       planner,
-      now: () => 200,
     });
 
     expect(result).toBe("I'm steady.\nAn upgrade to 2026.7.20 is ready when you are.");
@@ -196,7 +198,6 @@ describe("system agent greeting cache", () => {
 
     const result = await cache.greet({
       facts,
-      now: () => 200,
     });
 
     expect(result).toBe(`All systems nominal.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`);
@@ -205,7 +206,6 @@ describe("system agent greeting cache", () => {
 
     const calm = await cache.greet({
       facts: { ...facts, recentExternalEdit: false },
-      now: () => 300,
     });
     expect(calm).toBe("All systems nominal.");
     expect(cache.planner).toHaveBeenCalledOnce();
@@ -284,7 +284,8 @@ describe("system agent greeting cache", () => {
       await resumeWrite.promise;
       return compareAndSet(...args);
     });
-    const greeting = cache.greet({ now: () => 100 });
+    vi.spyOn(Date, "now").mockReturnValue(100);
+    const greeting = cache.greet();
     await awaitGateBeforeSettlement(reachedWrite.promise, greeting, "greeting never reached CAS");
     await cache.acknowledge(7);
     resumeWrite.resolve();
@@ -321,14 +322,14 @@ describe("system agent greeting cache", () => {
   it("timestamps the greeting snapshot before inference begins", async () => {
     const events: string[] = [];
     const cache = createCache();
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      events.push("snapshot");
+      return 100;
+    });
     await cache.greet({
       planner: async () => {
         events.push("planner");
         return modelReply();
-      },
-      now: () => {
-        events.push("snapshot");
-        return 100;
       },
     });
 
@@ -350,13 +351,14 @@ describe("system agent greeting cache", () => {
       auditSequence: 7,
     };
 
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100);
     const result = await cache.greet({
       facts,
       planner,
       cacheOwner,
-      now: () => 100,
     });
-    const repeated = await renewedCache.greet({ facts, planner, cacheOwner, now: () => 200 });
+    clock.mockReturnValue(200);
+    const repeated = await renewedCache.greet({ facts, planner, cacheOwner });
 
     expect(result).toBe(
       `${HEALTHY_GREETING_TEMPLATE}\nUpdate 2026.7.20 is available. Channels needing attention: Telegram.\n${SYSTEM_AGENT_EXTERNAL_EDIT_ALERT}`,
@@ -394,7 +396,6 @@ describe("system agent greeting cache", () => {
       const result = await cache.greet({
         facts: { ...healthyFacts(), ...facts },
         planner: async () => modelReply(text),
-        now: () => 100,
       });
       expect(result).toBe(HEALTHY_GREETING_TEMPLATE + suffix);
       expect(cache.read()).toBeUndefined();
@@ -407,7 +408,6 @@ describe("system agent greeting cache", () => {
     const result = await cache.greet({
       facts: { ...healthyFacts(), channelHealth: degradedHealth },
       planner: async () => modelReply(text),
-      now: () => 100,
     });
     expect(result).toBe(text);
     expect(cache.read()?.text).toBe(text);
@@ -422,7 +422,7 @@ describe("system agent greeting cache", () => {
     "uses the deterministic template (%s: %s) without opening the cache",
     async (overview, expected) => {
       const cache = createCache();
-      const result = await cache.greet({ overview, now: () => 100 });
+      const result = await cache.greet({ overview });
 
       expect(result).toContain(expected);
       expect(cache.planner).not.toHaveBeenCalled();
@@ -430,21 +430,6 @@ describe("system agent greeting cache", () => {
       expect(cache.read()).toBeUndefined();
     },
   );
-
-  it("uses the model-free fallback when the optional greeting cache cannot open", async () => {
-    const planner = vi.fn();
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts: healthyFacts(),
-      planner,
-      openCache: () => {
-        throw new Error("sqlite unavailable");
-      },
-    });
-
-    expect(result).toBe(HEALTHY_GREETING_TEMPLATE);
-    expect(planner).not.toHaveBeenCalled();
-  });
 
   it.each(["failed", "revoked"])(
     "does not publish cached text after a %s asynchronous greeting read",

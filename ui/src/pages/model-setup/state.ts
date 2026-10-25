@@ -210,9 +210,12 @@ export function wizardStateFromResult(
   if (result.done && result.status === "done") {
     return { phase: "done" };
   }
+  const cancelled = result.status === "cancelled";
+  // The Gateway ends its own wizard sessions with the bare word "cancelled"; show our sentence instead.
+  const error = cancelled && result.error?.trim().toLowerCase() === "cancelled" ? "" : result.error;
   return {
-    phase: result.status === "cancelled" ? "cancelled" : "error",
-    message: formatUiExternalText(result.error, fallbackError),
+    phase: cancelled ? "cancelled" : "error",
+    message: formatUiExternalText(error, fallbackError),
   };
 }
 

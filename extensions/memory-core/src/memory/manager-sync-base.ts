@@ -90,6 +90,7 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  cacheWritesPendingPrune?: boolean;
   memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;
@@ -482,6 +483,14 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
+  protected resolveConfiguredMemoryScopeHash(): string {
+    return resolveConfiguredScopeHash({
+      workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
+      multimodal: this.settings.multimodal,
+    });
+  }
+
   protected resolveConfiguredIndexIdentity() {
     if (this.settings.provider === "none") {
       return undefined;
@@ -551,11 +560,7 @@ export abstract class MemoryManagerSyncBase {
       providerAliases: providerIdentities.slice(1),
       providerKeyKnown: configuredProviderKeyKnown ? true : params.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-      configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: this.settings.multimodal,
-      }),
+      configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,

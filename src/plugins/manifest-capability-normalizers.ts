@@ -31,6 +31,7 @@ import type {
   PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestProviderBaseUrlGuard,
+  PluginManifestProviderEndpoint,
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
   PluginManifestToolMetadata,
@@ -115,6 +116,37 @@ export function normalizeManifestDecisionModels(
     const capabilities = normalizeDecisionCapabilities(entry.capabilities);
     seen.add(ref);
     return { provider, id, name, ...(capabilities ? { capabilities } : {}) };
+  });
+}
+
+export function normalizeManifestProviderEndpoints(
+  value: unknown,
+): PluginManifestProviderEndpoint[] | undefined {
+  return normalizeManifestObjectList(value, (rawEndpoint) => {
+    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
+    if (!endpointClass) {
+      return undefined;
+    }
+    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
+    if (!hosts && !hostSuffixes && !baseUrls) {
+      return undefined;
+    }
+    return omitUndefinedFields({
+      endpointClass,
+      hosts,
+      hostSuffixes,
+      baseUrls,
+      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
+      googleVertexRegionHostSuffix: normalizeOptionalString(
+        rawEndpoint.googleVertexRegionHostSuffix,
+      )?.toLowerCase(),
+    });
   });
 }
 

@@ -233,7 +233,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shared database-engine host and worker adapters.
       // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
       // +1: approved shared OpenAI Decisions codec used by OpenAI and ClawRouter.
-      157,
+      // +1: approved lightweight nullable request-header projection for provider transports.
+      158,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(

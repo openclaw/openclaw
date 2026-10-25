@@ -4,9 +4,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import JSON5 from "json5";
 import * as tar from "tar";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pinConfigDir } from "../utils.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
 import { installHooksFromPath } from "./install.js";
 import {
@@ -15,32 +16,17 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { prepareInternalHooks } from "./loader.js";
-import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hookName = "qa-lifecycle-recorder";
 const hookMarker = "QA_HOOK_LIFECYCLE_OK";
 
-afterEach(clearInternalHooks);
-
-async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
-  try {
-    return await execFileAsync(process.execPath, ["openclaw.mjs", "hooks", ...args], {
-      cwd: process.cwd(),
-      env,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      timeout: 90_000,
-    });
-  } catch (error) {
-    const failed = error as Error & { stdout?: string; stderr?: string };
-    throw new Error(
-      `${failed.message}\nstdout:\n${failed.stdout ?? ""}\nstderr:\n${failed.stderr ?? ""}`,
-      { cause: error },
-    );
-  }
-}
+afterEach(() => {
+  clearInternalHooks();
+  vi.unstubAllEnvs();
+  pinConfigDir();
+});
 
 it("installs, discovers, toggles, and dispatches an authored hook pack", async () => {
   const rootDir = tempDirs.make("openclaw-hooks-lifecycle-e2e-");
@@ -95,7 +81,8 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     VITEST: "",
   };
 
-  const options = { bundledHooksDir, managedHooksDir };
+  pinConfigDir(env);
+  vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
   const install = await installHooksFromPath({
     config: initialConfig,
     hooksDir: managedHooksDir,
@@ -111,28 +98,17 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     throw new Error(install.error);
   }
 
-  await expect(
-    fs.readFile(path.join(install.targetDir, "hooks", hookName, "HOOK.md"), "utf8"),
-  ).resolves.toContain("gateway:startup");
-
-  const discovered = loadWorkspaceHookEntries(workspaceDir, {
-    ...options,
-    config: initialConfig,
-  });
-  expect(discovered).toEqual([
-    expect.objectContaining({
-      hook: expect.objectContaining({ name: hookName, source: "openclaw-managed" }),
-      metadata: expect.objectContaining({ events: ["gateway:startup"] }),
-    }),
-  ]);
-
   for (const enabled of [false, true]) {
-    const result = await runHooksCli([enabled ? "enable" : "disable", hookName], env);
+    const result = await execFileAsync(
+      process.execPath,
+      ["openclaw.mjs", "hooks", enabled ? "enable" : "disable", hookName],
+      { cwd: process.cwd(), env, encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 90_000 },
+    );
     expect(result.stdout).toContain(hookName);
     const config: OpenClawConfig = JSON5.parse(await fs.readFile(configPath, "utf8"));
     expect(config.hooks?.internal?.entries?.[hookName]?.enabled).toBe(enabled);
     clearInternalHooks();
-    const prepared = await prepareInternalHooks(config, workspaceDir, options);
+    const prepared = await prepareInternalHooks(config, workspaceDir);
     expect(prepared.loadedCount).toBe(enabled ? 1 : 0);
     prepared.commit();
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {

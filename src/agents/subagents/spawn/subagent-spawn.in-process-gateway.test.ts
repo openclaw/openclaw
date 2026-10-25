@@ -15,7 +15,6 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
@@ -62,7 +61,10 @@ import { withParentExecutionIdentity } from "./execution-identity-spawn-context.
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
-import { createConfigOverride } from "./subagent-spawn.test-helpers.js";
+import {
+  createConfigOverride,
+  createThinkingProvenanceCases,
+} from "./subagent-spawn.test-helpers.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("../../runtime-plugins.js", () => ({
@@ -120,36 +122,7 @@ function parentAuthority() {
   return { parentToken, operationalRunInstance, authority };
 }
 
-type ThinkingContext = Parameters<typeof spawnSubagentDirect>[1] & {
-  requesterThinkingExplicit?: boolean;
-};
-type ThinkingCase = [
-  string,
-  ThinkingContext,
-  SessionEntry["thinkingLevel"],
-  string | undefined,
-  string?,
-  string?,
-];
-const automatic: ThinkingContext = {
-  requesterThinkingLevel: "high",
-  requesterThinkingExplicit: false,
-};
-const thinkingCases: ThinkingCase[] = [
-  [
-    "inherits explicit active effort",
-    { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
-    "medium",
-    "ultra",
-  ],
-  ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
-  ["ignores automatic effort and stale preference", automatic, "medium", undefined],
-  ["ignores automatic effort without a preference", automatic, undefined, undefined],
-  ["does not persist an unselected model default", {}, undefined, undefined],
-  ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
-  ["inherits persisted effort", {}, "off", "off"],
-  ["inherits configured effort", {}, undefined, "high", undefined, "high"],
-];
+const thinkingCases = createThinkingProvenanceCases();
 
 const waitForAssertion = (assertion: () => void) =>
   vi.waitFor(assertion, { timeout: 2_000, interval: 10 });

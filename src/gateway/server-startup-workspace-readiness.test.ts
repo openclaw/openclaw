@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -202,9 +203,9 @@ it.each(["disk", "supplied snapshot"])(
   },
 );
 
-it.each(["managed write", "file watcher"])(
+it.for(["managed write", "file watcher"])(
   "rejects an unmigrated workspace switch before publication via %s",
-  async (ingress) => {
+  async (ingress, { signal }) => {
     // The live candidate boundary needs the real managed reloader, not the minimal stub.
     state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
     state.applyEnv();
@@ -222,8 +223,23 @@ it.each(["managed write", "file watcher"])(
     const persona = "Retained workspace persona.\n";
     await fs.writeFile(personaPath, persona);
     const port = await getFreePort();
-    server = await start(port);
-    await server.startupSettled;
+    const startReady = async () => {
+      // Startup settles before recovery; observe the owner's readiness event.
+      const ready = createDeferred();
+      const info = gatewayKernelLogs.log.info.bind(gatewayKernelLogs.log);
+      using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+      readyLog.mockImplementation((message, meta) => {
+        info(message, meta);
+        if (message === "gateway ready") {
+          ready.resolve();
+        }
+      });
+      const started = await start(port);
+      await withinTest(started.startupSettled, signal);
+      await withinTest(ready.promise, signal);
+      return started;
+    };
+    server = await startReady();
     client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       scopes: ["operator.admin"],
@@ -266,8 +282,7 @@ it.each(["managed write", "file watcher"])(
     await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
     // Restart with last-good config, then retry the same live change after Doctor.
     await state.writeConfig(cfg);
-    server = await start(port);
-    await server.startupSettled;
+    server = await startReady();
     reloadError.mockClear();
     const application = createRuntimeConfigWriteApplication();
     await writeConfigFile(nextConfig, attachRuntimeConfigWriteApplication({}, application));

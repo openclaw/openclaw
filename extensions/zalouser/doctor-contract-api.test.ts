@@ -102,6 +102,29 @@ describe("zalouser doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("retains malformed UTF-8 credentials while importing a healthy profile", async () => {
+    const filePath = await writeLegacyCredentials("broken");
+    const healthyPath = await writeLegacyCredentials("healthy");
+    const bytes = Buffer.from(JSON.stringify({ ...legacyCredentials, userAgent: "utf8-marker" }));
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    await fs.writeFile(filePath, bytes);
+    const params = doctorParams();
+    const result = await credentialsMigration.migrateLegacyState(params);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toHaveLength(1);
+    expect(await fs.readFile(filePath)).toEqual(bytes);
+    await expect(fs.access(healthyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const store = params.context.openPluginStateKeyedStore<StoredZaloCredentials>({
+      namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
+      maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    expect(await store.lookup(zalouserCredentialStoreKey("broken"))).toBeUndefined();
+    expect(await store.lookup(zalouserCredentialStoreKey("healthy"))).toMatchObject(
+      legacyCredentials,
+    );
+  });
+
   it("imports a profile credential blob into SQLite before archiving it", async () => {
     const profile = "work";
     const filePath = await writeLegacyCredentials(profile);

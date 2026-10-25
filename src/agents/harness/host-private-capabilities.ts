@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
@@ -12,11 +11,10 @@ import type {
   ReplyToolAuthorityPreparation,
   ReplyToolAuthorityRoute,
 } from "../../sessions/session-controller.contracts.js";
-import type {
-  ReplyExecutionSelection,
-  ReplyIncomingExecutionSelection,
-} from "../../sessions/session-controller.execution-selection.js";
+import type { ReplyIncomingExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
+import type { ReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import type { ModelFallbackAvailability } from "../agent-scope.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -168,11 +166,6 @@ export type ReplyToolAuthorityContinuation = Readonly<{
   caller: Omit<ReplyToolAuthorityOverlay, "traceAuthorized" | "allowCollaborativeSteering">;
   config: OpenClawConfig;
   executionSelection: ReplyIncomingExecutionSelection;
-  delivery: {
-    assertCurrent(): void;
-    prepareCurrent(): Promise<void>;
-    bindExecutionSelection(selection: ReplyExecutionSelection, config: OpenClawConfig): void;
-  };
   selectedRoute: ReplyToolAuthorityRoute;
   fallbackAvailability: ModelFallbackAvailability;
 }>;
@@ -182,13 +175,19 @@ export type ReplyToolAuthorityCaller =
   | ReplyToolAuthorityRequester
   | ReplyToolAuthorityContinuation;
 
-type CallerReadPreparer = (
+export type ReplyToolAuthorityCallerBinding = {
+  assertCurrent(): void;
+  joinObservation?: ReplyMessageJoinObservation;
+  prepare(): Promise<PreparedQuestionCallerRead | undefined>;
+};
+
+type CallerBindingSelector = (
   caller: ReplyToolAuthorityCaller | undefined,
   fingerprint: string,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
-) => Promise<PreparedQuestionCallerRead | undefined>;
-const callerReadPreparers = new WeakMap<object, CallerReadPreparer>();
+) => ReplyToolAuthorityCallerBinding | undefined;
+const callerReadPreparers = new WeakMap<object, CallerBindingSelector>();
 
 export type PreparedToolAuthorityRead = {
   reads: readonly SessionEntryWorkerRead[];
@@ -197,10 +196,10 @@ export type PreparedToolAuthorityRead = {
   assertLegacyCurrent: () => void;
   retainCurrent?: PreparedQuestionCallerRead["retainCurrent"];
 };
-const toolAuthorityReadScope = new AsyncLocalStorage<{
+const toolAuthorityReadScope = new AsyncContext<{
   reads: PreparedToolAuthorityRead[];
   complete: boolean;
-}>();
+}>(Symbol("toolAuthorityReads"));
 const workerToolPreparations = new WeakMap<() => Promise<void>, { complete: boolean }>();
 
 export function bindWorkerToolPreparation<
@@ -250,9 +249,49 @@ export async function capturePreparedToolAuthorityReads(
 
 export function bindReplyToolAuthorityCallerRead(
   projector: object,
-  prepare: CallerReadPreparer,
+  select: CallerBindingSelector,
 ): void {
-  callerReadPreparers.set(projector, prepare);
+  callerReadPreparers.set(projector, select);
+}
+
+/** Select one policy owner before delivery preparation can yield to a successor attempt. */
+export function captureReplyToolAuthorityCallerBinding(
+  projector: object | undefined,
+  caller: ReplyToolAuthorityCaller | undefined,
+  fingerprint: string | undefined,
+  route: ReplyToolAuthorityRoute | undefined,
+  assertCurrent: () => void,
+): ReplyToolAuthorityCallerBinding | undefined {
+  assertCurrent();
+  const selected =
+    projector && fingerprint
+      ? callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
+      : undefined;
+  if (!selected) {
+    const scope = toolAuthorityReadScope.getStore();
+    if (scope) {
+      scope.complete = false;
+    }
+    return undefined;
+  }
+  selected.assertCurrent();
+  return {
+    assertCurrent: () => selected.assertCurrent(),
+    joinObservation: selected.joinObservation,
+    prepare: async () => {
+      selected.assertCurrent();
+      try {
+        const prepared = await selected.prepare();
+        const scope = toolAuthorityReadScope.getStore();
+        if (scope && !prepared) {
+          scope.complete = false;
+        }
+        return prepared;
+      } finally {
+        selected.assertCurrent();
+      }
+    },
+  };
 }
 
 export async function prepareReplyToolAuthorityCallerRead(
@@ -262,16 +301,13 @@ export async function prepareReplyToolAuthorityCallerRead(
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
 ) {
-  assertCurrent();
-  const prepared =
-    projector && fingerprint
-      ? await callerReadPreparers.get(projector)?.(caller, fingerprint, route, assertCurrent)
-      : undefined;
-  const scope = toolAuthorityReadScope.getStore();
-  if (scope && !prepared) {
-    scope.complete = false;
-  }
-  return prepared;
+  return captureReplyToolAuthorityCallerBinding(
+    projector,
+    caller,
+    fingerprint,
+    route,
+    assertCurrent,
+  )?.prepare();
 }
 
 function assertQuestionCompatibilityCurrent(
@@ -432,7 +468,9 @@ export type PreparedQuestionAnswerAuthority = Readonly<{
   admitTranscriptAnswer?: (recorder: UserTurnTranscriptRecorder | undefined) => void;
 }>;
 
-const questionAnswerScope = new AsyncLocalStorage<PreparedQuestionAnswerAuthority | undefined>();
+const questionAnswerScope = new AsyncContext<PreparedQuestionAnswerAuthority>(
+  Symbol("questionAnswerAuthority"),
+);
 const questionAnswerCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   PreparedQuestionAnswerAuthority

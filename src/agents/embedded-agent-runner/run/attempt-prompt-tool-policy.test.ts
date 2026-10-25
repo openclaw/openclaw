@@ -47,6 +47,7 @@ function createPolicyFixture(
   let names = [...activeToolNames];
   const session = {
     getActiveToolNames: () => [...names],
+    getToolDefinition: (name: string) => createStubTool(name),
     setActiveToolsByName: vi.fn((next: string[]) => void (names = [...next])),
   };
   const params = {

@@ -118,6 +118,17 @@ function replacedToolsHarness() {
 }
 
 const toolsResult = (profile: string) => ({ agentId: "main", profile, groups: [] });
+const discoveryResult = (profile: string) => ({
+  ...toolsResult(profile),
+  notices: [
+    {
+      id: "mcp-not-yet-connected",
+      severity: "info" as const,
+      message: "MCP tools will appear here after an agent run discovers them.",
+      servers: ["github"],
+    },
+  ],
+});
 const disabledServer = { mcp: { servers: { docs: { command: "docs-mcp", enabled: false } } } };
 
 function createAddServerHarness(
@@ -202,6 +213,7 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(query("form")).not.toBeNull());
       const form = query("form");
       container
@@ -322,7 +334,8 @@ describe("ChatComposerCapabilityHost", () => {
     const state = createState();
     host.props(context, state, undefined, "main").onAddServer?.();
     const container = mountDialogs(host, context, state);
-    await Promise.resolve();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
 
     const scope = container.querySelector<HTMLInputElement>(
       'input.settings-segmented__input[value="everywhere"]',
@@ -379,6 +392,26 @@ describe("ChatComposerCapabilityHost", () => {
 
     await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(secondResult));
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes Tool access on reopen while sharing an in-flight request", async () => {
+    const beforeRun = toolsResult("before-run");
+    const afterRun = toolsResult("after-run");
+    const second = deferred<unknown>();
+    const request = vi.fn().mockResolvedValueOnce(beforeRun).mockReturnValueOnce(second.promise);
+    const { props } = toolsHarness(request);
+
+    props().onOpenToolAccess?.("github");
+    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(beforeRun));
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    props().onOpenToolAccess?.("github");
+    props().onOpenToolAccess?.("github");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(props().toolsEffectiveLoading).toBe(true);
+    second.resolve(afterRun);
+    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(afterRun));
   });
 
   it.each(["before", "after"] as const)(
@@ -491,6 +524,73 @@ describe("ChatComposerCapabilityHost", () => {
 
     current.resolve({ skills: [skill("current")] });
     await vi.waitFor(() => expect(props().skills?.map(({ name }) => name)).toEqual(["current"]));
+  });
+
+  it("rereads the open Tool access view once after the session run settles", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(discoveryResult("pending"))
+      .mockResolvedValueOnce(discoveryResult("pending"));
+    const { state, props } = toolsHarness(request);
+    state.chatRunId = "run-1";
+
+    props().onOpenToolAccess?.("github");
+    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("pending"));
+    props().onLoadView?.("tools:github");
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    state.chatRunId = null;
+    props().onLoadView?.("tools:github");
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(props().toolsEffectiveLoading).toBe(false));
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for Tool access to open before rereading after a run settles", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(discoveryResult("pending"))
+      .mockResolvedValueOnce(discoveryResult("discovered"));
+    const { state, props } = toolsHarness(request);
+    state.chatRunId = "run-1";
+    props().onOpenToolAccess?.("github");
+    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("pending"));
+
+    state.chatRunId = null;
+    props();
+    props();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    props().onOpenToolAccess?.("github");
+    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("discovered"));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a read started during the run when it finishes after the settled reread", async () => {
+    const duringRun = deferred<unknown>();
+    const afterRun = deferred<unknown>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(duringRun.promise)
+      .mockReturnValueOnce(afterRun.promise);
+    const { state, props } = toolsHarness(request);
+    state.chatRunId = "run-1";
+    props().onOpenToolAccess?.("github");
+
+    state.chatRunId = null;
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(2);
+
+    afterRun.resolve(discoveryResult("discovered"));
+    await vi.waitFor(() => expect(props().toolsEffectiveResult?.profile).toBe("discovered"));
+    duringRun.resolve(discoveryResult("pending"));
+    await duringRun.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(props().toolsEffectiveResult?.profile).toBe("discovered");
   });
 
   it("shows effective-tools request failures and allows an explicit retry", async () => {

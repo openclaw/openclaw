@@ -193,7 +193,6 @@ describe("channel entry authentication audit", () => {
         config: auditConfig,
         sourceConfig: auditConfig,
         includeFilesystem: false,
-        includeChannelSecurity: true,
         loadPluginSecurityCollectors: false,
         plugins: [whatsappSetupPlugin, slackPlugin],
       });

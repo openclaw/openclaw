@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -33,7 +34,7 @@ export async function createSdkWebSocketServer(port = 0) {
       if (request.method === "connect") {
         reply(socket, request.id, {
           type: "hello-ok",
-          protocol: 4,
+          protocol: PROTOCOL_VERSION,
           server: { version: "sdk-live", connId: "sdk-live-connection" },
           features: { methods: ["connect"], events: ["chat", "agent"] },
           snapshot: {

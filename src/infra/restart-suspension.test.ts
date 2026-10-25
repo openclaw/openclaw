@@ -43,8 +43,7 @@ function forceAfterBudget(
   const hooks = { onTimeout: vi.fn() };
   deferGatewayRestartUntilIdle({
     getPendingCount,
-    maxWaitMs: 100,
-    pollMs: 10,
+    maxWaitMs: 5_000,
     hooks,
     timeoutIntent: { force: true },
     emitHooks,
@@ -119,21 +118,6 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onReady).not.toHaveBeenCalled();
   });
 
-  it("clamps oversized poll intervals instead of polling immediately", () => {
-    const hooks: RestartDeferralHooks = { onReady: vi.fn() };
-    let pending = 1;
-
-    deferGatewayRestartUntilIdle({
-      getPendingCount: () => pending,
-      pollMs: Number.MAX_SAFE_INTEGER,
-      hooks,
-    });
-
-    pending = 0;
-    vi.advanceTimersByTime(1);
-    expect(hooks.onReady).not.toHaveBeenCalled();
-  });
-
   it("cancels a pending restart before it emits", async () => {
     let pending = 1;
     const preparation = createDeferred();
@@ -158,11 +142,10 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 1,
       maxWaitMs: 10,
-      pollMs: 10,
       timeoutIntent: { force: true },
       emitHooks: { emitRestart },
     });
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(500);
 
     expect(emitRestart).toHaveBeenCalledOnce();
     root?.release();
@@ -179,8 +162,8 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
   });
 
   it.each([
-    { stage: "later", counts: [1, "throw", 0], firstCheckMs: 10, errors: 1 },
-    { stage: "final admission", counts: ["throw", 0, "throw"], firstCheckMs: 10, errors: 2 },
+    { stage: "later", counts: [1, "throw", 0], firstCheckMs: 500, errors: 1 },
+    { stage: "final admission", counts: ["throw", 0, "throw"], firstCheckMs: 500, errors: 2 },
   ])(
     "defers after a failed $stage inspection until a successful idle check",
     async ({ counts, firstCheckMs, errors }) => {
@@ -197,14 +180,13 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
           }
           return next;
         },
-        pollMs: 10,
         hooks,
       });
       await vi.advanceTimersByTimeAsync(firstCheckMs);
       expect(hooks.onCheckError).toHaveBeenCalledTimes(errors);
       expect(restartSignalHandler).not.toHaveBeenCalled();
       expect(hooks.onReady).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(500);
       expect(restartSignalHandler).toHaveBeenCalledOnce();
       expect(hooks.onReady).toHaveBeenCalledOnce();
     },
@@ -219,8 +201,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     let emitAttempts = 0;
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 0,
-      pollMs: 10,
-      maxWaitMs: 100,
+      maxWaitMs: 5_000,
       hooks,
       timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
       emitHooks: {
@@ -234,10 +215,10 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     const afterFirst = emitAttempts;
     expect(afterFirst).toBeGreaterThan(0);
     expect(hooks.onCheckError).toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(2_500);
     expect(emitAttempts).toBeGreaterThan(afterFirst);
     expect(hooks.onReady).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(2_500);
     expect(emitAttempts).toBeGreaterThan(1);
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
   });
@@ -248,7 +229,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       .mockReturnValueOnce(stuckPreparation)
       .mockReturnValueOnce(stuckPreparation);
     const hooks = forceAfterBudget({ beforeEmit, emitRestart });
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(12_500);
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
     expect(beforeEmit.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(emitRestart).toHaveBeenCalledOnce();
@@ -260,14 +241,14 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     forceAfterBudget({ beforeEmit, emitRestart });
 
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(beforeEmit).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(2_500);
     expect(beforeEmit).toHaveBeenCalledTimes(2);
 
     forced.resolve();
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(500);
     expect(emitRestart).toHaveBeenCalledOnce();
   });
 
@@ -283,7 +264,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     const hooks = forceAfterBudget({ emitRestart: retryEmission }, () => 1);
 
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(7_500);
 
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
     expect(emitAttempts).toBeGreaterThanOrEqual(3);
@@ -298,12 +279,11 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       const beforeEmit = vi.fn(async () => await preparation.promise);
       const handle = deferGatewayRestartUntilIdle({
         getPendingCount: () => 0,
-        pollMs: 10,
-        maxWaitMs: 100,
+        maxWaitMs: 5_000,
         emitHooks: { beforeEmit, emitRestart },
       });
       try {
-        await vi.advanceTimersByTimeAsync(timeout ? 150 : 0);
+        await vi.advanceTimersByTimeAsync(timeout ? 7_500 : 0);
         if (!timeout) {
           handle.cancel();
         }

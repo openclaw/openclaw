@@ -158,6 +158,7 @@ export function createImmediateCommandHost(
 }
 
 type TestChatHost = ChatHost & {
+  selectedChatSessionIncognito: boolean;
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
@@ -259,6 +260,7 @@ export function makeChatHost(
   };
   const host = {
     ...composerDefaults(),
+    selectedChatSessionIncognito: false,
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatDisplayedLeafEntryId: undefined,

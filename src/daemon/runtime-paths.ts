@@ -465,18 +465,16 @@ export async function resolvePreferredNodePath(
 }
 
 export async function resolvePreferredBunPath(
-  params: RuntimePathOptions,
+  params: Pick<RuntimePathOptions, "env" | "runtime">,
 ): Promise<string | undefined> {
   if (params.runtime !== "bun") {
     return undefined;
   }
 
   const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const currentExecPath = params.execPath ?? process.execPath;
   let probeFailure: Error | undefined;
   let selectionError: string | undefined;
-  for (const candidate of buildBunCandidates(env, platform, currentExecPath)) {
+  for (const candidate of buildBunCandidates(env, process.platform, process.execPath)) {
     try {
       await fs.access(candidate);
     } catch (error) {

@@ -13,7 +13,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 
 type PendingReaction = {
   messageId: string;
@@ -276,7 +276,15 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       // Install the replacement before the queue discards its superseded intent.
       this.reactionPending.set(key, pending);
       this.publishReactions();
-      if (!context.gateway.defer({ key, run, discard })) {
+      const agentId = resolveChatAgentId(state);
+      if (
+        !context.gateway.defer({
+          key,
+          group: `sessions.lifecycle:${agentId}:${sessionKey}`,
+          run,
+          discard,
+        })
+      ) {
         discard();
       }
       return;

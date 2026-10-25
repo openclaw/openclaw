@@ -8,6 +8,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import {
   createEmptyAgentDiscoveryStores,
@@ -21,22 +22,6 @@ import { ModelRegistry } from "./sessions/model-registry.js";
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   vi.restoreAllMocks();
-});
-
-const catalogProvider = (id: string, upstreams: string[], capability: string) => ({
-  id,
-  displayName: id,
-  openaiCompatible: id === "openai",
-  nativeBaseUrl: `/v1/native/${id}`,
-  routes:
-    id === "anthropic"
-      ? [{ path: "/v1/messages", requestFormat: "anthropic.messages", methods: ["POST"] }]
-      : [],
-  models: upstreams.map((upstream) => ({
-    id: `${id}/${upstream}`,
-    upstream,
-    capabilities: [capability],
-  })),
 });
 
 // Real ClawRouter catalog, model registry, provider runtime hooks, and runtime decisions.

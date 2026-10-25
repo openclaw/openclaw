@@ -46,6 +46,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
 
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
@@ -97,17 +98,11 @@ describe("session lifecycle state", () => {
     updatedAt: 1_000,
     startedAt: 1_000,
     lifecycleRunId: "goal-run",
-    goal: {
-      schemaVersion: 1,
-      id: "goal-1",
-      objective: "Finish the work",
-      status: "active",
+    goal: createSessionGoalFixture("goal-1", "Finish the work", {
       createdAt: 1_000,
       updatedAt: 1_000,
-      tokenStart: 0,
       tokensUsed: 12,
-      continuationTurns: 0,
-    },
+    }),
   };
   const goalFailure: LifecycleEvent = {
     sessionId: "goal-session",
@@ -473,12 +468,11 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
-    { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
-    { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
-    { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
+    { name: "visible run", controlUiVisible: true, lastActivityAt: 1_800 },
+    { name: "hidden run", controlUiVisible: false, lastActivityAt: 1_000 },
   ])(
     "records unread-worthy completion activity for a $name",
-    async ({ controlUiVisible, isHeartbeat, lastActivityAt }) => {
+    async ({ controlUiVisible, lastActivityAt }) => {
       const persisted = await persistLifecycle(
         {
           sessionId: "session-id",
@@ -490,7 +484,6 @@ describe("session lifecycle state", () => {
           ts: 2_000,
           sessionId: "session-id",
           controlUiVisible,
-          isHeartbeat,
           data: { phase: "end", endedAt: 1_800 },
         },
       );

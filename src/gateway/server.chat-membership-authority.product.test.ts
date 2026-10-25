@@ -28,7 +28,6 @@ import {
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { waitForSessionRunEnd } from "../sessions/session-controller.native-runtime.js";
@@ -753,9 +752,7 @@ it(
       nextCall.resolve(call);
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    const heartbeats = areHeartbeatsEnabled();
     try {
-      setHeartbeatsEnabled(false);
       await requireGit(repo, ["init", "-b", "main"]);
       await requireGit(repo, ["config", "user.name", "OpenClaw Test"]);
       await requireGit(repo, ["config", "user.email", "test@example.invalid"]);
@@ -1011,7 +1008,6 @@ it(
       } finally {
         creationObserver.mockRestore();
         readinessObserver.mockRestore();
-        setHeartbeatsEnabled(heartbeats);
         await state.cleanup();
       }
     }

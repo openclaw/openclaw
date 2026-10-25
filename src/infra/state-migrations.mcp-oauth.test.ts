@@ -15,13 +15,13 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../test-utils/vitest-spies.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   measureMcpMigrationHostSql,
   observeLegacyMcpOAuthImport,
@@ -557,22 +557,7 @@ it.each(["symlink", "hardlink", "oversized", "invalid-utf8"])(
 
 it("requires exclusive state ownership", async () => {
   const sourcePath = await writeLegacy();
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_790,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof migrateLegacyMcpOAuthStores>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
-  }
+  const result = await withGatewayLockHeld(env, 18_790, () => migrate());
 
   expect(result.warnings[0]).toContain("OpenClaw state database is busy");
   expect(fs.existsSync(sourcePath)).toBe(true);
@@ -592,6 +577,7 @@ it("fails closed for live, young, and malformed owner evidence", () => {
     [
       vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false),
       vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(456),
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-16T00:02:00.000Z")),
     ],
     () => {
       for (const raw of [
@@ -601,12 +587,7 @@ it("fails closed for live, young, and malformed owner evidence", () => {
         lockPayload({ starttime: "456" }),
         "not json",
       ]) {
-        expect(
-          isDefinitelyStaleLegacyMcpOAuthLock({
-            raw,
-            nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
-          }),
-        ).toBe(false);
+        expect(isDefinitelyStaleLegacyMcpOAuthLock({ raw })).toBe(false);
       }
     },
   );

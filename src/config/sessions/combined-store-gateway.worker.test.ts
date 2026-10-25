@@ -543,3 +543,22 @@ it("lists current memory entries and owner changes alongside durable targets", a
     memorySessionActorOwners.closeDatabase(location);
   }
 });
+
+it("rejects collisions for transcript aliases discovered in another store", async ({ state }) => {
+  const primary = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  const secondary = state.statePath("main.sqlite");
+  const cfg = fleet(["main"], { store: state.statePath("{agentId}.sqlite") });
+  const anchor = "agent:main:anchor";
+  const alias = "agent:main:alias";
+  seed("main", anchor, "shared", {}, primary);
+  seed("main", alias, "different", {}, primary);
+  seed("main", alias, "shared", {}, secondary);
+  await expect(
+    loadCombinedStoreAsync(cfg, {
+      agentId: "main",
+      includeIncognito: false,
+      projection: "list",
+      transcriptSelection: { sessionKeys: [anchor], sessionIds: [] },
+    }),
+  ).rejects.toThrow(`duplicate rows resolve to canonical session key ${alias}`);
+});

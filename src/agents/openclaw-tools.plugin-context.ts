@@ -45,6 +45,8 @@ export type OpenClawPluginToolOptions = Pick<
   | "oneShotCliRun"
   | "sandboxBrowserBridgeUrl"
   | "allowHostBrowserControl"
+  | "allowLocalBrowserLoopback"
+  | "assertLocalBrowserLoopbackCurrent"
   | "sandboxed"
   | "allowGatewaySubagentBinding"
   | "toolBindings"
@@ -120,6 +122,12 @@ export function resolveOpenClawPluginToolInputs(params: {
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
         allowHostControl: options?.allowHostBrowserControl,
+        ...(options?.assertLocalBrowserLoopbackCurrent
+          ? { assertLocalLoopbackCurrent: options.assertLocalBrowserLoopbackCurrent }
+          : {}),
+        ...(options?.allowLocalBrowserLoopback !== undefined
+          ? { allowLocalLoopback: options.allowLocalBrowserLoopback }
+          : {}),
       },
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,

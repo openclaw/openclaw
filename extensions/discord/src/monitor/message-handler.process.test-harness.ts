@@ -7,7 +7,7 @@ import type {
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 type SessionRecord = Parameters<

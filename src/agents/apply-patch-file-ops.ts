@@ -16,6 +16,7 @@ import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { decodeUtf8File } from "./utf8-file.js";
+import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
 export type SandboxApplyPatchConfig = {
   root: string;
@@ -144,17 +145,31 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const root = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
+  const initialRoot = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
+  const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
+  const resolveTarget = async (filePath: string) => {
+    const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
+    const relative = toRelativeSandboxPath(selectedRoot, filePath);
+    let root = roots.get(selectedRoot);
+    if (!root) {
+      root = await fsRoot(selectedRoot, { assertBeforeMutation: assertCurrent });
+      roots.set(selectedRoot, root);
+    }
+    const assertBeforeMutation = () => {
+      assertCurrent();
+      toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
+    };
+    return { root, relative, assertBeforeMutation };
+  };
   // Rebase only the admitted root spelling. Root owns parent-alias resolution;
   // absolute paths keep a literal "~" component from becoming home expansion.
-  const toRootPath = (filePath: string) =>
-    path.resolve(root.rootReal, toRelativeSandboxPath(root.rootDir, filePath));
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: (filePath) =>
       runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+        const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
         const opened = await openRootFile({
           absolutePath: filePath,
-          rootPath: containmentRoot,
+          rootPath: selectedRoot,
           boundaryLabel: "workspace root",
           symlinks: "follow-parents-within-root",
         });
@@ -168,11 +183,13 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
       }),
     writeFile: async (filePath, content) => {
       await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        assertCurrent();
+        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        assertBeforeMutation();
         await root
-          .write(toRootPath(filePath), content, {
+          .write(path.resolve(root.rootReal, relative), content, {
             encoding: "utf8",
             mutationSymlinks: "follow-parents-within-root",
+            assertBeforeMutation,
           })
           .catch(rethrowHostMutationError);
       });
@@ -180,10 +197,12 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     createFileExclusive: async (filePath, content) => {
       try {
         await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await root.create(toRootPath(filePath), content, {
+          const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+          assertBeforeMutation();
+          await root.create(path.resolve(root.rootReal, relative), content, {
             encoding: "utf8",
             mutationSymlinks: "reject",
+            assertBeforeMutation,
           });
         });
         return "created";
@@ -196,11 +215,12 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     },
     remove: async (filePath) => {
       await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        assertCurrent();
+        const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        assertBeforeMutation();
         // remove requires a relative path; "./" preserves literal tilde names.
         // Omitted mutationSymlinks lets it unlink the final symlink itself.
         await root
-          .remove(`./${toRelativeSandboxPath(root.rootDir, filePath)}`)
+          .remove(`./${relative}`, { assertBeforeMutation })
           .catch(rethrowHostMutationError);
       });
     },

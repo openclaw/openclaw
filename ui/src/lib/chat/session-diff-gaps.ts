@@ -16,14 +16,6 @@ function fileMatchesPatch(lines: readonly DiffLine[], fileLines: readonly string
   );
 }
 
-function contextRows(fileLines: readonly string[], start: number, count: number): DiffLine[] {
-  return Array.from({ length: count }, (_, index) => ({
-    kind: "ctx" as const,
-    lineNo: start + index,
-    text: fileLines[start + index - 1]!,
-  }));
-}
-
 /** Replaces part or all of one unchanged-lines marker with working-tree context. */
 export function expandSessionDiffGap(
   lines: readonly DiffLine[],
@@ -50,7 +42,11 @@ export function expandSessionDiffGap(
       : Math.min(GAP_CHUNK_SIZE, target.count);
   const remainingCount = target.count - revealCount;
   const revealStart = direction === "up" ? target.newStart + remainingCount : target.newStart;
-  const replacement = contextRows(fileLines, revealStart, revealCount);
+  const replacement: DiffLine[] = Array.from({ length: revealCount }, (_, offset) => ({
+    kind: "ctx",
+    lineNo: revealStart + offset,
+    text: fileLines[revealStart + offset - 1]!,
+  }));
   if (remainingCount > 0) {
     replacement.splice(direction === "up" ? 0 : replacement.length, 0, {
       kind: "skip",

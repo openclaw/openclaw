@@ -103,10 +103,7 @@ export function createNativeSessionCatalogGate(params: {
                 ),
             }
           : {}),
-        read: async (request) => {
-          assertEnabled();
-          return provider.read(request);
-        },
+        read: guard(provider.read),
         ...(continueSession
           ? {
               continueSession: guard(continueSession),

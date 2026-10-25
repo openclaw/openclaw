@@ -79,7 +79,7 @@ describe("Twitch durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const ingress = createIngress({ queue: append.queue, deliver, pollIntervalMs: 5 });
+      const ingress = createIngress({ queue: append.queue, deliver });
       ingress.start();
       try {
         const admission = ingress.accept(createTwitchIngressTestMessage("durable-first"));
@@ -105,7 +105,7 @@ describe("Twitch durable ingress", () => {
       const deliver = vi.fn(async (_message, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const recovered = createIngress({ queue, deliver, pollIntervalMs: 5 });
+      const recovered = createIngress({ queue, deliver });
       recovered.start();
       await expectSettledIngressVerdict(queue, "restart", "completed");
       expect(deliver).toHaveBeenCalledOnce();
@@ -120,7 +120,7 @@ describe("Twitch durable ingress", () => {
         { laneKey: "channel:testchannel" },
       );
       const deliver = vi.fn();
-      const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+      const ingress = createIngress({ queue, deliver });
       ingress.start();
       await expectSettledIngressVerdict(queue, "malformed", "failed");
       expect(deliver).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe("Twitch durable ingress", () => {
             }
           }
         });
-        const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+        const ingress = createIngress({ queue, deliver });
         try {
           ingress.start();
           await ingress.accept(createTwitchIngressTestMessage(mode));
@@ -230,7 +230,7 @@ describe("Twitch durable ingress", () => {
             await gate.promise;
           }
         });
-        const ingress = createIngress({ queue, deliver, pollIntervalMs: 5 });
+        const ingress = createIngress({ queue, deliver });
         try {
           ingress.start();
           await ingress.accept(createTwitchIngressTestMessage("shutdown-retry"));

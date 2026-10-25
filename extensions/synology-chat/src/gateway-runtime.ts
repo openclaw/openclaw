@@ -1,8 +1,10 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { sendMessage } from "./client.js";
 import { resolveSynologyPublicWebhookRouteKey } from "./hosted-media-route.js";
-import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
+import { getSynologyRuntime } from "./runtime.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import {
   createWebhookHandler,
@@ -218,11 +220,129 @@ export async function registerSynologyWebhookRoute(params: {
         lifecycle,
         log: logAdapter,
         deliver: async (msg, turnAdoptionLifecycle) => {
-          await dispatchSynologyChatInboundEvent({
-            account,
-            msg,
-            log: logAdapter,
-            turnAdoptionLifecycle,
+          const rt = getSynologyRuntime();
+          // SAFETY: Routing and inbound preparation only read the host-validated config snapshot.
+          const currentCfg = rt.config.current() as OpenClawConfig;
+
+          // The Chat API user_id (for sending) may differ from the webhook
+          // user_id (used for sessions/pairing). Use chatUserId for API calls.
+          const sendUserId = msg.chatUserId ?? msg.from;
+          const route = rt.channel.routing.resolveAgentRoute({
+            cfg: currentCfg,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            peer: { kind: "direct", id: msg.from },
+          });
+          const sessionKey = buildAgentSessionKey({
+            agentId: route.agentId,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            peer: { kind: "direct", id: msg.from },
+            // Synology Chat supports multiple independent accounts on one gateway.
+            // Keep direct-message sessions isolated per account and user.
+            dmScope: "per-account-channel-peer",
+            identityLinks: currentCfg.session?.identityLinks,
+          });
+
+          await rt.channel.inbound.run({
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            raw: msg,
+            ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+            adapter: {
+              ingest: (message) => ({
+                id: message.messageId,
+                timestamp: Date.now(),
+                rawText: message.body,
+                textForAgent: message.body,
+                textForCommands: message.body,
+                raw: message,
+              }),
+              resolveTurn: async (input) => {
+                const chatKind =
+                  msg.chatType === "group" || msg.chatType === "channel" ? msg.chatType : "direct";
+                const channelIngress = await msg.resolveChannelIngress({
+                  agentId: route.agentId,
+                  sessionKey,
+                  messageId: input.id,
+                  inboundEventKind: "user_request",
+                });
+                const msgCtx = rt.channel.inbound.buildContext({
+                  channelIngress,
+                  channel: CHANNEL_ID,
+                  accountId: account.accountId,
+                  messageId: input.id,
+                  timestamp: input.timestamp,
+                  from: `synology-chat:${msg.from}`,
+                  sender: {
+                    id: msg.from,
+                    name: msg.senderName,
+                  },
+                  conversation: {
+                    kind: chatKind,
+                    id: msg.from,
+                    label: msg.senderName || msg.from,
+                  },
+                  route: {
+                    agentId: route.agentId,
+                    dmScope: route.dmScope,
+                    accountId: account.accountId,
+                    routeSessionKey: sessionKey,
+                    dispatchSessionKey: sessionKey,
+                  },
+                  reply: {
+                    to: `synology-chat:${msg.from}`,
+                  },
+                  message: {
+                    rawBody: input.rawText,
+                    commandBody: input.textForCommands,
+                    bodyForAgent: input.textForAgent,
+                  },
+                  extra: {
+                    ChatType: msg.chatType,
+                    CommandAuthorized: msg.commandAuthorized,
+                  },
+                });
+                return {
+                  cfg: currentCfg,
+                  channel: CHANNEL_ID,
+                  accountId: account.accountId,
+                  route: {
+                    agentId: route.agentId,
+                    dmScope: route.dmScope,
+                    sessionKey: route.sessionKey,
+                  },
+                  ctxPayload: msgCtx,
+                  delivery: {
+                    durable: () => ({
+                      to: sendUserId,
+                    }),
+                    deliver: async (payload) => {
+                      const text = payload.text;
+                      const visibleReplySent = text
+                        ? await sendMessage(
+                            account.incomingUrl,
+                            text,
+                            sendUserId,
+                            account.allowInsecureSsl,
+                          )
+                        : false;
+                      return { visibleReplySent: Boolean(visibleReplySent) };
+                    },
+                  },
+                  dispatcherOptions: {
+                    onReplyStart: () => {
+                      logAdapter?.info?.(`Agent reply started for ${msg.from}`);
+                    },
+                  },
+                  record: {
+                    onRecordError: (err) => {
+                      logAdapter?.info?.(`Session metadata update failed for ${msg.from}`, err);
+                    },
+                  },
+                };
+              },
+            },
           });
         },
       });

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -64,6 +64,38 @@ const reply = (runId: string, timestamp: number, content = "Finished " + runId) 
 });
 
 describe("completed-work duration", () => {
+  it("keeps the recap duration when zero runtime cannot label completed work", async () => {
+    const sessionKey = "agent:main:dashboard:zero-runtime";
+    const runId = "zero-runtime";
+    const props = threadProps("pane-zero-runtime", sessionKey, [
+      prompt(runId, 1_000),
+      work(runId, 1_000),
+    ]);
+    props.runId = runId;
+    props.runActive = true;
+    props.runWorking = true;
+    props.streamStartedAt = 1_000;
+    props.runUsageById = new Map([[runId, { outputTokens: 42, seq: 1 }]]);
+    const { container, rerender } = mount(props);
+    props.messages = [...props.messages, reply(runId, 1_000)];
+    props.runActive = false;
+    props.runWorking = false;
+    props.runId = null;
+    props.selectedSession = {
+      key: sessionKey,
+      kind: "direct",
+      status: "done",
+      lastRunId: runId,
+      runtimeMs: 0,
+      updatedAt: 1_000,
+    };
+    rerender();
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in 1 second");
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
+  });
+
   it.each(["done", "failed", "timeout", "killed"] as const)(
     "uses matching %s lifecycle duration, not final-message creation time",
     async (status) => {
@@ -138,7 +170,7 @@ describe("completed-work duration", () => {
     disclosure?.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(disclosure?.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("read");
+    await waitForSolid(() => expect(container.textContent).toContain("read"));
     disclosure?.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
@@ -183,7 +215,7 @@ describe("completed-work duration", () => {
 });
 
 describe("live progress placement", () => {
-  it("keeps progress after accepted steers and before queued input", () => {
+  it("keeps progress after accepted steers and before queued input", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(31_000);
     cleanup.push(() => clock.mockRestore());
     const runId = "active-run";
@@ -239,7 +271,7 @@ describe("live progress placement", () => {
     ];
     const { container, transcript } = mount(props, false);
     transcript.update();
-    flush();
+    await flushDeferredRowPrune();
     const progress = container.querySelector(".chat-working-indicator")!;
     const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
     const activity = container.querySelector('[data-entry-id="latest-tool"]')!;

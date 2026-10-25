@@ -6,7 +6,11 @@ import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  beginConfigRead,
+  clearConfigRequestVersions,
+  createInitialConfigState,
   currentConfigObject,
+  currentConfigRead,
   currentDisplayRuntimeConfig,
   currentDisplaySpeechConfig,
   resolveAgentConfigEntryTarget,
@@ -20,6 +24,30 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config state model", () => {
+  it("settles superseded observers without completing the underlying config request", async () => {
+    const client = createTestGatewayClient(vi.fn());
+    const state = createInitialConfigState({ client, phase: "connected" });
+    const first = beginConfigRead(state, client);
+    const completed = vi.fn();
+    void first.completion.promise.then(completed);
+    const next = beginConfigRead(state, client);
+
+    await expect(first.settled).resolves.toEqual({
+      ok: false,
+      error: "The configuration refresh was superseded.",
+    });
+    expect(completed).not.toHaveBeenCalled();
+    expect(currentConfigRead(state)).toBe(next);
+
+    first.completion.resolve({ ok: true, value: undefined });
+    await first.completion.promise;
+    expect(completed).toHaveBeenCalledOnce();
+    next.completion.resolve({ ok: true, value: undefined });
+    await expect(next.settled).resolves.toEqual({ ok: true, value: undefined });
+    clearConfigRequestVersions(state);
+    await expect(next.settled).resolves.toEqual({ ok: true, value: undefined });
+  });
+
   it("settles foreground loading when its background successor fails first", async () => {
     const initial = deferred<ConfigSnapshot>();
     const latest = deferred<ConfigSnapshot>();

@@ -41,8 +41,6 @@ function rowFor(container: ParentNode, id: string) {
 function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
   return {
     ...makeViewProps(),
-    onAddAccount: () => undefined,
-    addAccountDisabled: false,
     ...overrides,
   };
 }
@@ -307,54 +305,25 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
-it("releases each account usage element while retaining its profile row", () => {
-  const releaseFirstUsage = vi.fn();
-  const releaseSecondUsage = vi.fn();
-  const registerAccountUsage = vi
-    .fn(() => releaseFirstUsage)
-    .mockReturnValueOnce(releaseFirstUsage)
-    .mockReturnValueOnce(releaseSecondUsage);
-  const providerCard = orderedCard(pair);
-  for (const profile of providerCard.profiles) {
-    profile.type = "api_key";
-  }
-  const { container, update } = mount(providerCard, props({ registerAccountUsage }));
-  const retainedRow = rowFor(container, "openai:one");
-  expect(registerAccountUsage).not.toHaveBeenCalled();
-
-  const oauthCard = {
-    ...providerCard,
-    profiles: [makeProfile("openai:one")],
-    profileOrders: { openai: ["openai:one"] },
-  };
-  update(oauthCard);
-  const firstUsage = container.querySelector("openclaw-model-account-usage");
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(firstUsage).not.toBeNull();
-  expect(registerAccountUsage).toHaveBeenCalledExactlyOnceWith(firstUsage);
-  expect(releaseFirstUsage).not.toHaveBeenCalled();
-
-  update({
-    ...oauthCard,
-    profiles: [{ ...makeProfile("openai:one"), type: "api_key" }],
-  });
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
-  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
-
-  update(oauthCard);
-  const secondUsage = container.querySelector("openclaw-model-account-usage");
-  expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(secondUsage).not.toBeNull();
-  expect(secondUsage).not.toBe(firstUsage);
-  expect(registerAccountUsage).toHaveBeenCalledTimes(2);
-  expect(registerAccountUsage).toHaveBeenLastCalledWith(secondUsage);
-  expect(releaseSecondUsage).not.toHaveBeenCalled();
-
-  update({ ...providerCard, profiles: [], profileOrders: {} });
-  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
-  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
-  expect(releaseSecondUsage).toHaveBeenCalledTimes(1);
+it("names hidden identities by credential kind, numbering only repeated kinds", () => {
+  const { container } = mount(
+    card({
+      profiles: [
+        { profileId: "openai:token-a", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:oauth", type: "oauth", status: "ok", source: "saved" },
+        { profileId: "openai:token-b", type: "token", status: "static", source: "saved" },
+        { profileId: "openai:named", type: "token", status: "static", email: "ops@example.com" },
+      ],
+      profileOrders: {
+        openai: ["openai:token-a", "openai:oauth", "openai:token-b", "openai:named"],
+      },
+    }),
+  );
+  expect(
+    [...container.querySelectorAll(".model-providers__profile-copy strong")].map(
+      (identity) => identity.textContent,
+    ),
+  ).toEqual(["Access token 1", "Signed-in account", "Access token 2", "ops@example.com"]);
 });
 
 it("releases a removed row's drag without handling the next Escape", () => {
@@ -413,8 +382,8 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   grip.focus();
-  const details = grip.closest(rowSelector)!.querySelector("details")!;
-  details.open = true;
+  // The moved row keeps its element, so focus and row state survive reordering.
+  const movedRow = grip.closest(rowSelector)!;
   expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
   expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
 
@@ -430,8 +399,7 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
         ),
       ).toEqual(order);
       expect(document.activeElement).toBe(grip);
-      expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
-      expect(details).toMatchObject({ open: true });
+      expect(grip.closest(rowSelector)).toBe(movedRow);
       expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
     });
   }

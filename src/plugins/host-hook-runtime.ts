@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { touchBoundedSet } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
@@ -58,16 +59,7 @@ function getPluginHostRuntimeState(): PluginHostRuntimeState {
 }
 
 function rememberBoundedRunId(runIds: Set<string>, runId: string): void {
-  runIds.delete(runId);
-  runIds.add(runId);
-
-  while (runIds.size > TRACKED_RUN_IDS_MAX) {
-    const oldest = runIds.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    runIds.delete(oldest);
-  }
+  touchBoundedSet(runIds, runId, TRACKED_RUN_IDS_MAX);
 }
 
 function trackAgentEventHandler(runId: string, pending: Promise<void>): void {

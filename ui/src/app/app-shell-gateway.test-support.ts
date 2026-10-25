@@ -65,7 +65,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
     invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;

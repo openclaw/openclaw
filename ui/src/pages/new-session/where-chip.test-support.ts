@@ -1,6 +1,7 @@
 import { createComponent } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import * as hosted from "./hosted-environments.ts";
@@ -114,6 +115,11 @@ export function pickerParams(
   return { params, state };
 }
 
-export function renderPicker(...args: Parameters<typeof pickerParams>) {
-  return mountSolid(() => createComponent(WhereChip, pickerParams(...args))).container;
+export async function renderPicker(...args: Parameters<typeof pickerParams>) {
+  const { container } = mountSolid(() => createComponent(WhereChip, pickerParams(...args)));
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(container.querySelector(".new-session-page__environment-layout")).not.toBeNull(),
+  );
+  return container;
 }

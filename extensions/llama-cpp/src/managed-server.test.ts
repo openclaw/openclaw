@@ -497,14 +497,13 @@ it("reports optional metrics separately from runtime readiness and load errors",
     inspectLlamaServerRuntime({
       baseUrl: `http://127.0.0.1:${port}/v1`,
       modelId: "embedding-model",
-      backend: "metal",
       loadError,
     });
 
   await expect(inspect()).resolves.toEqual({
     engine: "llama.cpp",
     state: "ready",
-    backend: "metal",
+    backend: undefined,
     buildInfo: "b10357 (689e227db)",
     model: { id: "embedding-model", path: "/models/from-props.gguf" },
     capabilities: { vision: false, draft: false },

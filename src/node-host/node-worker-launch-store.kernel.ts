@@ -23,6 +23,8 @@ import type {
 import {
   isNodeWorkerTerminalState,
   nodeWorkerLaunchReceiptFromRow,
+  rowMatchesImmutableIdentity,
+  validateIdentifier,
   validateNodeWorkerContainerIdentity,
   validateNodeWorkerPlanHash,
   validateNodeWorkerProcessIdentity,
@@ -194,12 +196,6 @@ export function readNodeWorkerLaunchReceipt(
   return row ? nodeWorkerLaunchReceiptFromRow(row) : undefined;
 }
 
-function validateIdentifier(value: string, label: string): void {
-  if (!value || value.trim() !== value || value.length > 256 || value.includes("\0")) {
-    throw new Error(`${label} must be a bounded non-empty identifier`);
-  }
-}
-
 function validateTimestamp(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error("node worker launch timestamp must be a non-negative safe integer");
@@ -251,21 +247,6 @@ function sameObservedOwner(
     current.supervisor_start_time === observed.supervisor_start_time &&
     current.worker_pid === observed.worker_pid &&
     current.worker_start_time === observed.worker_start_time
-  );
-}
-
-function rowMatchesImmutableIdentity(
-  row: NodeWorkerLaunchRow,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    row.launch_id === expected.launchId &&
-    row.plan_hash === expected.planHash &&
-    row.environment_id === expected.environmentId &&
-    row.session_id === expected.sessionId &&
-    row.owner_epoch === expected.ownerEpoch &&
-    row.placement_generation === expected.placementGeneration &&
-    row.run_id === expected.runId
   );
 }
 
@@ -639,7 +620,13 @@ export class NodeWorkerLaunchKernel {
             .values({
               launch_id: params.launchId,
               cleanup_mode:
-                params.cleanupMode === "linux-subreaper" ? "owned-anchor" : params.cleanupMode,
+                params.cleanupMode === "linux-subreaper"
+                  ? "owned-anchor"
+                  : params.cleanupMode === "windows-job"
+                    ? current.boot_id?.startsWith("win32:")
+                      ? "owned-anchor"
+                      : "process-group"
+                    : params.cleanupMode,
               lineage_settled: null,
             }),
         );

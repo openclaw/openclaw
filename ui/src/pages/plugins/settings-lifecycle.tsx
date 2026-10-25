@@ -1,5 +1,5 @@
 import { Icon } from "../../components/solid/icon.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginAskAction } from "./overview.tsx";
@@ -91,12 +91,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
         class="btn btn--icon oc-action oc-action-icon oc-action-secondary"
         href={props.settingsHref}
         aria-label={t("pluginsPage.detailSettings")}
-        onClick={(event: MouseEvent) => {
-          if (shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            props.onSettings();
-          }
-        }}
+        onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onSettings())}
       >
         <Icon name="settings" />
       </a>

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -230,5 +230,55 @@ describe("device pairing dialog", () => {
     expect(container.querySelector('[role="timer"]')?.textContent?.trim()).toBe(
       "This setup link expires in 1:00.",
     );
+  });
+
+  it("announces device requests that arrive while the setup code is shown", () => {
+    const [pendingCount, setPendingCount] = createSignal(0);
+    const view = mountSolid(() =>
+      createComponent(DevicePairSetup, {
+        open: true,
+        lifecycle: {
+          phase: "waiting",
+          access: "node",
+          setup: {
+            setupId: "setup-node",
+            setupCode: "AbC_123",
+            gatewayUrl: "wss://gateway.example",
+            auth: "token",
+            urlSource: "test",
+            access: "node",
+            expiresAtMs: 70_000,
+          },
+        },
+        nowMs: 10_000,
+        get pendingCount() {
+          return pendingCount();
+        },
+        onRefresh: vi.fn(async () => {}),
+        onAccessChange: vi.fn(),
+        onClose: vi.fn(),
+        onManageDevices: vi.fn(),
+        onGetApps: vi.fn(),
+      }),
+    );
+
+    const waiting = "Run the command on the device, then review its pairing request here.";
+    const status = view.getByRole("status");
+    expect(status.textContent).toBe("");
+    view.getByText(waiting);
+    setPendingCount(1);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(view.queryByText(waiting)).toBeNull();
+    expect(status.textContent).toBe("Device requests waiting for review: 1");
+    setPendingCount(2);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("Device requests waiting for review: 2");
+    setPendingCount(0);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("");
+    view.getByText(waiting);
   });
 });

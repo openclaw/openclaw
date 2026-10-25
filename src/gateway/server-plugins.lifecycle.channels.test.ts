@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
@@ -19,7 +20,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
+  INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
+  type InstanceBindingProbeResult,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
@@ -27,8 +30,6 @@ import {
   closePluginGateway,
   configurePluginGateway,
   observePostReadyStartupMaintenance,
-  requireBoundRuntime,
-  requestSettledInstanceBindingProbe,
   startPluginGateway,
   reloadPlugin,
   writeJson,
@@ -183,6 +184,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const started = await startPluginGateway({ hotReloadRecovery });
     server = started.server;
     await server.startupSettled;
+    await waitForGatewayStartup(started.port);
     socket = await connectWebchatClient({ port: started.port, scopes: ["operator.admin"] });
     const connected = socket;
     type Probe = {
@@ -338,11 +340,14 @@ it.each([false, true])(
       teardownFails ? { serviceStopFailure: "rejection" } : undefined,
     );
     coordinator.channel = channelPlugin;
-    const bundledRoot = tempDirs.make("openclaw-instance-binding-");
-    await writeInstanceBindingProbePlugin(bundledRoot, coordinator.channelName, channelId);
-    const configPath = configurePluginGateway(bundledRoot, true);
+    const pluginRoot = tempDirs.make("openclaw-instance-binding-");
+    await writeInstanceBindingProbePlugin(pluginRoot, coordinator.channelName, channelId);
+    const configPath = configurePluginGateway(tempDirs.make("openclaw-bundled-empty-"), true);
     const config = loadGatewayTestConfig();
-    config.plugins = enabledPlugins(["instance-binding-probe"], config.plugins);
+    config.plugins = {
+      ...enabledPlugins(["instance-binding-probe"], config.plugins),
+      load: { paths: [pluginRoot] },
+    };
     await writeJson(configPath, config);
     const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
     await useGatewayGraphPluginRuntime();
@@ -351,6 +356,7 @@ it.each([false, true])(
     server = started.server;
     const port = started.port;
     await server.startupSettled;
+    await waitForGatewayStartup(port);
     await maintenance.settled;
     const probe = async (accountId: string) => {
       const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
@@ -368,15 +374,26 @@ it.each([false, true])(
     expect(await probe("active")).toEqual({ status: 200, body: "active:1", registry: "current" });
     expect((await probe("pending")).status).toBe(404);
     socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-    const stopped = await rpcReq(socket, "channels.stop", {
+    const connected = socket;
+    const stopped = await rpcReq(connected, "channels.stop", {
       channel: channelId,
       accountId: "parked",
     });
     expect(stopped.ok, stopped.error?.message).toBe(true);
     expect((await probe("parked")).status).toBe(404);
 
-    const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
-    await requestSettledInstanceBindingProbe(runtime);
+    await vi.waitUntil(
+      async () => {
+        const settlement = await rpcReq<InstanceBindingProbeResult>(
+          connected,
+          INSTANCE_BINDING_PROBE_METHOD,
+          {},
+        );
+        expect(settlement.ok, settlement.error?.message).toBe(true);
+        return settlement.payload?.reloadSettled === true;
+      },
+      { timeout: 30_000 },
+    );
     const initialRegistry = getActivePluginRegistry();
     const reload = await reloadPlugin(socket);
     if (teardownFails) {

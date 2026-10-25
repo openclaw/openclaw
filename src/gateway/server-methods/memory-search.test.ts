@@ -79,8 +79,8 @@ async function invokeMemorySearch(
   cfg: OpenClawConfig,
   method = "memory.search",
   hasCurrentClientAuthority = () => true,
+  respond = vi.fn(),
 ) {
-  const respond = vi.fn();
   await expectDefined(
     memorySearchHandlers[method],
     'memorySearchHandlers["memory.search"] test invariant',
@@ -239,7 +239,7 @@ describe("memory.search gateway method", () => {
     });
   });
 
-  it("reports routed cleanup failure as an uncertain outcome while preserving legacy cleanup", async () => {
+  it("delivers routed results before cleanup and preserves them if cleanup fails", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
     manager.close.mockRejectedValue(new Error("fixture manager cleanup failed"));
@@ -251,17 +251,34 @@ describe("memory.search gateway method", () => {
         expect.objectContaining({ results: [] }),
         undefined,
       );
-      const routed = await invokeMemorySearch(
+      const closeStarted = createDeferredCore();
+      const releaseClose = createDeferredCore();
+      manager.close.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await releaseClose.promise;
+        throw new Error("fixture manager cleanup failed");
+      });
+      const routed = vi.fn();
+      let requestSettled = false;
+      const request = invokeMemorySearch(
         { query: "tea", expectedOwnerId },
         cfg,
         "memory.search.owner",
-      );
-      expect(routed).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", message: "fixture manager cleanup failed" }),
-      );
-      expect(routed.mock.calls[0]?.[2]?.details?.mutationAccepted).not.toBe(false);
+        () => true,
+        routed,
+      ).then(() => {
+        requestSettled = true;
+      });
+      try {
+        await closeStarted.promise;
+        expect(routed).toHaveBeenCalledExactlyOnceWith(true, { results: [] }, undefined);
+        expect(requestSettled).toBe(false);
+      } finally {
+        releaseClose.resolve();
+        await request;
+      }
+      expect(routed).toHaveBeenCalledTimes(1);
+      expect(manager.close).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -326,6 +343,20 @@ describe("memory.search gateway method", () => {
           expect.objectContaining({ code: "UNAVAILABLE" }),
         );
         expect(manager.search).not.toHaveBeenCalled();
+        getActiveMemorySearchManagerCore.mockImplementationOnce(async () => {
+          current = false;
+          return { manager, searchForCli: instance.wrap(searchForCli) };
+        });
+        const duringAcquisition = await invokeMemorySearch(
+          { query: "tea", expectedOwnerId },
+          cfg,
+          "memory.search.owner",
+          () => current,
+        );
+        expect(duringAcquisition).not.toHaveBeenCalledWith(true, expect.anything(), undefined);
+        expect(manager.search).not.toHaveBeenCalled();
+        expect(manager.close).toHaveBeenCalledOnce();
+        current = true;
         const response = await invokeMemorySearch(
           { query: "tea", expectedOwnerId },
           cfg,

@@ -7,11 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GatewayRequestError } from "../../../ui/src/api/gateway.ts";
-import {
-  createAgentFileActions,
-  loadAgentFileContent,
-  retainAgentFileDrafts,
-} from "../../../ui/src/pages/agents/files.ts";
+import { createAgentFilePanel, retainAgentFileDrafts } from "../../../ui/src/pages/agents/files.ts";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.ts";
 import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
@@ -20,7 +16,14 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 
-type EditorState = Parameters<typeof createAgentFileActions>[0];
+type EditorState = Parameters<typeof createAgentFilePanel>[0];
+
+function editorActions(editor: EditorState) {
+  return createAgentFilePanel(editor, {
+    canWrite: () => true,
+    isCurrent: () => true,
+  }).forAgent("main");
+}
 
 function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -91,7 +94,7 @@ function registerFileTests(storage: "local" | "remote") {
   }
   function saveDraft(editor: EditorState) {
     expectDefined(editor.agentFileEditors[memory]?.draft, "editor draft");
-    return createAgentFileActions(editor, "main", () => true).onFileSave(memory);
+    return editorActions(editor).onFileSave(memory);
   }
   function readFile(name = memory): string {
     return fs.readFileSync(path.join(storageDir, name), "utf8");
@@ -140,6 +143,8 @@ function registerFileTests(storage: "local" | "remote") {
     const editor: EditorState = {
       agentsSelectedId: "main",
       agentFileActive: memory,
+      agentFilesList: null,
+      agentsPanel: "files",
       client: createTestGatewayClient(async (method, params) => {
         if ((method !== "agents.files.get" && method !== "agents.files.set") || !isRecord(params)) {
           throw new Error(`Unexpected editor request: ${method}`);
@@ -153,7 +158,12 @@ function registerFileTests(storage: "local" | "remote") {
       }),
       connected: true,
       requestGeneration: 0,
-      agents: { recordFile: () => null },
+      agents: {
+        recordFile: () => null,
+        files: () => ({ list: null, loading: false, read: null }),
+        ensureFiles: async () => null,
+        refreshFiles: async () => null,
+      },
       agentFilesLoading: false,
       agentFileRead: null,
       agentFileOutcome: null,
@@ -162,8 +172,9 @@ function registerFileTests(storage: "local" | "remote") {
       agentFileSaving: false,
       agentFileWriteRevisions: new Map(),
     };
-    expect(await loadAgentFileContent(editor, "main", memory)).toBe(true);
-    createAgentFileActions(editor, "main", () => true).onFileDraftChange(memory, draft);
+    const actions = editorActions(editor);
+    expect(await actions.onSelectFile(memory)).toBe(true);
+    actions.onFileDraftChange(memory, draft);
     return editor;
   }
 
@@ -198,7 +209,7 @@ function registerFileTests(storage: "local" | "remote") {
         writeFile(replacement);
       }
       editor.agentFileEditors = retained.editors;
-      expect(await loadAgentFileContent(editor, "main", memory)).toBe(true);
+      expect(await editorActions(editor).onSelectFile(memory)).toBe(true);
 
       expect(await saveDraft(editor)).toBe(false);
       expect(editor.agentFileConflict).toBe(memory);
@@ -210,15 +221,11 @@ function registerFileTests(storage: "local" | "remote") {
       ).toBe(variant === "missing" ? false : replacement);
 
       if (variant === "missing") {
-        expect(await createAgentFileActions(editor, "main", () => true).onFileReload(memory)).toBe(
-          true,
-        );
+        expect(await editorActions(editor).onFileReload(memory)).toBe(true);
         expect(editor.agentFileEditors[memory]?.draft).toBe("");
         expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
       } else {
-        expect(
-          await createAgentFileActions(editor, "main", () => true).onFileOverwrite(memory),
-        ).toBe(true);
+        expect(await editorActions(editor).onFileOverwrite(memory)).toBe(true);
         expect(readFile()).toBe(edited);
       }
       expect(editor.agentFileConflict).toBeNull();

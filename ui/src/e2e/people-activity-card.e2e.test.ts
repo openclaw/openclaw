@@ -345,6 +345,7 @@ suite.define(() => {
           .getByRole("link");
         const recentTitle = recent.locator(".person-activity-card__session-name");
         await recent.hover();
+        await pollScrolling(recentTitle).toBe(true);
         const initialShift = await shift(recentTitle);
         expect(initialShift).not.toBe("");
         await updateRecent(gateway, recentTitle, updatedRecentLabel);

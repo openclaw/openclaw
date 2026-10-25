@@ -770,7 +770,9 @@ describeLive("gateway live (ACP bind)", () => {
         const { mainAssistantTexts, spawnedSessionKey } = bindResult;
         logLiveStep("bind command completed");
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
-        expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
+        // Raw harness ids stay owned by the requesting `main` agent; this lane configures no agent
+        // named after the harness, which would keep its own namespace instead.
+        expect(spawnedSessionKey).toMatch(/^agent:main:acp:/);
         logLiveStep(`binding announced for session ${spawnedSessionKey ?? "missing"}`);
 
         let firstBoundHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;

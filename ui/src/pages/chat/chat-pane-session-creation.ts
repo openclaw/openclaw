@@ -1,24 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import { resolveSessionCreateParams } from "../../lib/sessions/create.ts";
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
   areUiSessionKeysEquivalent,
   isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
+import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
 import {
   NEW_SESSION_ACTIVE_RUN_MESSAGE,
@@ -27,7 +31,6 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { canCreateChatSession, selectedChatSessionRow } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header-identity.tsx";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
@@ -41,6 +44,33 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       generation: number;
     } | null;
   } = { recovering: false, creatingIncognito: false, restartFallback: null };
+
+  protected catalogComposerReason(catalogKey: CatalogSessionKey | null) {
+    const { catalogHost, catalogLoading, catalogSession } = this.history;
+    // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
+    if (!catalogKey || catalogLoading || catalogSession?.canContinue === true) {
+      return null;
+    }
+    if (catalogHost?.kind === "node") {
+      return { text: t("chat.catalog.remoteViewOnly") };
+    }
+    // Archivable local Codex rows withhold continuation only when supervision is off.
+    if (catalogKey.catalogId !== "codex" || catalogSession?.canArchive !== true) {
+      return { text: t("chat.catalog.unsupportedViewOnly") };
+    }
+    const location = pluginDetailLocation(
+      { pathname: pathForPluginSettings("codex", this.context.basePath), search: "" },
+      true,
+    );
+    return {
+      text: t("chat.codexSupervisionDisabled"),
+      action: {
+        label: t("chat.openCodexSettings"),
+        href: `${location.pathname}${location.search}`,
+        onNavigate: () => this.context.navigate("plugin-settings", location),
+      },
+    };
+  }
 
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;

@@ -11,7 +11,7 @@ export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = ReturnType<
   typeof createDockPanelLayout<TDock>
 >;
 
-type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
+export function createDockPanelLayout<TDock extends DockPanelPlacement>(options: {
   storageKey: string;
   minHeight: number;
   minWidth: number;
@@ -19,11 +19,7 @@ type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
   supportedDocks: readonly TDock[];
   defaultHeight: number;
   defaultWidth: number;
-};
-
-export function createDockPanelLayout<TDock extends DockPanelPlacement>(
-  options: DockPanelLayoutOptions<TDock>,
-) {
+}) {
   const defaults: DockPanelLayout<TDock> = {
     open: false,
     dock: options.defaultDock,

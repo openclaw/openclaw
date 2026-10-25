@@ -450,9 +450,14 @@ describe("registered mcp.authLogin", () => {
           setGatewayPluginMetadataSnapshot(metadata(), { config: bundleConfig });
         }
         releaseToken.resolve();
-        expect(await terminal(started.sessionId)).toMatchObject({
-          status: change === "unchanged" ? "done" : "error",
-        });
+        const result = await terminal(started.sessionId);
+        expect(result.status).toBe(change === "unchanged" ? "done" : "error");
+        if (change !== "unchanged") {
+          // The CLI cannot resolve plugin-declared servers, so recovery names the plugin.
+          expect(result.error).toBe(
+            "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
+          );
+        }
         const stored = await store();
         expect(stored.tokens?.access_token).toBe(
           change === "unchanged" ? "fixture-access" : undefined,
@@ -529,6 +534,9 @@ describe("registered mcp.authLogin", () => {
       expect((await callback(started.state)).status).toBe(200);
       const result = await terminal(started.sessionId);
       expect(result.status).toBe("error");
+      expect(result.error).toBe(
+        "Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login docs, then start the Gateway again.",
+      );
       expect(JSON.stringify(result)).not.toContain("private exchange detail");
       const after = await store();
       expect(after.tokens).toEqual(before.tokens);

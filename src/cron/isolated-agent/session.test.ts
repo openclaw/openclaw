@@ -58,6 +58,17 @@ function resolveWithStoredEntry(params?: {
   });
 }
 
+it.each([true, false])(
+  "initializes recency only for a new scheduled session (existing=%s)",
+  (existing) => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:dashboard:scheduled-check",
+      ...(existing ? { entry: { updatedAt: NOW_MS - 1_000 } } : {}),
+    });
+    expect(result.sessionEntry.updatedAt).toBe(existing ? NOW_MS - 1_000 : NOW_MS);
+  },
+);
+
 const delivery = {
   lastChannel: "slack",
   lastTo: "channel:C0XXXXXXXXX",
@@ -106,40 +117,28 @@ it.each([
 });
 
 it.each([
-  { forceNew: true, heartbeat: false, initializing: false, rolls: false },
-  { forceNew: true, heartbeat: true, initializing: true, rolls: false },
-  { forceNew: false, heartbeat: true, initializing: false, rolls: false },
-  { forceNew: true, heartbeat: true, initializing: false, rolls: true },
+  { forceNew: false, initializing: false },
+  { forceNew: false, initializing: true },
+  { forceNew: true, initializing: false },
+  { forceNew: true, initializing: true },
 ])(
-  "guards archived sessions: forced=$forceNew, heartbeat=$heartbeat, initializing=$initializing",
-  ({ forceNew, heartbeat, initializing, rolls }) => {
-    const sessionKey = `agent:main:main${heartbeat ? ":heartbeat" : ""}`;
+  "guards archived sessions: forced=$forceNew, initializing=$initializing",
+  ({ forceNew, initializing }) => {
+    const sessionKey = "agent:main:cron:test";
     const resolve = () =>
       resolveWithStoredEntry({
         sessionKey,
         forceNew,
         entry: {
-          sessionId: "archived-heartbeat-session",
+          sessionId: "archived-session",
           archivedAt: NOW_MS,
-          ...(heartbeat ? { heartbeatIsolatedBaseSessionKey: "agent:main:main" } : {}),
           ...(initializing ? { initializationPending: true as const } : {}),
         },
       });
-    if (!rolls) {
-      const error = initializing
-        ? "is still initializing. Retry after initialization completes."
-        : "is archived. Restore it before starting new work.";
-      expect(resolve).toThrow(`Session "${sessionKey}" ${error}`);
-    } else {
-      const result = resolve();
-      expect(result).toMatchObject({
-        isNewSession: true,
-        previousSessionId: "archived-heartbeat-session",
-      });
-      expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
-      expect(result.sessionEntry.archivedAt).toBeUndefined();
-      expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
-    }
+    const error = initializing
+      ? "is still initializing. Retry after initialization completes."
+      : "is archived. Restore it before starting new work.";
+    expect(resolve).toThrow(`Session "${sessionKey}" ${error}`);
   },
 );
 

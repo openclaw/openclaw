@@ -145,19 +145,10 @@ describe("withReplyDispatcher", () => {
   it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
     const order: string[] = [];
     const dispatcher = {
-      sendToolResult: () => true,
-      sendBlockReply: () => true,
+      ...createDispatcher(order),
       sendFinalReply: () => {
         order.push("sendFinalReply");
         return true;
-      },
-      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-      markComplete: () => {
-        order.push("markComplete");
-      },
-      waitForIdle: async () => {
-        order.push("waitForIdle");
       },
     } satisfies ReplyDispatcher;
     hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(

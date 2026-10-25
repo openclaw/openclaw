@@ -139,6 +139,40 @@ describe("ordinary automation scratch editor", () => {
     expect(editor.textContent).not.toContain("Retired save failed");
   });
 
+  it("clears save failure for a held retry without replacing the draft", async () => {
+    const retry = createDeferred<CronScratchGetResult>();
+    onTestFinished(() => retry.resolve(snapshot("Draft notes", 2)));
+    const request = vi
+      .fn<GatewayBrowserClient["request"]>()
+      .mockResolvedValueOnce(snapshot("Saved notes", 1))
+      .mockRejectedValueOnce(new Error("Synthetic save unavailable"))
+      .mockImplementationOnce(() => retry.promise);
+    const { editor } = await mount(request);
+    await click(editor, "Load scratch");
+    const textarea = editor.querySelector("textarea")!;
+    textarea.value = "Draft notes";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    await click(editor, "Save scratch");
+    await waitForSolid(() => expect(editor.textContent).toContain("Synthetic save unavailable"));
+
+    const save = getButtonByText(editor, "Save scratch");
+    await click(editor, "Save scratch");
+    await waitForSolid(() => {
+      expect(editor.textContent).not.toContain("Synthetic save unavailable");
+      expect(save.disabled).toBe(true);
+      expect(editor.querySelector("textarea")).toBe(textarea);
+      expect(textarea.value).toBe("Draft notes");
+    });
+    getButtonByText(editor, "Reload scratch").click();
+    expect(request).toHaveBeenCalledTimes(3);
+    retry.resolve(snapshot("Draft notes", 2));
+    await waitForSolid(() => {
+      expect(save.disabled).toBe(false);
+      expect(editor.textContent).toContain("Scratch saved");
+      expect(editor.querySelector("textarea")).toBe(textarea);
+    });
+  });
+
   it("loads on demand and admits only one read while it is pending", async () => {
     const pending = createDeferred<CronScratchGetResult>();
     const request = vi.fn(() => pending.promise);

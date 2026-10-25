@@ -6,6 +6,7 @@ import {
 import { handleGatewayRequest } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -18,13 +19,7 @@ function setup() {
     connId: `activity-rpc-${tab}`,
     presenceKey: `activity-rpc-${tab}`,
     usesSharedGatewayAuth: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
+    connect: gatewayConnect(["operator.read"]),
     authenticatedUserId: "activity-rpc@example.test",
     personPresence: { onlineSince: started - 10_000 },
   }));

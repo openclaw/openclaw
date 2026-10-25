@@ -1,6 +1,5 @@
 import { Portal } from "@solidjs/web";
 import {
-  Loading,
   Show,
   createEffect,
   createMemo,
@@ -21,8 +20,9 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/details.css";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -57,6 +57,7 @@ export type ChatDetailsViewProps = {
   nativePresentation?: "desktop" | "mobile";
   mobileHost?: ChatMobileHost;
   mobileBindings?: MobileDetailsBindings;
+  contentPending?: boolean;
   conversationVisible?: boolean;
   conversationMain?: boolean;
   externalTrigger?: boolean;
@@ -129,8 +130,16 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
       : intent() === "open" || (intent() === "auto" && canDock()));
+  const outputsDemand = createMemo(() =>
+    desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
+  );
   // Load on first presentation, then retain disclosure state while closed.
-  const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
+  // Automatic content follows transcript paint; explicit opens bypass that wait.
+  // After first mount, retain disclosure state while closed or reconnecting.
+  const [sessionOpened] = createSignal<boolean>(
+    (previous) =>
+      previous || (opened() && (!props.contentPending || intent() === "open" || !desktop())),
+  );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
   surface.style.display = "contents";
@@ -192,9 +201,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     const pane = elements?.pane;
     const frame = elements?.frame;
-    const footerBounds = conversationVisible
-      ? elements?.footer?.getBoundingClientRect()
-      : undefined;
     const bounds = (
       mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
     )?.getBoundingClientRect();
@@ -205,12 +211,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     // Otherwise the inspector releases its column halfway through a side-panel
     // opening and makes the transcript shrink past its destination, then return.
     let dockingWidth = bounds.width;
-    if (isDesktop && pane && conversationVisible) {
+    // The chat frame still needs its destination width when Details anchors to main.
+    if (isDesktop && pane && frame) {
       const style = getComputedStyle(pane);
       const sideWidth = Number.parseFloat(style.getPropertyValue("--desktop-side-reserve"));
       const dividerWidth = Number.parseFloat(style.getPropertyValue("--desktop-divider-reserve"));
       const conversationIsSide =
-        frame?.closest("[data-region]")?.getAttribute("data-region") === "side";
+        frame.closest("[data-region]")?.getAttribute("data-region") === "side";
       // The pane uses border-box sizing; route-entry transforms must not
       // become the retained conversation width.
       dockingWidth = Number.parseFloat(style.width);
@@ -225,12 +232,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       frame?.style.setProperty("--chat-details-frame-width", `${dockingWidth}px`);
     }
     setWideEnough(dockingWidth >= DETAILS_DOCK_MIN_WIDTH);
+    if (!open) {
+      return;
+    }
+    const footerBounds = conversationVisible
+      ? elements?.footer?.getBoundingClientRect()
+      : undefined;
     if (isDesktop) {
       // Measure the conversation owner, never the moving Details surface. Its
       // reservation changes the composer width, but not this frame's width.
-      if (!open) {
-        return;
-      }
       const composer = conversationVisible
         ? elements?.getComposerInput?.()?.getBoundingClientRect()
         : undefined;
@@ -500,7 +510,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    reposition();
+    // Resolve automatic desktop docking before paint so a visible boot frame
+    // never widens for one frame before the first ResizeObserver delivery.
+    if (desktop()) {
+      reposition();
+    } else {
+      mountSurface(readLayout());
+    }
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
@@ -533,13 +549,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   function SessionContent(content: { children: Element }) {
     return (
       <Show when={sessionOpened()}>
-        <Loading
+        <ChatLazyBoundary
           fallback={
             <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           }
         >
           {content.children}
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
     );
   }
@@ -548,6 +564,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       ref={(element) => (host = element)}
       mobile={props.mobile ? "" : undefined}
     >
+      <Show when={outputsDemand()} keyed>
+        {(retain) => {
+          onSettled(retain);
+          return null;
+        }}
+      </Show>
       <button
         ref={(element) => (trigger = element)}
         class="chat-details-toggle"
@@ -616,7 +638,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
-                          <Loading>
+                          <ChatLazyBoundary>
                             <ChatDetailsProgress
                               onHideProgress={() => {
                                 // The top-layer inspector must not cover the Undo toast.
@@ -630,7 +652,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                               props={props.chat}
                               presented={isPresented() && opened()}
                             />
-                          </Loading>
+                          </ChatLazyBoundary>
                         </Show>
                       </>
                     }

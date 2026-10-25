@@ -35,11 +35,13 @@ it.each(["result", "settlement"] as const)(
         expect(error).toMatchObject({ code: "outcome-unknown" });
         expect(formatErrorMessageWithCode(error)).toContain(resultError.message);
         expect(formatErrorMessageWithCode(error)).toContain(settlementError.message);
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
-            storageFailure: classifyGatewayStorageFailure(error),
+            storageFailure: storageOutcome,
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check.*history.*before trying again/i);
         return true;
       });
     } finally {

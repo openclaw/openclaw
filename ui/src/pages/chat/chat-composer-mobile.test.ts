@@ -182,7 +182,7 @@ it("mounts only visible activity pills without disturbing the mobile draft or fo
 
   renderComposerInto(container, {
     ...props,
-    mobileActivityPills: { ...empty, goal: { ...goal, hidden: true } },
+    mobileActivityPills: empty,
   });
   expect(container.querySelector(".chat-activity-pills")).toBeNull();
   expect(onActivityPillsLayout).toHaveBeenLastCalledWith(expect.objectContaining({ strip }), true);

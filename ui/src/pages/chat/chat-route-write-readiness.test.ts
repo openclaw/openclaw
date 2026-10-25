@@ -5,7 +5,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { restoreChatComposerState } from "./composer-persistence.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -59,7 +59,7 @@ it("holds direct and restored queued sends after startup until route revalidatio
       "chat.send": { runId: "queued-send", status: "started" },
     },
   });
-  expect(restoreChatComposerState(host)).toBe(true);
+  expect(new ChatComposerPersistence(() => host).restore()).toBe(true);
   expect(host.chatQueue).toHaveLength(1);
   expect(host.chatQueue[0]?.id).toBe(original.chatQueue[0]?.id);
   host.chatMessage = "Keep this draft";

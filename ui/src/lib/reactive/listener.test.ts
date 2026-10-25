@@ -18,4 +18,48 @@ describe("native listener lifetime", () => {
     child.click();
     expect(calls).toEqual(["target", "sibling"]);
   });
+
+  it("retires a multi-target operation without removing another owner's listeners", () => {
+    const socket = new EventTarget();
+    const track = new EventTarget();
+    const scope = new AbortController();
+    const receive = vi.fn();
+    const ended = vi.fn();
+    const sibling = vi.fn();
+    socket.addEventListener("message", sibling);
+    listen(socket, "message", receive, { signal: scope.signal });
+    listen(track, "ended", ended, { signal: scope.signal });
+    socket.dispatchEvent(new Event("message"));
+    track.dispatchEvent(new Event("ended"));
+    expect(receive).toHaveBeenCalledOnce();
+    expect(ended).toHaveBeenCalledOnce();
+
+    scope.abort();
+    scope.abort();
+    listen(socket, "message", receive, { signal: scope.signal });
+    socket.dispatchEvent(new Event("message"));
+    track.dispatchEvent(new Event("ended"));
+    expect(scope.signal.aborted).toBe(true);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(ended).toHaveBeenCalledOnce();
+    expect(sibling).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps native capture and once behavior inside an operation", () => {
+    const parent = document.createElement("div");
+    const child = parent.appendChild(document.createElement("button"));
+    const scope = new AbortController();
+    const calls: string[] = [];
+    listen(parent, "click", () => calls.push("capture"), {
+      capture: true,
+      once: true,
+      signal: scope.signal,
+    });
+    listen(child, "click", () => calls.push("target"), { signal: scope.signal });
+    child.click();
+    child.click();
+    scope.abort();
+    child.click();
+    expect(calls).toEqual(["capture", "target", "target"]);
+  });
 });

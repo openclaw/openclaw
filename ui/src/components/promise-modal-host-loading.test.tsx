@@ -70,3 +70,33 @@ it("rejects initialization failures and releases the empty host", async () => {
   await expect(result).rejects.toThrow("Unable to prepare modal");
   expect(document.body.childElementCount).toBe(0);
 });
+
+it("retires an aborted preparation before its renderer arrives", async () => {
+  const preparation = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  const content = vi.fn(() => <openclaw-modal-dialog label="Retired preparation" />);
+  const result = withPromiseModalHost(
+    { signal: controller.signal, value: false },
+    async (modal) => {
+      await preparation.promise;
+      modal.render(content);
+    },
+  );
+  controller.abort();
+  await expect(result).resolves.toBe(false);
+  expect(document.body.childElementCount).toBe(0);
+  preparation.resolve();
+  await preparation.promise;
+  expect(content).not.toHaveBeenCalled();
+});
+
+it("rejects asynchronous preparation failures and releases the empty host", async () => {
+  const preparation = Promise.withResolvers<void>();
+  const result = withPromiseModalHost(undefined, async () => {
+    await preparation.promise;
+    throw new Error("Renderer could not load");
+  });
+  preparation.resolve();
+  await expect(result).rejects.toThrow("Renderer could not load");
+  expect(document.body.childElementCount).toBe(0);
+});

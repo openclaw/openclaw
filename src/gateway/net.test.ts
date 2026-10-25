@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as containerEnvironment from "../infra/container-environment.js";
+import * as interfaces from "../infra/network-interfaces.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   defaultGatewayBindMode,
@@ -121,11 +122,13 @@ describe("resolveLocalInterfaceAddressMatch", () => {
     ["10.42.0.60", false],
     [undefined, false],
   ] as const)("classifies %s as %s", (input, expected) => {
-    expect(resolveLocalInterfaceAddressMatch(input, snapshot)).toBe(expected);
+    using _ = vi.spyOn(interfaces, "safeNetworkInterfaces").mockReturnValue(snapshot);
+    expect(resolveLocalInterfaceAddressMatch(input)).toBe(expected);
   });
 
   it("reports an indeterminate match when interface discovery is unavailable", () => {
-    expect(resolveLocalInterfaceAddressMatch("10.42.0.59", undefined)).toBeUndefined();
+    using _ = vi.spyOn(interfaces, "safeNetworkInterfaces").mockReturnValue(undefined);
+    expect(resolveLocalInterfaceAddressMatch("10.42.0.59")).toBeUndefined();
   });
 });
 
@@ -237,63 +240,53 @@ describe("resolveClientIp", () => {
 });
 
 describe("resolveGatewayListenHosts", () => {
+  function mockBind(available: boolean) {
+    const server = new net.Server();
+    const listen = vi.spyOn(server, "listen").mockImplementation(() => {
+      queueMicrotask(() =>
+        server.emit(available ? "listening" : "error", new Error("bind failed")),
+      );
+      return server;
+    });
+    vi.spyOn(net, "createServer").mockReturnValue(server);
+    return listen;
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it.each([
-    [
-      "non-loopback host passthrough",
-      "0.0.0.0",
-      async (): Promise<boolean> => {
-        throw new Error("should not be called");
-      },
-      ["0.0.0.0"],
-    ],
-    [
-      "IPv6 host passthrough",
-      "::1",
-      async (): Promise<boolean> => {
-        throw new Error("should not be called");
-      },
-      ["::1"],
-    ],
+    ["non-loopback host passthrough", "0.0.0.0", ["0.0.0.0"]],
+    ["IPv6 host passthrough", "::1", ["::1"]],
     [
       "specific non-loopback host with loopback alias available",
       "100.64.0.1",
-      async (): Promise<boolean> => {
-        throw new Error("should not be called");
-      },
       ["100.64.0.1", "127.0.0.1"],
     ],
-    [
-      "loopback with IPv6 unavailable",
-      "127.0.0.1",
-      async (): Promise<boolean> => false,
-      ["127.0.0.1"],
-    ],
-  ] as const)("resolves listen hosts: %s", async (_name, host, canBindToHost, expected) => {
+    ["loopback with IPv6 unavailable", "127.0.0.1", ["127.0.0.1"]],
+  ] as const)("resolves listen hosts: %s", async (_name, host, expected) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const hosts = await resolveGatewayListenHosts(host, {
-      canBindToHost,
-    });
+    const listen = mockBind(false);
+    const hosts = await resolveGatewayListenHosts(host);
     expect(hosts).toEqual(expected);
+    expect(listen).toHaveBeenCalledTimes(host === "127.0.0.1" ? 1 : 0);
   });
 
   it("skips ::1 on Windows even when IPv6 is bindable", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const canBindToHost = vi.fn().mockResolvedValue(true);
-    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    const listen = mockBind(true);
+    const hosts = await resolveGatewayListenHosts("127.0.0.1");
     expect(hosts).toEqual(["127.0.0.1"]);
-    expect(canBindToHost).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
   });
 
   it("still includes ::1 on non-Windows when IPv6 is bindable", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const canBindToHost = vi.fn().mockResolvedValue(true);
-    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    const listen = mockBind(true);
+    const hosts = await resolveGatewayListenHosts("127.0.0.1");
     expect(hosts).toEqual(["127.0.0.1", "::1"]);
-    expect(canBindToHost).toHaveBeenCalledWith("::1");
+    expect(listen).toHaveBeenCalledWith(0, "::1");
   });
 });
 

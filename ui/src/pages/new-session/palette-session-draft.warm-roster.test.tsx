@@ -68,8 +68,10 @@ it.each(["removed-agent", "refresh-failure"] as const)(
       host.draft.setMessage("Keep this draft while defaults refresh");
       expect(host.draft.canSubmit).toBe(false);
       expect(host.draft.disabledReason).toBe("Refreshing agent defaults…");
+      expect(host.draft.error).toBeNull();
       await host.draft.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(host.draft.error).toBeNull();
 
       const id = choice === "removed-agent" ? "replacement" : "main";
       if (choice === "refresh-failure") {
@@ -80,6 +82,7 @@ it.each(["removed-agent", "refresh-failure"] as const)(
         expect(host.draft.disabledReason).toBe(
           "Could not refresh agent defaults. Reload to try again.",
         );
+        expect(host.draft.error).toBeNull();
         await host.draft.submit();
         expect(context.sessions.createResult).not.toHaveBeenCalled();
         read = agents.ensureList();

@@ -19,10 +19,7 @@ import { runSessionMutation } from "../../sessions/session-controller.lifecycle.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -30,11 +27,6 @@ import {
   parseNodeWorkerWorkspaceExecInput,
 } from "../../worker/node-workspace-protocol.js";
 import { WORKSPACE_INSPECTION_COMMAND } from "../../worker/workspace-inspection-protocol.js";
-import {
-  readGitHubRepositoryPublicationBlob,
-  readGitHubRepositoryPublicationMetadata,
-  REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
-} from "../github-repository-publication-snapshot.js";
 import { nodeWorkerGatewayNamespace } from "../worker-environments/node-worker-gateway-namespace.js";
 import {
   BUILD,
@@ -43,21 +35,10 @@ import {
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
-import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
-import type { WorkerEnvironmentService } from "../worker-environments/service.js";
-import {
-  stageSessionRepositoryCheckpoint,
-  withSessionRepositoryCheckpoint,
-} from "../worker-environments/session-repository-checkpoints.js";
-import type {
-  WorkerWorkspaceCommand,
-  WorkerWorkspaceReconcileRequest,
-} from "../worker-environments/tunnel-contract.js";
+import { stageSessionRepositoryCheckpoint } from "../worker-environments/session-repository-checkpoints.js";
+import type { WorkerWorkspaceCommand } from "../worker-environments/tunnel-contract.js";
 import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
-import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -68,7 +49,6 @@ import {
   fetchSessionFileDownload,
   openSessionFileDownload,
   createWorkspaceFixture,
-  expectOkPayload,
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
@@ -77,23 +57,7 @@ const mocks = vi.hoisted(() => ({
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
-  beforeWrite: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("../../infra/fs-safe.js", async (original) => {
-  const actual = await original<typeof import("../../infra/fs-safe.js")>();
-  return {
-    ...actual,
-    root: async (...args: Parameters<typeof actual.root>) => {
-      const root = await actual.root(...args);
-      const write = root.write.bind(root);
-      root.write = async (...writeArgs) => {
-        await mocks.beforeWrite();
-        await write(...writeArgs);
-      };
-      return root;
-    },
-  };
-});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,
@@ -306,137 +270,6 @@ async function persistSessionEntry() {
   );
 }
 
-async function withCheckpointAcceptance(failCapture = false) {
-  const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
-  const placements = createWorkerSessionPlacementStore({ database });
-  const placement = await advancePlacementFixtureToActive(
-    placements,
-    database,
-    {
-      sessionId: identity.sessionId,
-      sessionKey,
-      agentId: "main",
-      executionMode: "remote-exec",
-    },
-    {
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.generation,
-      workerBundleHash: BUILD.bundleHash,
-      workspaceBaseManifestRef: source.baseManifestHash!,
-      remoteWorkspaceDir: workspace,
-      seedEnvironment: "before-dispatch",
-    },
-  );
-  generation = placement.generation;
-  const base = await capture();
-  const environments = {
-    get: (): ReturnType<WorkerEnvironmentService["get"]> => ({
-      ...environmentRecord(),
-      desktopAvailable: false,
-      desktopApps: [],
-      tunnelStatus: "connected",
-    }),
-    startTunnel: async () => ({
-      ...(await context.workerEnvironmentService.startTunnel()),
-      stop: async () => {},
-      syncWorkspace: vi.fn(),
-      quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-      reconcileWorkspace: async (request: WorkerWorkspaceReconcileRequest) => {
-        if (failCapture) {
-          throw new Error("checkpoint capture failed");
-        }
-        if (request.source.kind !== "repository") {
-          throw new Error("expected repository capture");
-        }
-        const current = await capture();
-        const publicationStagingRoot = path.join(nodeRoot, "publication");
-        const publicationDigest = execFileSync(
-          process.execPath,
-          [
-            "-e",
-            REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
-            workspace,
-            source.baseCommit!,
-            publicationStagingRoot,
-          ],
-          { encoding: "utf8" },
-        ).trim();
-        const prepared = await request.source.prepareCheckpoint({
-          ...checkpointData(base, current),
-          publicationStagingRoot,
-          publicationDigest,
-        });
-        return {
-          manifestRef: current.manifestRef,
-          changed: current.manifestRef !== base.manifestRef,
-          verifyStable: async () => {
-            expect((await capture()).manifestRef).toBe(current.manifestRef);
-          },
-          verifyLocalStable: () => prepared.verify(),
-          publishStagedResult: async () => {
-            await prepared.publish();
-          },
-          discardPreparedStagedResult: () => prepared.discard(),
-        };
-      },
-    }),
-  };
-  const service = createRepositoryWorkspaceMutationService({
-    placements,
-    environments,
-    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-    resolveWorkspace: async () => ({
-      kind: "repository",
-      repository: (await store.get(source.workspaceId))!,
-    }),
-  });
-  return { placements, context: { ...context, workerRepositoryWorkspaceMutationService: service } };
-}
-
-it("accepts editor bytes and Git-normalized publication before acknowledging the save", async () => {
-  const accepted = await withCheckpointAcceptance();
-  writeFile(".gitattributes", "changed.txt text eol=lf\n");
-  await files.ok("set", edit("saved\r\n"), accepted.context);
-  await withSessionRepositoryCheckpoint(
-    { store, workspaceId: source.workspaceId },
-    async ({ stagingRoot, publicationDigest, publicationStagingRoot }) => {
-      expect(fs.readFileSync(path.join(stagingRoot, "changed.txt"), "utf8")).toBe("saved\r\n");
-      expect(publicationDigest).toBeDefined();
-      const { snapshot: publication } = await readGitHubRepositoryPublicationMetadata(
-        publicationStagingRoot!,
-        publicationDigest!,
-      );
-      const published = publication.entries.find((entry) => entry.path === "changed.txt")!;
-      expect(
-        (
-          await readGitHubRepositoryPublicationBlob(publicationStagingRoot!, published.sha!)
-        ).toString(),
-      ).toBe("saved\n");
-    },
-  );
-  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-  expect(accepted.placements.get(identity.sessionId)?.turnClaim).toBeNull();
-});
-
-it("reports failed editor checkpoint capture and retains the durable recovery owner", async () => {
-  const accepted = await withCheckpointAcceptance(true);
-  await expect(files.request("set", edit("saved\n"), accepted.context)).rejects.toThrow(
-    "checkpoint capture failed",
-  );
-  expect(readFile("changed.txt")).toBe("saved\n");
-  expect(await store.get(source.workspaceId)).toMatchObject({
-    checkpointRef: source.checkpointRef,
-    manifestHash: source.manifestHash,
-  });
-  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([
-    expect.objectContaining({
-      sessionId: identity.sessionId,
-      workspaceAcceptedAtMs: null,
-      recoveryRequestedAtMs: expect.any(Number),
-    }),
-  ]);
-});
-
 it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
   using connection = createSessionFileDownloadClient();
   const baseCommit = source.baseCommit!;
@@ -599,57 +432,6 @@ it.each(["reset", "archive", "lifecycle revision"])(
   },
 );
 
-it.each(["stop", "reset"])(
-  "retains the editor owner through a delayed file commit before %s",
-  async (mutation) => {
-    const writing = createDeferredCore();
-    const releaseWrite = createDeferredCore();
-    mocks.beforeWrite.mockImplementationOnce(async () => {
-      writing.resolve();
-      await releaseWrite.promise;
-    });
-    const saving = invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
-      context,
-    );
-    await writing.promise;
-    let mutationEntered = false;
-    let contentAtMutation: string | undefined;
-    const mutating = runSessionMutation({
-      scope: resolveDefaultSessionStorePath("main"),
-      identities: [sessionKey, identity.sessionId],
-      run: async () => {
-        mutationEntered = true;
-        contentAtMutation = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
-        if (mutation === "stop") {
-          active = false;
-        } else {
-          sessionId = "replacement";
-        }
-      },
-    });
-    // Observe the independently queued lifecycle operation after its microtasks drain.
-    // The filesystem delay is explicit; no elapsed-time assumption controls the race.
-    try {
-      await setImmediate();
-      expect(mutationEntered).toBe(false);
-    } finally {
-      releaseWrite.resolve();
-      await Promise.allSettled([saving, mutating]);
-    }
-    expectOkPayload(await saving);
-    await mutating;
-    expect(mutationEntered).toBe(true);
-    expect(contentAtMutation).toBe("saved\n");
-  },
-);
-
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
   const changedPaths = ["changed.txt", "oversized.txt", "second.txt"];
   const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 97);
@@ -664,13 +446,6 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   onTestFinished(() => hostReads.mockRestore());
   const list = await files.ok("list");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
-  expect(hostReads.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
-    ["cat-file", "commit"],
-    ["ls-tree", "-r"],
-  ]);
-  for (const call of hostReads.mock.calls) {
-    expect(call[2]).toMatchObject({ signal: expect.any(AbortSignal), killProcessTree: true });
-  }
   const retained = await files.ok("get", "second.txt");
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();

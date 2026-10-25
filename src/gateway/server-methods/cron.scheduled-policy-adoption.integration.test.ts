@@ -248,6 +248,56 @@ it.each([
   }
 });
 
+it("lets the owner edit tools on a job without app authority from a native turn", async () => {
+  const { storePath, service, context, makeJob } = createFixture();
+  const owner = { agentId: "main", sessionKey, accountId };
+  const created = await service.add(
+    makeJob({
+      payload: { kind: "agentTurn", message: "Sync mail", toolsAllow: ["read", "tool_call"] },
+      owner,
+    }),
+    { scheduledToolPolicy: accountPolicy },
+  );
+  await withAgentManagement(async (identity) => {
+    vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+      async <T>(method: string, _options: unknown, params: unknown) => {
+        const client = createSyntheticPluginRuntimeClient();
+        client.internal = {
+          ...client.internal,
+          agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+        };
+        const respond = await callCron(context, method, requireRecord(params, "request"), {
+          client,
+        });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+        if (!ok) {
+          throw new Error(error?.message);
+        }
+        return result as T;
+      },
+    );
+    // A native runtime has no app authority resolver to capture.
+    const tool = createCronTool({
+      runId: identity.operationalRunInstance.runId,
+      agentSessionKey: sessionKey,
+      agentAccountId: accountId,
+      creatorToolAllowlist: ["read", "dispatch_action"],
+    });
+    await expect(
+      tool.execute("native-owner-update", {
+        action: "update",
+        jobId: created.id,
+        job: { payload: { toolsAllow: ["read", "dispatch_action"] } },
+      }),
+    ).resolves.toMatchObject({ details: { id: created.id } });
+  }, true);
+  const [stored] = (await loadCronStore(storePath)).jobs;
+  expect(stored).toMatchObject({
+    owner,
+    payload: { toolsAllow: ["read", "dispatch_action"] },
+    scheduledToolPolicy: accountPolicy,
+  });
+});
 it.each([
   { caller: "agent management", definition: "known account", expected: accountPolicy },
   { caller: "operator", definition: "known account", expected: accountPolicy },

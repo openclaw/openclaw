@@ -8,17 +8,10 @@ import {
   applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModels,
 } from "../plugin-sdk/provider-onboard.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    contextWindow: 4096,
-    maxTokens: 1024,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: false,
-  };
+  return createTestModelDefinition(id, { contextWindow: 4096, maxTokens: 1024 });
 }
 
 function makeProvider(

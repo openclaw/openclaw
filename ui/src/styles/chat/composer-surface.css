@@ -6,17 +6,22 @@
   container-type: inline-size;
 }
 
+.agent-chat__composer-shell,
+.new-session-page__blocked-submit.agent-chat__composer-status {
+  /* The new-session page reuses this shell outside .chat, where the tokens are
+     not defined; the fallbacks keep its geometry identical there. */
+  width: calc(100% - var(--chat-composer-side-inset, 36px));
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin-inline: auto;
+}
+
 .agent-chat__composer-shell {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 6px;
-  /* The new-session page reuses this shell outside .chat, where the tokens are
-     not defined; the fallbacks keep its geometry identical there. */
-  width: calc(100% - var(--chat-composer-side-inset, 36px));
-  max-width: var(--chat-thread-max-width, 48rem);
-  margin: var(--chat-composer-top-margin, 8px) auto var(--chat-composer-bottom-gap, 14px);
+  margin-block: var(--chat-composer-top-margin, 8px) var(--chat-composer-bottom-gap, 14px);
 }
 .agent-chat__composer-notices {
   display: grid;
@@ -104,7 +109,6 @@
     .session-progress-card__body,
     .chat-queue__scroll,
     .agent-chat__goal-detail-objective,
-    .chat-swarm__tasks,
     .chat-error__diagnostic
   ) {
   overscroll-behavior: auto;
@@ -193,7 +197,7 @@
   --chat-composer-chip-height: 30px;
   --chat-composer-chip-gap: 6px;
   --chat-composer-chip-padding-inline: 8px;
-  --chat-composer-chip-text: var(--control-ui-text-md);
+  --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
   --chat-composer-chip-icon: 16px;
   /* Menu-row family: every option row inside a composer popover (model, effort,
      permission, plus menu, attach, microphone) shares one box, icon size, and
@@ -216,12 +220,9 @@
   /* Attachment controls keep their clearance when the compact editor loses its inset. */
   --chat-attachment-inset-block: 6px;
   --chat-attachment-hit-slop: calc(var(--chat-attachment-inset-block) * 2);
-  /* The editor is a reading and writing surface, not a compact form field, so it
-     owns a 16px base instead of the shared control token, whose 14px base only
-     reaches 16px through an iOS zoom floor — text that size by accident does not
-     follow the operator's text scale until the scale passes 1.15, and it drops
-     the moment that floor moves. The max() keeps 16px as a hard floor. */
-  --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
+  /* Writing follows the conversation's text size; footer controls stay one
+     step smaller. Touch keeps its editing floor below. */
+  --chat-composer-editor-size: var(--control-ui-text-md);
   /* One editor line. The single-line box centres a line of exactly this height,
      and the multiline editor never gets shorter than one of them. Derived, so a
      scaled-up editor keeps its leading instead of crowding its own descenders. */
@@ -247,7 +248,7 @@
      second texture. Foreground/menu tokens retain their opaque surface color. */
   background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     /* Personal artwork never changes the writing surface's readability. */
     --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
     background:
@@ -262,6 +263,14 @@
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
+}
+
+@media (pointer: coarse) {
+  .agent-chat__input {
+    /* Match the touch input floor at the owner so placeholders, predictions,
+       and the editor's line box stay aligned with the native control. */
+    --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
+  }
 }
 
 :root[data-theme-mode="dark"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
@@ -345,6 +354,14 @@
 @media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
     background: var(--chat-composer-surface);
+  }
+}
+
+@media (forced-colors: active) {
+  /* Forced colors drop the box shadows and border shift that mark focus above. */
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }
 
@@ -661,6 +678,12 @@
 
 .agent-chat__input-btn--attach {
   position: relative;
+}
+
+/* Icon-only triggers center the glyph, not the generic flex-growing text label. */
+.agent-chat__input-btn--attach > .oc-menu-item__label,
+.chat-talk-input-picker__trigger > .oc-menu-item__label {
+  display: contents;
 }
 
 .agent-chat__input-btn--has-overrides::after {
@@ -1085,6 +1108,7 @@
   /* New Session can load composer styles before the chat layout defaults. */
   .chat-thread-inner,
   .agent-chat__composer-shell,
+  .new-session-page__blocked-submit.agent-chat__composer-status,
   .chat-footer > openclaw-plugin-view > .chat-footer__context {
     /* Physical insets belong to the app; every route centers inside that
        usable canvas, including when its reading-width cap takes effect. */
@@ -1307,10 +1331,6 @@
 @container chat-conversation (max-height: 320px) {
   .chat-footer {
     --chat-footer-max-height: 100cqh;
-  }
-
-  .chat-footer::before {
-    display: none;
   }
 
   .agent-chat__input {

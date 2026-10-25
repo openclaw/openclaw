@@ -21,7 +21,6 @@ import type {
   PluginManifestModelIdPrefixRule,
   PluginManifestModelPricing,
   PluginManifestModelSupport,
-  PluginManifestProviderEndpoint,
   PluginManifestProviderRequest,
   PluginManifestSecretProviderIntegration,
 } from "./manifest-types.js";
@@ -130,37 +129,6 @@ export function normalizeManifestModelIdNormalization(
     normalizeManifestModelIdNormalizationProvider,
   );
   return providers ? { providers } : undefined;
-}
-
-export function normalizeManifestProviderEndpoints(
-  value: unknown,
-): PluginManifestProviderEndpoint[] | undefined {
-  return normalizeManifestObjectList(value, (rawEndpoint) => {
-    const endpointClass = normalizeOptionalString(rawEndpoint.endpointClass);
-    if (!endpointClass) {
-      return undefined;
-    }
-    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
-      host.toLowerCase(),
-    );
-    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
-      host.toLowerCase(),
-    );
-    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
-    if (!hosts && !hostSuffixes && !baseUrls) {
-      return undefined;
-    }
-    return omitUndefinedFields({
-      endpointClass,
-      hosts,
-      hostSuffixes,
-      baseUrls,
-      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
-      googleVertexRegionHostSuffix: normalizeOptionalString(
-        rawEndpoint.googleVertexRegionHostSuffix,
-      )?.toLowerCase(),
-    });
-  });
 }
 
 export function normalizeManifestProviderRequest(

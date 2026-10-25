@@ -15,7 +15,6 @@ import { probeMatrix } from "../probe.js";
 import {
   backfillMatrixAuthDeviceIdAfterStartup,
   resolveMatrixAuth,
-  resolveMatrixConfigForAccount,
   resolveMatrixAuthContext,
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
@@ -129,7 +128,11 @@ describe("Matrix auth/config live surfaces", () => {
     });
     cfg.secrets = { providers: { default: { source: "env", allowlist: [] } } };
     expect(
-      resolveMatrixConfigForAccount(cfg, "ops", { MATRIX_OPS_ACCESS_TOKEN: "ops-token" }),
+      resolveMatrixAuthContext({
+        cfg,
+        accountId: "ops",
+        env: { MATRIX_OPS_ACCESS_TOKEN: "ops-token" },
+      }).resolved,
     ).toMatchObject({ accessToken: "ops-token", password: undefined });
   });
 
@@ -339,7 +342,9 @@ describe("Matrix auth/config live surfaces", () => {
       MATRIX_DEVICE_ID: "GLOBALDEVICE",
     };
 
-    expect(resolveMatrixConfigForAccount(cfg, "ops", env)).toMatchObject(expected);
+    expect(resolveMatrixAuthContext({ cfg, accountId: "ops", env }).resolved).toMatchObject(
+      expected,
+    );
   });
 
   it("accepts internal http homeservers only when private-network access is enabled", () => {
@@ -371,7 +376,7 @@ describe("Matrix auth/config live surfaces", () => {
   it("rejects public http homeservers even when private-network access is enabled", async () => {
     await expect(
       resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {
-        allowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
       }),
     ).rejects.toThrow(

@@ -33,12 +33,6 @@ type MSTeamsNativeDeliveryFinalization = {
   postNativePayloads?: ReplyPayload[];
 };
 
-// Match SDK Stop failures by name: tsgo cannot resolve its error re-export
-// chain, and the SDK retry helper uses the same check.
-function isStreamCancelledError(err: unknown): boolean {
-  return err instanceof Error && err.name === "StreamCancelledError";
-}
-
 function hasUnstreamedContent(payload: ReplyPayload): boolean {
   return Boolean(payload.presentation || payload.mediaUrl || payload.mediaUrls?.length);
 }
@@ -427,7 +421,9 @@ export function createTeamsReplyStreamController(params: {
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } catch (err) {
-        if (isStreamCancelledError(err)) {
+        // Match SDK Stop failures by name: tsgo cannot resolve its error re-export
+        // chain, and the SDK retry helper uses the same check.
+        if (err instanceof Error && err.name === "StreamCancelledError") {
           return acknowledgedNativeDelivery();
         }
         // Non-cancel failure during the closing emit/close. Preserve only a

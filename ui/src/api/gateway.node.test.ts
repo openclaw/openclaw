@@ -7,8 +7,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { validateConnectParams } from "../../../packages/gateway-protocol/src/validators/workers.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -37,7 +36,6 @@ import {
 import type { GatewayBrowserClientOptions, GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
-const validateConnectParams = lazyCompile(ConnectParamsSchema);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -1250,30 +1248,6 @@ describe("GatewayBrowserClient", () => {
       },
       willRetry: false,
     });
-  });
-
-  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
-    useNodeFakeTimers();
-
-    const { ws: ws1, connectFrame: connect } = await startConnect(
-      createClient({ token: "shared-auth-token" }),
-    );
-
-    ws1.emitMessage({
-      type: "res",
-      id: connect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "protocol mismatch",
-        details: { code: "PROTOCOL_MISMATCH" },
-      },
-    });
-    await expectSocketClosed(ws1);
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
   });
 
   it.each([

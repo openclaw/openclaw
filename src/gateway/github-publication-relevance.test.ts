@@ -65,9 +65,10 @@ const check = (
   assertCurrent = () => {},
 ) => {
   vi.stubGlobal("fetch", fetchImpl);
-  return isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
+  return isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, async () => ({
+    pullRequests,
     assertCurrent,
-  });
+  }));
 };
 
 it.each(["github.com", "ghe.example.test"])(

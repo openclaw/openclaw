@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { getMeetingVoiceCallGatewayCall } from "openclaw/plugin-sdk/meeting-runtime";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { resolveGoogleMeetConfig } from "./config.js";
 import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
@@ -106,14 +107,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
     connectionCount += 1;
     socket.destroy();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("localhost gateway server did not receive a TCP port");
-  }
+  const port = await listenOnLoopback(server);
 
   // Control readiness and deadlines while socket I/O and setImmediate stay real.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -122,7 +116,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
   const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
   try {
     const config = voiceConfig({
-      gatewayUrl: `ws://127.0.0.1:${address.port}`,
+      gatewayUrl: `ws://127.0.0.1:${port}`,
       requestTimeoutMs: 3_000,
     });
     const rejected = expect(getCall(config)).rejects.toMatchObject({

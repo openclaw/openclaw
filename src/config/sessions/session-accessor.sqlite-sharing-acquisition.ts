@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type {
   SessionEntryPlaceholder,
@@ -196,8 +197,11 @@ export function publishRetainedSessionGeneration(
     generation.current.lifecycleRevision !== entry.lifecycleRevision
   ) {
     generation.current = null;
-  } else {
-    // Same-generation policy changes must narrow retained execution before its next effect.
+  } else if (
+    generation.current.permissionMode !== entry.permissionMode ||
+    !isDeepStrictEqual(generation.current.toolOverrides, entry.toolOverrides)
+  ) {
+    // Keep the same fact for metadata-only writes; policy changes narrow the next effect.
     generation.current = entry;
   }
 }

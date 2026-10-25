@@ -16,14 +16,13 @@ import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import * as scenarioCatalog from "./scenario-catalog.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
-import {
-  createCleanupTestLab,
-  createCleanupTestContext,
-  mocks,
-} from "./suite-run-isolated.test-support.js";
+import { createCleanupTestContext, mocks } from "./suite-run-isolated.test-support.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
-import { artifactPaths as artifacts } from "./suite-runtime-parity.test-support.js";
+import {
+  artifactPaths as artifacts,
+  createTestLab as createCleanupTestLab,
+} from "./suite-runtime-parity.test-support.js";
 import {
   makeQaSuiteTestScenario as makeScenario,
   recordQaSuiteTestResults,

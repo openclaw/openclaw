@@ -123,8 +123,16 @@ function createFixture(env: NodeJS.ProcessEnv, agentId = "main") {
     scope,
     transaction: (run: Parameters<typeof agentDb.runOpenClawAgentWriteTransaction>[0]) =>
       agentDb.runOpenClawAgentWriteTransaction(run, options),
-    read: (id = "hot") => metadata.readTranscriptMutationStateSync(scope(id)),
-    present: (id = "hot") => metadata.hasSessionTranscriptEventsSync(scope(id)),
+    read: (id = "hot") =>
+      mutations.readTranscriptMutationStateInTransaction(
+        agentDb.openOpenClawAgentDatabase(options),
+        id,
+      ),
+    present: (id = "hot") =>
+      metadata.readSessionTranscriptMetadataInDatabase(
+        agentDb.openOpenClawAgentDatabase(options),
+        id,
+      ).present,
     batchStats: (ids: string[], includeGeneration = false) =>
       includeGeneration
         ? statistics.readTranscriptStatsBatchFromDatabase(database, ids, {

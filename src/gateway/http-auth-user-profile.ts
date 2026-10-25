@@ -44,6 +44,7 @@ export type AuthenticatedHttpUserProfile = {
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   operatorRoleActor?: GatewayOperatorRoleActor;
+  hasCurrentProfileAuthority?: () => boolean;
 };
 
 type HttpUserProfileAuthResult =
@@ -261,6 +262,9 @@ async function prepareHttpProfile(
   }
   return {
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
+    // Identity-derived HTTP authority must not outlive the profile binding that admitted it.
+    // Shared-secret authority remains independent of owner-profile attribution.
+    ...(cfg ? { hasCurrentProfileAuthority: authority.isCurrent } : {}),
     ...(cfg
       ? {
           preparedSessionProfile: {

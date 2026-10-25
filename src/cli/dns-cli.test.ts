@@ -36,6 +36,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 import { Command } from "commander";
+import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { registerDnsCli } from "./dns-cli.js";
 
@@ -86,6 +87,17 @@ describe("dns-cli probe bounds", () => {
     for (const call of nonProbeCalls) {
       expect(call[2]?.timeout).toBeUndefined();
     }
+  });
+
+  it("does not restart CoreDNS when asynchronous zone publication fails", async () => {
+    const failure = new Error("zone publication failed");
+    vi.mocked(replaceWideAreaZoneFile).mockRejectedValueOnce(failure);
+    await expect(runDnsSetupApply()).rejects.toBe(failure);
+    expect(spawnSyncMock).not.toHaveBeenCalledWith(
+      "sudo",
+      ["brew", "services", "restart", "coredns"],
+      expect.anything(),
+    );
   });
 
   it.each([true, false])(

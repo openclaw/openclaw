@@ -16,14 +16,6 @@ import {
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 
-type MinimalServicePathOptions = {
-  platform?: NodeJS.Platform;
-  extraDirs?: string[];
-  home?: string;
-  env?: Record<string, string | undefined>;
-  includeMissingUserBinDefaults?: boolean;
-};
-
 export const SERVICE_PROXY_ENV_KEYS = [
   "OPENCLAW_PROXY_URL",
   "HTTP_PROXY",
@@ -195,7 +187,13 @@ function resolveUserBinDirs(
 }
 
 export function getMinimalServicePathPartsFromEnv(
-  options: MinimalServicePathOptions = {},
+  options: {
+    platform?: NodeJS.Platform;
+    extraDirs?: string[];
+    home?: string;
+    env?: Record<string, string | undefined>;
+    includeMissingUserBinDefaults?: boolean;
+  } = {},
 ): string[] {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;

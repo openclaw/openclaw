@@ -11,17 +11,6 @@ import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../comma
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatDocsHelp } from "../help-format.js";
 
-function resolveInstallDaemonFlag(command: Command): boolean | undefined {
-  // Explicit --skip-daemon wins over either install-daemon flag.
-  if (command.getOptionValueSource("skipDaemon") === "cli") {
-    return false;
-  }
-  if (command.getOptionValueSource("installDaemon") === "cli") {
-    return Boolean(command.getOptionValue("installDaemon"));
-  }
-  return undefined;
-}
-
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -182,17 +171,18 @@ export function registerOnboardRuntimeOptions(
     .option("--import-secrets", "Import supported secrets during onboarding migration", false);
 }
 
-export async function resolveOnboardCommandOptions(
+export async function runOnboardCommand(
   opts: Record<string, unknown>,
   command: Command,
   runtime: RuntimeEnv,
-): Promise<OnboardOptions | false> {
+): Promise<void> {
   if (opts.customImageInput === true && opts.customTextInput === true) {
     const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
     const message = "Use either --custom-image-input or --custom-text-input, not both.";
-    return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    return;
   }
-  return {
+  const onboardingOptions: OnboardOptions = {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
     team: opts.team === true ? true : undefined,
@@ -231,7 +221,13 @@ export async function resolveOnboardCommandOptions(
     tailscale: opts.tailscale as OnboardOptions["tailscale"],
     reset: Boolean(opts.reset),
     resetScope: opts.resetScope as OnboardOptions["resetScope"],
-    installDaemon: resolveInstallDaemonFlag(command),
+    // Explicit --skip-daemon wins over either install-daemon flag.
+    installDaemon:
+      command.getOptionValueSource("skipDaemon") === "cli"
+        ? false
+        : command.getOptionValueSource("installDaemon") === "cli"
+          ? Boolean(command.getOptionValue("installDaemon"))
+          : undefined,
     daemonRuntime: opts.daemonRuntime as OnboardOptions["daemonRuntime"],
     skipChannels: Boolean(opts.skipChannels),
     skipSkills: Boolean(opts.skipSkills),
@@ -247,6 +243,8 @@ export async function resolveOnboardCommandOptions(
     importSecrets: Boolean(opts.importSecrets),
     json: Boolean(opts.json),
   };
+  const { setupWizardCommand } = await import("../../commands/onboard.js");
+  await setupWizardCommand(onboardingOptions, runtime);
 }
 
 export function registerOnboardFlowOptions(command: Command): Command {
@@ -395,16 +393,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const onboardingOptions = await resolveOnboardCommandOptions(
-        opts as Record<string, unknown>,
-        commandRuntime,
-        defaultRuntime,
-      );
-      if (!onboardingOptions) {
-        return;
-      }
-      const { setupWizardCommand } = await import("../../commands/onboard.js");
-      await setupWizardCommand(onboardingOptions, defaultRuntime);
+      await runOnboardCommand(opts as Record<string, unknown>, commandRuntime, defaultRuntime);
     });
   });
 }

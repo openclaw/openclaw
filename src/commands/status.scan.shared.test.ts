@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   pickGatewaySelfPresence: vi.fn(),
+  getMemorySearchManager: vi.fn(),
 }));
 
 function readGatewayCall() {
@@ -85,6 +86,11 @@ vi.mock("./status.gateway-probe.js", () => ({
 
 vi.mock("./gateway-presence.js", () => ({
   pickGatewaySelfPresence: mocks.pickGatewaySelfPresence,
+}));
+
+vi.mock("./status.scan.deps.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status.scan.deps.runtime.js")>()),
+  getMemorySearchManager: mocks.getMemorySearchManager,
 }));
 
 describe("resolveGatewayProbeSnapshot", () => {
@@ -491,6 +497,9 @@ function memoryManager<
 }
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  const getMemorySearchManager = mocks.getMemorySearchManager;
+  beforeEach(() => getMemorySearchManager.mockReset().mockResolvedValue({ manager: null }));
+
   it("reports native provider health instead of returning a silent null", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const health = vi.fn().mockResolvedValue({ status: "ready", message: "connected" });
@@ -498,14 +507,12 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       providerId: "records",
       provider: { health, close },
     });
-    const getMemorySearchManager = vi.fn();
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: { plugins: { slots: { memory: "records" } } },
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "records" },
       resolveMemoryConfig: vi.fn(() => null),
-      getMemorySearchManager,
       isMemoryProviderNative: () => true,
       getMemoryProvider,
     });
@@ -528,7 +535,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
   it("does not resolve the slot owner for Memory Core without a built-in store", async () => {
     const isMemoryProviderNative = vi.fn(() => false);
-    const getMemorySearchManager = vi.fn();
 
     await expect(
       resolveSharedMemoryStatusSnapshot({
@@ -536,7 +542,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
         agentStatus: { defaultId: "main" },
         memoryPlugin: { enabled: true, slot: "memory-core" },
         resolveMemoryConfig: vi.fn(() => null),
-        getMemorySearchManager,
         isMemoryProviderNative,
         requireDefaultDatabasePath: () => null,
       }),
@@ -547,7 +552,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
   it("skips agent-scoped memory when an explicit fleet has no selected owner", async () => {
     const resolveMemoryConfig = vi.fn();
-    const getMemorySearchManager = vi.fn();
 
     await expect(
       resolveSharedMemoryStatusSnapshot({
@@ -560,7 +564,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
         agentStatus: { defaultId: null },
         memoryPlugin: { enabled: true, slot: "memory-core" },
         resolveMemoryConfig,
-        getMemorySearchManager,
       }),
     ).resolves.toBeNull();
 
@@ -582,14 +585,13 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     const resolveMemoryConfig = vi.fn(() => ({
       store: { databasePath: `/tmp/openclaw-missing-memory-${process.pid}.sqlite` },
     }));
-    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+    getMemorySearchManager.mockResolvedValue({ manager });
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg,
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
-      getMemorySearchManager,
       requireDefaultDatabasePath: () =>
         `/tmp/openclaw-missing-default-memory-${process.pid}.sqlite`,
     });
@@ -611,7 +613,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       fts: { enabled: true, available: true },
     });
     const resolveMemoryConfig = vi.fn(() => null);
-    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+    getMemorySearchManager.mockResolvedValue({ manager });
     const requireDefaultDatabasePath = vi.fn(
       () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     );
@@ -626,7 +628,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
-      getMemorySearchManager,
       requireDefaultDatabasePath,
     });
 
@@ -656,14 +657,12 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
   it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
-    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {},
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
-      getMemorySearchManager,
       requireDefaultDatabasePath: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     });
 
@@ -708,14 +707,13 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       vector: { enabled: true, available: true },
       fts: { enabled: true, available: true },
     });
-    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+    getMemorySearchManager.mockResolvedValue({ manager });
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {},
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
-      getMemorySearchManager,
       requireDefaultDatabasePath: () => databasePath,
     });
 
