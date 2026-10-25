@@ -18,6 +18,10 @@ const LOCAL_ORIGIN = "http://localhost:8080";
 const LOCAL_BASE_URL = "http://localhost:8080/v1";
 const MODEL_ID = "qwen/model:Q4_K_M";
 const MODEL_REF = "llama-cpp/qwen/model:Q4_K_M";
+const PROFILE_ID = "llama-cpp:default";
+const TENANT = { "X-Tenant": "one" };
+const AUTH_HEADERS = { Authorization: "Bearer configured-header", ...TENANT };
+const STALE_AUTH = { auth: "api-key", apiKey: "stale-inline-key" } as const;
 
 const removeProfilesMock = vi.hoisted(() => vi.fn());
 const upsertProfileMock = vi.hoisted(() => vi.fn());
@@ -62,8 +66,8 @@ function expectProfileRemoved(agentDir?: string) {
   expect(removeProfilesMock).toHaveBeenCalledWith({
     cfg: expect.any(Object),
     agentDir,
-    provider: "llama-cpp",
-    profileIds: ["llama-cpp:default"],
+    provider: LLAMA_CPP_PROVIDER_ID,
+    profileIds: [PROFILE_ID],
   });
 }
 
@@ -76,19 +80,14 @@ function configuredProvider(result: Awaited<ReturnType<typeof runLlamaServerSetu
   return result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
 }
 
-function expectKeyProfile(profiles: unknown, key: string) {
-  expect(profiles).toEqual([
-    {
-      profileId: "llama-cpp:default",
-      credential: { type: "api_key", provider: "llama-cpp", key },
-    },
-  ]);
+function credential(secret: { key: string } | { keyRef: typeof keyRef }) {
+  return { type: "api_key" as const, provider: "llama-cpp", ...secret };
 }
 
 function authProfileConfig(): NonNullable<ProviderAuthContext["config"]["auth"]> {
   return {
-    profiles: { "llama-cpp:default": { provider: "llama-cpp", mode: "api_key" } },
-    order: { "llama-cpp": ["llama-cpp:default"] },
+    profiles: { [PROFILE_ID]: { provider: LLAMA_CPP_PROVIDER_ID, mode: "api_key" } },
+    order: { [LLAMA_CPP_PROVIDER_ID]: [PROFILE_ID] },
   };
 }
 
@@ -96,10 +95,9 @@ function configWithProvider(
   provider: Partial<ModelProviderConfig>,
   withProfile = false,
 ): ProviderAuthContext["config"] {
-  const configured = { baseUrl: LOCAL_BASE_URL, models: [], ...provider };
   return {
     ...(withProfile ? { auth: authProfileConfig() } : {}),
-    models: { providers: { "llama-cpp": configured } },
+    models: { providers: { "llama-cpp": { baseUrl: LOCAL_BASE_URL, models: [], ...provider } } },
   };
 }
 
@@ -145,20 +143,12 @@ function nonInteractiveContext(
   };
 }
 
-type ResolvedApiKey = {
-  key: string;
-  source: "flag" | "env" | "profile";
-  envVarName?: string;
-};
-
 const keyRef = { source: "env", provider: "default", id: "LLAMA_SERVER_API_KEY" } as const;
 
 type AuthInput = {
   replacement?: boolean;
   authorization?: boolean;
-  option?: "llamaServerApiKey" | "customApiKey";
-  authoredKey?: string;
-  resolved: ResolvedApiKey | null;
+  opts?: Partial<Record<"llamaServerApiKey" | "customApiKey", string>>;
   secretRef?: boolean;
 };
 type AuthExpectation = [
@@ -166,46 +156,39 @@ type AuthExpectation = [
   Record<string, string> | undefined,
   "upsert" | "preserve" | "remove",
 ];
-const authPolicyCases: [string, AuthInput, AuthExpectation][] = [
+const RESOLVED_KEY = "resolved-key";
+const authPolicyCases: [string, AuthInput, "flag" | "env" | "profile", AuthExpectation][] = [
   [
-    "authored plaintext replaces configured Authorization",
+    "authored key replaces Authorization",
     {
       authorization: true,
-      option: "llamaServerApiKey",
-      authoredKey: "authored-key",
-      resolved: { key: "resolved-authored-key", source: "flag" },
+      opts: { llamaServerApiKey: "authored-key" },
     },
-    ["resolved-authored-key", { "X-Tenant": "one" }, "upsert"],
+    "flag",
+    [RESOLVED_KEY, TENANT, "upsert"],
   ],
   [
-    "authored SecretRef survives resolver source changes on a replacement endpoint",
+    "authored SecretRef survives replacement and resolver source change",
     {
       replacement: true,
-      option: "customApiKey",
-      authoredKey: "${LLAMA_SERVER_API_KEY}",
+      opts: { customApiKey: "${LLAMA_SERVER_API_KEY}" },
       secretRef: true,
-      resolved: { key: "resolved-ref-key", source: "env", envVarName: "LLAMA_SERVER_API_KEY" },
     },
-    ["resolved-ref-key", undefined, "upsert"],
+    "env",
+    [RESOLVED_KEY, undefined, "upsert"],
   ],
+  ["profile is preserved", {}, "profile", [RESOLVED_KEY, TENANT, "preserve"]],
   [
-    "unchanged profile is used without a persistence write",
-    { resolved: { key: "stored-profile-key", source: "profile" } },
-    ["stored-profile-key", { "X-Tenant": "one" }, "preserve"],
+    "Authorization beats implicit profile",
+    { authorization: true },
+    "profile",
+    [undefined, AUTH_HEADERS, "remove"],
   ],
+  ["ambient key is persisted", {}, "env", [RESOLVED_KEY, TENANT, "upsert"]],
   [
-    "configured Authorization wins over an implicit profile",
-    { authorization: true, resolved: { key: "stored-profile-key", source: "profile" } },
-    [undefined, { Authorization: "Bearer configured-header", "X-Tenant": "one" }, "remove"],
-  ],
-  [
-    "ambient environment auth is persisted for the unchanged endpoint",
-    { resolved: { key: "ambient-env-key", source: "env" } },
-    ["ambient-env-key", { "X-Tenant": "one" }, "upsert"],
-  ],
-  [
-    "replacement endpoint ignores implicit endpoint auth",
-    { replacement: true, authorization: true, resolved: { key: "ambient-env-key", source: "env" } },
+    "replacement ignores implicit auth",
+    { replacement: true, authorization: true },
+    "env",
     [undefined, undefined, "remove"],
   ],
 ];
@@ -219,10 +202,7 @@ describe("llama-server setup", () => {
   });
 
   it("does not present a managed localService as an existing-server candidate", async () => {
-    const config = configWithProvider({
-      baseUrl: "http://127.0.0.1:19432/v1",
-      localService: { command: "/runtime/llama-server" },
-    });
+    const config = configWithProvider({ localService: { command: "/runtime/llama-server" } });
 
     await expect(detectLlamaServerSetup({ config, env: {} })).resolves.toBeNull();
     await expect(
@@ -289,13 +269,9 @@ describe("llama-server setup", () => {
   });
 
   it("prepares only the exact discovered model", async () => {
-    const result = await prepareLlamaServerSetup({
-      config: {},
-      env: {},
-      modelRef: MODEL_REF,
-    });
+    const result = await prepareLlamaServerSetup({ config: {}, env: {}, modelRef: MODEL_REF });
     expect(result).toMatchObject({ profiles: [], defaultModel: MODEL_REF });
-    expect(result?.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toMatchObject({
+    expect(result && configuredProvider(result)).toMatchObject({
       baseUrl: LOCAL_BASE_URL,
       api: "openai-completions",
     });
@@ -318,10 +294,7 @@ describe("llama-server setup", () => {
       return "localhost:8080/v1/";
     });
 
-    const result = await runSetup({
-      env: {},
-      prompter: { text, confirm: vi.fn(async () => false) },
-    });
+    const result = await runSetup({ env: {}, prompter: { ...prompterFor(), text } });
 
     expect(configuredProvider(result)?.baseUrl).toBe(LOCAL_BASE_URL);
     expect(result.defaultModel).toBe(MODEL_REF);
@@ -382,21 +355,15 @@ describe("llama-server setup", () => {
       const baseUrl = "http://replacement.example:8080/v1";
       const provider = {
         apiKey: "stored-provider-key",
-        headers: { Authorization: "Bearer stored-header-key", "X-Tenant": "one" },
+        headers: AUTH_HEADERS,
         ...(managed
           ? {
               baseUrl: "http://127.0.0.1:19432/v1",
               timeoutSeconds: 600,
               params: { modelCacheDir: "/managed/cache" },
-              localService: {
-                command: "/runtime/llama-server",
-                healthUrl: "http://127.0.0.1:19432/health",
-              },
+              localService: { command: "/runtime/llama-server" },
               models: [
-                modelConfig({
-                  id: "managed-model",
-                  params: { modelPath: "/managed/model.gguf" },
-                }),
+                modelConfig({ id: "managed-model", params: { modelPath: "/managed/model.gguf" } }),
               ],
             }
           : {}),
@@ -431,15 +398,15 @@ describe("llama-server setup", () => {
     const prompter = prompterFor(LOCAL_ORIGIN, true);
 
     const result = await runSetup({
-      config: configWithProvider({ headers: { "X-Tenant": "one" } }, true),
+      config: configWithProvider({ headers: TENANT }, true),
       prompter,
     });
 
     expect(runtimeApiKeyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "llama-cpp:default" }),
+      expect.objectContaining({ profileId: PROFILE_ID }),
     );
     expect(prompter.text).toHaveBeenCalledOnce();
-    expectDiscovery({ apiKey: "stored-profile-key", headers: { "X-Tenant": "one" } });
+    expectDiscovery({ apiKey: "stored-profile-key", headers: TENANT });
     expect(result.profiles).toEqual([]);
     expectAuthUnchanged();
   });
@@ -448,101 +415,79 @@ describe("llama-server setup", () => {
     const prompter = prompterFor(LOCAL_ORIGIN, false);
 
     const result = await runSetup({
-      config: configWithProvider({
-        headers: { Authorization: "Bearer proxy-key", "X-Tenant": "one" },
-      }),
+      config: configWithProvider({ headers: AUTH_HEADERS }),
       env: { LLAMA_SERVER_API_KEY: "ambient-key" },
       prompter,
     });
 
     expect(prompter.confirm).toHaveBeenCalledOnce();
-    expectDiscovery({
-      apiKey: undefined,
-      headers: { Authorization: "Bearer proxy-key", "X-Tenant": "one" },
-    });
+    expectDiscovery({ apiKey: undefined, headers: AUTH_HEADERS });
     const provider = configuredProvider(result);
-    expect(provider?.headers).toEqual({ Authorization: "Bearer proxy-key", "X-Tenant": "one" });
+    expect(provider?.headers).toEqual(AUTH_HEADERS);
     expect(result.profiles).toEqual([]);
     expect(runtimeApiKeyMock).not.toHaveBeenCalled();
     expectProfileRemoved();
   });
 
-  it.each([
-    {
-      name: "replacement endpoint",
-      url: "http://replacement.example:8080",
-      key: "replacement-key",
-      config: configWithProvider(
-        { apiKey: "old-config-key", headers: { Authorization: "Bearer old-header-key" } },
-        true,
-      ),
-      env: { LLAMA_SERVER_API_KEY: "old-endpoint-key" },
+  it.each([false, true])(
+    "prompts for and persists a key with replacement=%s",
+    async (replacement) => {
+      const url = replacement ? "http://replacement.example:8080" : LOCAL_ORIGIN;
+      const key = "new-secret-key";
+      const config = configWithProvider(
+        {
+          ...STALE_AUTH,
+          headers: replacement ? AUTH_HEADERS : { authorization: "Bearer stale-key", ...TENANT },
+        },
+        replacement,
+      );
+      const env = replacement ? { LLAMA_SERVER_API_KEY: "old-endpoint-key" } : {};
+      const prompter = prompterFor(url, true, key);
+      const result = await runSetup({ config, env, prompter, secretInputMode: "plaintext" });
+      expect(prompter.text).toHaveBeenCalledTimes(2);
+      expectDiscovery({ baseUrl: url + "/v1", apiKey: key });
+      expect(result.profiles).toEqual([{ profileId: PROFILE_ID, credential: credential({ key }) }]);
+      if (!replacement) {
+        const provider = configuredProvider(result);
+        expect([provider?.auth, provider?.apiKey, provider?.headers]).toEqual([
+          undefined,
+          undefined,
+          TENANT,
+        ]);
+      }
     },
-    {
-      name: "unchanged endpoint with stale inline auth",
-      url: LOCAL_ORIGIN,
-      key: "secret-key",
-      config: configWithProvider({
-        auth: "api-key",
-        apiKey: "stale-inline-key",
-        headers: { authorization: "Bearer stale-key", "X-Tenant": "one" },
-      }),
-      env: {},
-    },
-  ])("prompts for and persists a new API key for $name", async ({ url, key, config, env }) => {
-    const prompter = prompterFor(url, true, key);
-    const result = await runSetup({ config, env, prompter, secretInputMode: "plaintext" });
-    expect(prompter.text).toHaveBeenCalledTimes(2);
-    expectDiscovery({ baseUrl: url + "/v1", apiKey: key });
-    expectKeyProfile(result.profiles, key);
-    if (url === LOCAL_ORIGIN) {
-      const provider = configuredProvider(result);
-      expect([provider?.auth, provider?.apiKey, provider?.headers]).toEqual([
-        undefined,
-        undefined,
-        { "X-Tenant": "one" },
-      ]);
-    }
-  });
+  );
 
   it.each(authPolicyCases)(
     "%s",
-    async (_name, testCase, [expectedApiKey, expectedHeaders, action]) => {
+    async (_name, testCase, source, [expectedApiKey, expectedHeaders, action]) => {
       const origin = testCase.replacement ? "http://replacement.example:8080" : LOCAL_ORIGIN;
       discoverMock.mockResolvedValue(successfulDiscovery(origin));
       const ctx = nonInteractiveContext({
         customBaseUrl: `${origin}/v1`,
-        ...(testCase.option && testCase.authoredKey
-          ? { [testCase.option]: testCase.authoredKey }
-          : {}),
+        ...testCase.opts,
       });
       ctx.agentDir = "/test/agent";
       ctx.config = configWithProvider(
         {
-          ...(action === "preserve"
-            ? {}
-            : { auth: "api-key" as const, apiKey: "stale-inline-key" }),
-          headers: {
-            ...(testCase.authorization ? { Authorization: "Bearer configured-header" } : {}),
-            "X-Tenant": "one",
-          },
+          ...(action === "preserve" ? {} : STALE_AUTH),
+          headers: testCase.authorization ? AUTH_HEADERS : TENANT,
         },
         true,
       );
-      ctx.resolveApiKey = vi.fn(async () => testCase.resolved);
-      ctx.toApiKeyCredential = vi.fn(({ resolved }) => ({
-        type: "api_key" as const,
-        provider: LLAMA_CPP_PROVIDER_ID,
-        ...(testCase.secretRef ? { keyRef } : { key: resolved.key }),
+      ctx.resolveApiKey = vi.fn(async () => ({
+        key: RESOLVED_KEY,
+        source,
+        ...(testCase.secretRef ? { envVarName: keyRef.id } : {}),
       }));
+      ctx.toApiKeyCredential = vi.fn(({ resolved }) =>
+        credential(testCase.secretRef ? { keyRef } : { key: resolved.key }),
+      );
 
       const configured = await configureLlamaServerNonInteractive(ctx);
       const provider = configured?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
 
-      expectDiscovery({
-        apiKey: expectedApiKey,
-        headers: expectedHeaders,
-      });
+      expectDiscovery({ apiKey: expectedApiKey, headers: expectedHeaders });
       expect(provider?.headers).toEqual(expectedHeaders);
       if (action !== "preserve") {
         expect(provider).toMatchObject({ auth: undefined, apiKey: undefined });
@@ -552,13 +497,11 @@ describe("llama-server setup", () => {
         expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
         expect(upsertProfileMock).toHaveBeenCalledWith(
           expect.objectContaining({
-            profileId: "llama-cpp:default",
+            profileId: PROFILE_ID,
             agentDir: "/test/agent",
             credential: testCase.secretRef
-              ? expect.objectContaining({
-                  keyRef: { source: "env", provider: "default", id: "LLAMA_SERVER_API_KEY" },
-                })
-              : expect.objectContaining({ key: testCase.resolved?.key }),
+              ? expect.objectContaining({ keyRef })
+              : expect.objectContaining({ key: RESOLVED_KEY }),
           }),
         );
         expect(removeProfilesMock).not.toHaveBeenCalled();
