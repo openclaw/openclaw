@@ -123,19 +123,20 @@ exec /usr/bin/plutil "$@"
         systemOwnership === "interrupted extraction" ? parser : "/usr/bin/plutil",
       );
 
-    const exitCode = await execFileAsync(
-      "/bin/sh",
-      ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", file("test.plist"), "0"],
-      { env: options.env },
-    ).then(
-      () => 0,
-      (error: { code?: unknown }) => {
-        if (typeof error.code !== "number") {
-          throw error;
-        }
-        return error.code;
-      },
-    );
+    let exitCode = 0;
+    try {
+      await execFileAsync(
+        "/bin/sh",
+        ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", file("test.plist"), "0"],
+        { env: options.env },
+      );
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (typeof code !== "number") {
+        throw error;
+      }
+      exitCode = code;
+    }
 
     const readLines = (name: string) => fs.readFileSync(file(name), "utf8").trim().split("\n");
     expect(new Set(readLines("environment.calls"))).toEqual(new Set(["::"]));
