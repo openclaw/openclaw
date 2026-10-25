@@ -330,6 +330,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/sessions-resolve-store.test.ts",
   "src/gateway/skill-library-authoring.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/system-run-approval-binding.contract.test.ts",
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-gateway-control.agent-consult.test.ts",
