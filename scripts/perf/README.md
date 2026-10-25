@@ -4517,6 +4517,16 @@ the default team-shape fixture disables plugins. `plugin-inventory.json` records
 the actual runtime states before capture, including enabled plugins that remain
 unloaded under their lazy activation policy. The harness replaces `plugins.load`
 with its own synthetic plugin directory.
+`--plugins 40` creates 40 startup-activated synthetic plugins for any scenario,
+including `session-idle-retention` to compare resident workers and heap after
+startup and ten minutes idle (`--duration-ms 600000`). `gatewayReadyMs` records
+process launch through the readiness probe, before recovery waits and warmup.
+For edited-source update proof, add `--plugin-update` to `plugins.reload` with
+`--rpc-concurrency 1`. Each operation edits the selected plugin, reloads it, and
+verifies the new revision through its registered RPC. `pluginUpdate.latency`
+includes editing, reload, and verification; the ordinary `plugins.reload` RPC
+distribution measures only the reload request. Warmup updates are excluded from
+both measured distributions.
 With diagnostics enabled, `wholeReloadDiagnostics` retains one full-run event-loop
 histogram and GC totals; use its observation counts to qualify tail percentiles.
 Setup, startup

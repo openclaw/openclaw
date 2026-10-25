@@ -631,6 +631,10 @@ without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
+Preparing a package module defers its capture resolver until an import or source
+inspection needs it. Explicit `JITI_TSCONFIG_PATHS` configuration still initializes
+the resolver at module preparation so later tsconfig edits cannot change the
+selected mapping. Preparation workers retain separate artifact isolation.
 Captures reuse resolution state for local TypeScript imports such as `./helper.js`
 when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
 file probing. Existing JavaScript and Jiti's alternative filename precedence remain
