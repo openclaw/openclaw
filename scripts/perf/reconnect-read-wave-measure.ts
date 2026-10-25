@@ -2,7 +2,7 @@
 // Synthetic state only. Run with node --enable-source-maps --import ./scripts/tsx.mjs.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
@@ -41,11 +41,6 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
-import {
-  runColdSessionRead,
-  observeSessionListChurnGateway,
-  runSessionListChurnWorkload,
-} from "./session-list-churn-workload.ts";
 
 const observerArgs: unknown = JSON.parse(
   new URL(import.meta.url).searchParams.get("args") ?? "null",
@@ -64,8 +59,6 @@ const { values } = parseArgs({
     sync: { type: "string" },
     side: { type: "string" },
     retention: { type: "boolean", default: false },
-    "list-stress": { type: "boolean", default: false },
-    profile: { type: "boolean", default: false },
     entry: { type: "string", default: "dist/entry.js" },
   },
 });
@@ -115,10 +108,6 @@ async function observeGateway() {
     "private benchmark child required",
   );
   writeFileSync(path.join(output, "gateway.pid"), `${process.pid}\n`);
-  if (values["list-stress"]) {
-    await observeSessionListChurnGateway(port, output);
-    return;
-  }
   // The existing IPC profiler tracks workers without exposing a debug listener or product RPC.
   await import("../lib/gateway-bench-profile-preload.ts");
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
@@ -601,7 +590,6 @@ async function runController() {
         "--entry",
         entry,
         ...(values.retention ? ["--retention"] : []),
-        ...(values["list-stress"] ? ["--list-stress"] : []),
       ]),
     );
     const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
@@ -770,16 +758,59 @@ async function runController() {
     );
     return peer;
   };
-  const boot = (peer: Peer, index: number, window: string) =>
-    runColdSessionRead({
+  const boot = async (peer: Peer, index: number, window: string) => {
+    const key = `agent:main:team-shape-session-${index}`;
+    const roster = rpc(peer, "sessions.subscribe", {}, window);
+    const list = rpc(
       peer,
-      index,
+      "sessions.list",
+      {
+        agentId: "main",
+        limit: 200,
+        rowMode: "sidebar",
+        source: "sidebar",
+        configuredAgentsOnly: true,
+        excludeDock: true,
+        includeGlobal: true,
+        includeUnknown: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      },
       window,
-      request: rpc,
-      modelCatalog: catalogs.get(peer),
-      timeoutMs,
-    });
-
+    );
+    const subscribed = rpc(
+      peer,
+      "sessions.messages.subscribe",
+      { key, includeApprovals: true, subscriptionId: randomUUID() },
+      window,
+    );
+    const catalog = catalogs.get(peer);
+    let catalogTimer: ReturnType<typeof setTimeout> | undefined;
+    const modelReady = catalog
+      ? Promise.race([
+          catalog,
+          new Promise<never>((_, reject) => {
+            catalogTimer = setTimeout(
+              () => reject(new Error("models.snapshot timeout")),
+              timeoutMs,
+            );
+          }),
+        ]).finally(() => clearTimeout(catalogTimer))
+      : rpc(peer, "models.list", { agentId: "main", sessionKey: key, view: "configured" }, window);
+    const results = await Promise.allSettled([
+      roster,
+      list,
+      subscribed,
+      rpc(peer, "sessions.observer.visibility", { visible: true }, window),
+      rpc(peer, "sessions.resolve", { key, agentId: "main" }, window),
+      rpc(peer, "board.get", { sessionKey: key, agentId: "main" }, window),
+      rpc(peer, "agents.list", {}, window),
+      rpc(peer, "users.list", {}, window),
+      modelReady,
+      subscribed.then(() => rpc(peer, "chat.startup", { sessionKey: key, limit: 80 }, window)),
+    ]);
+    return results.every((result) => result.status === "fulfilled");
+  };
   const closePeers = async () => {
     await Promise.all(
       [...peers].map(
@@ -808,7 +839,7 @@ async function runController() {
     await launch("pairing");
     for (let index = 0; index <= clientCount; index++) {
       const peer = await connect(index, "setup");
-      if (index < clientCount && !values["list-stress"]) {
+      if (index < clientCount) {
         await rpc(
           peer,
           "board.widget.put",
@@ -831,27 +862,6 @@ async function runController() {
     await stopGatewayGracefully(child!, timeoutMs);
     child = undefined;
     const gateway = await launch("measured");
-    if (values["list-stress"]) {
-      const readers = await Promise.all(Array.from({ length: 65 }, (_, i) => connect(i, "setup")));
-      const appenders = await Promise.all(
-        Array.from({ length: 20 }, (_, i) => connect(i, "setup")),
-      );
-      await runSessionListChurnWorkload({
-        gateway,
-        readers,
-        writers: appenders,
-        request: rpc,
-        command,
-        output,
-        profile: values.profile,
-        retention: values.retention,
-      });
-      await closePeers();
-      await command(gateway, { action: "stop" });
-      await stopGatewayGracefully(gateway, timeoutMs);
-      child = undefined;
-      return;
-    }
     const waveReports: Array<Record<string, unknown>> = [];
     const writerKeys = Array.from({ length: 250 }, (_, i) => i)
       .filter((i) => i % 5 !== 0)

@@ -298,7 +298,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     ): number => {
       const excludedRunId = options?.excludeRunId?.trim();
       let count = 0;
-      for (const entry of getDescendantRuns(rootSessionKey)) {
+      for (const runId of getDescendantRuns(rootSessionKey)) {
+        const entry = runs.get(runId)!;
         if (entry.runId === excludedRunId) {
           continue;
         }
@@ -376,9 +377,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
         stopAtFirst: true,
       }) > 0;
 
-    const listDescendantRunsForRequester = (rootSessionKey: string): T[] => [
-      ...getDescendantRuns(rootSessionKey),
-    ];
+    const listDescendantRunsForRequester = (rootSessionKey: string): T[] =>
+      getDescendantRuns(rootSessionKey).map((runId) => runs.get(runId)!);
 
     return {
       inputs,
