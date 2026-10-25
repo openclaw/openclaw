@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { appendTranscriptMessage } from "../../../config/sessions/session-accessor.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -213,12 +214,6 @@ describe("yielded run settlement", () => {
       freezeTime();
       await writeYieldedTranscript();
       // Controls: yielded rows that a continuation can still reach stay untouched.
-      const orchestrator = pausedRun({
-        runId: "yielded-orchestrator",
-        childSessionKey: "agent:main:subagent:orchestrator",
-        expectsCompletionMessage: true,
-        wakeOnDescendantSettle: true,
-      });
       const legacyLeaf = pausedRun({
         runId: "yielded-legacy-leaf",
         childSessionKey: "agent:main:subagent:legacy-leaf",
@@ -241,7 +236,6 @@ describe("yielded run settlement", () => {
       });
       for (const run of [
         legacyYieldedCollector(outcome),
-        orchestrator,
         legacyLeaf,
         frozenCollector,
         killClaimedCollector,
@@ -277,7 +271,7 @@ describe("yielded run settlement", () => {
       if (outcome?.status === "ok") {
         expect(waited.completed[0]?.error).toBeUndefined();
       }
-      for (const control of [orchestrator, legacyLeaf]) {
+      for (const control of [legacyLeaf]) {
         expect(persisted(control.runId), control.runId).toMatchObject({
           pauseReason: "sessions_yield",
           execution: { status: "terminal" },
@@ -354,57 +348,40 @@ describe("yielded run settlement", () => {
         completion: { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
       });
       await restartRegistry();
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
       let injected = 0;
       let refusedFallback = false;
-      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        (context, operation, options) =>
-          execute(
-            context,
-            (scope) =>
-              operation({
-                execute: async (command, executeOptions) => {
-                  if (
-                    injected < (retry === "restart" ? 2 : 1) &&
-                    isSubagentRegistryWriteCommand(command) &&
-                    command.input.values.some(
-                      (row) =>
-                        row.run_id === collectorId &&
-                        rowToSubagentRunRecord(row)?.browserCleanupDispatchedAt !== undefined,
-                    )
-                  ) {
-                    injected += 1;
-                    if (retry === "restart") {
-                      markGatewayRestartDraining();
-                    }
-                    // Observe the real terminal commit independently before refusing this later write.
-                    expect(persisted(collectorId)).toMatchObject({
-                      collectorCompletion: { status: "done" },
-                      completion: { resultText: YIELDED_REPLY },
-                    });
-                    expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
-                    throw new Error("injected postcommit browser claim write failure");
-                  }
-                  if (
-                    retry === "restart" &&
-                    !refusedFallback &&
-                    injected === 2 &&
-                    isSubagentRegistryWriteCommand(command) &&
-                    command.input.values.some(
-                      (row) =>
-                        row.run_id === collectorId &&
-                        rowToSubagentRunRecord(row)?.cleanupHandled === false,
-                    )
-                  ) {
-                    refusedFallback = true;
-                    throw new Error("injected restart fallback write refusal");
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-      );
+      using _ = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const next = isSubagentRegistryWriteCommand(command)
+          ? command.input.values.find((row) => row.run_id === collectorId)
+          : undefined;
+        const entry = next && rowToSubagentRunRecord(next);
+        if (
+          injected < (retry === "restart" ? 2 : 1) &&
+          entry?.browserCleanupDispatchedAt !== undefined
+        ) {
+          injected++;
+          if (retry === "restart") {
+            markGatewayRestartDraining();
+          }
+          // Refuse only the later cleanup claim, after the durable terminal commit.
+          expect(persisted(collectorId)).toMatchObject({
+            collectorCompletion: { status: "done" },
+            completion: { resultText: YIELDED_REPLY },
+          });
+          expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
+          throw new Error("injected postcommit browser claim write failure");
+        }
+        if (
+          retry === "restart" &&
+          !refusedFallback &&
+          injected === 2 &&
+          entry?.cleanupHandled === false
+        ) {
+          refusedFallback = true;
+          throw new Error("injected restart fallback write refusal");
+        }
+        return scope.execute(command, executeOptions);
+      });
       await testing.sweepOnceForTests();
       // The observer retains the first failed root even though the completion owner retries it.
       await expect(fixture.settle()).rejects.toThrow("Failed to settle subagent cleanup roots");

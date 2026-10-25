@@ -3,17 +3,21 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  beginSessionEffect,
   captureSessionTarget,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
-import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import * as killSession from "./subagent-control-session.js";
-import { controlController, enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
+import {
+  beginControlAdmission,
+  controlController,
+  enqueueControlRun,
+} from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { runSubagentStateWorkerOperation } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -98,12 +102,12 @@ export function registerAdmissionDrainControlTests({
         [childSessionKey]: { sessionId, updatedAt: Date.now() },
       });
       const interrupted = createDeferred();
-      const admission = await beginSessionEffect({
-        scope: storePath,
-        identities: [childSessionKey, sessionId],
-        assertAllowed: () => {},
-        onInterrupt: () => interrupted.resolve(),
-      });
+      const admission = await beginControlAdmission(
+        storePath,
+        childSessionKey,
+        sessionId,
+        interrupted.resolve,
+      );
       setSubagentControlDepsForTest({
         clearSessionQueues: () => [],
       });
@@ -198,18 +202,18 @@ export function registerLateDescendantControlTests({
       });
       const reached = createDeferred();
       const proceed = createDeferred();
-      const admission = await beginSessionEffect({
-        scope: storePath,
-        identities: [parent.childSessionKey, "late-parent-session"],
-        assertAllowed: () => {},
-        onInterrupt: () => {
+      const admission = await beginControlAdmission(
+        storePath,
+        parent.childSessionKey,
+        "late-parent-session",
+        () => {
           reached.resolve();
           if (phase !== "admission drain") {
             expect(releaseSwarmRun(parent.runId)).toBe(true);
             admission.release();
           }
         },
-      });
+      );
       const start = vi.fn(async () => {});
       const childKey = "agent:main:subagent:late-child";
       const registerChild = () => {
@@ -346,48 +350,37 @@ export function registerQueuedReservationFailureTests({
     const reserve = () => enqueueControlRun("failure-lane", entry.runId, [], dispatch);
     reserve();
     let writes = 0;
-    let rejectedWrite: number | undefined;
+    const rejectsWrite = [
+      "tombstone write",
+      "claim release",
+      "session replacement release",
+    ].includes(failure);
     const replaceSession = () =>
       replaceSessionEntrySync(
         { storePath, sessionKey: entry.childSessionKey },
         { sessionId: "new-session", updatedAt: 2 },
       );
     resetRegistryLeafMocks();
-    vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
-      runSubagentStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (command) => {
-              const writeNumber =
-                command.type === "subagents.persistChanges" ? ++writes : undefined;
-              if (writeNumber !== undefined) {
-                if (failure === "session replacement at intent" && writeNumber === 1) {
-                  replaceSession();
-                }
-                if (
-                  ["tombstone write", "claim release", "session replacement release"].includes(
-                    failure,
-                  ) &&
-                  writeNumber === 2
-                ) {
-                  rejectedWrite = writeNumber;
-                  throw new Error("sqlite busy");
-                }
-              }
-              const receipt = await scope.execute(command);
-              if (
-                ["session replacement", "session replacement release"].includes(failure) &&
-                writeNumber === 1
-              ) {
-                replaceSession();
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
+    probe.command(
+      stateWorker,
+      async (command, options, scope) => {
+        const writeNumber = command.type === "subagents.persistChanges" ? ++writes : undefined;
+        if (failure === "session replacement at intent" && writeNumber === 1) {
+          replaceSession();
+        }
+        if (rejectsWrite && writeNumber === 2) {
+          throw new Error("sqlite busy");
+        }
+        const receipt = await scope.execute(command, options);
+        if (
+          ["session replacement", "session replacement release"].includes(failure) &&
+          writeNumber === 1
+        ) {
+          replaceSession();
+        }
+        return receipt;
+      },
+      { original: runSubagentStateWorkerOperation },
     );
     setSubagentControlDepsForTest({
       clearSessionQueues: () => [],
@@ -437,12 +430,11 @@ export function registerQueuedReservationFailureTests({
         ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
       );
       if (failure === "session replacement release") {
-        expect(rejectedWrite).toBe(2);
         expect(result).toMatchObject({
           error: expect.stringContaining("kill intent could not be released"),
         });
       }
-      if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
+      if (rejectsWrite) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });
         const survivor = vi.fn(async () => {});
         enqueueControlRun("failure-lane", "survivor", [], survivor);

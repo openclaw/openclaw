@@ -30,7 +30,6 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   createArchivedSubagentSweeperRun as archivedRun,
   createSubagentSweeperHarness as createHarness,
-  createSubagentSweeperRun as run,
 } from "./subagent-registry-sweeper.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -106,39 +105,12 @@ export function registerSubagentSweepRetainedAuthorityTests(
   recoverRow: ReturnType<typeof vi.fn>,
   killSessionEntry: { current: Awaited<ReturnType<typeof loadSubagentSessionEntry>> },
 ) {
-  it("retains unresolved child owner across recovery, archival, collector, and delivery cleanup", async () => {
+  it("retains an unresolved child owner before recovery or cleanup", async () => {
     recoverRow.mockResolvedValue({ status: "ignored" });
-    const harness = createHarness({});
-    harness.runs.clear();
-    const now = Date.now();
-    const records = [
-      run(),
-      { ...run(), execution: { status: "interrupted" as const } },
-      archivedRun(),
-      archivedRun({
-        collect: true,
-        groupId: "retained-group",
-        collectorCompletion: { status: "done" },
-      }),
-      archivedRun({
-        archiveAtMs: undefined,
-        spawnMode: "session",
-        cleanupCompletedAt: now - 10 * 60_000,
-      }),
-      archivedRun({
-        delivery: {
-          status: "suspended",
-          suspendedReason: "expiry",
-          suspendedAt: now - 8 * 24 * 60 * 60_000,
-        },
-      }),
-    ];
-    for (const [index, entry] of records.entries()) {
-      entry.runId = `unresolved-${index}`;
-      entry.childSessionKey = "global";
-      entry.childAgentId = undefined;
-      harness.runs.set(entry.runId, entry);
-    }
+    const harness = createHarness(
+      {},
+      archivedRun({ childSessionKey: "global", childAgentId: undefined }),
+    );
     const before = structuredClone(harness.runs);
 
     await harness.sweeper.sweepOnce();

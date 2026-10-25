@@ -21,15 +21,17 @@ import { createChatAbortContext } from "../../../gateway/server-methods/chat.abo
 import { sessionMutationHandlers } from "../../../gateway/server-methods/sessions-mutations.js";
 import { registerInternalHook, unregisterInternalHook } from "../../../hooks/internal-hooks.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
-import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
+import {
+  beginControlAdmission,
+  createControlRunFixture,
+} from "./subagent-control.fixtures.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
-import { registerSubagentRun } from "./subagent-registry.js";
 import {
   writeChildSession,
   writeSubagentSessionEntry,
@@ -38,6 +40,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+const records = createControlRunFixture(() => fixture.stateDir);
 beforeEach(async () => captureRuntimeConfigAsyncReader()());
 const parentKey = "agent:main:main";
 const controllerKey = "agent:main:telegram:default:direct:123";
@@ -101,22 +104,12 @@ function resetChat() {
   });
 }
 
-function registerChild(
-  runId: string,
-  sessionEntry: Parameters<typeof registerSubagentRun>[0]["sessionEntry"],
-  overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
-) {
-  return registerSubagentRun({
-    runId,
+function registerChild(runId: string, overrides: Parameters<typeof records.register>[2] = {}) {
+  return records.register(runId, undefined, {
     childSessionKey: childKey(runId),
-    childAgentId: "main",
-    sessionEntry,
     requesterSessionKey: parentKey,
     controllerSessionKey: controllerKey,
-    requesterAgentId: "main",
     requesterDisplayKey: parentKey,
-    task: runId,
-    cleanup: "keep",
     expectsCompletionMessage: true,
     ...overrides,
   });
@@ -129,7 +122,7 @@ it.each([false, true])(
     const { read, patch } = sessions(storePath);
     const key = childKey("replaced");
     await writeSession(key, "original-child", "original-revision");
-    await registerChild("original-run", read(key), {
+    await registerChild("original-run", {
       childSessionKey: key,
       controllerSessionKey: undefined,
       task: "old retained assignment",
@@ -148,12 +141,12 @@ it.each([false, true])(
     await patch(key, { sessionId: "replacement-child", lifecycleRevision: "replacement-revision" });
     const replacement = read(key);
     const interruptReplacement = vi.fn();
-    const replacementAdmission = await beginSessionEffect({
-      scope: storePath,
-      identities: [key, "replacement-child"],
-      assertAllowed: () => {},
-      onInterrupt: interruptReplacement,
-    });
+    const replacementAdmission = await beginControlAdmission(
+      storePath,
+      key,
+      "replacement-child",
+      interruptReplacement,
+    );
     const respond = vi.fn();
     try {
       await resetRpc(respond);
@@ -237,7 +230,7 @@ it.each(
         { message: { role: "user", content: "child conversation " + id } },
       );
       childTranscripts.set(id, await transcript(id));
-      await registerChild(id, read(childKey(id)), {
+      await registerChild(id, {
         requesterSessionKey,
         controllerSessionKey,
         requesterDisplayKey: requesterSessionKey,
@@ -309,28 +302,23 @@ it.each(["chat", "rpc"] as const)(
     const storePath = await writeSession(parentKey, "parent", "before-reset");
     const { read, patch } = sessions(storePath);
     await writeSession(childKey("draining"), "draining");
-    await registerChild("draining", read(childKey("draining")));
+    await registerChild("draining");
     const parentInterrupted = createDeferredCore();
     const childInterrupted = createDeferredCore();
     const interruptChild = vi.fn(() => childInterrupted.resolve());
-    const parentAdmission = await beginSessionEffect({
-      scope: storePath,
-      identities: [parentKey, "parent"],
-      assertAllowed: () => {},
-      onInterrupt: () => parentInterrupted.resolve(),
-    });
-    const childAdmission = await beginSessionEffect({
-      scope: storePath,
-      identities: [childKey("draining"), "draining"],
-      run: {
-        runId: "draining",
-        sessionKey: childKey("draining"),
-        sessionId: "draining",
-        agentId: "main",
-      },
-      assertAllowed: () => {},
-      onInterrupt: interruptChild,
-    });
+    const parentAdmission = await beginControlAdmission(
+      storePath,
+      parentKey,
+      "parent",
+      parentInterrupted.resolve,
+    );
+    const childAdmission = await beginControlAdmission(
+      storePath,
+      childKey("draining"),
+      "draining",
+      interruptChild,
+      "draining",
+    );
     const respond = vi.fn();
     const reset = boundary !== "rpc" ? resetChat() : resetRpc(respond);
     try {
@@ -371,18 +359,14 @@ it("lifecycle requester cleanup respects agent ownership without granting ordina
       sessionKey: "agent:" + agentId + ":subagent:global-child",
       defaultSessionId: agentId,
     });
-    await registerChild(
-      agentId,
-      { sessionId: agentId },
-      {
-        childSessionKey: "agent:" + agentId + ":subagent:global-child",
-        childAgentId: agentId,
-        requesterSessionKey: "global",
-        controllerSessionKey: "agent:" + agentId + ":other-controller",
-        requesterAgentId: agentId,
-        requesterDisplayKey: "global",
-      },
-    );
+    await registerChild(agentId, {
+      childSessionKey: "agent:" + agentId + ":subagent:global-child",
+      childAgentId: agentId,
+      requesterSessionKey: "global",
+      controllerSessionKey: "agent:" + agentId + ":other-controller",
+      requesterAgentId: agentId,
+      requesterDisplayKey: "global",
+    });
     await pauseRun(agentId);
   }
   const ordinary = await killAllControlledSubagentRuns({
@@ -421,16 +405,12 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         false,
       );
       await writeSession(childKey("replacement-child"), "replacement-child");
-      await registerChild(
-        "replacement-child",
-        { sessionId: "replacement-child" },
-        {
-          requesterSessionKey: "agent:main:other-requester",
-          controllerSessionKey: parentKey,
-          requesterDisplayKey: "other requester",
-          task: "replacement work",
-        },
-      );
+      await registerChild("replacement-child", {
+        requesterSessionKey: "agent:main:other-requester",
+        controllerSessionKey: parentKey,
+        requesterDisplayKey: "other requester",
+        task: "replacement work",
+      });
       await pauseRun("replacement-child");
     };
     registerInternalHook("command:reset", replaceParent);

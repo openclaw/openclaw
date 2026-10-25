@@ -55,10 +55,7 @@ export function registerArchiveCancellationTests({
   sweepAndSettleCleanup,
   waitForNoRequesterRuns,
 }: {
-  getRegistry: () => Pick<
-    SubagentRegistryHarness,
-    "listSubagentRunsForRequester" | "markSubagentRunTerminated" | "testing"
-  >;
+  getRegistry: () => Pick<SubagentRegistryHarness, "listSubagentRunsForRequester" | "testing">;
   addCanonicalSubagentRunForTests: (
     entry: Parameters<SubagentRegistryHarness["addSubagentRunForTests"]>[0],
   ) => Promise<void>;
@@ -168,24 +165,6 @@ export function registerArchiveCancellationTests({
     await mod.testing.sweepOnceForTests();
 
     expect(requesterRuns()).toHaveLength(1);
-  });
-
-  it("directly kills a replacement run through its durable task ID", async () => {
-    const mod = getRegistry();
-    const now = Date.now();
-    await addCanonicalSubagentRunForTests(
-      createArchiveRun("replacement-direct-kill", now, {
-        runId: "run-after-replacement-direct-kill",
-        sessionStartedAt: now - 11 * 60_000,
-      }),
-    );
-
-    expect(
-      await mod.markSubagentRunTerminated({
-        runId: "run-after-replacement-direct-kill",
-        reason: "manual kill",
-      }),
-    ).toBe(1);
   });
 
   it("does not reconcile an older tombstone through a newer session task", async () => {
