@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunRecord,
+  type SubagentRunRecordOverrides,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
@@ -13,15 +16,13 @@ import {
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId"> = {}) {
   return createSubagentRunRecord({
     runId: "run-1",
     task: "finish the task",
     retainAttachmentsOnKeep: true,
     createdAt: 500,
-    execution: { status: "running", startedAt: 1_000 },
+    startedAt: 1_000,
     ...overrides,
   });
 }
@@ -51,12 +52,8 @@ describe("updateSubagentArchiveAtMs", () => {
     vi.setSystemTime(10_000);
     const entry = createRunEntry({
       collect: true,
-      execution: {
-        status: "terminal",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        outcome: { status: "ok" },
-      },
+      endedAt: 2_000,
+      outcome: { status: "ok" },
       completion: { required: false, resultText: "done" },
     });
 
@@ -69,20 +66,9 @@ describe("updateSubagentArchiveAtMs", () => {
     for (const overrides of [
       { cleanup: "delete" as const },
       { collect: true },
-      {
-        cleanup: "delete" as const,
-        pauseReason: "sessions_yield" as const,
-        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
-      },
-      {
-        cleanup: "keep" as const,
-        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
-      },
-      {
-        collect: true,
-        spawnMode: "session" as const,
-        execution: { status: "terminal" as const, startedAt: 1_000, endedAt: 2_000 },
-      },
+      { cleanup: "delete" as const, pauseReason: "sessions_yield" as const, endedAt: 2_000 },
+      { cleanup: "keep" as const, endedAt: 2_000 },
+      { collect: true, spawnMode: "session" as const, endedAt: 2_000 },
     ]) {
       const entry = createRunEntry({ ...overrides, archiveAtMs: 10_000 });
       expect(updateSubagentArchiveAtMs(entry, cfg)).toBe(true);
@@ -95,7 +81,7 @@ describe("updateSubagentArchiveAtMs", () => {
       const entry = createRunEntry({
         cleanup: "delete",
         collect,
-        execution: { status: "terminal", startedAt: 1_000, endedAt: 2_000 },
+        endedAt: 2_000,
         archiveAtMs: 10_000,
       });
 
@@ -152,16 +138,13 @@ describe("safeRemoveAttachmentsDir", () => {
     await fs.access(siblingDir);
   });
 
-  it("ignores legacy workspace paths after an external symlink replacement", async () => {
+  it("ignores legacy workspace paths through an external symlink", async () => {
     const workspaceDir = tempDirs.make("openclaw-attachment-root-");
     const externalDir = tempDirs.make("openclaw-attachment-external-");
     const relDir = ".openclaw/attachments/run-1";
     const externalSentinel = path.join(externalDir, "sentinel.txt");
-    await fs.mkdir(path.join(workspaceDir, ".openclaw", "attachments"), { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, relDir));
-    await fs.writeFile(path.join(workspaceDir, relDir, "staged.txt"), "staged");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"));
     await fs.writeFile(externalSentinel, "must-survive");
-    await fs.rm(path.join(workspaceDir, ".openclaw", "attachments"), { recursive: true });
     await fs.symlink(externalDir, path.join(workspaceDir, ".openclaw", "attachments"));
 
     await expect(
