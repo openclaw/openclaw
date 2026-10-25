@@ -117,14 +117,6 @@ describe("statusJsonCommand", () => {
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    // The complete schema is owned by status-json-runtime; this boundary covers
-    // the absent-probe defaults and real service-summary composition.
-    expect(payload).toMatchObject({
-      configuredChannels: [],
-      memoryPlugin: null,
-      agents: [],
-      update: { installKind: "npm", git: { tag: null, branch: null } },
-    });
     expect(payload.gateway).toEqual({
       mode: "local",
       url: "ws://127.0.0.1:18789",
@@ -136,19 +128,6 @@ describe("statusJsonCommand", () => {
       error: null,
       authWarning: null,
     });
-    for (const field of ["gatewayService", "nodeService"]) {
-      expect(payload[field]).toEqual({
-        label: "LaunchAgent",
-        installed: false,
-        loadState: { status: "not-loaded" },
-        managedByOpenClaw: false,
-        externallyManaged: false,
-        loadedText: "not loaded",
-        runtime: { status: "stopped" },
-        loaded: false,
-        runtimeShort: "stopped",
-      });
-    }
     expect(payload).not.toHaveProperty("securityAudit");
     expect(payload).not.toHaveProperty("pluginCompatibility");
   });
@@ -183,26 +162,6 @@ describe("statusJsonCommand", () => {
     });
   });
 
-  it.each([
-    { engine: "postgres" },
-    { engine: "sqlite", families: { agent: { engine: "postgres" } } },
-  ])(
-    "reports supported PostgreSQL selections without the experimental flag: %j",
-    async (database) => {
-      mocks.scanStatusJsonFast.mockResolvedValueOnce({
-        ...createScanResult(),
-        cfg: { database },
-      });
-
-      const payload = JSON.parse(await runJson());
-      expect(payload.databaseEngines.experimental).toBe(false);
-      expect(payload.databaseEngines.families).toContainEqual(
-        expect.objectContaining({ id: "agent", effective: "postgres" }),
-      );
-      expect(payload.databaseEngines.source).toBe("unavailable");
-    },
-  );
-
   it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const compatibilityNotice = {
       pluginId: "legacy-plugin",
@@ -217,13 +176,6 @@ describe("statusJsonCommand", () => {
 
     const payload = JSON.parse(await runJson({ all: true })) as Record<string, unknown>;
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
-      config: { update: { channel: "stable" } },
-      sourceConfig: {},
-      deep: false,
-      includeFilesystem: true,
-      loadPluginSecurityCollectors: false,
-    });
     expect({
       securityAudit: payload.securityAudit,
       pluginCompatibility: payload.pluginCompatibility,

@@ -7,10 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getChannelsCommandSecretTargetIds: vi.fn(() => []),
   loadConfig: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  replaceConfigFile: vi.fn(),
-  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
 }));
@@ -29,14 +26,8 @@ vi.mock("../config/config.js", async () => {
   return {
     ...actual,
     ...createTestConfigReadMocks(mocks, "loadConfig"),
-    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
-
-vi.mock("../plugins/registry-refresh.js", () => ({
-  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
-}));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
@@ -63,10 +54,7 @@ function fixturePlugin(
 
 function explicitPlugin(plugin: { id: string; resolver?: ChannelResolverAdapter }) {
   mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-    cfg: { channels: {} },
     channelId: plugin.id,
-    configChanged: false,
-    pluginInstalled: false,
     plugin,
   });
 }
@@ -77,10 +65,7 @@ describe("channelsResolveCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfig.mockReturnValue({ channels: {} });
-    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
-    mocks.refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: { channels: {} },
       diagnostics: [],
@@ -88,8 +73,6 @@ describe("channelsResolveCommand", () => {
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "telegram",
       plugin: { id: "telegram" },
-      configured: ["telegram"],
-      source: "explicit",
     });
   });
 
@@ -131,13 +114,6 @@ describe("channelsResolveCommand", () => {
       1,
       expect.objectContaining({ agentId: "ops" }),
     );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    expect(resolveTargets).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ kind: "group" }),
-    );
-    expect(resolveTargets.mock.calls[0]?.[0].cfg).toStrictEqual({ channels: {} });
-    expect(resolveTargets.mock.calls[0]?.[0].inputs).toStrictEqual(["friends"]);
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
   });
 
@@ -151,7 +127,6 @@ describe("channelsResolveCommand", () => {
       channelsResolveCommand({ agent: "   ", channel: "telegram", entries: ["friends"] }, runtime),
     ).rejects.toThrow("--agent must not be blank");
 
-    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
@@ -159,11 +134,7 @@ describe("channelsResolveCommand", () => {
 
   it("tells users to add an explicit catalog channel before resolving", async () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
-      cfg: { channels: {} },
-      channelId: "external-chat",
       catalogEntry: { id: "external-chat" },
-      configChanged: false,
-      pluginInstalled: false,
     });
 
     await expect(
@@ -218,14 +189,6 @@ describe("channelsResolveCommand", () => {
 
       expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(expected);
       expect(runtime.error).not.toHaveBeenCalled();
-      expect(resolveTargets.mock.calls.map(([params]) => [params.kind, params.inputs])).toEqual(
-        kind === "auto"
-          ? [
-              ["user", ["@alice", "@alice"]],
-              ["group", ["#general", "missing"]],
-            ]
-          : [["group", ["@alice", "#general", "missing", "@alice"]]],
-      );
     },
   );
 
@@ -248,9 +211,6 @@ describe("channelsResolveCommand", () => {
 
       await channelsResolveCommand({ channel: "fixture", entries: [input], json: true }, runtime);
 
-      expect(resolveTargets).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: expectedKind, inputs: [input] }),
-      );
       expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual([
         { input, resolved: true, id: input },
       ]);

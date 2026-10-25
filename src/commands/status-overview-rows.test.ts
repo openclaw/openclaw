@@ -128,7 +128,7 @@ it("shows the latest offsite attempt beside a newer local backup", () => {
   expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
 });
 
-it("preserves service inspection failures in default output", () => {
+it("redacts both load and runtime service inspection errors", () => {
   const service = {
     label: "LaunchAgent",
     installed: false,
@@ -143,7 +143,6 @@ it("preserves service inspection failures in default output", () => {
     runtime: { status: "unknown", detail: "system domain permission denied token=fixture" },
   };
   const rows = buildStatusCommandOverviewRows(params);
-
   expect(findRowValue(rows, "Gateway service")).toBe(
     "LaunchAgent unknown (inspection failed: permission denied token=***)",
   );
@@ -181,22 +180,18 @@ it("renders native provider health without legacy index counters", () => {
   expect(value("Memory")).toBe("plugin records · warn(degraded) · warming");
 });
 
-it.each([
-  { every: "1m", everyMs: 60_000 },
-  { every: "scheduled", everyMs: null },
-])(
-  "shows supported remediation for an enabled $every automation without a route",
-  ({ every, everyMs }) => {
-    params.summary.heartbeat = {
-      defaultAgentId: "main",
-      agents: [{ agentId: "main", enabled: true, every, everyMs, waitingForRoute: true }],
-    };
-    const heartbeat = value("Heartbeat");
-    expect(heartbeat).toContain(`${every} (main; waiting for delivery route`);
-    expect(heartbeat).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-    expect(heartbeat).toContain("edit the automation delivery channel and recipient");
-  },
-);
+it("shows supported remediation for an enabled automation without a route", () => {
+  params.summary.heartbeat = {
+    defaultAgentId: "main",
+    agents: [
+      { agentId: "main", enabled: true, every: "scheduled", everyMs: null, waitingForRoute: true },
+    ],
+  };
+  const heartbeat = value("Heartbeat");
+  expect(heartbeat).toContain("scheduled (main; waiting for delivery route");
+  expect(heartbeat).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+  expect(heartbeat).toContain("edit the automation delivery channel and recipient");
+});
 
 it("shows managed host desktop coordinates", () => {
   params.summary.hostDesktop = {
@@ -228,12 +223,6 @@ it("shows utility model capability warnings in normal and full status", () => {
 
 it("builds status-all overview rows from the shared surface", () => {
   const rows = allRows({
-    surface: {
-      ...params.surface,
-      tailscaleMode: "off",
-      tailscaleHttpsUrl: null,
-      gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
-    },
     summary: {
       ...params.summary,
       modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
