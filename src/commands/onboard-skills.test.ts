@@ -42,28 +42,15 @@ function createBundledSkill(params: {
   installKind?: SkillInstallOption["kind"];
 }) {
   const bins = params.bins ?? [params.name];
-  const requirements = {
-    bins,
-    anyBins: [],
-    env: [],
-    config: [],
-    os: [],
-  };
   return {
     name: params.name,
     description: params.description ?? params.name,
     source: "openclaw-bundled",
     bundled: true,
-    filePath: `/tmp/skills/${params.name}`,
-    baseDir: `/tmp/skills/${params.name}`,
-    skillKey: params.name,
-    always: false,
     disabled: false,
     blockedByAllowlist: false,
     eligible: false,
-    requirements: { ...requirements },
-    missing: { ...requirements },
-    configChecks: [],
+    missing: { bins, os: [] },
     install: [
       {
         id: params.installKind ?? "brew",
@@ -189,105 +176,84 @@ describe("setupSkills", () => {
     expect(stop).toHaveBeenCalledWith(expect.stringContaining(`${failurePrefix}…`));
   });
 
-  it("hides brew-only installs in Linux containers when brew is missing", async () => {
-    await withPlatform("linux", async () => {
-      mockMissingBrewStatus([createBrewSkill()]);
-      mocks.isContainerEnvironment.mockReturnValue(true);
+  it.each([undefined, "/home/linuxbrew/.linuxbrew/bin/brew"])(
+    "offers container brew installs only when brew resolves (%s)",
+    async (brew) => {
+      await withPlatform("linux", async () => {
+        mockMissingBrewStatus([createBrewSkill()]);
+        mocks.isContainerEnvironment.mockReturnValue(true);
+        mocks.resolveBrewExecutable.mockReturnValue(brew);
 
-      const { prompter, notes, run } = createPrompter({});
-      await run();
+        const { prompter, notes, run } = createPrompter({ multiselect: ["video-frames"] });
+        await run();
 
-      expect(prompter.multiselect).not.toHaveBeenCalled();
-      expect(mocks.installSkill).not.toHaveBeenCalled();
-      expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
-      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
-      expect(
-        notes.find((n) => n.message.includes("No missing skill dependencies to install")),
-      ).toBeUndefined();
-    });
-  });
+        if (brew) {
+          expect(prompter.multiselect).toHaveBeenCalled();
+          expect(mocks.installSkill).toHaveBeenCalledWith(
+            expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+          );
+          expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
+        } else {
+          expect(prompter.multiselect).not.toHaveBeenCalled();
+          expect(mocks.installSkill).not.toHaveBeenCalled();
+          expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
+          expect(notes.some((n) => n.message.includes("No missing skill dependencies"))).toBe(
+            false,
+          );
+        }
+        expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+      });
+    },
+  );
 
-  it("keeps brew-only installs visible when Linuxbrew is resolved off PATH", async () => {
-    await withPlatform("linux", async () => {
-      mockMissingBrewStatus([createBrewSkill()]);
-      mocks.isContainerEnvironment.mockReturnValue(true);
-      mocks.resolveBrewExecutable.mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
+  it.each(["__skip__", "nano-pdf"])(
+    "offers only bundled recipes and checks prerequisites after selection (%s)",
+    async (selected) => {
+      await withPlatform("linux", async () => {
+        mockMissingBrewStatus([
+          createWorkspaceSkill({
+            name: "repo-helper",
+            installKind: "node",
+          }),
+          createNodeSkill(),
+          createBundledSkill({
+            name: "nano-pdf",
+            installKind: "uv",
+          }),
+        ]);
+        mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
+          kind === "uv" ? { ready: false, reason: "uv" } : { ready: true },
+        );
 
-      const { prompter, notes, run } = createPrompter({ multiselect: ["video-frames"] });
-      await run();
-
-      expect(prompter.multiselect).toHaveBeenCalled();
-      expect(mocks.installSkill).toHaveBeenCalledWith(
-        expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
-      );
-      expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
-      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
-    });
-  });
-
-  it("lets the user skip ready bundled dependencies without offering workspace recipes", async () => {
-    mockMissingBrewStatus([
-      createWorkspaceSkill({
-        name: "repo-helper",
-      }),
-      createNodeSkill(),
-      createBrewSkill(),
-    ]);
-    mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
-      kind === "brew" ? { ready: false, reason: "brew" } : { ready: true },
-    );
-
-    const { notes, run, choices } = createPrompter({});
-    await run();
-    expect(choices().map(({ value }) => value)).toEqual(
-      expect.arrayContaining(["__skip__", "node-helper"]),
-    );
-    expect(choices().map(({ value }) => value)).not.toContain("repo-helper");
-    expect(mocks.installSkill).not.toHaveBeenCalled();
-    expect(mocks.resolveInstallerKindReadiness).not.toHaveBeenCalled();
-    expect(notes.find((note) => note.title === "Homebrew recommended")).toBeUndefined();
-    expect(notes.find((note) => note.title === "Manual skill prerequisites")).toBeUndefined();
-  });
-
-  it("offers unavailable bundled dependencies and explains selected prerequisites afterward", async () => {
-    await withPlatform("linux", async () => {
-      mockMissingBrewStatus([
-        createWorkspaceSkill({
-          name: "repo-helper",
-          installKind: "node",
-        }),
-        createNodeSkill(),
-        createBundledSkill({
-          name: "nano-pdf",
-          installKind: "uv",
-        }),
-      ]);
-      mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
-        kind === "uv" ? { ready: false, reason: "uv" } : { ready: true },
-      );
-
-      const { prompter, notes, run, choices } = createPrompter({ multiselect: ["nano-pdf"] });
-      await run();
-      expect(choices().map(({ value }) => value)).toEqual(
-        expect.arrayContaining(["__skip__", "node-helper", "nano-pdf"]),
-      );
-      expect(choices().map(({ value }) => value)).not.toContain("repo-helper");
-      expect(mocks.installSkill).not.toHaveBeenCalled();
-      expect(mocks.resolveInstallerKindReadiness.mock.calls).toEqual([["uv"]]);
-      expect(mocks.resolveInstallerKindReadiness.mock.invocationCallOrder[0]).toBeGreaterThan(
-        vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-      expect(notes.find((note) => note.title === "Manual skill prerequisites")?.message).toContain(
-        "uv: nano-pdf",
-      );
-      const manualNoteCall = vi
-        .mocked(prompter.note)
-        .mock.calls.findIndex(([, title]) => title === "Manual skill prerequisites");
-      expect(vi.mocked(prompter.note).mock.invocationCallOrder[manualNoteCall]).toBeGreaterThan(
-        vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-    });
-  });
+        const { prompter, notes, run, choices } = createPrompter({ multiselect: [selected] });
+        await run();
+        expect(choices().map(({ value }) => value)).toEqual(
+          expect.arrayContaining(["__skip__", "node-helper", "nano-pdf"]),
+        );
+        expect(choices().map(({ value }) => value)).not.toContain("repo-helper");
+        expect(mocks.installSkill).not.toHaveBeenCalled();
+        expect(notes.find((note) => note.title === "Homebrew recommended")).toBeUndefined();
+        if (selected === "__skip__") {
+          expect(mocks.resolveInstallerKindReadiness).not.toHaveBeenCalled();
+          expect(notes.find((note) => note.title === "Manual skill prerequisites")).toBeUndefined();
+          return;
+        }
+        expect(mocks.resolveInstallerKindReadiness.mock.calls).toEqual([["uv"]]);
+        expect(mocks.resolveInstallerKindReadiness.mock.invocationCallOrder[0]).toBeGreaterThan(
+          vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+        );
+        expect(
+          notes.find((note) => note.title === "Manual skill prerequisites")?.message,
+        ).toContain("uv: nano-pdf");
+        const manualNoteCall = vi
+          .mocked(prompter.note)
+          .mock.calls.findIndex(([, title]) => title === "Manual skill prerequisites");
+        expect(vi.mocked(prompter.note).mock.invocationCallOrder[manualNoteCall]).toBeGreaterThan(
+          vi.mocked(prompter.multiselect).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+        );
+      });
+    },
+  );
 
   it("installs only the bundled dependencies selected by the user", async () => {
     mockMissingBrewStatus([

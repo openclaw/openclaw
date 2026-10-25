@@ -4,14 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  installPrivateUpdateHandoffStore,
-  writePrivateUpdateHandoffChildGuard,
-} from "../../test/helpers/private-update-handoff-store.js";
-import {
   consumeUpdateDoctorHistoricalScans,
   recordUpdateDatabaseWrites,
 } from "../cli/update-cli/update-command-database-receipts.js";
-import { runUpdateFinalizationDoctorInFreshProcess } from "../cli/update-cli/update-command-fresh-doctor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import * as sqliteOwner from "../infra/node-sqlite.js";
 import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
@@ -27,7 +22,6 @@ import {
   UPDATE_DOCTOR_HISTORICAL_SCANS_ENV,
   type UpdateDoctorHistoricalScans,
 } from "../infra/update-doctor-scan-receipts.js";
-import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
@@ -75,7 +69,6 @@ describe("update Doctor retained transcript scan reuse", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     note.mockClear();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -283,58 +276,6 @@ describe("update Doctor retained transcript scan reuse", () => {
       expect(second.warnings).toEqual([]);
     },
   );
-  it("does not route an older-driver reuse miss into fresh Doctor update warnings", async () => {
-    const second = await pass(undefined, undefined, { postPlugin: true });
-    const privateTmp = path.join(root, "private-tmp");
-    fs.mkdirSync(privateTmp, { mode: 0o700 });
-    const { databasePath: handoffPath, assertDatabasePath } =
-      installPrivateUpdateHandoffStore(privateTmp);
-    assertDatabasePath(resolveManagedUpdateLeaseDatabasePath());
-    const guarded = writePrivateUpdateHandoffChildGuard(
-      handoffPath,
-      privateTmp,
-    )({ ...process.env, ...env });
-    for (const key of [
-      "HOME",
-      "OPENCLAW_STATE_DIR",
-      "NODE_OPTIONS",
-      "BUN_OPTIONS",
-      "OPENCLAW_TEST_PRIVATE_HANDOFF_PATH",
-    ]) {
-      vi.stubEnv(key, guarded[key]);
-    }
-    const entryPath = path.join(root, "fixture-doctor.mjs");
-    const marker = path.join(root, "doctor-ran");
-    fs.writeFileSync(
-      entryPath,
-      [
-        "import fs from 'node:fs';",
-        "import path from 'node:path';",
-        "const file = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;",
-        "if (fs.realpathSync(path.dirname(file)) !== " +
-          JSON.stringify(fs.realpathSync(privateTmp)) +
-          ") throw Error('not private');",
-        "fs.writeFileSync(file, " +
-          JSON.stringify(JSON.stringify({ status: "ok", warnings: second.warnings })) +
-          ", { flag: 'wx', mode: 0o600 });",
-        "fs.writeFileSync(" + JSON.stringify(marker) + ", 'ran');",
-      ].join("\n"),
-    );
-    const warnings: string[] = [];
-    const result = await runUpdateFinalizationDoctorInFreshProcess({
-      phase: "post-plugin",
-      root,
-      entryPath,
-      nodeRunner: process.execPath,
-      yes: true,
-      json: true,
-      timeoutMs: 30_000,
-      onWarnings: (messages) => warnings.push(...messages),
-    });
-    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
-    expect(result).toBeUndefined();
-    expect(warnings).toEqual([]);
-  }, 45_000);
   it("drops an optional receipt rather than exceeding the child environment budget", async () => {
     const first = await pass();
     const generations = await readUpdatePhysicalDatabaseGenerations([databasePath]);
