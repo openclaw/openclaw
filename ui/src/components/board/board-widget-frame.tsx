@@ -20,6 +20,7 @@ import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import { BoardWidgetTicketRefresh, type FrameRefresh } from "./board-widget-ticket-refresh.ts";
 
 registerEnglishCatalog(registerBoardEnglish);
 
@@ -31,10 +32,6 @@ const WIDGET_SCROLL_MESSAGE_TYPE = "openclaw:widget-scroll";
 const WIDGET_COMMAND_PALETTE_MESSAGE_TYPE = "openclaw:widget-command-palette";
 const WIDGET_SHORTCUT_HOST_MESSAGE_TYPE = "openclaw:widget-shortcut-host";
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
-const TICKET_REFRESH_LEAD_MS = 15_000;
-const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
-const TICKET_REFRESH_RETRY_MS = 1_000;
-const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -60,8 +57,6 @@ function resolveBoardFrameFailureMessage(
   return t("board.widget.frameAuthorizationFailed");
 }
 
-type FrameRefresh = (name: string) => Promise<void>;
-
 type BoardWidgetFrameOwnerHost = {
   active: () => boolean;
   loadingCovered?: () => boolean;
@@ -74,77 +69,6 @@ type BoardWidgetFrameOwnerHost = {
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   widget: () => BoardWidget | undefined;
 };
-
-class BoardWidgetTicketRefresh {
-  private timer: number | null = null;
-  private attempts = 0;
-  private scheduledTicket = "";
-
-  constructor(
-    private readonly currentTicket: () => string | undefined,
-    private readonly canRefresh: () => boolean,
-  ) {}
-
-  private clearTimer(): void {
-    if (this.timer !== null) {
-      window.clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  reset(): void {
-    this.clearTimer();
-    this.attempts = 0;
-    this.scheduledTicket = "";
-  }
-
-  schedule(widget: BoardWidget | undefined, refresh: FrameRefresh | undefined): void {
-    const ticket = widget?.viewTicket;
-    const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
-    if (!this.canRefresh() || !widget || !refresh || !ticket || remainingTtlMs === undefined) {
-      this.reset();
-      return;
-    }
-    if (this.scheduledTicket === ticket) {
-      return;
-    }
-    this.clearTimer();
-    this.attempts = 0;
-    this.scheduledTicket = ticket;
-    const delayMs = Math.max(TICKET_REFRESH_MIN_DELAY_MS, remainingTtlMs - TICKET_REFRESH_LEAD_MS);
-    this.timer = window.setTimeout(() => {
-      this.timer = null;
-      this.refresh(widget.name, ticket, refresh);
-    }, delayMs);
-  }
-
-  private refresh(name: string, ticket: string, refresh: FrameRefresh): void {
-    if (!this.canRefresh()) {
-      this.reset();
-      return;
-    }
-    if (this.currentTicket() !== ticket || this.scheduledTicket !== ticket) {
-      return;
-    }
-    this.attempts += 1;
-    const retryIfUnchanged = () => {
-      if (this.currentTicket() !== ticket || this.scheduledTicket !== ticket) {
-        return;
-      }
-      // A fulfilled refresh may be discarded by a superseding provider mutation.
-      // Retry until this exact expiring ticket is actually replaced.
-      this.clearTimer();
-      this.timer = window.setTimeout(
-        () => {
-          this.timer = null;
-          this.refresh(name, ticket, refresh);
-        },
-        Math.min(TICKET_REFRESH_RETRY_MS * this.attempts, TICKET_REFRESH_MAX_RETRY_MS),
-      );
-    };
-    void refresh(name).then(retryIfUnchanged, retryIfUnchanged);
-  }
-}
 
 export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
 export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
