@@ -298,6 +298,11 @@ it.runIf(process.platform === "linux")(
   async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-peer-") };
     const pathname = resolveOpenClawAgentSqlitePath({ agentId: "integrity-lease", env });
+    // A claim records provenance only for an existing file, so another process creates it first.
+    const creator = await openChild(pathname, env);
+    const created = once(creator, "exit");
+    creator.send("close");
+    expect(await created).toEqual([0, null]);
     const child = await openChild(pathname, env);
     const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
     let diagnostics: SqliteIntegrityDiagnostics | undefined;
