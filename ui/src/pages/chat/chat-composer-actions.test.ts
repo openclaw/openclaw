@@ -55,16 +55,29 @@ function pressComposerEnter(container: Element, modifiers: KeyboardEventInit = {
 }
 
 describe("renderChatComposer controls", () => {
-  it("keeps an editable draft without send permission", () => {
-    const draft = "local draft";
-    const { container, onSend } = renderComposer({ canCompose: true, canSend: false, draft });
-    expect(textarea(container).disabled).toBe(false);
+  it.each([
+    { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
+    {
+      name: "after history failed",
+      draft: "/compact",
+      submitDisabledReason: "History failed. Retry to load the conversation.",
+      submitPending: false,
+    },
+  ])("keeps submission gated $name", ({ name: _name, ...overrides }) => {
+    const { container, onSend } = renderComposer(overrides);
     const send = primaryButton(container);
     expect(send.disabled).toBe(true);
+    if (overrides.submitDisabledReason) {
+      expect(send.getAttribute("aria-label")).toBe(overrides.submitDisabledReason);
+      expect(send.getAttribute("aria-busy")).toBe("false");
+      expect(send.querySelector(".btn__spinner")).toBeNull();
+    } else {
+      expect(textarea(container).disabled).toBe(false);
+    }
     send.click();
     pressComposerEnter(container);
     expect(onSend).not.toHaveBeenCalled();
-    expect(textarea(container).value).toBe(draft);
+    expect(textarea(container).value).toBe(overrides.draft);
   });
 
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
@@ -90,24 +103,6 @@ describe("renderChatComposer controls", () => {
     expect(onDraftChange).not.toHaveBeenCalled();
     expect(onTypingChange).not.toHaveBeenCalled();
     expect(textarea(container).value).toBe(props.draft);
-  });
-
-  it("keeps command submission gated after history failed", () => {
-    const reason = "History failed. Retry to load the conversation.";
-    const { container, onSend } = renderComposer({
-      draft: "/compact",
-      submitDisabledReason: reason,
-      submitPending: false,
-    });
-    const send = primaryButton(container);
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("aria-label")).toBe(reason);
-    expect(send.getAttribute("aria-busy")).toBe("false");
-    expect(send.querySelector(".btn__spinner")).toBeNull();
-    send.click();
-    pressComposerEnter(container);
-    expect(onSend).not.toHaveBeenCalled();
-    expect(textarea(container).value).toBe("/compact");
   });
 
   function renderDictatingComposer({

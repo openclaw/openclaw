@@ -37,6 +37,7 @@ function renderComposer(overrides: Parameters<typeof props>[0], attached = false
 
 const microphoneGuidance =
   "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.";
+const voiceButton = (container: Element) => button(container, t("chat.composer.startVoiceInput"));
 
 function expectClasses(element: Element | null | undefined, classes: string) {
   expect(new Set(element?.classList)).toEqual(new Set(classes.split(" ")));
@@ -256,9 +257,7 @@ it("shows the same microphone guidance while dictation waits for access", async 
     onDismissRealtimeTalkError: dismissRecovery,
   });
   await vi.advanceTimersByTimeAsync(0);
-  button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
-    dictationPointer("pointerdown", 15),
-  );
+  voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
   expect(query('.agent-chat__talk-status[role="status"]')?.textContent).toContain(
@@ -301,22 +300,14 @@ it.each([true, false])(
         onCancel,
       },
     });
-    const composer = query<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea");
-    await waitForSolid(() =>
-      expect(query<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-        "unsaved queued edit",
-      ),
+    const editor = () => query<HTMLTextAreaElement>(".chat-queue__edit-input");
+    await waitForSolid(() => expect(editor()?.value).toBe("unsaved queued edit"));
+    query(".agent-chat__composer-combobox textarea")?.dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true }),
     );
-
-    composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-
     expect(onCancel).not.toHaveBeenCalled();
-    expect(query<HTMLTextAreaElement>(".chat-queue__edit-input")?.value).toBe(
-      "unsaved queued edit",
-    );
-    query<HTMLTextAreaElement>(".chat-queue__edit-input")?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-    );
+    expect(editor()?.value).toBe("unsaved queued edit");
+    editor()?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(onCancel).toHaveBeenCalledOnce();
   },
 );
@@ -439,7 +430,7 @@ it.each([
 it("keeps send and dictation distinct for attachment-only drafts", () => {
   const onSend = vi.fn();
   const onToggleRealtimeTalk = vi.fn();
-  const { container, query } = renderComposer({
+  const { container } = renderComposer({
     attachments: [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
     onSend,
     onToggleRealtimeTalk,
@@ -448,7 +439,7 @@ it("keeps send and dictation distinct for attachment-only drafts", () => {
   button(container, t("chat.runControls.sendMessage")).click();
   expect(onSend).toHaveBeenCalledOnce();
   expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
-  expect(query(`button[aria-label="${t("chat.composer.startVoiceInput")}"]`)).not.toBeNull();
+  expect(voiceButton(container)).not.toBeNull();
 });
 
 it("keeps the dictation button stable through hold progress and latch", async () => {
@@ -502,7 +493,7 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
     { realtime: { ready: true }, transcription: { ready: false } },
     { onToggleRealtimeTalk },
   );
-  const microphone = button(container, t("chat.composer.startVoiceInput"));
+  const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 10));
   await vi.advanceTimersByTimeAsync(801);
   const dropdown = query(".chat-talk-input-picker");
@@ -529,7 +520,7 @@ it("shows an actionable error status and returns the microphone to idle on start
     transcription: { ready: true },
   });
 
-  const microphone = button(container, t("chat.composer.startVoiceInput"));
+  const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 12));
   await vi.advanceTimersByTimeAsync(800);
   await vi.waitFor(() =>

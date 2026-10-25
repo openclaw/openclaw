@@ -45,6 +45,21 @@ import { expandModelProviders } from "./components/chat-model-picker.test-suppor
 
 beforeEach(installModelPickerLayout);
 
+function seedCatalog(
+  client: Parameters<typeof beginModelCatalogRead>[0],
+  sessionKey: string,
+  catalog: ModelCatalogResult,
+) {
+  const scope = { agentId: "main", sessionKey };
+  expect(publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, catalog)).toBe(
+    true,
+  );
+  return scope;
+}
+
+const menuReady = (container: HTMLElement) =>
+  waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
+
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
     state,
@@ -212,9 +227,7 @@ describe("chat pane composer controls", () => {
     flush();
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-    );
+    await menuReady(container);
     container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
     flush();
     expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
@@ -266,12 +279,7 @@ describe("chat pane composer controls", () => {
         retireChatMetadataRequests(state);
       });
       if (retained) {
-        const scope = { agentId: "main", sessionKey: state.sessionKey };
-        expect(
-          publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
-            models: cachedModels,
-          }),
-        ).toBe(true);
+        const scope = seedCatalog(client, state.sessionKey, { models: cachedModels });
         await refreshChatModelCatalogOnDemand(state);
         invalidateModelCatalogCache(client, scope);
       }
@@ -282,9 +290,7 @@ describe("chat pane composer controls", () => {
       const failureLabel = retained
         ? "Some models could not be refreshed. Open Models to try again."
         : "Models unavailable";
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-      );
+      await menuReady(container);
       expandModelProviders(container);
       expect(container.textContent).toContain(failureLabel);
 
@@ -367,10 +373,7 @@ describe("chat pane composer controls", () => {
         state.sessions.dispose();
       });
       if (cachedCatalog) {
-        const scope = { agentId: "main", sessionKey: "main" };
-        expect(
-          publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, cachedCatalog),
-        ).toBe(true);
+        const scope = seedCatalog(client, "main", cachedCatalog);
         const initialized = refreshChatModelCatalogOnDemand(state);
         expect(state.chatModelCatalogInitialized).toBe(true);
         expect(state.chatModelSelectionPolicy).toEqual(cachedCatalog.modelSelectionPolicy);
@@ -395,9 +398,7 @@ describe("chat pane composer controls", () => {
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
       renderPaneModelControl(composerControls(state), container);
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-      );
+      await menuReady(container);
       expandModelProviders(container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
@@ -449,11 +450,7 @@ describe("chat pane composer controls", () => {
     beginChatMetadataPublication(client, scope).publish({
       commands: [],
     });
-    expect(
-      publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
-        models: [cachedModel],
-      }),
-    ).toBe(true);
+    seedCatalog(client, host.sessionKey, { models: [cachedModel] });
     await refreshChatModelCatalogOnDemand(host);
     invalidateChatMetadataStore(
       client,
@@ -472,9 +469,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
     renderPaneModelControl(composerControls(host), container, true);
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-    );
+    await menuReady(container);
     expandModelProviders(container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");

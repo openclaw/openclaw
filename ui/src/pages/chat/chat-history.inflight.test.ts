@@ -450,11 +450,6 @@ describe("chat history run ownership recovery", () => {
     });
     const abortCalls = () => request.mock.calls.filter(([method]) => method.endsWith(".abort"));
     const state = Object.assign(createState(initial), {
-      chatLocalInputHistoryBySession: {},
-      chatInputHistorySessionKey: null,
-      chatInputHistoryItems: null,
-      chatInputHistoryIndex: -1,
-      chatDraftBeforeHistory: null,
       refreshCurrentChat: async () => {
         await loadChatHistory(state);
       },

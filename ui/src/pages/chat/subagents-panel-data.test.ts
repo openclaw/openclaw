@@ -265,13 +265,10 @@ describe("Subagents panel data ownership", () => {
     "loads older running children beyond the first page (%s)",
     async (swarmGroupId) => {
       const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
-      const last = child("last", {
+      const last = runningChild("last", {
         key: "agent:research:subagent:last",
         agentId: "research",
         swarmGroupId,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
       });
       const persistent = child("persistent", {
         key: "agent:main:dashboard:persistent",
@@ -427,16 +424,19 @@ describe("native observations in the Subagents panel owner", () => {
     truncated: false,
   };
   const nativeParent = { key: parentKey, sessionId: "parent-session", kind: "direct" };
-
-  it("keeps native observations separate from managed sessions and controls", async () => {
-    const f = fixture(
+  const nativeResult = (children = nativeSnapshot.children) => ({
+    session: nativeParent,
+    nativeSubagents: { ...nativeSnapshot, children },
+  });
+  const nativeFixture = (read: Parameters<typeof fixture>[2] = () => nativeResult()) =>
+    fixture(
       () => page([]),
       () => ({}),
-      () => ({
-        session: nativeParent,
-        nativeSubagents: nativeSnapshot,
-      }),
+      read,
     );
+
+  it("keeps native observations separate from managed sessions and controls", async () => {
+    const f = nativeFixture();
     f.open();
     await f.when(() => f.data.nativeSnapshot?.children.length === 1);
     expect(f.data.rows).toEqual([]);
@@ -449,58 +449,50 @@ describe("native observations in the Subagents panel owner", () => {
     expect(f.request.mock.calls.some(([method]) => method === "sessions.abort")).toBe(false);
   });
 
-  it.each(["parent", "connection"])("drops a late native read after %s changes", async (change) => {
-    const blocked = createDeferred<unknown>();
-    let reads = 0;
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => {
-        reads += 1;
-        return reads === 1
-          ? blocked.promise
-          : {
-              session: nativeParent,
-              nativeSubagents: {
-                ...nativeSnapshot,
-                children: [],
-              },
-            };
-      },
-    );
-    f.open();
-    await vi.waitFor(() => expect(reads).toBe(1));
-    if (change === "parent") {
-      f.open(otherParentKey);
-    } else {
-      f.connection.publish({ phase: "reconnecting" });
-      expect(f.data.nativeSnapshot?.children).toBeUndefined();
-      f.connection.publish({ phase: "connected" });
-    }
-    await vi.waitFor(() => expect(reads).toBe(2));
-    blocked.resolve({ session: nativeParent, nativeSubagents: nativeSnapshot });
-    await blocked.promise;
-    await Promise.resolve();
-    expect(f.data.nativeSnapshot?.children).toEqual([]);
-  });
+  it.each(["parent", "connection", "disposal"])(
+    "drops a late native read after %s",
+    async (change) => {
+      const blocked = createDeferred<unknown>();
+      let reads = 0;
+      const f = nativeFixture(() => (++reads === 1 ? blocked.promise : nativeResult([])));
+      f.open();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      if (change === "parent") {
+        f.open(otherParentKey);
+      } else if (change === "connection") {
+        f.connection.publish({ phase: "reconnecting" });
+        expect(f.data.nativeSnapshot?.children).toBeUndefined();
+        f.connection.publish({ phase: "connected" });
+      } else {
+        f.data.dispose();
+      }
+      if (change !== "disposal") {
+        await vi.waitFor(() => expect(reads).toBe(2));
+      }
+      blocked.resolve(nativeResult());
+      await blocked.promise;
+      await Promise.resolve();
+      if (change === "disposal") {
+        expect(f.data.nativeSnapshot).toBeUndefined();
+      } else {
+        expect(f.data.nativeSnapshot?.children).toEqual([]);
+      }
+    },
+  );
 
   it.each(["missing", "denied"])(
     "clears prior contents when the parent becomes %s",
     async (outcome) => {
       let allowed = true;
-      const f = fixture(
-        () => page([]),
-        () => ({}),
-        () => {
-          if (allowed) {
-            return { session: nativeParent, nativeSubagents: nativeSnapshot };
-          }
-          if (outcome === "denied") {
-            throw new Error("Access denied");
-          }
-          return { session: null };
-        },
-      );
+      const f = nativeFixture(() => {
+        if (allowed) {
+          return nativeResult();
+        }
+        if (outcome === "denied") {
+          throw new Error("Access denied");
+        }
+        return { session: null };
+      });
       f.open();
       await f.when(() => f.data.nativeSnapshot?.children.length === 1);
       allowed = false;
@@ -510,40 +502,12 @@ describe("native observations in the Subagents panel owner", () => {
     },
   );
 
-  it("does not publish an in-flight native response after disposal", async () => {
-    const blocked = createDeferred<unknown>();
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => blocked.promise,
-    );
-    f.open();
-    await vi.waitFor(() =>
-      expect(f.request).toHaveBeenCalledWith(
-        "sessions.describe",
-        expect.objectContaining({ includeNativeSubagents: true }),
-      ),
-    );
-    f.data.dispose();
-    blocked.resolve({ session: nativeParent, nativeSubagents: nativeSnapshot });
-    await blocked.promise;
-    await Promise.resolve();
-    expect(f.data.nativeSnapshot).toBeUndefined();
-  });
-
   it("polls only while visible and retires pending reads on disposal", async () => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
     });
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => ({
-        session: nativeParent,
-        nativeSubagents: nativeSnapshot,
-      }),
-    );
+    const f = nativeFixture();
     f.open();
     await vi.advanceTimersByTimeAsync(0);
     const reads = () =>
