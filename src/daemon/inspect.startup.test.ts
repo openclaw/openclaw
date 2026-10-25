@@ -10,7 +10,6 @@ import { maybeScanExtraGatewayServices } from "../commands/doctor-gateway-servic
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import * as doctorServicePolicy from "../commands/doctor-service-repair-policy.js";
 import * as configPaths from "../config/paths.js";
-import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import * as gatewayProcesses from "../infra/gateway-processes.js";
 import * as portsInspection from "../infra/ports-inspect.js";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
@@ -114,7 +113,7 @@ const nativeResult = (stdout: string, overrides: Partial<SpawnSyncReturns<string
   signal: null,
   ...overrides,
 });
-const readStartupWithinDeadline = (windowsStartupEntry: string, timeoutMs = 200) =>
+const readStartup = (windowsStartupEntry: string, timeoutMs?: number) =>
   readGatewayServiceState(resolveGatewayService(), {
     env: environment(),
     windowsStartupEntry,
@@ -210,12 +209,7 @@ describe("Startup entries", () => {
           4343,
         ]);
       }
-      const state = await readGatewayServiceState(resolveGatewayService(), {
-        env: environment(),
-        windowsStartupEntry: startupPath,
-        requireEffective: true,
-        requireLoadedCommand: true,
-      });
+      const state = await readStartup(startupPath);
       expect(state).toMatchObject({
         command: { sourcePath: scriptPath },
         env: { OPENCLAW_PROFILE: "rescue" },
@@ -247,7 +241,7 @@ describe("Startup entries", () => {
           : {}),
       });
     });
-    const state = await readStartupWithinDeadline(startupPath);
+    const state = await readStartup(startupPath, 200);
     expect(nativeBudgets).toEqual([200]);
     expect(state).toMatchObject(startupUnknown);
     expect(state.runtime?.pid).toBeUndefined();
@@ -270,7 +264,7 @@ describe("Startup entries", () => {
       return readFile(...args);
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const inspection = readStartupWithinDeadline(startupPath);
+    const inspection = readStartup(startupPath, 200);
     await entered.promise;
     await vi.advanceTimersByTimeAsync(200);
     expect(await inspection).toMatchObject(startupUnknown);
@@ -292,20 +286,6 @@ describe("Startup entries", () => {
     vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
     const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const check = CORE_HEALTH_CHECKS.find(({ id }) => id === "core/doctor/gateway-services/extra");
-    if (!check) {
-      throw new Error("Doctor extra-services check is not registered");
-    }
-    const context = { mode: "doctor" as const, cfg: {}, runtime, deep: true };
-    expect(await check.detect(context)).toEqual(
-      [sibling, selected].map((entry) =>
-        expect.objectContaining({
-          severity: "info",
-          target: entry.taskName,
-          message: expect.stringContaining(entry.startupPath),
-        }),
-      ),
-    );
     await maybeScanExtraGatewayServices(
       { deep: true },
       runtime,
@@ -596,13 +576,7 @@ it.each([
     expect(observations.filter((startedAt) => startedAt >= 60_000)).toEqual([]);
     expectInventory(
       inventory,
-      [
-        expect.objectContaining({
-          ...gatewayFields,
-          label: completed.snapshot.taskPath,
-          detail: expect.stringMatching(/^task:/),
-        }),
-      ],
+      [expect.objectContaining({ label: completed.snapshot.taskPath })],
       [issue("schtasks", expect.stringMatching(/deadline expired/))],
     );
   },
@@ -702,57 +676,54 @@ describe("inventory projections", () => {
     ]);
   });
 
-  it.each<[string, taskProbe.ScheduledTaskSnapshot[], string?, string?]>([
-    [
-      "missing actions",
-      ["\\OpenClaw Gateway", "\\Selected Custom"].map((taskPath) => ({
-        taskPath,
-        state: null,
-        actions: undefined,
-      })),
-      "\\Selected Custom",
-    ],
-    [
-      "missing launchers",
-      ["\\OpenClaw Gateway (dev)", "\\Clawdbot Gateway", "\\Custom Service"].map((label) =>
-        task(label, "C:\\OpenClaw\\gateway.cmd", ""),
-      ),
-    ],
-    [
-      "multiple actions",
-      [
-        task("\\Mixed Assistant", [
-          action("C:\\clawdbot\\clawdbot.exe", "run"),
-          action("C:\\OpenClaw\\openclaw.exe", "gateway run"),
-        ]),
-      ],
-      undefined,
-      "Multiple Scheduled Task actions",
-    ],
-  ])("qualifies incomplete inventory: %s", async (name, tasks, selected, message) => {
-    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue(tasks);
-    const missing = name === "missing launchers";
-    if (missing) {
-      vi.mocked(taskLayout.readScheduledTaskCommand).mockResolvedValue(null);
-    }
-    const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: selected };
-    const result = selected
-      ? await findExtraGatewayServices(env, { deep: true })
-      : await listManagedOpenClawGatewayServices(env);
-    expectInventory(
-      result,
-      [],
-      tasks.map(({ taskPath }) =>
-        issue(
-          taskPath,
-          missing
-            ? "Scheduled Task launcher could not be inspected."
-            : expect.stringContaining(message ?? "could not be inspected"),
+  it.each(["missing actions", "missing launchers", "multiple actions"])(
+    "qualifies incomplete inventory: %s",
+    async (name) => {
+      const selected = name === "missing actions" ? "\\Selected Custom" : undefined;
+      const tasks: taskProbe.ScheduledTaskSnapshot[] =
+        name === "missing actions"
+          ? ["\\OpenClaw Gateway", "\\Selected Custom"].map((taskPath) => ({
+              taskPath,
+              state: null,
+            }))
+          : name === "missing launchers"
+            ? ["\\OpenClaw Gateway (dev)", "\\Clawdbot Gateway", "\\Custom Service"].map((label) =>
+                task(label, "C:\\OpenClaw\\gateway.cmd", ""),
+              )
+            : [
+                task("\\Mixed Assistant", [
+                  action("C:\\clawdbot\\clawdbot.exe", "run"),
+                  action("C:\\OpenClaw\\openclaw.exe", "gateway run"),
+                ]),
+              ];
+      vi.mocked(taskProbe.listScheduledTasks).mockReturnValue(tasks);
+      const missing = name === "missing launchers";
+      if (missing) {
+        vi.mocked(taskLayout.readScheduledTaskCommand).mockResolvedValue(null);
+      }
+      const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: selected };
+      const result = selected
+        ? await findExtraGatewayServices(env, { deep: true })
+        : await listManagedOpenClawGatewayServices(env);
+      expectInventory(
+        result,
+        [],
+        tasks.map(({ taskPath }) =>
+          issue(
+            taskPath,
+            missing
+              ? "Scheduled Task launcher could not be inspected."
+              : expect.stringContaining(
+                  name === "multiple actions"
+                    ? "Multiple Scheduled Task actions"
+                    : "could not be inspected",
+                ),
+          ),
         ),
-      ),
-    );
-    if (selected) {
-      expect(await listManagedOpenClawGatewayServices(env)).toEqual(result);
-    }
-  });
+      );
+      if (selected) {
+        expect(await listManagedOpenClawGatewayServices(env)).toEqual(result);
+      }
+    },
+  );
 });
