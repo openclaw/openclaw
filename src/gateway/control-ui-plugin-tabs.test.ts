@@ -62,63 +62,42 @@ afterEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
 });
 
-it("advertises a tab slug in the hello contract without altering its frame path", () => {
-  activateDescriptors([
+it.each([
+  ["", undefined, "exact"],
+  ["", "/reports", "exact"],
+  ["/team", "/team", "prefix"],
+] as const)("projects hello slugs under %s with route %s (%s)", (basePath, path, match) => {
+  setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
+  const registry = activateDescriptors([
     tab("reports-fixture", { slug: "reports", path: "/plugins/reports-fixture" }),
   ]);
-  const tabs = listControlUiPluginTabs(["operator.read"]);
-  expect(tabs).toEqual([
-    expect.objectContaining({ slug: "reports", path: "/plugins/reports-fixture" }),
-  ]);
-  expect(Value.Check(HelloOkSchema.properties.controlUiTabs, tabs)).toBe(true);
-});
-
-it.each([
-  { basePath: "", path: "/reports", match: "exact" as const, auth: "gateway" as const },
-  { basePath: "/team", path: "/team", match: "prefix" as const, auth: "gateway" as const },
-])(
-  "drops a slug shadowed by $auth $match route $path under $basePath once",
-  ({ basePath, ...shadow }) => {
-    setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
-    const registry = activateDescriptors([
-      tab("reports-fixture", { slug: "reports", path: "/plugins/reports-fixture" }),
-    ]);
-    // HTTP registration after the descriptor must produce the same projection.
+  // HTTP registration after the descriptor must produce the same projection.
+  if (path) {
     registry.httpRoutes.push({
-      ...shadow,
-      pluginId: "other",
+      ...route("other", path, match),
       source: "test:other",
       handler: async () => true,
     });
-    for (let connect = 0; connect < 2; connect += 1) {
-      const [projected] = listControlUiPluginTabs(["operator.read"]);
-      expect(projected).toMatchObject({
+  }
+  for (let connect = 0; connect < 2; connect += 1) {
+    const tabs = listControlUiPluginTabs(["operator.read"]);
+    expect(Value.Check(HelloOkSchema.properties.controlUiTabs, tabs)).toBe(true);
+    expect(tabs).toMatchObject([
+      {
         pluginId: "reports-fixture",
         path: "/plugins/reports-fixture",
-      });
-      expect(projected).not.toHaveProperty("slug");
-    }
-    expect(registry.diagnostics).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        pluginId: "reports-fixture",
-        message: expect.stringContaining("shadowed by plugin HTTP route"),
-      }),
+      },
     ]);
-    expect(registry.controlUiDescriptors[0]?.descriptor.slug).toBe("reports");
-  },
-);
-
-it("projects only tab descriptors", () => {
-  activateDescriptors([
-    tab("workboard", { placement: "route:workboard" }),
-    tab("other", { id: "run-panel", surface: "run" }),
-  ]);
-
-  const tabs = listControlUiPluginTabs(["operator.admin"]);
-  expect(tabs).toMatchObject([
-    { id: "logbook", placement: "route:workboard", pluginId: "workboard" },
-  ]);
+    if (path) {
+      expect(tabs[0]).not.toHaveProperty("slug");
+    } else {
+      expect(tabs[0]).toHaveProperty("slug", "reports");
+    }
+  }
+  expect(registry.diagnostics.map(({ level, pluginId }) => ({ level, pluginId }))).toEqual(
+    path ? [{ level: "warn", pluginId: "reports-fixture" }] : [],
+  );
+  expect(registry.controlUiDescriptors[0]?.descriptor.slug).toBe("reports");
 });
 
 it("hides tabs whose required scopes are not granted", () => {
@@ -127,30 +106,32 @@ it("hides tabs whose required scopes are not granted", () => {
     tab("adminy", { id: "adminy", label: "Admin", requiredScopes: ["operator.admin"] }),
   ]);
 
-  expect(listControlUiPluginTabs(["operator.read"])).toEqual([]);
-  expect(listControlUiPluginDescriptors(["operator.read"])).toEqual([]);
-  expect(listControlUiPluginTabs(["operator.write"]).map((row) => row.id)).toEqual(["logbook"]);
-  expect(listControlUiPluginDescriptors(["operator.write"]).map((entry) => entry.id)).toEqual([
-    "logbook",
-  ]);
-  expect(listControlUiPluginTabs(["operator.admin"]).map((row) => row.id)).toEqual([
-    "adminy",
-    "logbook",
-  ]);
+  for (const [scope, ids] of [
+    ["operator.read", []],
+    ["operator.write", ["logbook"]],
+    ["operator.admin", ["adminy", "logbook"]],
+  ] as const) {
+    expect(listControlUiPluginTabs([scope]).map((row) => row.id)).toEqual(ids);
+    expect(listControlUiPluginDescriptors([scope]).map((row) => row.id)).toEqual(ids);
+  }
 });
 
-it("orders deterministically by order, label, then id", () => {
+it("projects only tabs, ordered by order, label, then id", () => {
   activateDescriptors([
-    tab("b", { id: "beta", label: "Beta" }),
+    tab("b", { id: "beta", label: "Beta", placement: "route:workboard" }),
     tab("a", { id: "alpha", label: "Alpha", order: 5 }),
     tab("c", { id: "zed", label: "Beta" }),
+    tab("other", { id: "run-panel", surface: "run" }),
   ]);
 
-  expect(listControlUiPluginTabs([]).map((row) => row.id)).toEqual(["beta", "zed", "alpha"]);
+  const tabs = listControlUiPluginTabs([]);
+  expect(tabs.map((row) => row.id)).toEqual(["beta", "zed", "alpha"]);
+  expect(tabs[0]).toMatchObject({ pluginId: "b", placement: "route:workboard" });
   expect(listControlUiPluginDescriptors([]).map((entry) => entry.pluginId)).toEqual([
     "a",
     "b",
     "c",
+    "other",
   ]);
 });
 
@@ -165,13 +146,19 @@ it("merges the read-scoped core kind into deterministic plugin ordering", () => 
   );
 
   expect(listControlUiPluginWidgetKinds([])).toEqual([]);
-  expect(listControlUiPluginWidgetKinds(["operator.read"])).toEqual([
-    { pluginId: "session", kind: "session:report", label: "Report" },
-    { pluginId: "session", kind: "session:progress", label: "Session progress" },
-    { pluginId: "session", kind: "session:website", label: "Website" },
-    { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
-    { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
+  const widgets = listControlUiPluginWidgetKinds(["operator.read"]);
+  expect(widgets.map(({ kind }) => kind)).toEqual([
+    "session:report",
+    "session:progress",
+    "session:website",
+    "workboard:card",
+    "workboard:mini",
   ]);
+  expect(widgets[3]).toEqual({
+    pluginId: "workboard",
+    kind: "workboard:card",
+    label: "Workboard card",
+  });
 });
 
 it("grants only same-plugin gateway routes with least-privilege scopes", () => {

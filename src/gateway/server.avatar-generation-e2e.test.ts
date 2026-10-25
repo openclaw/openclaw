@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -38,13 +38,7 @@ const design = {
   name: "Garden Keeper",
   description: "A friendly gardener with a cream apron.",
   palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: {
-    back: "",
-    left_prop: "",
-    right_prop: "",
-    shell_overlay: '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
-    accessory: "",
-  },
+  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
 };
 
 function respond(response: ServerResponse, id: string, content = JSON.stringify(design)) {
@@ -135,7 +129,7 @@ it(
         deviceToken?: string;
         deviceIdentity?: GatewayClientOptions["deviceIdentity"];
       }) => {
-        const ready = createDeferred<HelloOk>();
+        const ready = createDeferred();
         const closed = createDeferred();
         const client = new GatewayClient({
           url: `ws://127.0.0.1:${claim.port}`,
@@ -150,7 +144,7 @@ it(
             storeDeviceAuthToken: () => {},
             clearDeviceAuthToken: () => {},
           },
-          onHelloOk: (hello) => ready.resolve(hello),
+          onHelloOk: () => ready.resolve(),
           onConnectError: (error) => ready.reject(error),
           onClose: () => closed.resolve(),
         });
@@ -246,10 +240,7 @@ it(
         ...clients.map((client) => () => client.stopAndWait()),
         async () => gateway?.close(),
         () => state.cleanup(),
-        () =>
-          new Promise<void>((resolve) => {
-            provider.close(() => resolve());
-          }),
+        () => closeHttpServer(provider),
       );
     }
   },
