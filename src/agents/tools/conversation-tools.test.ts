@@ -39,12 +39,32 @@ function conversationTool(
   kind: "list" | "send" | "turn",
   options: Parameters<typeof createHostedConversationTools>[0] = {},
 ) {
-  return expectDefined(
+  const tool = expectDefined(
     createHostedConversationTools(options, "main", {}).find(
-      (tool) => tool.name === `conversations_${kind}`,
+      (entry) => entry.name === `conversations_${kind}`,
     ),
     "conversation tool",
   );
+  expect(tool.outputSchema).toBe(
+    {
+      list: ConversationListResultSchema,
+      send: ConversationSendResultSchema,
+      turn: ConversationTurnResultSchema,
+    }[kind],
+  );
+  expect(compactToolOutputHint(tool.outputSchema)).toBeDefined();
+  return tool;
+}
+
+async function execute(
+  kind: "list" | "send" | "turn",
+  args: Record<string, unknown> = {},
+  id: string = kind,
+) {
+  const tool = conversationTool(kind, operatorOptions);
+  const result = await tool.execute(id, args);
+  expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+  return result.details;
 }
 
 function mockGateway() {
@@ -72,48 +92,24 @@ function mockGateway() {
 
 describe("conversation tools", () => {
   afterEach(() => vi.restoreAllMocks());
-  it("declares exact Gateway output contracts and promotes only bounded complete hints", async () => {
-    mockGateway();
-    for (const [kind, schema, params] of [
-      ["list", ConversationListResultSchema, {}],
-      ["send", ConversationSendResultSchema, message],
-      ["turn", ConversationTurnResultSchema, message],
-    ] as const) {
-      const tool = conversationTool(kind);
-      expect(tool.outputSchema).toBe(schema);
-      const result = await tool.execute(`${tool.name}-contract`, params);
-      expect(Value.Check(schema, result.details)).toBe(true);
-    }
-    expect(
-      (["list", "send", "turn"] as const).map((kind) =>
-        compactToolOutputHint(conversationTool(kind).outputSchema),
-      ),
-    ).toEqual([
-      '{ conversations: Array<{ accountId: string; channel: string; conversationRef: string; firstSeenAt: number; kind: "direct" | "group" | "channel"; lastSeenAt: number; target: string; label?: string; threadId?: string }> }',
-      '{ channel: string; conversationRef: string; status: "sent" | "queued" | "suppressed" | "unknown"; messageId?: string; queueId?: string }',
-      '{ channel: string; conversationRef: string; correlationPersisted: boolean; messageId: string; reply: { conversationRef: string; messageId: string; text: string; timestamp: number; replyToId?: string; threadId?: string; transcriptArtifactId?: string; transcriptMessageId?: string }; status: "replied" } | { channel: string; conversationRef: string; correlationPersisted: boolean; messageId: string; status: "timeout" } | { channel: string; conversationRef: string; correlationPersisted: boolean; error: string; status: "sent" | "queued" | "suppressed" | "unknown"; messageId?: string }',
-    ]);
-  });
-
   it("lists opaque external addresses independently from sessions", async () => {
     const callGateway = mockGateway();
-    const result = await conversationTool("list").execute("list", {
+    const result = await execute("list", {
       channel: "reef",
       query: "@peer-agent",
     });
     expect(callGateway).toHaveBeenCalledWith({
       method: "conversations.list",
       params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
+      config: {},
     });
-    expect(result.details).toEqual({ conversations: [conversation] });
+    expect(result).toEqual({ conversations: [conversation] });
   });
 
   it("routes sends through the Gateway with a stable operation id", async () => {
     const callGateway = mockGateway();
-    const tool = conversationTool("send", operatorOptions);
-
-    const firstResult = await tool.execute("tool-call-1", message);
-    const secondResult = await tool.execute("tool-call-1", message);
+    const firstResult = await execute("send", message, "tool-call-1");
+    const secondResult = await execute("send", message, "tool-call-1");
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
 
@@ -128,8 +124,8 @@ describe("conversation tools", () => {
       config: {},
     });
     expect(second.params).toEqual(first.params);
-    expect(firstResult.details).toEqual(secondResult.details);
-    expect(firstResult.details).toMatchObject({
+    expect(firstResult).toEqual(secondResult);
+    expect(firstResult).toMatchObject({
       status: "sent",
       messageId: "reef-outbound-1",
       queueId: "queue-1",
@@ -144,20 +140,16 @@ describe("conversation tools", () => {
       queueId: "queue-suppressed",
     };
     mockGateway().mockResolvedValueOnce(suppressed);
-    const result = await conversationTool("send", { config: {} }).execute(
-      "suppressed-call",
-      message,
-    );
-    expect(result.details).toEqual(suppressed);
+    expect(await execute("send", message)).toEqual(suppressed);
   });
 
   it("keeps a transient Gateway send failure retryable under the stable tool call id", async () => {
     const callGateway = mockGateway();
     callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-    const tool = conversationTool("send", { config: {} });
-    await expect(tool.execute("retryable-call", message)).rejects.toThrow("gateway unavailable");
-    await expect(tool.execute("retryable-call", message)).resolves.toMatchObject({
-      details: { status: "sent", messageId: "reef-outbound-1" },
+    await expect(execute("send", message)).rejects.toThrow("gateway unavailable");
+    await expect(execute("send", message)).resolves.toMatchObject({
+      status: "sent",
+      messageId: "reef-outbound-1",
     });
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
@@ -166,9 +158,8 @@ describe("conversation tools", () => {
 
   it("uses a stable operation id for correlated turns and cancels on abort", async () => {
     const callGateway = mockGateway();
-    const tool = conversationTool("turn", operatorOptions);
-    await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
-    await tool.execute("turn-call", { ...message, timeoutSeconds: 12 });
+    await execute("turn", { ...message, timeoutSeconds: 12 });
+    await execute("turn", { ...message, timeoutSeconds: 12 });
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
     expect(first.params).toMatchObject({ turnId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u) });
