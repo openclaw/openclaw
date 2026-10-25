@@ -32,7 +32,10 @@ export function runWorkspacePreparation<T>(
 export async function maybeWriteWorkspaceAttestation(
   dir: string,
   previous: WorkspaceAttestation | undefined,
-  collectGeneratedHashes: (dir: string) => Promise<Map<string, string>>,
+  collectGeneratedHashes: (
+    dir: string,
+    previousHashes?: ReadonlyMap<string, string>,
+  ) => Promise<Map<string, string>>,
   guard?: WorkspaceStateGuard,
 ): Promise<void> {
   const assertHost = guard?.assertHost;
@@ -40,7 +43,7 @@ export async function maybeWriteWorkspaceAttestation(
   // compares against a separate lock-time clock, so a newer committed scan
   // wins when this async collection finishes later.
   const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedHashes(dir);
+  const generatedHashes = await collectGeneratedHashes(dir, previous?.generatedHashes);
   assertHost?.();
   // Coalesce unchanged evidence while retaining at least 23 hours of durable
   // disappearance protection. Future-dated evidence still needs clock repair.

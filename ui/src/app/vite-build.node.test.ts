@@ -6,9 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { build, createLogger, type InlineConfig } from "vite";
+import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+} from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
+import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
@@ -86,16 +91,22 @@ async function buildOutput(config: InlineConfig) {
 
 function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
   info.mockReset();
-  return {
-    ...controlUiViteConfig({
-      outDir,
-      buildInfo: normalizeControlUiBuildInfo({
-        version: "1.0.0",
-        commit: "a".repeat(40),
-        dirty: false,
-        release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
-      }),
+  const config = controlUiViteConfig({
+    outDir,
+    buildInfo: normalizeControlUiBuildInfo({
+      version: "1.0.0",
+      commit: "a".repeat(40),
+      dirty: false,
+      release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
     }),
+  });
+  return {
+    ...config,
+    plugins: (config.plugins as Plugin[]).map((plugin) =>
+      plugin.name === "control-ui-plugin-distributions"
+        ? controlUiPluginDistributionsPlugin(root, new Set())
+        : plugin,
+    ),
     configFile: false,
     root,
     publicDir: false,
@@ -217,6 +228,8 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
   expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
   expect(html).toContain(initial.name);
+  expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
+  expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
   expect(html).not.toContain(firstStyle.name);
   expect(html).not.toContain(secondStyle.name);
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
@@ -228,7 +241,9 @@ it.each(["login", "attachment"] as const)(
   "prepares %s assets offline without preloading the wrong modules",
   async (kind) => {
     const attachment = kind === "attachment";
-    const entry = uiPath(attachment ? "components/app-sidebar.tsx" : "components/login-gate.ts");
+    const entry = uiPath(
+      attachment ? "components/app-sidebar.tsx" : "components/login-gate-solid.tsx",
+    );
     const dependency = attachment
       ? path.join(root, "resize.js")
       : uiPath("components/login-offline-fixture.ts");
@@ -311,16 +326,15 @@ it("reports completed compression work before build completion at a bounded cade
     if (!message.includes("Control UI precompression")) {
       return;
     }
-    const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
-      encoding: "utf8",
-      recursive: true,
-    });
+    const emitted = listDirectoryTreeStrictSync(path.join(outDir, "assets")).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     activity.push({
       message,
       elapsed: clockMs,
-      assets: emitted.filter(
-        (name) => name.endsWith(".br") && emitted.includes(name.replace(/\.br$/u, ".gz")),
-      ).length,
+      assets: new Set(
+        emitted.filter((name) => /\.(br|gz)$/u.test(name)).map((name) => name.slice(0, -3)),
+      ).size,
       sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
     });
     // The logger observes real disk writes while build() is still finalizing.
@@ -332,7 +346,11 @@ it("reports completed compression work before build completion at a bounded cade
       name: "compression-progress-fixture",
       generateBundle() {
         for (let index = 0; index < 4; index++) {
-          this.emitFile({ type: "asset", fileName: `assets/x/${index}.txt`, source: "fixture" });
+          this.emitFile({
+            type: "asset",
+            fileName: `assets/x/${index}.txt`,
+            source: "fixture".repeat(1024),
+          });
         }
       },
     },
@@ -340,20 +358,25 @@ it("reports completed compression work before build completion at a bounded cade
 
   await build(config);
 
-  const emitted = await fs.readdir(path.join(outDir, "assets"), {
-    encoding: "utf8",
-    recursive: true,
-  });
-  const completed = emitted.filter((name) => name.endsWith(".gz")).length;
+  const emitted = (await listDirectoryTreeStrict(path.join(outDir, "assets"))).map(
+    (walkEntry) => walkEntry.relativePath,
+  );
+  const sidecars = emitted.filter((name) => /\.(br|gz)$/u.test(name));
+  const completed = new Set(sidecars.map((name) => name.slice(0, -3))).size;
   expect(completed).toBeGreaterThan(4);
-  expect(activity).toMatchObject([
-    ...Array.from({ length: Math.floor(completed / 2) + 1 }, (_, index) => ({
-      elapsed: index * 10_000,
-      assets: index * 2,
-      sidecars: index * 4,
-    })),
-    { elapsed: completed * 5_000, assets: completed, sidecars: completed * 2 },
-  ]);
+  expect(activity[0]).toMatchObject({ elapsed: 0, assets: 0, sidecars: 0 });
+  expect(activity.at(-1)).toMatchObject({
+    elapsed: sidecars.length * 2_500,
+    assets: completed,
+    sidecars: sidecars.length,
+  });
+  expect(activity.length).toBeGreaterThan(2);
+  for (let index = 1; index < activity.length - 1; index++) {
+    const elapsed = activity[index]!.elapsed - activity[index - 1]!.elapsed;
+    expect(elapsed).toBeGreaterThanOrEqual(10_000);
+    // One completed asset can cross the reporting interval by one sidecar write.
+    expect(elapsed).toBeLessThanOrEqual(12_500);
+  }
   expect(activity[0]?.message).toMatch(/starting/u);
   for (const entry of activity.slice(1)) {
     expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
@@ -401,10 +424,25 @@ it.each([
   expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
   for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
     const source = await readBytes(name);
-    const brotli = await readBytes(`${name}.br`);
-    const gzip = await readBytes(`${name}.gz`);
-    expect(brotliDecompressSync(brotli)).toEqual(source);
-    expect(gunzipSync(gzip)).toEqual(source);
+    expect(source.byteLength).toBeLessThan(4096);
+    // The startup entry saves bytes in both encodings; its tiny runtime only in Brotli.
+    // Deferred JS is below the threshold, and this tiny CSS grows in either encoding.
+    const encodings = name.startsWith("index-")
+      ? ["br", "gz"]
+      : name.startsWith("rolldown-runtime-")
+        ? ["br"]
+        : [];
+    for (const extension of ["br", "gz"]) {
+      if (!encodings.includes(extension)) {
+        await missingOutput(`assets/${name}.${extension}`);
+        continue;
+      }
+      const compressed = await readBytes(`${name}.${extension}`);
+      expect(compressed.byteLength).toBeLessThan(source.byteLength);
+      expect(
+        extension === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed),
+      ).toEqual(source);
+    }
     if (name.endsWith(".js")) {
       expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
         !release && emitted.includes(`${name}.map`),

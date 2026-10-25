@@ -7,6 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -28,14 +29,13 @@ import {
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 
 beforeEach(() => {
@@ -156,11 +156,11 @@ describe("server-owned pending input pagination", () => {
       chatQueue: [
         {
           id: "browser-input",
-          text: "Unconfirmed browser input",
+          text: "Pending browser input",
           createdAt: 99,
           sendRunId: "browser-input",
           sendAttempts: 1,
-          sendState: "unconfirmed",
+          sendState: "waiting-reconnect",
         },
       ],
       requestHandlers: {
@@ -493,6 +493,7 @@ describe("server-owned pending input pagination", () => {
       ).toBe(true);
       applyChatPendingInputs(host, page);
       await loadChatPendingInputs(host, 2);
+      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(false);
 
       for (let index = 0; index < 3; index++) {
         applyChatPendingInputs(host, latestPage);
@@ -524,7 +525,7 @@ describe("server-owned pending input pagination", () => {
       expect(getChatPendingInputs(host)?.page).toEqual(latestPage);
       expect(getChatPendingInputs(host)?.before).toBeUndefined();
       expect(getChatPendingInputs(host)?.loading).toBe(false);
-      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(true);
+      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(false);
       expect(olderReads).toBe(2);
     },
   );

@@ -4,6 +4,7 @@ import * as execution from "../agents/simple-completion-execution.js";
 import * as runtime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -96,6 +97,7 @@ describe("utility completion with an unavailable implicit harness", () => {
   };
 
   beforeEach(async () => {
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
     dispose = undefined;
     state = await createOpenClawTestState({ scenario: "minimal" });
     config = {

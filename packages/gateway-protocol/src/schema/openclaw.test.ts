@@ -1,15 +1,5 @@
 import { describe, it } from "vitest";
-import {
-  validateSystemAgentChatParams,
-  validateSystemAgentChatHistoryParams,
-  validateSystemAgentSetupActivateParams,
-  validateSystemAgentSetupActivateStartParams,
-  validateSystemAgentSetupAutoParams,
-  validateSystemAgentSetupAuthStartParams,
-  validateSystemAgentSetupDetectParams,
-  validateSystemAgentSetupRuntimeStartParams,
-  validateSystemAgentSetupVerifyParams,
-} from "../index.js";
+import * as protocol from "../index.js";
 import {
   SystemAgentChatQuestionSchema,
   SystemAgentChatHistoryResultSchema,
@@ -18,14 +8,15 @@ import {
   SystemAgentSetupAutoResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+import { check } from "./protocol-validation.test-support.js";
 import { accepts, rejects, acceptsParams, rejectsParams } from "./schema.test-support.js";
 
 it("OpenClaw chat params protocol: accepts a typed wizard cancel and rejects unknown cancel fields", () => {
-  acceptsParams(validateSystemAgentChatParams, {
+  acceptsParams(protocol.validateSystemAgentChatParams, {
     sessionId: "session-1",
     wizardCancel: { stepId: "channel" },
   });
-  rejectsParams(validateSystemAgentChatParams, {
+  rejectsParams(protocol.validateSystemAgentChatParams, {
     sessionId: "session-1",
     wizardCancel: { stepId: "channel", reason: "user" },
   });
@@ -48,11 +39,11 @@ describe("OpenClaw chat question protocol", () => {
 
 describe("OpenClaw chat history protocol", () => {
   it("accepts the default request and bounds explicit limits", () => {
-    acceptsParams(validateSystemAgentChatHistoryParams, {});
-    acceptsParams(validateSystemAgentChatHistoryParams, { limit: 1 });
-    acceptsParams(validateSystemAgentChatHistoryParams, { limit: 500 });
-    rejectsParams(validateSystemAgentChatHistoryParams, { limit: 0 });
-    rejectsParams(validateSystemAgentChatHistoryParams, { limit: 501 });
+    check(
+      protocol.validateSystemAgentChatHistoryParams,
+      [{}, { limit: 1 }, { limit: 500 }],
+      [{ limit: 0 }, { limit: 501 }],
+    );
   });
 
   it("accepts ordered role, text, and timestamp turns only", () => {
@@ -81,22 +72,17 @@ describe("OpenClaw interactive activation protocol", () => {
 
   it("requires a session id and does not accept client capability acknowledgments", () => {
     const activation = { kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" };
-    acceptsParams(validateSystemAgentSetupActivateParams, activation);
-    rejectsParams(validateSystemAgentSetupActivateStartParams, activation);
-    acceptsParams(validateSystemAgentSetupActivateStartParams, {
-      ...activation,
-      sessionId: "activation",
-    });
-    rejectsParams(validateSystemAgentSetupActivateStartParams, {
-      ...activation,
-      sessionId: "activation",
-      reviewToken: "client-token",
-    });
-    rejectsParams(validateSystemAgentSetupActivateStartParams, {
-      ...activation,
-      sessionId: "activation",
-      acceptCapabilities: true,
-    });
+    const start = { ...activation, sessionId: "activation" };
+    acceptsParams(protocol.validateSystemAgentSetupActivateParams, activation);
+    check(
+      protocol.validateSystemAgentSetupActivateStartParams,
+      [start],
+      [
+        activation,
+        { ...start, reviewToken: "client-token" },
+        { ...start, acceptCapabilities: true },
+      ],
+    );
   });
 });
 
@@ -107,7 +93,7 @@ it("OpenClaw installed runtime setup protocol: requires an explicit runtime targ
     runtimeId: "fixture-native",
     configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
   };
-  acceptsParams(validateSystemAgentSetupRuntimeStartParams, params);
+  acceptsParams(protocol.validateSystemAgentSetupRuntimeStartParams, params);
   const requiredKeys: Array<keyof typeof params> = [
     "sessionId",
     "agentId",
@@ -117,118 +103,85 @@ it("OpenClaw installed runtime setup protocol: requires an explicit runtime targ
   for (const key of requiredKeys) {
     const missing: Partial<typeof params> = { ...params };
     delete missing[key];
-    rejectsParams(validateSystemAgentSetupRuntimeStartParams, missing);
+    rejectsParams(protocol.validateSystemAgentSetupRuntimeStartParams, missing);
   }
   for (const key of ["sessionId", "agentId", "runtimeId"]) {
-    rejectsParams(validateSystemAgentSetupRuntimeStartParams, { ...params, [key]: "" });
+    rejectsParams(protocol.validateSystemAgentSetupRuntimeStartParams, { ...params, [key]: "" });
   }
-  rejectsParams(validateSystemAgentSetupRuntimeStartParams, { ...params, configPatch: [] });
-  rejectsParams(validateSystemAgentSetupRuntimeStartParams, { ...params, modelRef: "other/model" });
+  check(
+    protocol.validateSystemAgentSetupRuntimeStartParams,
+    [],
+    [
+      { ...params, configPatch: [] },
+      { ...params, modelRef: "other/model" },
+    ],
+  );
 });
 
 describe("OpenClaw setup detection protocol", () => {
   it("accepts an explicit owner across the structured setup family", () => {
-    acceptsParams(validateSystemAgentSetupDetectParams, { agentId: "research" });
-    acceptsParams(validateSystemAgentSetupVerifyParams, { agentId: "research" });
-    acceptsParams(validateSystemAgentSetupVerifyParams, {
-      agentId: "new-bot",
-      modelTarget: "primary",
-    });
-    acceptsParams(validateSystemAgentSetupVerifyParams, {
-      agentId: "new-bot",
-      modelTarget: "utility",
-    });
-    rejectsParams(validateSystemAgentSetupVerifyParams, {
-      agentId: "new-bot",
-      modelTarget: "fallback",
-    });
-    acceptsParams(validateSystemAgentSetupActivateParams, {
+    const owner = { agentId: "research" };
+    check(protocol.validateSystemAgentSetupDetectParams, [owner], [{ ...owner, unknown: true }]);
+    check(
+      protocol.validateSystemAgentSetupVerifyParams,
+      [
+        owner,
+        { agentId: "new-bot", modelTarget: "primary" },
+        { agentId: "new-bot", modelTarget: "utility" },
+      ],
+      [{ agentId: "new-bot", modelTarget: "fallback" }],
+    );
+    acceptsParams(protocol.validateSystemAgentSetupActivateParams, {
       agentId: "research",
       kind: "existing-model",
       nativeSessionCatalogsEnabled: false,
     });
-    acceptsParams(validateSystemAgentSetupAuthStartParams, {
+    acceptsParams(protocol.validateSystemAgentSetupAuthStartParams, {
       sessionId: "setup-1",
       agentId: "research",
       authChoice: "openai-api-key",
       selectModel: true,
       nativeSessionCatalogsEnabled: false,
     });
-    rejectsParams(validateSystemAgentSetupDetectParams, { agentId: "research", unknown: true });
   });
 
   it("accepts additive presentation metadata and older results without installs", () => {
+    const brand = {
+      brandId: "ollama",
+      label: "Ollama",
+      icon: "https://cdn.simpleicons.org/ollama",
+      website: "https://ollama.com/download",
+    };
+    const brandedOption = { id: "ollama", ...brand };
+    const authOption = { id: "manual", brandId: "manual", label: "Manual", featured: false };
+    const unavailable = {
+      id: "gemini-cli",
+      label: "Gemini CLI",
+      detail: "Login unavailable",
+      reason: "Reconnect",
+      authOptionId: "google-gemini-cli",
+      manualProviderId: "gemini-api-key",
+    };
     const result = {
       candidates: [
         {
+          ...brand,
           kind: "provider-auto:ollama",
-          brandId: "ollama",
-          label: "Ollama",
           detail: "available locally",
           modelRef: "ollama/qwen3",
           recommended: false,
-          icon: "https://cdn.simpleicons.org/ollama",
-          website: "https://ollama.com/download",
         },
       ],
-      unavailableCandidates: [
-        {
-          id: "gemini-cli",
-          brandId: "google-gemini-cli",
-          label: "Gemini CLI",
-          detail: "installed; login status unavailable",
-          reason: "Reconnect through OpenClaw or use a Gemini API key.",
-          authOptionId: "google-gemini-cli",
-          manualProviderId: "gemini-api-key",
-        },
-      ],
-      manualProviders: [
-        {
-          id: "ollama",
-          brandId: "ollama",
-          groupLabel: "Ollama",
-          label: "Ollama",
-          icon: "https://cdn.simpleicons.org/ollama",
-          website: "https://ollama.com/download",
-        },
-      ],
+      unavailableCandidates: [{ ...unavailable, brandId: "google-gemini-cli" }],
+      manualProviders: [{ ...brandedOption, groupLabel: "Ollama" }],
       authOptions: [
-        {
-          id: "meta-api-key",
-          brandId: "meta",
-          label: "Meta API key",
-          kind: "install",
-          featured: false,
-        },
-        {
-          id: "custom-api-key",
-          brandId: "custom",
-          label: "Custom OpenAI/Anthropic-compatible endpoint",
-          kind: "custom",
-          featured: false,
-        },
+        { ...authOption, kind: "install" },
+        { ...authOption, kind: "custom" },
       ],
       prepareOptions: [
-        {
-          id: "lmstudio",
-          brandId: "lmstudio",
-          label: "LM Studio",
-          hint: "Local/self-hosted LM Studio server",
-          actionLabel: "Connect server",
-          icon: "https://cdn.simpleicons.org/lmstudio",
-          website: "https://lmstudio.ai/download",
-        },
+        { ...brandedOption, hint: "Local/self-hosted server", actionLabel: "Connect server" },
       ],
-      recommendedInstalls: [
-        {
-          id: "ollama",
-          brandId: "ollama",
-          label: "Ollama",
-          hint: "Run open models locally",
-          website: "https://ollama.com/download",
-          icon: "https://cdn.simpleicons.org/ollama",
-        },
-      ],
+      recommendedInstalls: [{ ...brandedOption, hint: "Run open models locally" }],
       nativeSessionCatalogs: [
         {
           pluginId: "codex",
@@ -245,9 +198,7 @@ describe("OpenClaw setup detection protocol", () => {
     accepts(SystemAgentSetupDetectResultSchema, {
       ...result,
       candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
-      unavailableCandidates: result.unavailableCandidates.map(
-        ({ brandId: _brandId, ...candidate }) => candidate,
-      ),
+      unavailableCandidates: [unavailable],
       manualProviders: result.manualProviders.map(
         ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
       ),
@@ -270,9 +221,11 @@ describe("OpenClaw setup detection protocol", () => {
 
 describe("OpenClaw automatic setup protocol", () => {
   it("accepts only an empty params object", () => {
-    acceptsParams(validateSystemAgentSetupAutoParams, {});
-    rejectsParams(validateSystemAgentSetupAutoParams, { agentId: "research" });
-    rejectsParams(validateSystemAgentSetupAutoParams, { acceptCapabilities: true });
+    check(
+      protocol.validateSystemAgentSetupAutoParams,
+      [{}],
+      [{ agentId: "research" }, { acceptCapabilities: true }],
+    );
   });
 
   it("preserves the four outcomes, candidate metadata, and required collections", () => {

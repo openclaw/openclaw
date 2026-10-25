@@ -185,7 +185,6 @@ describe("install security scan official bypass", () => {
       requestedSpecifier: "@openclaw/matrix@latest",
       source: officialSource,
       sourcePath: "/tmp/openclaw-official-npm",
-      sourcePathKind: "directory",
     });
   it.each([
     ["bundled skill", () => scanSkill(true), false, true],
@@ -482,5 +481,72 @@ describe("plugin install policy warnings", () => {
     expect(result).toBeUndefined();
     expect(warnings.join("\n")).toContain("additional findings omitted");
     expect(warnings.join("\n").length).toBeLessThanOrEqual(4_000);
+  });
+});
+
+describe("installed plugin runtime compatibility", () => {
+  it("warns for resolved transitive runtime dependencies without blocking trusted installs", async () => {
+    const root = makeTempDir("openclaw-install-runtime-compatibility-");
+    const packages = [
+      {
+        dir: root,
+        manifest: {
+          name: "runtime-plugin",
+          version: "1.0.0",
+          dependencies: { direct: "1.0.0" },
+          devDependencies: { "dev-only": "1.0.0" },
+        },
+        source: "throw new Error('must not execute');\nconsole.log = () => {};",
+      },
+      {
+        dir: path.join(root, "node_modules", "direct"),
+        manifest: {
+          name: "direct",
+          version: "1.0.0",
+          dependencies: { hoisted: "2.0.0" },
+          optionalDependencies: { optional: "3.0.0" },
+        },
+      },
+      {
+        dir: path.join(root, "node_modules", "hoisted"),
+        manifest: { name: "hoisted", version: "2.0.0" },
+        source: "Buffer.concat = () => null;",
+      },
+      {
+        dir: path.join(root, "node_modules", "optional"),
+        manifest: { name: "optional", version: "3.0.0" },
+        source: "process.chdir = () => {};",
+      },
+      {
+        dir: path.join(root, "node_modules", "dev-only"),
+        manifest: { name: "dev-only", version: "1.0.0" },
+        source: "new Function('return 1');",
+      },
+    ];
+    for (const pkg of packages) {
+      await fs.mkdir(pkg.dir, { recursive: true });
+      await fs.writeFile(path.join(pkg.dir, "package.json"), JSON.stringify(pkg.manifest));
+      if (pkg.source) {
+        await fs.writeFile(path.join(pkg.dir, "index.cjs"), pkg.source);
+      }
+    }
+    const warn = vi.fn();
+    const result = await scanInstalledPackageDependencyTreeRuntime({
+      packageDir: root,
+      pluginId: "runtime-plugin",
+      logger: { warn },
+      source: { kind: "npm", authority: "official", mutable: false, network: true },
+      trustedSourceLinkedOfficialInstall: true,
+    });
+    expect(result).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("runtime-plugin@1.0.0 index.cjs:2:1"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("hoisted@2.0.0 index.cjs:1:1"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("optional@3.0.0 index.cjs:1:1"));
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("dev-only");
+    expectPolicyRuns(1);
+    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
   });
 });

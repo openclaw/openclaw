@@ -11,6 +11,7 @@ import {
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDoctorHealthFlowContext } from "./doctor-health-context.test-support.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -66,20 +67,14 @@ let ctx: DoctorHealthFlowContext;
 beforeEach(() => {
   mocks.applyWizardMetadata.mockReset().mockImplementation((cfg) => cfg);
   const cfg = { gateway: { mode: "local" } } satisfies OpenClawConfig;
-  ctx = {
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    options: {},
+  ctx = createDoctorHealthFlowContext({
     prompter: {} as DoctorHealthFlowContext["prompter"],
     configResult: {
-      cfg,
-      confirmedConfigSource: { path: "/tmp/openclaw.json", hash: "planning-revision" },
       retiredAuthProfileCleanupPlans: [cleanupPlan],
     },
     cfg,
     cfgForPersistence: {},
-    sourceConfigValid: true,
-    configPath: "/tmp/openclaw.json",
-  };
+  });
   mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
   mocks.replaceConfigFile.mockReset().mockResolvedValue(saved("committed-revision"));
 });

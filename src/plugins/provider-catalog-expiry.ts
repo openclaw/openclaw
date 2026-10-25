@@ -1,15 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelServingContextLimit } from "../agents/model-serving-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type CatalogExpiryCapture = {
   providers: Map<string, number>;
-  models: Map<string, Set<string>>;
   servingLimits: Map<string, ModelServingContextLimit[]>;
   observedServingLimits?: ModelServingContextLimit[];
   refreshKeys?: Set<string>;
   expiresAt?: number;
-  discoveryBudget?: { timeoutMs: number | null; deadlineMs: number };
+  discoveryBudget?: {
+    timeoutMs: number | null;
+    deadlineMs: number;
+    providerTimeouts?: Readonly<Record<string, number>>;
+  };
 };
 
 const capture = resolveGlobalSingleton(
@@ -21,15 +25,16 @@ const capture = resolveGlobalSingleton(
 export async function withProviderCatalogDiscoveryBudget<T>(
   timeoutMs: number | null,
   load: () => Promise<T>,
+  providerTimeouts?: Readonly<Record<string, number>>,
 ): Promise<T> {
   const parent = capture.getStore();
   const current: CatalogExpiryCapture = {
     ...(parent ?? {
       providers: new Map(),
-      models: new Map(),
       servingLimits: new Map(),
     }),
     discoveryBudget: {
+      providerTimeouts: providerTimeouts ?? parent?.discoveryBudget?.providerTimeouts,
       timeoutMs:
         timeoutMs === null
           ? (parent?.discoveryBudget?.timeoutMs ?? null)
@@ -52,25 +57,37 @@ export function getProviderCatalogDiscoveryBudget() {
   return capture.getStore()?.discoveryBudget;
 }
 
+/** Operator settings replace transport defaults; the admitted deadline still bounds acquisition. */
+export function resolveProviderCatalogDiscoveryTimeoutMs(providerId: string, timeoutMs?: number) {
+  if (timeoutMs === 0) {
+    return 0;
+  }
+  const budget = getProviderCatalogDiscoveryBudget();
+  return (
+    budget?.providerTimeouts?.[normalizeProviderId(providerId)] ??
+    timeoutMs ??
+    budget?.timeoutMs ??
+    5_000
+  );
+}
+
 export async function captureProviderCatalogExpiries<T>(
   load: () => Promise<T>,
   options: { refresh?: boolean } = {},
 ) {
   const providers = new Map<string, number>();
-  const models = new Map<string, Set<string>>();
   const refreshKeys = options.refresh ? new Set<string>() : undefined;
   const servingLimits = new Map<string, ModelServingContextLimit[]>();
   const value = await capture.run(
     {
       providers,
-      models,
       refreshKeys,
       servingLimits,
       discoveryBudget: capture.getStore()?.discoveryBudget,
     },
     load,
   );
-  return { value, providerExpiries: providers, providerModels: models, servingLimits };
+  return { value, providerExpiries: providers, servingLimits };
 }
 
 export async function withProviderCatalogExpiry<T>(
@@ -83,7 +100,6 @@ export async function withProviderCatalogExpiry<T>(
   }
   const current: CatalogExpiryCapture = {
     providers: parent.providers,
-    models: parent.models,
     servingLimits: parent.servingLimits,
     observedServingLimits: [],
     refreshKeys: parent.refreshKeys,
@@ -111,21 +127,6 @@ export function consumeLiveCatalogRefresh(key: string): boolean {
   // Joining a pending load also satisfies this acquisition's refresh intent.
   keys.add(key);
   return true;
-}
-
-/** Record accepted hook identities, never static fallback or merged configured rows. */
-export function recordProviderCatalogModels(provider: string, modelIds: readonly string[]): void {
-  const current = capture.getStore();
-  if (!current) {
-    return;
-  }
-  const models = current.models.get(provider) ?? new Set<string>();
-  for (const id of modelIds) {
-    if (id.trim()) {
-      models.add(id.trim());
-    }
-  }
-  current.models.set(provider, models);
 }
 
 /** Hook-local observations publish only when the catalog owner accepts the hook result. */

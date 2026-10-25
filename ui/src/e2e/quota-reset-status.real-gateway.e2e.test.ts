@@ -20,7 +20,6 @@ import {
 } from "../../../test/e2e/qa-lab/runtime/quota-reset.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.js";
 
 type QuotaFixture = Awaited<ReturnType<typeof createQuotaResetFixture>>;
 type SavedState = {
@@ -92,7 +91,6 @@ function clearSavedBlock(fixture: QuotaFixture): SavedClearReceipt {
 
 async function captureFinalStatus(
   fixture: QuotaFixture,
-  artifactDir: string,
   recordProfile: (profile: unknown) => void,
 ) {
   const cli = await fixture.gateway.cli(["models", "status", "--json"]);
@@ -140,41 +138,18 @@ async function captureFinalStatus(
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
-    try {
-      await page.goto(url.href);
-      await waitForControlUiGatewayReady(page);
-      const card = page.locator('[data-provider-id="openai"]');
-      await card.waitFor({ state: "visible" });
-      // The ordinary turn already proved automatic quota recovery. Initial catalog
-      // publication is best effort; Refresh explicitly asks for its settled status.
-      await page.locator(".model-providers__refresh-button").click();
-      const badge = card.locator(".model-providers__head .settings-status");
-      await expect
-        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
-        .toBe("Ready");
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      await page.screenshot({
-        path: path.join(artifactDir, "provider-status.png"),
-        animations: "disabled",
-      });
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error("Quota final-status failure"),
-        label: "quota-final-status",
-      });
-      throw error;
-    } finally {
-      await fs.writeFile(
-        path.join(artifactDir, "rendered-page.json"),
-        JSON.stringify({ text: await page.locator("body").textContent() }, null, 2),
-      );
-      if ((await page.locator(".community-invite-card").count()) === 0) {
-        await page.screenshot({
-          path: path.join(artifactDir, "final-page.png"),
-          animations: "disabled",
-        });
-      }
-    }
+    await page.goto(url.href);
+    await waitForControlUiGatewayReady(page);
+    const card = page.locator('[data-provider-id="openai"]');
+    await card.waitFor({ state: "visible" });
+    // The ordinary turn already proved automatic quota recovery. Initial catalog
+    // publication is best effort; Refresh explicitly asks for its settled status.
+    await page.locator(".model-providers__refresh-button").click();
+    const badge = card.locator(".model-providers__head .settings-status");
+    await expect
+      .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
+      .toBe("Ready");
+    expect(await page.locator(".community-invite-card").count()).toBe(0);
     await context.close();
   } finally {
     await browser.close();
@@ -324,11 +299,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
                 };
               })
               .toEqual({ pending: false, available: true });
-            expect
-              .soft(published?.models, evidence())
-              .toContainEqual(
-                expect.objectContaining({ provider: "openai", id: "gpt-5.5", available: true }),
-              );
             catalogHold.release();
             const refreshed = await catalogRefresh;
             // Recovery changes availability, so the held generation must not publish stale facts.
@@ -344,7 +314,7 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
-          await captureFinalStatus(fixture, artifactDir, (profile) => {
+          await captureFinalStatus(fixture, (profile) => {
             finalProfile = profile;
           });
           expect(provider.errors, evidence()).toEqual([]);

@@ -12,18 +12,6 @@ import { requireValidConfig, requireValidConfigForWrite } from "./config-validat
 
 type AgentConfig = NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
 
-type AgentsBindingsListOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-type AgentsBindingsUpdateOptions = {
-  agent?: string;
-  bind?: string[];
-  all?: boolean;
-  json?: boolean;
-};
-
 function resolveTargetAgentId(params: {
   cfg: AgentConfig;
   agentInput: string | undefined;
@@ -44,7 +32,7 @@ function resolveTargetAgentId(params: {
   return agentId;
 }
 
-export async function agentsBindingsCommand(opts: AgentsBindingsListOptions) {
+export async function agentsBindingsCommand(opts: { agent?: string; json?: boolean }) {
   const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
@@ -86,7 +74,12 @@ export async function agentsBindingsCommand(opts: AgentsBindingsListOptions) {
 
 export async function agentsUpdateBindingsCommand(
   operation: "bind" | "unbind",
-  opts: AgentsBindingsUpdateOptions,
+  opts: {
+    agent?: string;
+    bind?: string[];
+    all?: boolean;
+    json?: boolean;
+  },
 ) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {

@@ -822,44 +822,56 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
   });
 
-  it("merges only portable auth-profile env refs into the service environment", async () => {
-    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "node:default": tokenProfile("node", "NODE_OPTIONS"),
-        "git:default": tokenProfile("git", "GIT_ASKPASS"),
-        "broken:default": tokenProfile("broken", "BAD KEY"),
-        "openai:default": apiKeyProfile("openai", secretRef("OPENAI_API_KEY")),
-        "anthropic:default": tokenProfile("anthropic", "ANTHROPIC_TOKEN"),
-        "missing:default": tokenProfile("missing", "MISSING_TOKEN"),
-      },
-    });
-    const warn = vi.fn();
-    const plan = await buildNodePlan({
-      env: isolatedPlanEnv({
-        NODE_OPTIONS: "--require ./pwn.js",
-        GIT_ASKPASS: "/tmp/askpass.sh",
-        OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
-        ANTHROPIC_TOKEN: "ant-test-token",
-      }),
-      warn,
-    });
-    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
-    expect(plan.environment.GIT_ASKPASS).toBeUndefined();
-    expect(plan.environment["BAD KEY"]).toBeUndefined();
-    expect(plan.environment.MISSING_TOKEN).toBeUndefined();
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      'Auth profile env ref "NODE_OPTIONS" blocked by host-env security policy',
-      "Auth profile",
-    );
-    expect(warn).toHaveBeenCalledWith(
-      'Auth profile env ref "GIT_ASKPASS" blocked by host-env security policy',
-      "Auth profile",
-    );
-  });
+  it.each(["linux", "darwin", "win32"] as const)(
+    "merges only portable auth-profile env refs into the %s service environment",
+    async (platform) => {
+      mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+        version: 1,
+        profiles: {
+          "node:default": tokenProfile("node", "NODE_OPTIONS"),
+          "git:default": tokenProfile("git", "GIT_ASKPASS"),
+          "broken:default": tokenProfile("broken", "BAD KEY"),
+          "openai:default": apiKeyProfile("openai", secretRef("OPENAI_API_KEY")),
+          "anthropic:default": tokenProfile("anthropic", "ANTHROPIC_TOKEN"),
+          "missing:default": tokenProfile("missing", "MISSING_TOKEN"),
+        },
+      });
+      const warn = vi.fn();
+      const plan = await buildNodePlan({
+        env: isolatedPlanEnv({
+          NODE_OPTIONS: "--require ./pwn.js",
+          GIT_ASKPASS: "/tmp/askpass.sh",
+          OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
+          ANTHROPIC_TOKEN: "ant-test-token",
+        }),
+        warn,
+        platform,
+      });
+      expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+      expect(plan.environment.GIT_ASKPASS).toBeUndefined();
+      expect(plan.environment["BAD KEY"]).toBeUndefined();
+      expect(plan.environment.MISSING_TOKEN).toBeUndefined();
+      expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+      expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+      expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+        platform === "linux" ? "ANTHROPIC_TOKEN,MISSING_TOKEN,OPENAI_API_KEY" : undefined,
+      );
+      expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe(
+        platform === "linux" ? "file" : "inline",
+      );
+      expect(plan.environmentValueSources?.ANTHROPIC_TOKEN).toBe(
+        platform === "linux" ? "file" : "inline",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        'Auth profile env ref "NODE_OPTIONS" blocked by host-env security policy',
+        "Auth profile",
+      );
+      expect(warn).toHaveBeenCalledWith(
+        'Auth profile env ref "GIT_ASKPASS" blocked by host-env security policy',
+        "Auth profile",
+      );
+    },
+  );
 });
 
 describe("buildGatewayInstallPlan — dotenv merge", () => {

@@ -14,6 +14,7 @@ import * as runtimeIdentity from "./agent-runtime-identity-token.js";
 import { createSessionMutationTestClient } from "./server-methods/sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import * as sessions from "./test/server-sessions.test-helpers.js";
 
@@ -80,12 +81,7 @@ test("new unpinned sessions bind the account for the permitted operator default"
   const client: GatewayClient = {
     ...createSessionMutationTestClient(),
     connId: "role-default-account",
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
     internal: {
       operatorRunAuthority: operatorAuthority(cfg, owner.id, { deny: ["primary/model"] }),
     },

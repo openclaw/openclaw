@@ -147,7 +147,6 @@ async function createAcceptedTurnFixture(
       admission: candidate,
       database,
       engineId: "test",
-      isHeartbeat: false,
     });
   enqueue();
   const readRow = (key = admission.logicalTurnId) =>
@@ -271,7 +270,6 @@ describe("accepted context-engine turn finalization", () => {
             sessionKey: `agent:main:${retrySessionId}`,
           },
         },
-        isHeartbeat: false,
         messages: [],
       },
     });

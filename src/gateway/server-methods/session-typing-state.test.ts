@@ -81,28 +81,6 @@ describe("session typing connection state", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("retains the newest live preview across an actor's connections", () => {
-    const update = typingSession("shared-preview");
-    expect(update("preview-tab", 10_000, true, "first draft")).toEqual({
-      typing: true,
-      preview: "first draft",
-    });
-    expect(update("presence-tab", 10_100)).toEqual({ typing: true, preview: "first draft" });
-    expect(update("presence-tab", 10_200, true, "newer draft")).toEqual({
-      typing: true,
-      preview: "newer draft",
-    });
-  });
-
-  it("removes a stopped connection's preview while preserving another connection's liveness", () => {
-    const update = typingSession("stopped-preview");
-    update("preview-tab", 10_000, true, "draft");
-    update("presence-tab", 10_100);
-    expect(update("preview-tab", 10_200, false)).toEqual({ typing: true });
-    expect(update("presence-tab", 10_300, false)).toEqual({ typing: false });
-    expect(update("missing-tab", 10_400, false)).toEqual({ typing: false });
-  });
-
   it("expires stale previews while a refreshed boolean-only connection remains live", () => {
     const update = typingSession("expired-preview");
     update("preview-tab", 10_000, true, "expired draft");

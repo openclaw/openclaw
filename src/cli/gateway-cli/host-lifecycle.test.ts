@@ -61,7 +61,6 @@ describe("Gateway host lifecycle authority", () => {
     expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     expect(scheduleSafeGatewayRestart).toHaveBeenCalledExactlyOnceWith({
       reason: "gateway.restart.safe",
-      delayMs: 0,
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });

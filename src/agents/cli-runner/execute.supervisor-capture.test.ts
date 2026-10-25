@@ -41,7 +41,6 @@ import { createStubChildAdapter } from "../../process/supervisor/supervisor.test
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
@@ -55,8 +54,9 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import { createPreparedCliContext } from "./prepared-context.test-support.js";
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
-import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() }));
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -213,44 +213,17 @@ function buildPreparedCliRunContext(params: {
     input: "stdin" as const,
     serialize: true,
   };
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider,
-      model: "model",
-      timeoutMs: 1_000,
-      runId,
+  return createPreparedCliContext(
+    { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
+    { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
+    {
+      preparedBackend: {
+        backend,
+        env: {},
+        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
+      },
     },
-    ...captureCliRunStartTime(),
-    workspaceDir: "/tmp",
-    backendResolved: {
-      id: provider,
-      config: backend,
-      bundleMcp: false,
-      parseJsonlEvent: params.parseJsonlEvent,
-    },
-    executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
-      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
-    },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "model",
-    normalizedModel: "model",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  };
+  );
 }
 
 function claudeJsonlContext() {

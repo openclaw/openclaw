@@ -1,7 +1,8 @@
-import { flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { createMemo, createSignal, flush } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   renderPluginCatalogDetail as PluginCatalogDetail,
   type PluginCatalogDetailProps as Props,
@@ -14,7 +15,7 @@ function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {})
   const props: Props = {
     connected: true,
     result,
-    error: null,
+    read: { receipt: () => null, value: () => null },
     backHref: "/plugins",
     onBack: vi.fn(),
     onRetry: vi.fn(),
@@ -100,4 +101,46 @@ it.each([false, true])("orders capabilities before tools (mixed=%s)", (mixed) =>
     ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
+});
+
+it("retains catalog controls while refreshing the same accepted plugin", async () => {
+  const pending = Promise.withResolvers<void>();
+  onTestFinished(() => pending.resolve());
+  let refresh = () => {};
+  const initialResult = createDiscoveryDetail(createPlugin({ installed: false }));
+  const onInstall = vi.fn();
+  const view = mountSolid(() => {
+    const [result, setResult] = createSignal(initialResult);
+    const [receipt, setReceipt] = createSignal({ result: Promise.resolve() });
+    const value = createMemo(async () => {
+      await receipt().result;
+      return null;
+    });
+    refresh = () => {
+      setResult({ ...initialResult });
+      setReceipt({ result: pending.promise });
+    };
+    return (
+      <PluginCatalogDetail
+        connected
+        result={result()}
+        read={{ receipt, value }}
+        backHref="/plugins"
+        onBack={() => {}}
+        onRetry={() => {}}
+        canInstall
+        installBlockedReason={null}
+        onInstall={onInstall}
+        iconUrls={{}}
+      />
+    );
+  });
+  await waitForSolid(() => expect(view.container.querySelector("button.primary")).not.toBeNull());
+  const button = view.container.querySelector<HTMLButtonElement>("button.primary")!;
+  refresh();
+  flush();
+  expect(view.container.querySelector(".plugin-catalog-detail--loading")).toBeNull();
+  expect(view.container.querySelector("button.primary")).toBe(button);
+  button.click();
+  expect(onInstall).toHaveBeenCalledOnce();
 });

@@ -328,6 +328,31 @@ describe("llama-server setup", () => {
   });
 
   it.each([
+    {
+      name: "blank input uses the default",
+      saved: undefined,
+      initialValue: undefined,
+      baseUrl: "http://127.0.0.1:8080/v1",
+    },
+    {
+      name: "blank input keeps the saved URL, prefilled for editing",
+      saved: "http://gpu-box:8080/v1",
+      initialValue: "http://gpu-box:8080",
+      baseUrl: "http://gpu-box:8080/v1",
+    },
+  ])("$name", async ({ saved, initialValue, baseUrl }) => {
+    const prompter = prompterFor("");
+
+    await runSetup({ config: saved ? configWithProvider({ baseUrl: saved }) : {}, prompter });
+
+    expect(prompter.text.mock.calls[0]?.[0]).toMatchObject({
+      initialValue,
+      placeholder: "http://127.0.0.1:8080",
+    });
+    expectDiscovery({ baseUrl });
+  });
+
+  it.each([
     { name: "saved false", saved: false },
     { name: "saved true", saved: true },
     { name: "unset", saved: undefined },

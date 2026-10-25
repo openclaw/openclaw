@@ -301,75 +301,6 @@ function mapNormalizedIds(ids: readonly string[]): Map<string, string> {
   return mapped;
 }
 
-function pushDescriptorRuntimeDisabledDiagnostic(params: {
-  record: PluginManifestRecord;
-  diagnostics: PluginSetupRegistryDiagnostic[];
-}): void {
-  if (
-    !(
-      params.record.setupSource ??
-      resolveSetupApiPath(params.record.rootDir, { includeBundledSourceFallback: false })
-    )
-  ) {
-    return;
-  }
-  params.diagnostics.push({
-    pluginId: params.record.id,
-    code: "setup-descriptor-runtime-disabled",
-    message:
-      "setup.requiresRuntime is false, so OpenClaw ignored the plugin setup runtime entry. Remove setup-api/openclaw.setupEntry or set requiresRuntime true if setup lookup still needs plugin code.",
-  });
-}
-
-function pushSetupDescriptorDriftDiagnostics(params: {
-  record: PluginManifestRecord;
-  providers: readonly ProviderPlugin[];
-  cliBackends: readonly CliBackendPlugin[];
-  diagnostics: PluginSetupRegistryDiagnostic[];
-}): void {
-  const declaredProviderIds = params.record.setup?.providers?.map((entry) => entry.id);
-  if (declaredProviderIds) {
-    for (const provider of params.providers) {
-      if (
-        !declaredProviderIds.some((declaredId) => matchesProviderPluginRef(provider, declaredId))
-      ) {
-        params.diagnostics.push({
-          pluginId: params.record.id,
-          code: "setup-descriptor-provider-runtime-undeclared",
-          runtimeId: provider.id,
-          message: `setup runtime registered provider "${provider.id}" but setup.providers does not declare it.`,
-        });
-      }
-    }
-  }
-
-  const declaredCliBackendIds = params.record.setup?.cliBackends;
-  if (declaredCliBackendIds) {
-    const declaredCliBackends = mapNormalizedIds(declaredCliBackendIds);
-    const runtimeCliBackends = mapNormalizedIds(params.cliBackends.map((backend) => backend.id));
-    for (const [normalized, declaredId] of declaredCliBackends) {
-      if (!runtimeCliBackends.has(normalized)) {
-        params.diagnostics.push({
-          pluginId: params.record.id,
-          code: "setup-descriptor-cli-backend-missing-runtime",
-          declaredId,
-          message: `setup.cliBackends declares "${declaredId}" but setup runtime did not register a matching CLI backend.`,
-        });
-      }
-    }
-    for (const [normalized, runtimeId] of runtimeCliBackends) {
-      if (!declaredCliBackends.has(normalized)) {
-        params.diagnostics.push({
-          pluginId: params.record.id,
-          code: "setup-descriptor-cli-backend-runtime-undeclared",
-          runtimeId,
-          message: `setup runtime registered CLI backend "${runtimeId}" but setup.cliBackends does not declare it.`,
-        });
-      }
-    }
-  }
-}
-
 function withPluginSetupCache<TArgs extends unknown[], TResult>(
   query: (...args: TArgs) => TResult,
 ) {
@@ -435,10 +366,17 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       continue;
     }
     if (record.setup?.requiresRuntime === false) {
-      pushDescriptorRuntimeDisabledDiagnostic({
-        record,
-        diagnostics,
-      });
+      if (
+        record.setupSource ??
+        resolveSetupApiPath(record.rootDir, { includeBundledSourceFallback: false })
+      ) {
+        diagnostics.push({
+          pluginId: record.id,
+          code: "setup-descriptor-runtime-disabled",
+          message:
+            "setup.requiresRuntime is false, so OpenClaw ignored the plugin setup runtime entry. Remove setup-api/openclaw.setupEntry or set requiresRuntime true if setup lookup still needs plugin code.",
+        });
+      }
       continue;
     }
     const setupArtifact = resolveLoadableSetupRuntimeSource(record);
@@ -557,12 +495,49 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     for (const [key, entry] of recordCliBackends) {
       cliBackends.set(key, entry);
     }
-    pushSetupDescriptorDriftDiagnostics({
-      record,
-      providers: [...recordProviders.values()].map((entry) => entry.provider),
-      cliBackends: [...recordCliBackends.values()].map((entry) => entry.backend),
-      diagnostics,
-    });
+    const declaredProviderIds = record.setup?.providers?.map((entry) => entry.id);
+    if (declaredProviderIds) {
+      for (const { provider } of recordProviders.values()) {
+        if (
+          !declaredProviderIds.some((declaredId) => matchesProviderPluginRef(provider, declaredId))
+        ) {
+          diagnostics.push({
+            pluginId: record.id,
+            code: "setup-descriptor-provider-runtime-undeclared",
+            runtimeId: provider.id,
+            message: `setup runtime registered provider "${provider.id}" but setup.providers does not declare it.`,
+          });
+        }
+      }
+    }
+
+    const declaredCliBackendIds = record.setup?.cliBackends;
+    if (declaredCliBackendIds) {
+      const declaredCliBackends = mapNormalizedIds(declaredCliBackendIds);
+      const runtimeCliBackends = mapNormalizedIds(
+        [...recordCliBackends.values()].map((entry) => entry.backend.id),
+      );
+      for (const [normalized, declaredId] of declaredCliBackends) {
+        if (!runtimeCliBackends.has(normalized)) {
+          diagnostics.push({
+            pluginId: record.id,
+            code: "setup-descriptor-cli-backend-missing-runtime",
+            declaredId,
+            message: `setup.cliBackends declares "${declaredId}" but setup runtime did not register a matching CLI backend.`,
+          });
+        }
+      }
+      for (const [normalized, runtimeId] of runtimeCliBackends) {
+        if (!declaredCliBackends.has(normalized)) {
+          diagnostics.push({
+            pluginId: record.id,
+            code: "setup-descriptor-cli-backend-runtime-undeclared",
+            runtimeId,
+            message: `setup runtime registered CLI backend "${runtimeId}" but setup.cliBackends does not declare it.`,
+          });
+        }
+      }
+    }
   }
 
   const registry = {

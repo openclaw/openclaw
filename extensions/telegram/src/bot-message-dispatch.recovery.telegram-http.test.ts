@@ -161,7 +161,6 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     const first = "The first queued answer remains visible in the conversation.";
     const { replyPayloads } = await buildReplyPayloads({
       payloads: [first, recoveredAnswer].map((text) => ({ text: "[[reply_to_current]]" + text })),
-      isHeartbeat: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       applyReplyToMode: createReplyToModeFilterForChannel("first", "telegram"),

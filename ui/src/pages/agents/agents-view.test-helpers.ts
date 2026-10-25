@@ -1,5 +1,6 @@
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -25,6 +26,7 @@ export const inertAgentFileControls = {
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
+  const retired = Promise.withResolvers<void>().promise;
   const data: ReturnType<AgentsViewProps["readData"]> = {
     agentsList: {
       defaultId: "alpha",
@@ -38,15 +40,10 @@ export function createAgentViewTestProps(
     agentsSelectedId: "beta",
     agentsPanel: "overview",
     requestGeneration: 0,
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFilesList: null,
     agentFileActive: null,
     agentFileEditors: {},
@@ -54,7 +51,7 @@ export function createAgentViewTestProps(
     agentFileConflict: null,
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
-    identityError: null,
+    identityOutcome: null,
     agentSkillsRead: null,
     agentSkillsReport: null,
     agentSkillsAgentId: null,
@@ -62,9 +59,10 @@ export function createAgentViewTestProps(
   };
   return {
     readData: () => data,
+    presentationRetired: () => retired,
     readChannels: () => ({
       channelsSnapshot: null,
-      channelsLoading: false,
+      channelsRead: null,
       channelsError: null,
       channelsLastSuccess: null,
     }),
@@ -77,8 +75,7 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    loading: false,
-    error: null,
+    listRead: null,
     selectedAgentId: "beta",
     memoryTarget: {
       read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
@@ -102,7 +99,7 @@ export function createAgentViewTestProps(
       onRunNow: () => undefined,
     },
     agentFiles: {
-      agentFilesError: null,
+      listRead: null,
       ...inertAgentFileControls,
     },
     agentIdentityById: {},
@@ -111,17 +108,10 @@ export function createAgentViewTestProps(
       decisionModels: [],
       modelCatalogRetired: false,
       modelCatalogHasSnapshot: false,
-      modelCatalogGateway: {
-        client: null,
+      modelCatalogGateway: createApplicationGatewaySnapshot({
         phase: "connected",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-      },
+      }),
       modelSelectionPolicy: undefined,
       onModelChange: () => false,
       onDecisionModelChange: () => false,
@@ -142,6 +132,12 @@ export function createAgentViewTestProps(
       onDisableAll: () => false,
     },
     tools: {
+      readCatalog: () => null,
+      readEffective: () => null,
+      effectivePreview: null,
+      effectiveRequest: null,
+      catalogRequest: null,
+      onRetryCatalog: () => undefined,
       onOpenGitHubConnections: () => undefined,
       githubIdentity: githubIdentityViewFixture(),
       runtimeSessionKey: "main",
@@ -153,9 +149,9 @@ export function createAgentViewTestProps(
     onRefresh: () => undefined,
     onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
-    onSetDefault: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
+    onSetDefault: async () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,
     onOpenMemorySettings: () => undefined,

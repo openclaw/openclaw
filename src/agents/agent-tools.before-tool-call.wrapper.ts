@@ -83,6 +83,7 @@ import {
   appendToolLoopWarning,
   attachInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
+import { markToolExecutionRefused } from "./tool-effect-receipt.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -204,14 +205,6 @@ export function recordStructuredReplayTrustForToolCall(
   pruneTrackedToolCallIds(structuredReplaySafeToolCallIds);
 }
 
-const preExecutionBlockedToolResults = new WeakSet<object>();
-
-export function isPreExecutionBlockedToolResult(result: unknown): boolean {
-  return (
-    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
-  );
-}
-
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -227,8 +220,7 @@ export function buildBlockedToolResult(params: {
       reason: params.reason,
     },
   };
-  preExecutionBlockedToolResults.add(result);
-  return result;
+  return markToolExecutionRefused(result, { kind: "blocked", reason: params.reason });
 }
 
 export function wrapToolWithBeforeToolCallHook(
@@ -526,7 +518,13 @@ export function wrapToolWithBeforeToolCallHook(
           ctx,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
+          recordSkillUsed({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+            result: signal?.aborted ? undefined : result,
+          });
         }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

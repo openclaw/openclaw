@@ -75,11 +75,7 @@ function click(label: string) {
 it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
   const { request } = fixture([
     grants,
-    {
-      code: "ABCDE-FGHIJ",
-      expiresAt: 1_800_000_000_000,
-      mcpUrl: "https://relay.example/mcp",
-    },
+    { code: "ABCDE-FGHIJ", expiresAt: 1_800_000_000_000, mcpUrl: "https://relay.example/mcp" },
   ]);
   await shows("Pair with code");
   click("Pair with code");

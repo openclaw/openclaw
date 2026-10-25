@@ -1,5 +1,3 @@
-// Covers channel/target inference, legacy target rewrite, target validation,
-// and plugin alias-aware message-action normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
@@ -41,6 +39,8 @@ describe("normalizeMessageActionInput", () => {
 
   type Input = Parameters<typeof normalizeMessageActionInput>[0];
   it.each<[Input, Record<string, unknown>, string[]]>([
+    [{ action: "send", args: { target: "  channel:C1  " } }, { to: "channel:C1" }, []],
+    [{ action: "channel-info", args: { target: "  C123  " } }, { channelId: "C123" }, []],
     [
       { action: "send", args: { target: "channel:C1", to: "legacy", channelId: "legacy-channel" } },
       { target: "channel:C1", to: "channel:C1" },
@@ -84,52 +84,57 @@ describe("normalizeMessageActionInput", () => {
       expect(field in normalized).toBe(false);
     }
   });
-  it("does not inject heartbeat sender sentinel as inferred target", () => {
-    expect(() =>
-      normalizeMessageActionInput({
+  it.each<[string, Input]>([
+    ["blank target", { action: "send", args: { target: "   " } }],
+    [
+      "heartbeat sentinel",
+      {
         action: "send",
         args: {},
-        toolContext: {
-          currentChannelId: "heartbeat",
-          currentChannelProvider: "telegram",
-        },
-      }),
-    ).toThrow(/requires a target/);
-  });
-
-  it("does not infer an internal session as a message target", () => {
-    expect(() =>
-      normalizeMessageActionInput({
+        toolContext: { currentChannelId: "heartbeat", currentChannelProvider: "telegram" },
+      },
+    ],
+    [
+      "internal session",
+      {
         action: "send",
         args: { channel: "discord" },
         toolContext: {
           currentChannelId: "channel:agent:main:subagent:worker",
           currentChannelProvider: "discord",
         },
-      }),
-    ).toThrow(/requires a target/);
-  });
-
-  it("does not replace an empty targets array with the current conversation", () => {
-    expect(() =>
-      normalizeMessageActionInput({
+      },
+    ],
+    [
+      "explicit empty targets",
+      {
         action: "read",
         args: { targets: [] },
-        toolContext: {
-          currentChannelId: "C_CURRENT",
-          currentChannelProvider: "workspace",
-        },
-      }),
-    ).toThrow(/requires a target/);
-  });
-
-  it("throws when poll-vote has only a resource reference and no current target", () => {
-    expect(() =>
-      normalizeMessageActionInput({
+        toolContext: { currentChannelId: "C_CURRENT", currentChannelProvider: "workspace" },
+      },
+    ],
+    [
+      "resource without conversation",
+      {
         action: "poll-vote",
         args: { channel: "imessage", pollId: "poll_123" },
-      }),
-    ).toThrow(/requires a target/);
+      },
+    ],
+  ])("rejects %s as a target", (_name, input) => {
+    expect(() => normalizeMessageActionInput(input)).toThrow(/requires a target/);
+  });
+
+  it.each<[Input, string]>([
+    [
+      { action: "broadcast", args: { to: "legacy" } },
+      "Use `target` for actions that accept a destination.",
+    ],
+    [
+      { action: "broadcast", args: { target: "channel:C1" } },
+      "Action broadcast does not accept a target.",
+    ],
+  ])("rejects a destination for no-target action %j", (input, message) => {
+    expect(() => normalizeMessageActionInput(input)).toThrow(message);
   });
 
   it("rejects conflicting canonical and plugin delivery targets", () => {

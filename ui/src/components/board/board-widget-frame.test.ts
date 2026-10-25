@@ -1,60 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import {
-  BoardWidgetFrame,
-  createBoardWidgetFrame,
-  type BoardWidgetFrameOwner,
-} from "./board-widget-frame.tsx";
+  acknowledgeWidgetHostInit,
+  createFrameOwner,
+  dispatchFrameMessage,
+  mountBoardWidgetFrame,
+} from "./board-widget-frame.test-support.tsx";
+import type { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
 
 const disposers: Array<() => void> = [];
-function mountFrame(lifecycle: BoardWidgetFrameOwner, widget: BoardWidget, root: HTMLElement) {
-  const [revision, setRevision] = createSignal(0);
-  disposers.push(
-    mountSolid(
-      () => {
-        const state = projectOwner(lifecycle, (current) => current);
-        return createComponent(BoardWidgetFrame, {
-          state: state.read,
-          current: () => {
-            revision();
-            return widget;
-          },
-        });
-      },
-      { container: root },
-    ).unmount,
-  );
-  flush();
-  return () => {
-    setRevision((value) => value + 1);
-    flush();
-  };
-}
 
 function createTicketRefreshLifecycle(
   widget: BoardWidget,
   refreshFrame: (name: string) => Promise<void>,
 ): BoardWidgetFrameOwner {
-  const lifecycle = createBoardWidgetFrame({
-    active: () => true,
-    connected: () => true,
-    context: () => undefined,
-    refreshFrame: () => refreshFrame,
-    reportContentHeight: () => {},
-    scrollBy: () => {},
-    resolveFrameUrl: () => () => "",
-    widget: () => widget,
-  });
+  const lifecycle = createFrameOwner(() => widget, { refreshFrame: () => refreshFrame });
   lifecycle.connect();
   lifecycle.update();
   return lifecycle;
@@ -68,6 +35,129 @@ afterEach(() => {
   delete document.documentElement.dataset.themeMode;
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("board widget frame visibility lifetime", () => {
+  it("shares one native listener until the final active owner retires", () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    let firstActive = true;
+    const owners = Array.from({ length: 6 }, (_, index) => {
+      const owner = createFrameOwner(() => boardWidget({ name: `clock-${index}` }), {
+        active: () => index !== 0 || firstActive,
+      });
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      owner.connect();
+      owner.update();
+      return owner;
+    });
+    expect(add.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+
+    firstActive = false;
+    owners[0]!.activityChanged();
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
+    firstActive = true;
+    owners[0]!.activityChanged();
+    expect(add.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+
+    for (const owner of owners.slice(0, -1)) {
+      owner.disconnect();
+    }
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
+    owners.at(-1)!.disconnect();
+    expect(remove.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+  });
+});
+
+describe("board widget frame message lifetime", () => {
+  it("does not listen for frame messages when active cells have no iframe", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    for (let index = 0; index < 6; index += 1) {
+      const owner = createFrameOwner(() =>
+        boardWidget({ name: `progress-${index}`, contentKind: "plugin" }),
+      );
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      owner.update();
+    }
+    expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+  });
+
+  it("shares delivery between mounted frames and retains suspended frame registration", () => {
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    const firstHeight = vi.fn();
+    const secondHeight = vi.fn();
+    let firstActive = true;
+    const mountFrame = (name: string, reportContentHeight: typeof firstHeight) => {
+      const widget = boardWidget({ name });
+      const owner = createFrameOwner(() => widget, {
+        active: () => name !== "first" || firstActive,
+        reportContentHeight,
+      });
+      disposers.push(() => owner.disconnect());
+      owner.connect();
+      const root = document.body.appendChild(document.createElement("div"));
+      mountBoardWidgetFrame(owner, widget, root, disposers);
+      return { owner, frame: root.querySelector("iframe")! };
+    };
+    const first = mountFrame("first", firstHeight);
+    const second = mountFrame("second", secondHeight);
+    expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 360 } });
+    expect(firstHeight).toHaveBeenCalledExactlyOnceWith("first", 360);
+    expect(secondHeight).not.toHaveBeenCalled();
+    firstActive = false;
+    first.owner.activityChanged();
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 480 } });
+    expect(firstHeight).toHaveBeenCalledOnce();
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+    firstActive = true;
+    first.owner.activityChanged();
+    first.owner.disconnect();
+    dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 640 } });
+    dispatchFrameMessage(second.frame, { data: { type: "openclaw:widget-size", height: 720 } });
+    expect(firstHeight).toHaveBeenCalledOnce();
+    expect(secondHeight).toHaveBeenCalledExactlyOnceWith("second", 720);
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(0);
+    second.owner.disconnect();
+    expect(remove.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
+  });
+
+  it("retires a replaced iframe source before accepting messages from its replacement", () => {
+    let widget = boardWidget();
+    const reportContentHeight = vi.fn();
+    const owner = createFrameOwner(() => widget, {
+      context: () => gatewayContext(null),
+      reportContentHeight,
+    });
+    disposers.push(() => owner.disconnect());
+    owner.connect();
+    const root = document.body.appendChild(document.createElement("div"));
+    const update = mountBoardWidgetFrame(owner, () => widget, root, disposers);
+    const previous = root.querySelector("iframe")!;
+    const retiredSource = previous.contentWindow;
+    widget = {
+      ...widget,
+      sandboxUrl: "/mcp-app-sandbox",
+      sandboxOrigin: "https://sandbox.example",
+      sandboxPort: 18790,
+      viewTicket: "ticket",
+    };
+    update();
+    const current = root.querySelector("iframe")!;
+    expect(current).not.toBe(previous);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: retiredSource,
+        data: { type: "openclaw:widget-size", height: 360 },
+      }),
+    );
+    expect(reportContentHeight).not.toHaveBeenCalled();
+    dispatchFrameMessage(current, { data: { type: "openclaw:widget-size", height: 480 } });
+    expect(reportContentHeight).toHaveBeenCalledExactlyOnceWith(widget.name, 480);
+  });
 });
 
 function terminalFailureError(params: {
@@ -87,17 +177,13 @@ function terminalFailureError(params: {
   context.gateway.connection.gatewayUrl = gatewayUrl.href;
   const root = document.createElement("div");
   document.body.append(root);
-  const owner = createBoardWidgetFrame({
-    active: () => true,
+  const owner = createFrameOwner(() => widget, {
     connected: () => root.isConnected,
     context: () => context,
     refreshFrame: () => async () => {},
-    reportContentHeight: () => {},
-    scrollBy: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
-    widget: () => widget,
   });
-  mountFrame(owner, widget, root);
+  mountBoardWidgetFrame(owner, widget, root, disposers);
   const frame = root.querySelector("iframe")!;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     frame.dispatchEvent(new Event("error"));
@@ -150,18 +236,13 @@ describe("board widget frame themes", () => {
       });
       const root = document.createElement("div");
       document.body.append(root);
-      const owner = createBoardWidgetFrame({
-        active: () => true,
+      const owner = createFrameOwner(() => widget, {
         connected: () => root.isConnected,
         context: () => gatewayContext(null),
-        refreshFrame: () => undefined,
-        reportContentHeight: () => {},
-        scrollBy: () => {},
         resolveFrameUrl: () => () => "/widget?bt=ticket",
-        widget: () => widget,
       });
       disposers.push(() => owner.disconnect());
-      const update = mountFrame(owner, widget, root);
+      const update = mountBoardWidgetFrame(owner, widget, root, disposers);
       const frame = root.querySelector("iframe")!;
       const source = frame.src;
       expect(source).toBe(
@@ -235,18 +316,14 @@ describe("board widget frame scroll handoff", () => {
       const context = gatewayContext(null);
       const container = document.createElement("div");
       document.body.append(container);
-      const lifecycle = createBoardWidgetFrame({
+      const lifecycle = createFrameOwner(() => widget, {
         active: () => active,
-        connected: () => true,
         context: () => context,
-        refreshFrame: () => undefined,
-        reportContentHeight: () => {},
         scrollBy,
         resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard?bt=ticket",
-        widget: () => widget,
       });
       lifecycle.connect();
-      mountFrame(lifecycle, widget, container);
+      mountBoardWidgetFrame(lifecycle, widget, container, disposers);
       const frame = container.querySelector<HTMLIFrameElement>(".board-widget__frame")!;
       const resourceReady = createDeferred<{ renderId: string }>();
       const hostNonces: string[] = [];
@@ -258,13 +335,7 @@ describe("board widget frame scroll handoff", () => {
         }
       });
       const receive = (data: object) =>
-        window.dispatchEvent(
-          new MessageEvent("message", {
-            source: frame.contentWindow,
-            origin: "https://sandbox.example",
-            data,
-          }),
-        );
+        dispatchFrameMessage(frame, { origin: "https://sandbox.example", data });
       try {
         frame.dispatchEvent(new Event("load"));
         const initialNonce = hostNonces.at(-1);
@@ -301,21 +372,12 @@ describe("board widget frame scroll handoff", () => {
   it("accepts a finite vertical remainder only from its rendered iframe and nonce", () => {
     const widget = { name: "long-dashboard", revision: 1 } as BoardWidget;
     const scrollBy = vi.fn();
-    const lifecycle = createBoardWidgetFrame({
-      active: () => true,
-      connected: () => true,
-      context: () => undefined,
-      refreshFrame: () => undefined,
-      reportContentHeight: () => {},
-      scrollBy,
-      resolveFrameUrl: () => () => "",
-      widget: () => widget,
-    });
+    const lifecycle = createFrameOwner(() => widget, { scrollBy });
     const unrelated = document.createElement("iframe");
     unrelated.className = "board-widget__frame";
     const root = document.createElement("div");
     document.body.append(unrelated, root);
-    mountFrame(lifecycle, widget, root);
+    mountBoardWidgetFrame(lifecycle, widget, root, disposers);
     const frame = root.querySelector("iframe")!;
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     frame.dispatchEvent(new Event("load"));
@@ -323,34 +385,23 @@ describe("board widget frame scroll handoff", () => {
       .nonce;
     lifecycle.connect();
 
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        data: { type: "openclaw:widget-scroll", deltaY: 48, nonce },
-      }),
-    );
+    dispatchFrameMessage(frame, { data: { type: "openclaw:widget-scroll", deltaY: 48, nonce } });
     window.dispatchEvent(
       new MessageEvent("message", {
         source: window,
         data: { type: "openclaw:widget-scroll", deltaY: 96, nonce },
       }),
     );
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        data: {
-          type: "openclaw:widget-scroll",
-          deltaY: Number.POSITIVE_INFINITY,
-          nonce,
-        },
-      }),
-    );
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: frame.contentWindow,
-        data: { type: "openclaw:widget-scroll", deltaY: 192, nonce: "wrong-nonce" },
-      }),
-    );
+    dispatchFrameMessage(frame, {
+      data: {
+        type: "openclaw:widget-scroll",
+        deltaY: Number.POSITIVE_INFINITY,
+        nonce,
+      },
+    });
+    dispatchFrameMessage(frame, {
+      data: { type: "openclaw:widget-scroll", deltaY: 192, nonce: "wrong-nonce" },
+    });
 
     expect(scrollBy).toHaveBeenCalledOnce();
     expect(scrollBy).toHaveBeenCalledWith(48);
@@ -385,18 +436,14 @@ describe("board widget frame message confirmation", () => {
     const root = document.createElement("div");
     document.body.append(root);
     let active = true;
-    const lifecycle = createBoardWidgetFrame({
+    const lifecycle = createFrameOwner(() => widget, {
       active: () => active,
       connected: () => root.isConnected,
       context: () => context,
-      refreshFrame: () => undefined,
-      reportContentHeight: () => {},
-      scrollBy: () => {},
       resolveFrameUrl: () => () => "/__openclaw__/board/confirm-parts?bt=ticket",
-      widget: () => widget,
     });
     lifecycle.connect();
-    mountFrame(lifecycle, widget, root);
+    mountBoardWidgetFrame(lifecycle, widget, root, disposers);
     lifecycle.update();
     const frame = root.querySelector<HTMLIFrameElement>("iframe")!;
     frame.checkVisibility = () => true;
@@ -407,25 +454,10 @@ describe("board widget frame message confirmation", () => {
       }
     });
     const notify = (data: object, ports: MessagePort[] = []) =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data,
-          ports,
-        }),
-      );
+      dispatchFrameMessage(frame, { origin: "https://sandbox.example", data, ports });
     const channel = new MessageChannel();
     const initialized = createDeferred();
-    channel.port2.addEventListener("message", (event) => {
-      if (event.data.type === "openclaw:widget-host-init") {
-        channel.port2.postMessage({
-          type: "openclaw:widget-host-init-ack",
-          ticket: event.data.ticket,
-        });
-        initialized.resolve();
-      }
-    });
+    acknowledgeWidgetHostInit(channel.port2, initialized);
     channel.port2.start();
     const send = (id: string, text: string) => {
       const response = createDeferred<Record<string, unknown>>();
@@ -550,27 +582,22 @@ describe("board widget frame ticket refresh", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const context = gatewayContext(null);
-    const owner = createBoardWidgetFrame({
+    const owner = createFrameOwner(() => widget, {
       active: () => active,
       connected: () => root.isConnected,
       context: () => context,
       refreshFrame: () => refreshFrame,
       reportContentHeight,
-      scrollBy: () => {},
       resolveFrameUrl: () => () => "/widget?bt=ticket",
-      widget: () => widget,
     });
-    mountFrame(owner, widget, root);
+    mountBoardWidgetFrame(owner, widget, root, disposers);
     owner.update();
     const frame = root.querySelector("iframe")!;
     const reportHeight = () =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          origin: "https://sandbox.example",
-          data: { type: "openclaw:widget-size", height: 720 },
-        }),
-      );
+      dispatchFrameMessage(frame, {
+        origin: "https://sandbox.example",
+        data: { type: "openclaw:widget-size", height: 720 },
+      });
     active = false;
     owner.activityChanged();
     owner.update();

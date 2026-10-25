@@ -1,4 +1,15 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -162,6 +173,32 @@ export function DebugPage() {
     },
   });
 
+  function observeRequest(request: { readonly read: Promise<unknown> | null }) {
+    // Keep promise identity synchronous; only the ready memo consumes it.
+    const receipt = createMemo(
+      () => {
+        revision();
+        return { completion: request.read };
+      },
+      { equals: (previous, next) => previous.completion === next.completion },
+    );
+    // The page deliberately retains snapshots while owner updates stay immediate.
+    return { receipt, ready: createDeferred(() => receipt().completion) };
+  }
+  const diagnosticsRead = observeRequest(diagnostics);
+  const liveRead = observeRequest(live);
+
+  // Accepted errors survive retries; a full success clears both read owners.
+  const readFeedback = () => {
+    latest(diagnosticsRead.ready);
+    latest(liveRead.ready);
+    const error = read("diagnosticsError") ?? read("liveError");
+    if (error) {
+      throw new Error(error);
+    }
+    return null;
+  };
+
   function invalidate() {
     diagnostics.cancel();
     live.cancel();
@@ -263,6 +300,20 @@ export function DebugPage() {
     return state[key];
   };
 
+  function RefreshButton(props: { pending: boolean }) {
+    return (
+      <button
+        class="btn"
+        disabled={gateway.read().snapshot.phase !== "connected" || props.pending}
+        onClick={() => void loadDiagnostics()}
+      >
+        {gateway.read().snapshot.phase === "connected" && props.pending
+          ? t("common.refreshing")
+          : t("common.refresh")}
+      </button>
+    );
+  }
+
   function DebugPageView() {
     return (
       <SettingsPage wide>
@@ -270,17 +321,9 @@ export function DebugPage() {
           title={t("debug.snapshotsTitle")}
           description={t("debug.snapshotsSubtitle")}
           actions={
-            <button
-              class="btn"
-              disabled={
-                gateway.read().snapshot.phase !== "connected" || (revision(), diagnostics.pending)
-              }
-              onClick={() => void loadDiagnostics()}
-            >
-              {gateway.read().snapshot.phase === "connected" && (revision(), diagnostics.pending)
-                ? t("common.refreshing")
-                : t("common.refresh")}
-            </button>
+            <Loading on={diagnosticsRead.receipt()} fallback={<RefreshButton pending />}>
+              <RefreshButton pending={isPending(diagnosticsRead.ready)} />
+            </Loading>
           }
         >
           <Show
@@ -293,18 +336,20 @@ export function DebugPage() {
               description={t("debug.offlineSnapshots")}
             />
           </Show>
-          <Show when={read("diagnosticsError") ?? read("liveError")}>
-            <div class="settings-row" role="alert">
-              <div class="settings-row__text">
-                <span class="settings-row__title">
-                  <Status kind="danger" label={t("common.failed")} />
-                </span>
-                <span class="settings-row__desc">
-                  {read("diagnosticsError") ?? read("liveError")}
-                </span>
+          <Errored
+            fallback={(error) => (
+              <div class="settings-row" role="alert">
+                <div class="settings-row__text">
+                  <span class="settings-row__title">
+                    <Status kind="danger" label={t("common.failed")} />
+                  </span>
+                  <span class="settings-row__desc">{formatUiError(error())}</span>
+                </div>
               </div>
-            </div>
-          </Show>
+            )}
+          >
+            <Loading>{readFeedback()}</Loading>
+          </Errored>
           <SecurityRow status={read("data").status} />
           <For each={["status", "health", "heartbeat"] as const}>
             {(key) => {

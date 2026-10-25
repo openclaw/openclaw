@@ -1,44 +1,37 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { AssistantMessageEventStream, type ToolCall } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
-import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { HEARTBEAT_TOKEN } from "../../../auto-reply/tokens.js";
 import { Agent } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
-import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
+import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
+type ResultOwner = Parameters<typeof completeEmbeddedAttemptResult>;
 
 type ResultInput = {
   terminal?: EmbeddedRunAttemptResult["terminal"];
   currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   hasSuccessfulModelResponse?: boolean;
-  heartbeatToolResponse?: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
   latestMcpAppChannelView?: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   toolMetas?: EmbeddedRunAttemptResult["toolMetas"];
   replyOptional?: boolean;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   successfulNestedToolNames?: string[];
-  clientToolCallSlots?: Array<{
-    toolCallId: string;
-    name: string;
-    params?: Record<string, unknown>;
-    completed: boolean;
-  }>;
+  clientToolCallSlots?: ResultOwner[0]["prepared"]["sessionRuntime"]["agentSession"]["clientToolCallSlots"];
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
   toolAutoDeliveryMediaUrls?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -48,27 +41,17 @@ type ResultInput = {
 };
 
 function createResultFixture(params: ResultInput = {}) {
-  const state: Parameters<typeof completeEmbeddedAttemptResult>[0]["state"] = {
+  const state: ResultOwner[0]["state"] = {
     terminal: params?.terminal ?? { kind: "ok" },
     beforeAgentRunBlockedBy: undefined,
     trajectoryEndRecorded: false,
   };
-  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
-    sessionIdUsed: "session-1",
+  const settled: ResultOwner[1] = createSettledStreamResult({
     messagesSnapshot: params?.messagesSnapshot ?? [],
-    lastAssistant: undefined,
-    currentAttemptAssistant: undefined,
     currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
     successfulNestedToolNames: params?.successfulNestedToolNames ?? [],
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-  };
-  const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
+  });
+  const prompt: ResultOwner[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
     yieldAborted: false,
@@ -81,7 +64,6 @@ function createResultFixture(params: ResultInput = {}) {
     answerSegments: undefined,
     assistantTexts: [...(params?.assistantTexts ?? [])],
     didSendViaMessagingTool: () => params?.didSendViaMessagingTool ?? false,
-    getHeartbeatToolResponse: () => params?.heartbeatToolResponse,
     getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
     getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
     getPendingToolMediaReply: () => params?.pendingToolMediaReply,
@@ -133,14 +115,6 @@ function completeResult(params?: ResultInput) {
   return completeFixture(createResultFixture(params));
 }
 
-function heartbeatPayloads(result: ReturnType<typeof completeResult>) {
-  return buildPayloads({
-    isHeartbeatTrigger: true,
-    assistantTexts: result.assistantTexts,
-    heartbeatToolResponse: result.heartbeatToolResponse,
-  });
-}
-
 function textAssistant(
   text: string,
   overrides: Parameters<typeof makeAssistantMessageFixture>[0] = {},
@@ -154,14 +128,7 @@ function textAssistant(
 
 function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
   return [
-    {
-      role: "toolResult",
-      toolCallId: "call-read",
-      toolName: "read",
-      isError: false,
-      timestamp: 1,
-      content: [{ type: "text", text: "file contents" }],
-    },
+    { ...textToolResult("call-read", "read", "file contents"), isError: false, timestamp: 1 },
   ];
 }
 
@@ -198,32 +165,27 @@ describe("attempt result projection", () => {
     ).toMatchObject([{ text }]);
   });
 
-  it.each([
-    { name: "Write", allowedToolNames: ["write"], expected: true },
-    { name: "functions.write", allowedToolNames: ["write"], expected: true },
-    { name: "WRITE", allowedToolNames: ["Write", "wriTE"], expected: undefined },
-  ])("uses native callable-name matching for $name", ({ name, allowedToolNames, expected }) => {
-    const assistant = textAssistant(JSON.stringify({ name, arguments: { path: "proof.txt" } }));
-    expect(
-      completeResult({ currentAttemptCompletedAssistant: assistant, allowedToolNames })
-        .textToolCallAttempt,
-    ).toBe(expected);
-  });
-
   // Syntax variants belong to packages/tool-call-repair/src/attempt.test.ts.
-  it.each([false, true])(
-    "recognizes text-only terminal calls after a read (native=%s)",
-    (nativeCall) => {
-      const assistant = textAssistant('{"name":"write","arguments":{"path":"proof.txt"}}');
-      if (nativeCall) {
+  it.each<[string, string[], boolean, true | undefined]>([
+    ["Write", ["write"], false, true],
+    ["functions.write", ["write"], false, true],
+    ["WRITE", ["Write", "wriTE"], false, undefined],
+    ["write", ["write"], false, true],
+    ["write", ["write"], true, undefined],
+  ])(
+    "recognizes terminal callable %s (allowed=%j, native=%s)",
+    (name, allowedToolNames, native, expected) => {
+      const assistant = textAssistant(JSON.stringify({ name, arguments: { path: "proof.txt" } }));
+      if (native) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
       }
-      const result = completeResult({
-        currentAttemptCompletedAssistant: assistant,
-        allowedToolNames: ["write"],
-        toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
-      });
-      expect(result.textToolCallAttempt).toBe(nativeCall ? undefined : true);
+      expect(
+        completeResult({
+          currentAttemptCompletedAssistant: assistant,
+          allowedToolNames,
+          toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+        }).textToolCallAttempt,
+      ).toBe(expected);
     },
   );
 
@@ -341,6 +303,7 @@ describe("attempt result projection", () => {
     }),
   };
   const truncated = failed(new Error("Stream ended without finish_reason"));
+  const commentary = "Checking the post-reboot state.";
   const afterRead = (text: string, authored = false): ResultInput => ({
     ...truncated,
     assistantTexts: authored ? [text] : [],
@@ -356,20 +319,19 @@ describe("attempt result projection", () => {
       "only pre-tool commentary",
       {
         ...truncated,
-        assistantTexts: ["Checking the post-reboot state."],
+        assistantTexts: [commentary],
         messagesSnapshot: [
-          textAssistant("Checking the post-reboot state.", {
+          textAssistant(commentary, {
             stopReason: "toolUse",
             errorMessage: undefined,
             timestamp: 1,
             content: [
-              { type: "text", text: "Checking the post-reboot state." },
+              { type: "text", text: commentary },
               { type: "toolCall", id: "call-read", name: "read", arguments: {} },
             ],
           }),
           ...settledToolMessages(),
-          textAssistant("", {
-            stopReason: "error",
+          makeAssistantMessageFixture({
             errorMessage: "Stream ended without finish_reason",
             timestamp: 3,
             content: [],
@@ -405,57 +367,6 @@ describe("attempt result projection", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
-  });
-
-  it.each([false, true])("keeps heartbeat carryover scoped to its run (fresh=%s)", (fresh) => {
-    const carryover = createAttemptCarryover();
-    const publicResponse = {
-      outcome: "done" as const,
-      notify: fresh,
-      summary: "The task reached its completion condition.",
-      notificationText: "The monitored task is complete.",
-    };
-    const scratch = "Private monitor notes: completion checked; no follow-up needed.";
-    const providerFailure = {
-      kind: "failed" as const,
-      source: "prompt" as const,
-      error: Object.assign(new Error("529 overloaded"), { status: 529 }),
-    };
-    carryover.apply(
-      completeResult({
-        heartbeatToolResponse: { ...publicResponse, scratch },
-        terminal: fresh ? { kind: "ok" } : providerFailure,
-      }),
-    );
-    const completed = completeResult({
-      assistantTexts: [fresh ? "Still running." : "Retry fallback."],
-    });
-    if (fresh) {
-      createAttemptCarryover().apply(completed);
-    } else {
-      carryover.apply(completeResult({ terminal: providerFailure }));
-      carryover.apply(completed);
-    }
-    const payloads = heartbeatPayloads(completed);
-    expect(payloads).toHaveLength(1);
-    if (fresh) {
-      expect(payloads[0]?.text).toBe("Still running.");
-      expect(selectHeartbeatToolResponse(payloads)).toBeUndefined();
-      expect(
-        getReplyPayloadMetadata(expectDefined(payloads[0], "fresh-run payload"))
-          ?.heartbeatScratchProposal,
-      ).toBeUndefined();
-      return;
-    }
-    expect(payloads[0]?.text).toBe(HEARTBEAT_TOKEN);
-    const selected = expectDefined(
-      selectHeartbeatToolResponse(payloads),
-      "expected the carried heartbeat response",
-    );
-    expect(selected.response).toEqual(publicResponse);
-    expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(scratch);
-    expect(JSON.stringify(payloads)).not.toContain(scratch);
-    expect(JSON.stringify(payloads)).not.toContain("Retry fallback.");
   });
 
   it("keeps completed client tool calls in reserved source order", () => {
@@ -520,16 +431,30 @@ describe("trailing source progress at runtime settlement", () => {
       sessionExtras: { sessionManager } as never,
     });
     let callIndex = 0;
-    const tool = (name: string, execute: (toolCallId: string) => void) => ({
+    const tools = ["message", "read"].map((name) => ({
       name,
       label: name,
       description: name,
       parameters: Type.Object({}, { additionalProperties: true }),
       execute: async (toolCallId: string) => {
-        execute(toolCallId);
+        if (name === "message") {
+          recordEmbeddedToolReceipt(
+            sessionManager,
+            toolCallId,
+            {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+            true,
+          );
+        }
         return { content: [{ type: "text" as const, text: "ok" }], details: {} };
       },
-    });
+    }));
     const toolSettled = new Map<string, ReturnType<typeof createDeferred<void>>>();
     const settledFor = (toolCallId: string) => {
       const settled = toolSettled.get(toolCallId) ?? createDeferred();
@@ -539,24 +464,7 @@ describe("trailing source progress at runtime settlement", () => {
     const agent = new Agent({
       initialState: {
         model: testModel,
-        tools: [
-          tool("message", (toolCallId) =>
-            recordEmbeddedToolReceipt(
-              sessionManager,
-              toolCallId,
-              {
-                messageDelivery: {
-                  status: "settled",
-                  partialDelivery: false,
-                  createdThreadIds: [],
-                  sourceReplyDelivered: true,
-                },
-              },
-              true,
-            ),
-          ),
-          tool("read", () => {}),
-        ],
+        tools,
       },
       streamFn: () => {
         const call = calls[callIndex++] ?? {};

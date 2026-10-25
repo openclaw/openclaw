@@ -219,7 +219,7 @@ async function prepareHistoryRead(
     case "transcript-match": {
       const [{ findTranscriptEventMatchingInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
         await Promise.all([
-          import("./session-transcript-match.js"),
+          import("./session-transcript-match-read.js"),
           import("../../state/openclaw-agent-db-readonly.js"),
         ]);
       return () => {

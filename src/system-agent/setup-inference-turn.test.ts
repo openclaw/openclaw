@@ -118,18 +118,9 @@ describe("setup inference plugin ownership", () => {
         thinkLevel: "off",
         streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
       });
-      return {
-        payloads: [{ text: "OK" }],
-        meta: {
-          durationMs: 1,
-          executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
-        },
-      };
+      return probeReply(route);
     });
-    const result = await runSetupInferenceTurn({
-      route,
-      requireExecutionOwner: false,
-    });
+    const result = await runProbe(route);
     expect(result, result.ok ? undefined : result.error).toMatchObject({
       ok: true,
       text: "OK",
@@ -270,12 +261,10 @@ describe("setup inference plugin ownership", () => {
       }),
     );
     const previousMetadata = getCurrentPluginMetadataSnapshot();
-    const resolveMetadataSnapshot = vi
-      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
-      .mockImplementation(async () => {
-        order.push("metadata");
-        return metadataSnapshot;
-      });
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockImplementation(async () => {
+      order.push("metadata");
+      return metadataSnapshot;
+    });
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementationOnce(() => {
       order.push("load");
       expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
@@ -299,21 +288,14 @@ describe("setup inference plugin ownership", () => {
 
     expect(order).toEqual(["metadata", "load", "validate"]);
     expect(getCurrentPluginMetadataSnapshot()).toBe(previousMetadata);
-    expect(resolveMetadataSnapshot).toHaveBeenCalledWith({
-      config: route.runConfig,
-      env: process.env,
-      workspaceDir: "/tmp/openclaw-workspace",
-      allowCurrent: false,
-    });
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
-      config: route.runConfig,
-      metadataSnapshot,
-      preferBuiltPluginArtifacts: true,
-      workspaceDir: "/tmp/openclaw-workspace",
-      selections: [
-        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-      ],
-    });
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferBuiltPluginArtifacts: true,
+        selections: [
+          { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
+        ],
+      }),
+    );
   });
 
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {

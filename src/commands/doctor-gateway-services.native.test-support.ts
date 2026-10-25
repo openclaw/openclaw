@@ -1,9 +1,6 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  readEmbeddedGatewayTokenForTest,
-  testServiceAuditCodes,
-} from "./doctor-service-audit.test-helpers.js";
+import { readEmbeddedGatewayTokenForTest } from "./doctor-service-audit.test-helpers.js";
 
 // Native boundary mocks are shared; each test file registers its own reset/cleanup hooks.
 const fsMocks = vi.hoisted(() => ({ realpath: vi.fn() }));
@@ -74,27 +71,15 @@ vi.mock("../daemon/runtime-paths.js", () => ({
   resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
 
-vi.mock("../daemon/service-audit.js", () => ({
-  auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: mocks.needsNodeRuntimeMigration,
-  readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
-  SERVICE_AUDIT_CODES: {
-    gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
-    gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
-    gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
-    gatewayPathMissing: "gateway-path-missing",
-    gatewayPathMissingDirs: "gateway-path-missing-dirs",
-    gatewayPathNonMinimal: "gateway-path-nonminimal",
-    gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
-    gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
-    gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
-    gatewayTokenDrift: "gateway-token-drift",
-    gatewayTokenEmbedded: "gateway-token-embedded",
-    gatewayPasswordEmbedded: "gateway-password-embedded",
-    gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
-    systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
-  },
-}));
+vi.mock("../daemon/service-audit.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service-audit.js")>();
+  return {
+    ...actual,
+    auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
+    needsNodeRuntimeMigration: mocks.needsNodeRuntimeMigration,
+    readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
+  };
+});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({

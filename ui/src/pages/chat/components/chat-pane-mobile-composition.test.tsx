@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
@@ -58,30 +59,14 @@ it("retains the People page and lookup across native host replacement and deskto
     request: async () => {},
     insert: () => false,
   };
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "people-retention",
-    open: false,
-    suspended: false,
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("people-retention", {
     mode: "expanded",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
     navigate: (destination) => {
       mobileHost.open = true;
       mobileHost.destination = destination;
       refreshHost();
     },
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-    onViewportChange: vi.fn(),
-  };
+  });
   const detailsControl = {
     chat: undefined,
     elements: {},
@@ -96,6 +81,7 @@ it("retains the People page and lookup across native host replacement and deskto
     mobilePeople: {
       header: [
         { key: "ada", sender: { name: "Ada" }, label: "Ada", firstName: "Ada", viewing: true },
+        { key: "sam", sender: { name: "Sam" }, label: "Sam", firstName: "Sam", viewing: true },
       ],
       viewers: [],
       participants: [],
@@ -107,6 +93,9 @@ it("retains the People page and lookup across native host replacement and deskto
   function refreshHost() {
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector(".chat-mobile-people-grid")).not.toBeNull(),
+  );
   const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
   expect(mentions.activate).not.toHaveBeenCalled();
   trigger.click();

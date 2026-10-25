@@ -75,9 +75,6 @@ export function createPluginSystemRuntime(params: {
     captureSessionEventTarget: (...args) => route(() => system.captureSessionEventTarget(...args)),
     enqueueSessionEvent: (...args) => route(() => system.enqueueSessionEvent(...args)),
     enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
-    requestHeartbeat: (...args) => route(() => system.requestHeartbeat(...args)),
-    requestHeartbeatNow: (...args) => route(() => system.requestHeartbeatNow(...args)),
-    runHeartbeatOnce: (...args) => route(() => system.runHeartbeatOnce(...args)),
     runCommandWithTimeout: (...args) =>
       runWithPluginScope(() => system.runCommandWithTimeout(...args)),
   } satisfies PluginRuntime["system"];

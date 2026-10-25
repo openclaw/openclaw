@@ -333,31 +333,6 @@ function resolveGitHubUserIdentityById(
   return promise.then((identity) => ({ identity, refreshed: true }));
 }
 
-function cloudflareAccessAssertion(params: {
-  authResult: GatewayAuthResult;
-  authConfig?: GatewayAuthConfig;
-  config?: OpenClawConfig;
-  requestHeaders?: IncomingHttpHeaders;
-}): { assertion: string; principal: string } | undefined {
-  const trustedProxy = params.authConfig?.trustedProxy;
-  if (
-    !params.authResult.ok ||
-    params.authResult.method !== "trusted-proxy" ||
-    params.authConfig?.mode !== "trusted-proxy" ||
-    normalizeLowercaseStringOrEmpty(trustedProxy?.userHeader) !== CLOUDFLARE_ACCESS_USER_HEADER ||
-    !trustedProxy?.requiredHeaders?.some(
-      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
-    )
-  ) {
-    return undefined;
-  }
-  const principal = params.authResult.user?.trim();
-  const assertion = firstHeaderValue(
-    params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
-  )?.trim();
-  return principal && assertion ? { assertion, principal } : undefined;
-}
-
 /** An Enterprise GitHub principal is authoritative only after trusted-proxy admission. */
 export function resolveTrustedEnterpriseGitHubAccountId(params: {
   authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
@@ -379,54 +354,6 @@ export function resolveTrustedEnterpriseGitHubAccountId(params: {
     : undefined;
 }
 
-/** Metadata is accepted only from the same trusted hop that asserted the immutable account. */
-function resolveTrustedEnterpriseGitHubMetadata(params: {
-  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
-  authConfig?: GatewayAuthConfig;
-  config?: OpenClawConfig;
-  requestHeaders?: IncomingHttpHeaders;
-}) {
-  const accountId = resolveTrustedEnterpriseGitHubAccountId(params);
-  if (!accountId) {
-    return undefined;
-  }
-  const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
-  const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
-  const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
-  const name =
-    rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
-      ? rawName.trim()
-      : undefined;
-  const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
-  const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
-  let avatarUrl: string | undefined;
-  if (rawAvatar && rawAvatar.length <= 512) {
-    try {
-      const url = new URL(rawAvatar);
-      if (
-        url.origin === `https://${resolveConfiguredGitHubHost(params.config)}` &&
-        url.pathname === `/avatars/u/${accountId}` &&
-        !url.username &&
-        !url.password &&
-        !url.hash
-      ) {
-        avatarUrl = url.href;
-      }
-    } catch {
-      /* Invalid metadata never grants authority. */
-    }
-  }
-  return login
-    ? {
-        accountId,
-        login,
-        ...(email ? { email } : {}),
-        ...(name ? { name } : {}),
-        ...(avatarUrl ? { avatarUrl } : {}),
-      }
-    : undefined;
-}
-
 export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
@@ -445,27 +372,56 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     params.assertCurrent?.();
     return cached;
   };
-  const enterprise = resolveTrustedEnterpriseGitHubMetadata(params);
-  if (enterprise) {
-    return createLazyPromise(async () => {
-      params.assertCurrent?.();
-      const profile = await ensureCanonicalEnterpriseGitHubProfile(
-        params.authResult.user!,
-        enterprise.name ?? enterprise.login,
-        options,
-        { login: enterprise.login, email: enterprise.email },
-      );
-      params.assertCurrent?.();
-      return {
-        profileId: profile.id,
-        updatedAt: profile.updatedAt,
-        enterprise: {
-          accountId: enterprise.accountId,
-          login: enterprise.login,
-          ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
-        },
-      };
-    });
+  // Metadata is accepted only from the same trusted hop that asserted the immutable account.
+  const accountId = resolveTrustedEnterpriseGitHubAccountId(params);
+  if (accountId) {
+    const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
+    const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
+    const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
+    const name =
+      rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
+        ? rawName.trim()
+        : undefined;
+    const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
+    const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
+    let avatarUrl: string | undefined;
+    if (rawAvatar && rawAvatar.length <= 512) {
+      try {
+        const url = new URL(rawAvatar);
+        if (
+          url.origin === `https://${resolveConfiguredGitHubHost(params.config)}` &&
+          url.pathname === `/avatars/u/${accountId}` &&
+          !url.username &&
+          !url.password &&
+          !url.hash
+        ) {
+          avatarUrl = url.href;
+        }
+      } catch {
+        /* Invalid metadata never grants authority. */
+      }
+    }
+    if (login) {
+      return createLazyPromise(async () => {
+        params.assertCurrent?.();
+        const profile = await ensureCanonicalEnterpriseGitHubProfile(
+          params.authResult.user!,
+          name || login,
+          options,
+          { login, email },
+        );
+        params.assertCurrent?.();
+        return {
+          profileId: profile.id,
+          updatedAt: profile.updatedAt,
+          enterprise: {
+            accountId,
+            login,
+            ...(avatarUrl ? { avatarUrl } : {}),
+          },
+        };
+      });
+    }
   }
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
@@ -497,31 +453,46 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     });
   }
 
-  const access = cloudflareAccessAssertion(params);
-  if (!access) {
+  const trustedProxy = params.authConfig?.trustedProxy;
+  if (
+    !params.authResult.ok ||
+    params.authResult.method !== "trusted-proxy" ||
+    params.authConfig?.mode !== "trusted-proxy" ||
+    normalizeLowercaseStringOrEmpty(trustedProxy?.userHeader) !== CLOUDFLARE_ACCESS_USER_HEADER ||
+    !trustedProxy?.requiredHeaders?.some(
+      (header) => normalizeLowercaseStringOrEmpty(header) === CLOUDFLARE_ACCESS_ASSERTION_HEADER,
+    )
+  ) {
+    return undefined;
+  }
+  const principal = params.authResult.user?.trim();
+  const assertion = firstHeaderValue(
+    params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
+  )?.trim();
+  if (!principal || !assertion) {
     return undefined;
   }
   return createLazyPromise(async () => {
     params.assertCurrent?.();
     const accessIdentity = await resolveCloudflareAccessIdentity(
-      access.assertion,
-      access.principal,
+      assertion,
+      principal,
       params.authConfig?.trustedProxy?.cloudflareAccessOidc,
     );
     params.assertCurrent?.();
-    const accountId = accessIdentity.accountId;
-    if (accountId === undefined) {
-      const profile = await ensureCanonicalUserProfileForEmail(access.principal, options);
+    const accessAccountId = accessIdentity.accountId;
+    if (accessAccountId === undefined) {
+      const profile = await ensureCanonicalUserProfileForEmail(principal, options);
       params.assertCurrent?.();
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     }
-    const identityBinding = { accountId, email: access.principal };
+    const identityBinding = { accountId: accessAccountId, email: principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
     const token = githubApiToken(process.env, undefined, "github.com");
     let lookup: GitHubIdentityLookup;
     try {
       lookup = await gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
-        resolveGitHubUserIdentityById(accountId, requestToken, fetch),
+        resolveGitHubUserIdentityById(accessAccountId, requestToken, fetch),
       );
     } catch (error) {
       const cached = await reuseVerifiedBinding(error, identityBinding);
@@ -530,9 +501,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       }
       if (accessIdentity.provider === "oidc") {
         params.assertCurrent?.();
-        const profile = await ensureCanonicalUserProfileForEmail(access.principal, {
+        const profile = await ensureCanonicalUserProfileForEmail(principal, {
           ...options,
-          expectedGitHubAccountId: accountId,
+          expectedGitHubAccountId: accessAccountId,
         });
         params.assertCurrent?.();
         return { profileId: profile.id, updatedAt: profile.updatedAt };
@@ -554,7 +525,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     const profile = await syncCanonicalGitHubIdentity(
       {
         identity: lookup.identity,
-        authenticationAlias: { kind: "email", email: access.principal },
+        authenticationAlias: { kind: "email", email: principal },
         initialDisplayName:
           accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
         preserveEmailProfile: accessIdentity.provider === "oidc",

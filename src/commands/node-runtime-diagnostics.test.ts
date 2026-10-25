@@ -61,7 +61,7 @@ beforeEach(() => {
     status: "unsupported",
     version: "22.23.2",
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
@@ -132,9 +132,9 @@ it("registers CLI and service Node repair findings", async () => {
 
 it.each([
   [
-    { status: "supported", version: "24.15.0", note: "Node 24.15.0: unsupported, capability OK." },
-    "[info] Node 24.15.0:",
-    ["[warning]", "undefined"],
+    { status: "unsupported", version: "24.22.0" },
+    "Gateway service Node 24.22.0 is unsupported.",
+    ["[info]", "undefined"],
   ],
   [
     { status: "probe-failed", error: new Error("unavailable") },

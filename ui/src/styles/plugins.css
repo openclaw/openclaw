@@ -547,24 +547,6 @@
   background: var(--bg-hover);
 }
 
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .clawhub-skill-icon {
   width: 40px;
   height: 40px;
@@ -648,11 +630,7 @@
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-row-message {

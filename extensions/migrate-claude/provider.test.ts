@@ -117,7 +117,57 @@ describe("Claude migration provider", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await testWorkspace.cleanup();
+  });
+
+  it.each([
+    ["project", "project/.mcp.json", true],
+    [".claude", ".claude.json", true],
+    [".claude", "Library/Application Support/Claude/claude_desktop_config.json", true],
+    ["project", "project/.claude/settings.json", false],
+    ["project", "project/.claude/settings.local.json", false],
+    [".claude", ".claude/settings.json", false],
+    [".claude", ".claude/settings.local.json", false],
+  ])("refuses damaged JSON in %s/%s before importing and allows repair", async (dir, file, mcp) => {
+    vi.spyOn(os, "homedir").mockReturnValue(root);
+    const source = path.join(root, dir);
+    const sourceFile = path.join(root, file);
+    await fs.mkdir(source, { recursive: true });
+    await writeFile(sourceFile, "");
+    await writeFile(path.join(source, "CLAUDE.md"), "New instructions.\n");
+    const target = path.join(workspaceDir, "AGENTS.md");
+    await writeFile(target, "Existing instructions.\n");
+    const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    const original = structuredClone(config);
+    const context = contextFor(source, { config, runtime: makeConfigRuntime(config), reportDir });
+    const malformed = Buffer.concat([
+      Buffer.from('{"mcpServers":{"proof":{"command":"node","args":["'),
+      Buffer.from([0xc3, 0x28]),
+      Buffer.from('"]}},"env":{"EXAMPLE":"value"}}'),
+    ]);
+    await fs.writeFile(sourceFile, malformed);
+
+    await expect(provider.apply(context)).rejects.toThrow(
+      `Claude configuration file ${sourceFile}`,
+    );
+    expect(config).toEqual(original);
+    expect(await readText(target)).toBe("Existing instructions.\n");
+    expect(await fs.readFile(sourceFile)).toEqual(malformed);
+    await expect(fs.access(reportDir)).rejects.toThrow();
+
+    const value = "中文 🦞 literal �";
+    await writeJson(sourceFile, {
+      mcpServers: { proof: { command: "node", args: [value] } },
+      env: { EXAMPLE: value },
+    });
+    const result = await provider.apply(context);
+    expect(result.summary.errors).toBe(0);
+    if (mcp) {
+      expect(config.mcp?.servers?.proof).toEqual({ command: "node", args: [value] });
+    } else {
+      expect(result.items.some((item) => item.kind === "manual")).toBe(true);
+    }
   });
 
   it.each(instructionSources)(
@@ -307,13 +357,7 @@ describe("Claude migration provider", () => {
   });
 
   it("discovers a user-configured Claude Code auto-memory directory", async () => {
-    const source = path.join(root, ".claude");
-    const customMemory = path.join(root, "custom-memory");
-    await writeFile(
-      path.join(source, "settings.json"),
-      JSON.stringify({ autoMemoryDirectory: customMemory }),
-    );
-    await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
+    const { source, directory: customMemory } = await memoryFixture();
 
     const plan = await provider.plan(contextFor(source, { itemKinds: ["memory"] }));
 
@@ -593,15 +637,11 @@ describe("Claude migration provider", () => {
   it.each([false, true])(
     "reports a removed command source without changing its generated skill (overwrite: %s)",
     async (overwrite) => {
-      const source = path.join(root, "project");
-      const sourceFile = path.join(source, ".claude", "commands", "ship.md");
-      const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
-      const targetFile = path.join(targetDir, "SKILL.md");
-      await writeFile(sourceFile, "Ship safely.\n");
+      const { sourceFile, targetDir, targetFile } = await commandFixture();
       if (overwrite) {
         await writeFile(targetFile, "# Local skill\n");
       }
-      const context = contextFor(source, {
+      const context = contextFor(projectDir, {
         reportDir,
         overwrite,
       });

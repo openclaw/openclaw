@@ -4,9 +4,14 @@ import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/h
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createModelContextPairing, PREFIX_TOOL_OWNER } from "./session-model-context-pairing.js";
 
-function call(id: string) {
+function call(id: string, count = 1) {
   return makeAgentAssistantMessage({
-    content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+    content: Array.from({ length: count }, (_, index) => ({
+      type: "toolCall",
+      id: index === 0 ? id : `${id}-${index}`,
+      name: "read",
+      arguments: {},
+    })),
     stopReason: "toolUse",
   });
 }
@@ -41,12 +46,10 @@ describe("bounded model-context pairing", () => {
   });
 
   it("accepts local results after unresolved-prefix overflow, including reused IDs", () => {
-    const older = call("X");
+    const older = call("X", 257);
     const unrelated = call("Z");
     const recent = call("Y");
-    const pairing = createModelContextPairing([older, unrelated, recent], [recent], {
-      maxOccurrences: 1,
-    });
+    const pairing = createModelContextPairing([older, unrelated, recent], [recent]);
     const recentResult = result("Y");
     expect(pairing.append([recentResult])).toBe(true);
     const next = call("X");
@@ -57,12 +60,10 @@ describe("bounded model-context pairing", () => {
   });
 
   it("requires recovery when a new displaced result could become falsely unambiguous", () => {
-    const older = call("X");
+    const older = call("X", 257);
     const recent = call("X");
     const other = call("Y");
-    const pairing = createModelContextPairing([older, recent, other], [recent, other], {
-      maxOccurrences: 0,
-    });
+    const pairing = createModelContextPairing([older, recent, other], [recent, other]);
 
     expect(pairing.append([result("X")])).toBe(false);
   });
@@ -105,10 +106,10 @@ describe("bounded model-context pairing", () => {
   });
 
   it("recovers an oversized frame but resumes local pairing at the next frame", () => {
-    const oversized = call("X".repeat(4096));
-    const pairing = createModelContextPairing([oversized], [], { maxBytes: 1024 });
+    const oversized = call("X".repeat(128 * 1024));
+    const pairing = createModelContextPairing([oversized], []);
 
-    expect(pairing.append([result("X".repeat(4096))])).toBe(false);
+    expect(pairing.append([result("X".repeat(128 * 1024))])).toBe(false);
     const next = call("next");
     const nextResult = result("next");
     expect(pairing.append([next, nextResult])).toBe(true);
@@ -167,9 +168,9 @@ describe("bounded model-context pairing", () => {
   });
 
   it("forgets fulfilled overflow when the next tool frame starts", () => {
-    const id = "X".repeat(4096);
+    const id = "X".repeat(128 * 1024);
     const next = call("next");
-    const pairing = createModelContextPairing([call(id), result(id)], [], { maxBytes: 1024 });
+    const pairing = createModelContextPairing([call(id), result(id)], []);
     const orphan = result("unrelated");
 
     expect(pairing.append([next, orphan])).toBe(true);
@@ -178,9 +179,7 @@ describe("bounded model-context pairing", () => {
 
   it("does not recover unknown prefix ownership for a result without an ID", () => {
     const next = call("next");
-    const pairing = createModelContextPairing([call("older"), next], [next], {
-      maxOccurrences: 0,
-    });
+    const pairing = createModelContextPairing([call("older", 257), next], [next]);
     const orphan = { ...result(""), toolName: "another_tool" };
 
     expect(pairing.append([orphan])).toBe(true);

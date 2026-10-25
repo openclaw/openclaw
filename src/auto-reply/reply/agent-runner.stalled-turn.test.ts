@@ -42,7 +42,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createReplyParams } from "./test-helpers.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -107,7 +107,6 @@ const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
 async function createStalledRun(
   options: {
-    isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     queuedFollowupReplyDisposition?: FollowupRun["queuedFollowupReplyDisposition"];
     originatingChannel?: string;
@@ -143,7 +142,7 @@ async function createStalledRun(
   followupRun.userTurnTranscriptRecorder = recorder;
   const admitted = await admitReplyTurn({
     ...transcriptTarget,
-    kind: options.isHeartbeat ? "heartbeat" : "visible",
+    kind: "visible",
     resetTriggered: false,
   });
   if (admitted.status !== "owned") {
@@ -152,39 +151,30 @@ async function createStalledRun(
   const operation = admitted.operation;
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
-  const run = runReplyAgent({
-    commandBody: "what is good at the hotel restaurant?",
-    followupRun,
-    queueKey,
-    sessionKey: queueKey,
-    storePath: transcriptTarget.storePath,
-    sessionEntry,
-    sessionStore: { [queueKey]: sessionEntry },
-    resolvedQueue: settings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    replyOperation: operation,
-    opts: {
-      [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
-    },
-    typing: createMockTypingController(),
-    sessionCtx: {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      ChatType: "direct",
-      MessageSid: "msg-stalled",
-    } as unknown as TemplateContext,
-    defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  });
+  const run = runReplyAgent(
+    createReplyParams(followupRun, {
+      commandBody: "what is good at the hotel restaurant?",
+      queueKey,
+      sessionKey: queueKey,
+      storePath: transcriptTarget.storePath,
+      sessionEntry,
+      sessionStore: { [queueKey]: sessionEntry },
+      resolvedQueue: settings,
+      replyOperation: operation,
+      opts: {
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "12345",
+        ChatType: "direct",
+        MessageSid: "msg-stalled",
+      } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      typingMode: "instant",
+    }),
+  );
   return { operation, run, runState, recorder, transcriptTarget };
 }
 
@@ -272,8 +262,18 @@ describe("runReplyAgent stalled turn continuation", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = await createStalledRun();
+  it("queues one transcript-only recovery without transferring personal authoring authority", async () => {
+    const stalled = await createStalledRun({
+      skillLibraryAuthoring: {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: () => {
+          throw new Error("Personal authoring cannot move to a replacement run.");
+        },
+        invoke: vi.fn(),
+      },
+    });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(true);
@@ -286,6 +286,13 @@ describe("runReplyAgent stalled turn continuation", () => {
     const recovery = drainedRuns.mock.calls[0]?.[0];
     expect(recovery?.prompt).toContain("previous turn stopped making progress");
     await expectTranscriptOnlyRecovery(stalled, recovery);
+    expect(recovery?.disableTools).toBeUndefined();
+    const authoring = recovery?.run.skillLibraryAuthoring;
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
   });
 
   it.each(["followup", "collect"] as const)(
@@ -508,34 +515,6 @@ describe("runReplyAgent stalled turn continuation", () => {
     ]);
   });
 
-  it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
-    const stalled = await createStalledRun({
-      skillLibraryAuthoring: {
-        target: "personal",
-        defaultTarget: "workspace",
-        multipleProfiles: true,
-        bind: () => {
-          throw new Error("Personal authoring cannot move to a replacement run.");
-        },
-        invoke: vi.fn(),
-      },
-    });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.disableTools).toBeUndefined();
-    const authoring = recovery?.run.skillLibraryAuthoring;
-    // Personal-only means the Workshop cannot fall back to the workspace tool.
-    expect(authoring?.defaultTarget).toBe("personal");
-    expect(() => authoring?.bind({} as never)).not.toThrow();
-    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
-      code: "AUTHORITY_EXPIRED",
-    });
-  });
-
   it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
     const stalled = await createStalledRun({
       queuedFollowupReplyDisposition: { kind: "drop", reason: "source-unavailable" },
@@ -546,15 +525,5 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
     await settleStalledOwner(stalled);
     expect(drainedRuns).not.toHaveBeenCalled();
-  });
-
-  it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = await createStalledRun({ isHeartbeat: true });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn).toBeUndefined();
-
-    await settleStalledOwner(stalled);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 });

@@ -9,7 +9,10 @@ import {
   settleCliSessionResult,
 } from "../../agents/cli-session-store.js";
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import {
+  isFallbackAttempt,
+  resolveDelegationCapability,
+} from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
 import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
@@ -185,6 +188,7 @@ export async function runCliFallbackCandidate(
         cliSessionBinding,
         assertSettlementCurrent,
         settleResult,
+        persistStoppedFirstSession,
       }) => {
         let sessionEntry = initialSessionEntry;
         const clearCliBinding = () =>
@@ -199,20 +203,35 @@ export async function runCliFallbackCandidate(
             storePath: turn.storePath,
             activeSessionEntry: sessionEntry,
           });
+        const scheduledInference = params.scheduledInference;
         // The CLI owner must see explicit pins before provider scoping can discard them.
-        const authProfileId = allowCliAuthProfileForwarding
-          ? await resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: params.cliExecutionProvider,
-              authProfileProvider: params.provider,
-              config: params.runtimeConfig,
-              agentDir: params.candidateRun.agentDir,
-              selected: params.candidateRun,
-              sessionBinding: cliSessionBinding,
-            })
-          : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
-              config: params.runtimeConfig,
-            }).authProfileId;
-        if (turn.followupRun.run.scheduledAutomation && authProfileId) {
+        // A recorded account runs only when this backend forwards exactly that account.
+        const authProfileId = scheduledInference
+          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
+              allowCliAuthProfileForwarding
+                ? await resolveCliExecutionAuthProfileId({
+                    cliExecutionProvider: params.cliExecutionProvider,
+                    authProfileProvider: params.provider,
+                    config: params.runtimeConfig,
+                    agentDir: params.candidateRun.agentDir,
+                    selected,
+                    sessionBinding: cliSessionBinding,
+                  })
+                : undefined,
+            )
+          : allowCliAuthProfileForwarding
+            ? await resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: params.cliExecutionProvider,
+                authProfileProvider: params.provider,
+                config: params.runtimeConfig,
+                agentDir: params.candidateRun.agentDir,
+                selected: params.candidateRun,
+                sessionBinding: cliSessionBinding,
+              })
+            : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
+                config: params.runtimeConfig,
+              }).authProfileId;
+        if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           const refusal = new Error(
             "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
           );
@@ -417,12 +436,11 @@ export async function runCliFallbackCandidate(
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
-            // Candidate zero is the primary attempt; later candidates are
-            // fallbacks. Carry the runner-owned fact instead of inferring from
-            // this shared dispatch path, or primary CLI runs lose delegation.
+            // Carry the runner-owned facts instead of inferring from this shared
+            // dispatch path, or primary CLI runs lose delegation.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: turn.followupRun.run.inputProvenance,
                 disableTools: turn.opts?.disableTools,
                 toolsAllow: turn.opts?.toolsAllow,
@@ -450,8 +468,32 @@ export async function runCliFallbackCandidate(
             cliSessionBinding,
             forkCliSessionOnResume,
             ...forkRunParams,
+            // Room events and preserved provenance never publish a new native session.
+            ...(turn.followupRun.currentInboundEventKind === "room_event" ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(
+              turn.followupRun.run.inputProvenance,
+            )
+              ? {}
+              : {
+                  persistStoppedFirstCliSession: (binding) =>
+                    persistStoppedFirstSession({
+                      binding,
+                      expectedSession: sessionEntry,
+                      sessionStore: turn.activeSessionStore,
+                    }),
+                }),
             authProfileId,
-            nativeAuthOnly: turn.followupRun.run.scheduledAutomation ? true : undefined,
+            // The CLI owner rechecks this after awaits and before credential/transport effects.
+            assertCurrent: scheduledInference
+              ? () => {
+                  assertSettlementCurrent();
+                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                }
+              : undefined,
+            nativeAuthOnly:
+              turn.followupRun.run.scheduledAutomation && !params.scheduledInference
+                ? true
+                : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

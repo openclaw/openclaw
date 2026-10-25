@@ -1,9 +1,19 @@
 import type { SessionConfig } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  buildCredentialSafetyPrompt,
+  buildDelegationGuidanceSection,
+  buildHarnessVisibleReplyGuidance,
+  buildSkillWorkshopPromptSection,
   resolveAgentHarnessBeforePromptBuildResult,
+  resolveMainSessionDelegationMode,
   runAgentHarnessLlmInputHook,
+  SKILL_WORKSHOP_TOOL_NAME,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  normalizeUniqueStringEntries,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readResolvedAttemptPath, type resolvePoolAcquire } from "./attempt-config.js";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 import {
@@ -14,12 +24,15 @@ import {
 import type { AttemptParamsLike, CopilotAgentEndHookParams, ModelRef } from "./attempt-types.js";
 import { createHooksBridge } from "./hooks-bridge.js";
 import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
-import { buildCopilotPromptGuidance } from "./prompt-guidance.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 import { shouldForceCopilotMessageTool, type createCopilotToolBridge } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { loadCopilotWorkspaceInstructions } from "./workspace-bootstrap.js";
+
+const COPILOT_HARNESS_IDENTITY =
+  "You are a personal agent running inside OpenClaw. Your available OpenClaw capabilities are policy-filtered for this turn; use only the exact tools exposed to you.";
+
 export async function createCopilotSessionSetup(params: {
   attempt: AttemptParamsLike;
   byokProxy: Awaited<ReturnType<typeof import("./byok-proxy.js").createCopilotByokProxy>>;
@@ -86,13 +99,60 @@ export async function createCopilotSessionSetup(params: {
       developerInstructions: {
         build: ({ toolsAllow }) => {
           promptPolicyResult = promptToolPolicy.apply({ toolsAllow, forceToolNames });
-          return buildCopilotPromptGuidance({
-            attempt: input,
-            callableToolNames: promptPolicyResult.callableToolNames,
-            toolSchemaDirectoryPrompt: promptPolicyResult.toolSchemaDirectoryPrompt,
-            requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
-            workspaceBootstrapInstructions,
-          });
+          if (isRawCopilotModelRun(input)) {
+            return undefined;
+          }
+          const callableTools = new Set(
+            normalizeUniqueStringEntries(promptPolicyResult.callableToolNames),
+          );
+          const hasSessionsSpawn = callableTools.has("sessions_spawn");
+          const isMinimal = input.promptMode === "minimal";
+          const extraSystemPrompt = readNonEmptyString(input.extraSystemPrompt)?.trim();
+          const delegationGuidance =
+            input.disableTools !== true && input.delegationCapability !== "report_only"
+              ? buildDelegationGuidanceSection({
+                  mode: resolveMainSessionDelegationMode({
+                    config: input.config,
+                    agentId: input.agentId,
+                    sessionKey: input.sessionKey,
+                  }),
+                  isMinimal,
+                  hiddenDelegationTool: hasSessionsSpawn ? "`sessions_spawn`" : "",
+                  hasVisibleSessionSpawn: hasSessionsSpawn,
+                  hasSessionsYield: callableTools.has("sessions_yield"),
+                  hasSubagentsList: callableTools.has("subagents"),
+                  hasSessionsSend: callableTools.has("sessions_send"),
+                }).join("\n")
+              : undefined;
+          const sections = [
+            COPILOT_HARNESS_IDENTITY,
+            promptPolicyResult.toolSchemaDirectoryPrompt,
+            callableTools.has(SKILL_WORKSHOP_TOOL_NAME)
+              ? buildSkillWorkshopPromptSection().join("\n")
+              : undefined,
+            delegationGuidance,
+            buildHarnessVisibleReplyGuidance({
+              sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+              messageToolAvailable: callableTools.has("message"),
+              currentConversation: {
+                agentSessionKey: input.sessionKey,
+                currentChannelProvider: input.messageChannel ?? input.messageProvider,
+                currentChannelId: input.currentChannelId,
+                currentMessagingTarget: input.currentMessagingTarget,
+              },
+              requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
+            }),
+            buildCredentialSafetyPrompt({
+              controlToolsAvailable:
+                input.disableTools !== true &&
+                (callableTools.has("openclaw") || callableTools.has("gateway")),
+            }),
+            workspaceBootstrapInstructions?.trim(),
+            extraSystemPrompt
+              ? `${isMinimal ? "## Subagent Context" : "## Conversation Context"}\n${extraSystemPrompt}`
+              : undefined,
+          ];
+          return sections.filter((section) => section?.trim()).join("\n\n") || undefined;
         },
       },
       messages,

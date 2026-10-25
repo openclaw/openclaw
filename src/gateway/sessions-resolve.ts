@@ -268,7 +268,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   };
   const configuredAgentIds = new Set(listAgentIds(cfg));
   const prepareAgentChecks = (
-    entries: readonly (readonly [string, SessionEntry, ...unknown[]])[],
+    entries: Array<[string, SessionEntry]>,
     getTarget: ReturnType<typeof prepare>["getTarget"],
   ) => {
     const facts = new Map<SessionEntry, SessionEntry["acp"]>();
@@ -466,9 +466,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       }
       if (ownerTaggedMatches.size > 1) {
         return invalidSessionRequest(
-          `Multiple sessions found for sessionId: ${sessionId} (${[...ownerTaggedMatches.values()]
-            .map((match) => `${match.agentId}:${match.key}`)
-            .join(", ")})`,
+          `Multiple sessions found for sessionId: ${sessionId} (${Array.from(ownerTaggedMatches.values(), (match) => `${match.agentId}:${match.key}`).join(", ")})`,
         );
       }
       const ownerTaggedMatch = ownerTaggedMatches.values().next().value;

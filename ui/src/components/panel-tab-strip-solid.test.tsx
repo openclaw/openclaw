@@ -32,6 +32,7 @@ function mountStrip(
 }
 afterEach(() => {
   document.documentElement.removeAttribute("dir");
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -126,15 +127,49 @@ it.each(["ltr", "rtl"])("uses the same %s edge for drag preview and reorder", (d
 });
 
 it("releases measurement observers on disposal", () => {
-  const disconnected = vi.fn();
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const observed = new Set<Element>();
+  const disconnected = vi.fn(() => observed.clear());
   const observer = vi.fn(function () {
-    return { observe() {}, unobserve() {}, disconnect: disconnected };
+    return {
+      observe: (target: Element) => observed.add(target),
+      unobserve: (target: Element) => observed.delete(target),
+      disconnect: disconnected,
+    };
   });
   vi.stubGlobal("ResizeObserver", observer);
   const view = mountStrip();
+  flush();
+  vi.advanceTimersToNextFrame();
   const initialObservers = observer.mock.calls.length;
   expect(initialObservers).toBeGreaterThan(0);
+  const firstTargets = new Set(observed);
+  const other = mountStrip();
+  flush();
+  vi.advanceTimersToNextFrame();
+  const otherTargets = new Set([...observed].filter((target) => !firstTargets.has(target)));
+  expect(otherTargets.size).toBeGreaterThan(0);
   view.unmount();
+  expect(observed).toEqual(otherTargets);
+  expect(disconnected).not.toHaveBeenCalled();
+
+  const label = other.query(".tabstrip-tab__label")!;
+  Object.defineProperties(label, {
+    scrollWidth: { configurable: true, value: 100 },
+    clientWidth: { configurable: true, value: 20 },
+  });
+  other.query(".tabstrip")!.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersToNextFrame();
+  expect(label.classList.contains("is-overflowing")).toBe(true);
+
+  other.query(".tabstrip")!.dispatchEvent(new Event("scroll"));
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  other.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(observed.size).toBe(0);
   expect(observer).toHaveBeenCalledTimes(initialObservers);
   expect(disconnected).toHaveBeenCalledTimes(initialObservers);
+  vi.advanceTimersToNextFrame();
+  expect(observed.size).toBe(0);
+  expect(observer).toHaveBeenCalledTimes(initialObservers);
 });

@@ -23,6 +23,7 @@ import {
   createNativeModelSourceFixture,
   childTurnCompletedNotification,
   directSpawnItem,
+  itemNotification as parentItemNotification,
   notifyChildStarted,
   successfulSendInputOutput,
   turnStartedNotification,
@@ -144,10 +145,6 @@ function childStarted(id: string): CodexServerNotification {
   };
 }
 
-function childClaimed(item: JsonObject, turnId: string): CodexServerNotification {
-  return { method: "item/completed", params: { threadId: "thread-1", turnId, item } };
-}
-
 describe("runCodexAppServerAttempt native hook relay retention", () => {
   beforeEach(() => {
     // Retention owns this clock; cold preparation must not consume the execution budget.
@@ -217,14 +214,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     first.bindTurn("parent-a");
     await notifyChildStarted(client);
     await client.notify(turnStartedNotification("child-a"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-a",
-        item: directSpawnItem("v1", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(
+      parentItemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "parent-a"),
+    );
     const second = await codexNativeSubagentMonitorRuntime.register({
       client: client.client,
       parentThreadId: "parent-thread",
@@ -373,12 +365,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
       // A stock V1 successful steer reports an opaque submission ID while the
       // receiver keeps its old native turn and lineage, including after a hook race.
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-b",
-          item: {
+      await client.notify(
+        parentItemNotification(
+          {
             type: "collabAgentToolCall",
             tool: "sendInput",
             status: "completed",
@@ -386,8 +375,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
             senderThreadId: "parent-thread",
             receiverThreadIds: ["child-thread"],
           },
-        },
-      });
+          "parent-b",
+        ),
+      );
       await expect(codexNativeSubagentMonitorRuntime.captureModelSource(request)).rejects.toThrow(
         "same admitted model source",
       );
@@ -460,20 +450,18 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       await expect(
         invoke("parent-a", "incompatible-pending", "child-thread", "collaborationfollowup_task"),
       ).rejects.toThrow("same admitted model source");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-b",
-          item: {
+      await client.notify(
+        parentItemNotification(
+          {
             type: "subAgentActivity",
             kind: "interacted",
             id: "followup-after-a",
             agentThreadId: "child-thread",
             agentPath: "/root/child-thread",
           },
-        },
-      });
+          "parent-b",
+        ),
+      );
       await client.notify(turnStartedNotification("child-b"));
       const next = await codexNativeSubagentMonitorRuntime.captureModelSource({
         ...request,
@@ -713,7 +701,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         );
         await expect(terminalPending).rejects.toThrow("Codex child turn completed");
         await harness.notify(childStarted(childThreadId));
-        await harness.notify(childClaimed(childClaim, "wrong-turn"));
+        await harness.notify(parentItemNotification(childClaim, "wrong-turn", "thread-1"));
         if (version === "v1") {
           await harness.notify(
             itemNotification("item/completed", { ...childClaim, status: "failed" }),
@@ -751,7 +739,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           expect.objectContaining({
             customType: "openclaw.sessions_yield",
             content:
-              "Waiting for child\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+              "Waiting for child\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event. This was an agent-requested pause, not a user interruption. If Codex recorded a <turn_aborted> marker for this yield, its user-interruption wording describes OpenClaw's turn/interrupt mechanism, not a user request to stop or cancel the task. Continue the pending task when the expected follow-up arrives.]",
             display: false,
             details: { source: "sessions_yield", message: "Waiting for child" },
           }),

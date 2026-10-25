@@ -14,14 +14,10 @@ describe("X GitHub verification configuration", () => {
   it("is off by default and inherits individual GitHub settings through account overrides", () => {
     expect(resolveXAccount({}).config.verifiedFromGitHub).toBeUndefined();
     const token = { source: "env", provider: "default", id: "X_GITHUB_TOKEN" } as const;
-    const cfg: OpenClawConfig = {
-      channels: {
-        x: {
-          verifiedFromGitHub: { repo: "openclaw/openclaw", refreshMinutes: 60, token },
-          accounts: { team: { verifiedFromGitHub: { minPermission: "maintain" } } },
-        },
-      },
-    };
+    const cfg = xConfig({
+      verifiedFromGitHub: { repo: "openclaw/openclaw", refreshMinutes: 60, token },
+      accounts: { team: { verifiedFromGitHub: { minPermission: "maintain" } } },
+    });
     expect(XConfigSchema.safeParse(cfg.channels?.x).success).toBe(true);
     expect(resolveXAccount(cfg, "team").config.verifiedFromGitHub).toEqual({
       repo: "openclaw/openclaw",

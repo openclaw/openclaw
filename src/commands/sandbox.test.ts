@@ -146,22 +146,20 @@ describe("sandboxListCommand", () => {
 });
 
 describe("sandboxRecreateCommand", () => {
+  const missingScope = "Choose the sandbox scope: --all, --session <key>, or --agent <id>";
   const scopes = [
     { browser: false, command: "sandbox list" },
     { browser: true, command: "sandbox list --browser" },
   ];
   it.each([
-    ...scopes.map(({ browser, command }) => ({
-      options: { browser },
-      message: "Choose the sandbox scope: --all, --session <key>, or --agent <id>",
-      advice: `${command} to inspect active runtimes first.`,
-    })),
-    {
-      options: { all: true, session: "test" },
-      message: "Choose only one sandbox scope: --all, --session, or --agent.",
-      advice: undefined,
-    },
-  ])("rejects invalid scopes: $options", async ({ options, message, advice }) => {
+    [{}, missingScope, "sandbox list to inspect active runtimes first."],
+    [{ browser: true }, missingScope, "sandbox list --browser to inspect active runtimes first."],
+    [
+      { all: true, session: "test" },
+      "Choose only one sandbox scope: --all, --session, or --agent.",
+      undefined,
+    ],
+  ] as const)("rejects invalid scopes: %j", async (options, message, advice) => {
     await recreate(options);
     expectOutput("error", message);
     if (advice) {
@@ -172,19 +170,14 @@ describe("sandboxRecreateCommand", () => {
     expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
   });
   it.each([
-    {
-      filter: { session: "target-session" },
-      keys: ["target-session", "other-session"],
-      removed: ["target-session"],
-      force: false,
-    },
-    {
-      filter: { agent: "work" },
-      keys: ["agent:work", "agent:work:subtask", "test-session"],
-      removed: ["agent:work", "agent:work:subtask"],
-      force: true,
-    },
-  ])("filters $filter with force=$force", async ({ filter, keys, removed, force }) => {
+    [{ session: "target-session" }, ["target-session", "other-session"], ["target-session"], false],
+    [
+      { agent: "work" },
+      ["agent:work", "agent:work:subtask", "test-session"],
+      ["agent:work", "agent:work:subtask"],
+      true,
+    ],
+  ] as const)("filters %j", async (filter, keys, removed, force) => {
     const containers = keys.map((sessionKey) =>
       createContainer({ sessionKey, containerName: sessionKey }),
     );

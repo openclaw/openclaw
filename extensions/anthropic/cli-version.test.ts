@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../test-support/command-result.test-support.js";
 import { makeModel } from "./model-contract-cases.test-support.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
@@ -32,23 +33,12 @@ const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Parameters<StreamFn>[1];
 const oauthOptions = { apiKey: "sk-ant-oat01-synthetic", headers: { "x-test": "preserved" } };
-
-function versionResult(stdout: string, overrides: Partial<CommandResult> = {}): CommandResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
+const executionContext = { workspaceDir: "/synthetic", provider: "claude-cli", modelId: model.id };
 
 function register(
   runCommandWithTimeout = vi
     .fn<CommandRunner>()
-    .mockResolvedValue(versionResult("2.1.400 (Claude Code)")),
+    .mockResolvedValue(commandResult({ stdout: "2.1.400 (Claude Code)" })),
 ) {
   const registerProvider = vi.fn<OpenClawPluginApi["registerProvider"]>();
   const registerCliBackend = vi.fn<OpenClawPluginApi["registerCliBackend"]>();
@@ -65,7 +55,19 @@ function register(
   if (!provider || !backend) {
     throw new Error("Missing Anthropic registration");
   }
-  return { provider, backend, readRuntime, runCommandWithTimeout };
+  return {
+    provider,
+    backend,
+    readRuntime,
+    runCommandWithTimeout,
+    prepare: () => backend.prepareExecution?.(executionContext),
+    args: () =>
+      backend.resolveExecutionArgs?.({
+        ...executionContext,
+        useResume: false,
+        baseArgs: backend.config.args ?? [],
+      }),
+  };
 }
 
 function capture(
@@ -122,14 +124,15 @@ it.each([
   const runner = vi
     .fn<CommandRunner>()
     .mockResolvedValue(
-      versionResult(stdout ?? "", { outputLimitExceeded: mode === "output-limit" }),
+      commandResult({ stdout: stdout ?? "", outputLimitExceeded: mode === "output-limit" }),
     );
   if (mode === "missing") {
     vi.mocked(resolveClaudeTerminalExecutable).mockReturnValue(undefined);
   } else if (mode === "command failure") {
     runner.mockRejectedValue(new Error("synthetic launch failure"));
   }
-  const request = capture(register(runner).provider);
+  const fixture = register(runner);
+  const request = capture(fixture.provider);
   await request.run();
   await request.run();
   expect(request.base.mock.calls.map((call) => call[2]?.headers)).toEqual([
@@ -138,6 +141,8 @@ it.each([
   ]);
   expect(runner).toHaveBeenCalledTimes(mode === "missing" ? 0 : 1);
   expect(resolveClaudeTerminalExecutable).toHaveBeenCalledOnce();
+  await fixture.prepare();
+  expect(fixture.args()).not.toContain("--exclude-dynamic-system-prompt-sections");
   if (warning) {
     expect(subsystemLogMock.warn).toHaveBeenCalledOnce();
     const message = String(subsystemLogMock.warn.mock.calls[0]?.[0]);
@@ -175,15 +180,14 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   expect(fixture.readRuntime).not.toHaveBeenCalled();
   const normal = capture(fixture.provider);
   const simple = capture(fixture.provider, "wrapSimpleCompletionStreamFn");
+  const prepared = vi.fn();
   const executions = [
-    normal.run(),
-    simple.run(),
-    fixture.backend.prepareExecution?.({
-      workspaceDir: "/synthetic",
-      provider: "claude-cli",
-      modelId: model.id,
-    }),
-  ].map((execution) => Promise.resolve(execution));
+    Promise.resolve(normal.run()),
+    Promise.resolve(simple.run()),
+    ...[fixture.prepare(), fixture.prepare()].map((result) =>
+      Promise.resolve(result).then(prepared),
+    ),
+  ];
   await Promise.resolve();
   expect(fixture.runCommandWithTimeout).toHaveBeenCalledOnce();
   expect(resolveClaudeTerminalExecutable).toHaveBeenCalledWith(process.env, {
@@ -191,22 +195,16 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   });
   expect(normal.base).not.toHaveBeenCalled();
   expect(simple.base).not.toHaveBeenCalled();
-  pending.resolve(versionResult("2.1.400 (Claude Code)"));
+  expect(prepared).not.toHaveBeenCalled();
+  pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));
   await Promise.all(executions);
+  expect(prepared).toHaveBeenCalledTimes(2);
   expect(normal.headers()).toEqual({
     ...oauthOptions.headers,
     "user-agent": "claude-cli/2.1.400",
   });
   expect(simple.headers()?.["user-agent"]).toBe("claude-cli/2.1.400");
-  expect(
-    fixture.backend.resolveExecutionArgs?.({
-      workspaceDir: "/synthetic",
-      provider: "claude-cli",
-      modelId: model.id,
-      useResume: false,
-      baseArgs: fixture.backend.config.args ?? [],
-    }),
-  ).toContain("--exclude-dynamic-system-prompt-sections");
+  expect(fixture.args()).toContain("--exclude-dynamic-system-prompt-sections");
 });
 
 it("bounds requests even while process cleanup is pending and caches the fallback", async () => {
@@ -230,7 +228,7 @@ it("bounds requests even while process cleanup is pending and caches the fallbac
   });
   await request.run();
   expect(runner).toHaveBeenCalledOnce();
-  pending.resolve(versionResult("2.1.400 (Claude Code)"));
+  pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));
   await request.run();
   expect(request.headers(2)).toEqual(oauthOptions.headers);
 });

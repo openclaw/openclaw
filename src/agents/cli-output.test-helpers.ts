@@ -1,6 +1,5 @@
 import type { CliJsonlStreamingParserOptions } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import { parseCliOutput } from "./cli-output.js";
 
 export const localCliBackend: CliJsonlStreamingParserOptions["backend"] = {
   command: "local-cli",
@@ -8,6 +7,12 @@ export const localCliBackend: CliJsonlStreamingParserOptions["backend"] = {
   jsonlDialect: "claude-stream-json",
   sessionIdFields: ["session_id"],
 };
+
+export function createClaudeBackend(
+  command = "local-cli",
+): CliJsonlStreamingParserOptions["backend"] {
+  return { ...localCliBackend, command, sessionIdFields: ["session_id"] };
+}
 
 export function createPluginParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
   return createCliJsonlStreamingParser({
@@ -18,18 +23,6 @@ export function createPluginParser(overrides: Partial<CliJsonlStreamingParserOpt
   });
 }
 
-export function parseCliJsonl(
-  raw: string,
-  backend: CliJsonlStreamingParserOptions["backend"] = {
-    command: "claude",
-    output: "jsonl",
-    sessionIdFields: ["session_id"],
-  },
-  providerId = "claude-cli",
-) {
-  return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
-}
-
 export function finishCliFrames(
   parser: ReturnType<typeof createClaudeParser>,
   ...frames: unknown[]
@@ -38,9 +31,6 @@ export function finishCliFrames(
   parser.finish();
 }
 
-export function messageFrame(type: string, content: unknown[], parent_tool_use_id?: string) {
-  return { type, parent_tool_use_id, message: { role: type, content } };
-}
 export function claudeMessageStart(id?: string) {
   return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
 }
@@ -129,4 +119,8 @@ export function claudeInputJsonDelta(partialJson: string, index?: number) {
 
 export function claudeTextDelta(text: string, index?: number | string) {
   return indexedEvent("content_block_delta", index, { delta: { type: "text_delta", text } });
+}
+
+export function createGeminiBackend(): CliJsonlStreamingParserOptions["backend"] {
+  return { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" };
 }

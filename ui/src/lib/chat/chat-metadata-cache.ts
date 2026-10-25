@@ -76,6 +76,7 @@ export type ChatMetadataEntry = {
 
 export type ChatMetadataInvalidation = {
   sessionOnly?: boolean;
+  refreshSessionFacts?: boolean;
   retireCatalog?: boolean;
   matchesCatalog?: (scope: ChatMetadataParams) => boolean;
   commandsChanged?: boolean;
@@ -99,7 +100,10 @@ export function invalidateChatMetadataStore(
   scope?: ChatMetadataParams,
   sessionDefaults?: UiSessionDefaultsHost,
   catalogInvalidation: ModelCatalogInvalidation | "preserve" = "refresh",
-  commandsChanged = true,
+  {
+    commandsChanged = true,
+    refreshSessionFacts,
+  }: Pick<ChatMetadataInvalidation, "commandsChanged" | "refreshSessionFacts"> = {},
 ): void {
   // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
   let matchesCatalog: ChatMetadataInvalidation["matchesCatalog"];
@@ -116,6 +120,7 @@ export function invalidateChatMetadataStore(
   }
   chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
     commandsChanged,
+    refreshSessionFacts,
     matchesCatalog: commandsChanged ? undefined : matchesCatalog,
     retireCatalog: catalogInvalidation === "clear",
   });

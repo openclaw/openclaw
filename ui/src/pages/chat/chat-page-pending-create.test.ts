@@ -8,6 +8,7 @@ vi.mock("./chat-pane.tsx", async () => {
   return { ChatPaneView: mockChatPagePane };
 });
 
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -73,12 +74,9 @@ it.each([
     Object.assign(context, { theme: { subscribe: () => () => undefined } });
     Object.assign(context.agents, { subscribe: () => () => undefined });
     Object.assign(context.gateway.snapshot, { phase: "connected" });
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    context.agents.state.agentsList = makeBootRoster({
       agents: [{ id: "main", name: "Previous agent" }],
-    };
+    });
     page.data = { sessionKey: previousKey };
     document.body.append(page);
     await settleChatPage(page);
@@ -157,12 +155,9 @@ it.each(["rollback", "admission"] as const)(
     Object.assign(context, { theme: { subscribe: () => () => undefined } });
     Object.assign(context.agents, { subscribe: () => () => undefined });
     Object.assign(context.gateway.snapshot, { phase: "connected" });
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    context.agents.state.agentsList = makeBootRoster({
       agents: [{ id: "main", name: "Previous agent" }],
-    };
+    });
     const previousRoute = { sessionKey: previousKey };
     page.data = previousRoute;
     document.body.append(page);

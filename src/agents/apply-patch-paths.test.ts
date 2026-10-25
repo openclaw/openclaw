@@ -5,12 +5,25 @@ import { describe, expect, it } from "vitest";
 import {
   extractApplyPatchTargetPaths,
   extractResolvedApplyPatchTargetPaths,
+  toDisplayPath,
 } from "./apply-patch-paths.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
 const envelope = (...hunks: string[]) => ["*** Begin Patch", ...hunks, "*** End Patch"].join("\n");
+
+describe("toDisplayPath", () => {
+  const root = path.join(path.parse(defaultCwd).root, "workspace");
+  it.each([
+    [".", "workspace"],
+    ["sub/file.txt", path.join("sub", "file.txt")],
+    ["..cache/file.txt", path.join("..cache", "file.txt")],
+    ["../outside.txt", path.resolve(root, "../outside.txt")],
+  ])("displays %s without disguising paths outside the workspace", (relative, expected) => {
+    expect(toDisplayPath(path.resolve(root, relative), root)).toBe(expected);
+  });
+});
 
 describe("extractApplyPatchTargetPaths", () => {
   it.each([undefined, null, 42, {}, { input: 7 }, "", { input: "" }])(

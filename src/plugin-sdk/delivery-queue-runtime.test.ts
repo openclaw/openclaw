@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -27,11 +28,7 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => {
   };
 });
 
-const log = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function drain(deliver?: Parameters<typeof drainPendingDeliveries>[0]["deliver"]) {
   return drainPendingDeliveries({
@@ -48,9 +45,6 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
   mocks.coreDrainPendingDeliveries.mockReset().mockResolvedValue(undefined);
   mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([]);
-  log.info.mockClear();
-  log.warn.mockClear();
-  log.error.mockClear();
 });
 
 afterEach(resetGatewayWorkAdmission);
@@ -78,25 +72,21 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
   });
 
   it("counts a reconnect drain independently from its admitted parent", async () => {
-    let finishDrain = () => {};
-    const drainStarted = new Promise<void>((resolveStarted) => {
-      mocks.coreDrainPendingDeliveries.mockImplementationOnce(
-        () =>
-          new Promise<void>((resolveDrain) => {
-            finishDrain = resolveDrain;
-            resolveStarted();
-          }),
-      );
+    const started = createDeferred();
+    const finished = createDeferred();
+    mocks.coreDrainPendingDeliveries.mockImplementationOnce(() => {
+      started.resolve();
+      return finished.promise;
     });
     const deliver = vi.fn(async () => []);
 
     await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       const pending = drain(deliver);
-      await drainStarted;
+      await started.promise;
 
       expect(getActiveGatewayRootWorkCount()).toBe(2);
-      finishDrain();
+      finished.resolve();
       await pending;
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledOnce();

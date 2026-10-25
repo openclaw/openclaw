@@ -12,11 +12,11 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createRequestGate } from "../server-methods.request-gate.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import * as sharingPreparation from "../session-sharing-preparation.js";
 import { commandsHandlers } from "./commands.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
 import { handleSkillsStatus } from "./skills-status.js";
@@ -45,6 +45,12 @@ afterEach(() => vi.restoreAllMocks());
 
 const sessionKey = "agent:main:discovery";
 const scope = { agentId: "main", sessionKey };
+const sessionEntry = {
+  sessionId: "discovery",
+  updatedAt: 1,
+  visibility: "read-only",
+  createdActor: { type: "human", source: "profile", id: "owner" },
+} as const;
 const handlers = {
   "commands.list": commandsHandlers["commands.list"]!,
   "skills.status": handleSkillsStatus,
@@ -52,19 +58,8 @@ const handlers = {
 
 function participant(): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: "alice",
-      displayName: "Alice",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile("alice", "Alice"),
     preparedSessionProfile: { profileId: "alice", aliases: new Set(["alice"]), role: null },
   };
 }
@@ -125,26 +120,20 @@ async function withDiscoveryState(
 }
 
 async function seed() {
-  await upsertSessionEntryCore(scope, {
-    sessionId: "discovery",
-    updatedAt: 1,
-    visibility: "read-only",
-    createdActor: { type: "human", source: "profile", id: "owner" },
-  });
+  await upsertSessionEntryCore(scope, sessionEntry);
   addSessionMember(scope, { identityId: "alice", addedBy: "owner" });
 }
 
 it.each(["commands.list", "skills.status"] as const)(
-  "%s discovers for a participant without caller-thread SQL",
+  "%s discovers for a participant before and after topology invalidation without caller-thread SQL",
   async (method) => {
     await withDiscoveryState(async ({ call }) => {
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
         expect((await call(method))[0]).toBe(true);
-        console.log(
-          `${method}: caller SQL prepare=${prepare.mock.calls.length} exec=${exec.mock.calls.length}`,
-        );
+        sessionChanges.emit({ all: true, scope: "stores" });
+        expect((await call(method))[0]).toBe(true);
         expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(exec).not.toHaveBeenCalled();
       } finally {
@@ -193,12 +182,8 @@ it.each(["commands.list", "skills.status"] as const)(
             }),
           };
         }
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        discovery.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-        });
+        using gate = createRequestGate();
+        discovery.mockImplementationOnce(gate.pause);
         const invalidateMembership = () => {
           const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
           sessionChanges.emit({ all: true, scope: "stores" });
@@ -215,59 +200,55 @@ it.each(["commands.list", "skills.status"] as const)(
           }
           return change !== "request" || !revoked;
         });
-        try {
-          await awaitGateBeforeSettlement(
-            entered.promise,
+        await gate.during(
+          awaitGateBeforeSettlement(
+            gate.entered,
             pending,
             `${method}: ${change} did not reach discovery`,
-          );
-          revoked = true;
-          if (change === "member") {
-            removeSessionMember(scope, "alice");
-          }
-          if (change === "dirty") {
-            invalidateMembership();
-          }
-          if (change === "callback-dirty") {
-            dirtyOnCheck = true;
-          }
-          if (change === "profile") {
-            client.authenticatedUserProfile!.profileId = "bob";
-          }
-          if (change === "projection") {
-            bindSessionRowProjection(context, () => undefined);
-          }
-          if (change === "route") {
-            setConfig({ ...cfg, session: { mainKey: "replacement" } });
-          }
-          if (change === "policy") {
-            setConfig({
-              ...cfg,
-              gateway: {
-                roles: {
-                  default: "blocked",
-                  definitions: {
-                    blocked: {
-                      sessions: { others: "none" },
-                      agents: "*",
-                      scopes: ["operator.read", "operator.write"],
+          ),
+          () => {
+            revoked = true;
+            const changes: Partial<Record<typeof change, () => void>> = {
+              member: () => removeSessionMember(scope, "alice"),
+              dirty: invalidateMembership,
+              "callback-dirty": () => {
+                dirtyOnCheck = true;
+              },
+              profile: () => {
+                client.authenticatedUserProfile!.profileId = "bob";
+              },
+              projection: () => {
+                bindSessionRowProjection(context, () => undefined);
+              },
+              route: () => setConfig({ ...cfg, session: { mainKey: "replacement" } }),
+              policy: () =>
+                setConfig({
+                  ...cfg,
+                  gateway: {
+                    roles: {
+                      default: "blocked",
+                      definitions: {
+                        blocked: {
+                          sessions: { others: "none" },
+                          agents: "*",
+                          scopes: ["operator.read", "operator.write"],
+                        },
+                      },
                     },
                   },
-                },
+                }),
+              session: () => {
+                replaceSessionEntrySync(scope, {
+                  ...sessionEntry,
+                  sessionId: "replacement",
+                  updatedAt: 2,
+                });
               },
-            });
-          }
-          if (change === "session") {
-            replaceSessionEntrySync(scope, {
-              sessionId: "replacement",
-              updatedAt: 2,
-              visibility: "read-only",
-              createdActor: { type: "human", source: "profile", id: "owner" },
-            });
-          }
-        } finally {
-          release.resolve();
-        }
+            };
+            changes[change]?.();
+          },
+          pending,
+        );
         expect(await pending, change).toMatchObject([false, undefined, expect.any(Object)]);
       }
     });
@@ -283,10 +264,9 @@ it("uses captured display selections and observes a committed change on the next
         ],
       });
     await select("first");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    using gate = createRequestGate();
     const responses: Parameters<RespondFn>[] = [];
-    const discoverSelections = (ready = Promise.resolve()) =>
+    const discoverSelections = () =>
       withSessionDiscoveryAccess(
         {
           client: participant(),
@@ -297,23 +277,18 @@ it("uses captured display selections and observes a committed change on the next
           respond: (...response) => responses.push(response),
         },
         async (entry) => {
-          entered.resolve();
-          await ready;
+          await gate.pause();
           return entry?.skillLibrarySelections?.map(({ revision }) => revision);
         },
       );
-    const pending = discoverSelections(release.promise);
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "selection discovery did not start",
-      );
-      await select("second");
-    } finally {
-      release.resolve();
-    }
-    await pending;
+    const pending = discoverSelections();
+    await gate.during(
+      awaitGateBeforeSettlement(gate.entered, pending, "selection discovery did not start"),
+      async () => {
+        await select("second");
+      },
+      pending,
+    );
     await discoverSelections();
     expect(responses).toEqual([
       [true, ["first"], undefined],
@@ -326,12 +301,10 @@ it.each(["ready", "rejected", "replaced"] as const)(
   "keeps the original target across membership preparation (%s)",
   async (outcome) => {
     await withDiscoveryState(async ({ call, projection }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      using gate = createRequestGate();
       const prepare = projection.prepareMembership.bind(projection);
       vi.spyOn(projection, "prepareMembership").mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await gate.pause();
         if (outcome === "rejected") {
           throw new Error("membership unavailable");
         }
@@ -340,23 +313,24 @@ it.each(["ready", "rejected", "replaced"] as const)(
       sessionChanges.emit({ agentId: "main", sessionKey, factsInvalidated: "category" });
       discovery.mockClear();
       const pending = call("commands.list");
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
+      await gate.during(
+        awaitGateBeforeSettlement(
+          gate.entered,
           pending,
           "discovery skipped membership preparation",
-        );
-        expect(discovery).not.toHaveBeenCalled();
-        if (outcome === "replaced") {
-          replaceSessionEntrySync(scope, {
-            sessionId: "replacement",
-            updatedAt: 2,
-            visibility: "shared",
-          });
-        }
-      } finally {
-        release.resolve();
-      }
+        ),
+        () => {
+          expect(discovery).not.toHaveBeenCalled();
+          if (outcome === "replaced") {
+            replaceSessionEntrySync(scope, {
+              sessionId: "replacement",
+              updatedAt: 2,
+              visibility: "shared",
+            });
+          }
+        },
+        pending,
+      );
       expect((await pending)[0]).toBe(outcome === "ready");
       if (outcome !== "ready") {
         expect(discovery).not.toHaveBeenCalled();
@@ -364,12 +338,3 @@ it.each(["ready", "rejected", "replaced"] as const)(
     });
   },
 );
-
-it("uses the retained physical source when dirty topology needs fallback preparation", async () => {
-  await withDiscoveryState(async ({ call }) => {
-    sessionChanges.emit({ all: true, scope: "stores" });
-    const prepare = vi.spyOn(sharingPreparation, "prepareSessionMutationFacts");
-    expect((await call("commands.list"))[0]).toBe(true);
-    expect(prepare).toHaveBeenCalled();
-  });
-});

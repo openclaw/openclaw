@@ -1,4 +1,4 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -16,8 +16,10 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsPage } from "./plugins-page.tsx";
@@ -129,18 +131,7 @@ export function createInspectResult(
       enabled: false,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: createPluginDeclaredSurface(),
     components: {
       mapped: [],
       skills: [],
@@ -189,16 +180,27 @@ function createSnapshot(
   client: GatewayBrowserClient | null,
   connected: boolean,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+  });
+}
+
+export function createPluginCapabilities(
+  generation: number,
+  methods: string[] = [],
+): NonNullable<ApplicationGatewaySnapshot["pluginCapabilities"]> {
+  return {
+    ok: true,
+    generation,
+    descriptors: [],
+    methods,
+    controlUiTabs: [],
+    controlUiWidgetKinds: [],
+    pluginSurfaceUrls: {},
   };
 }
 
@@ -231,15 +233,10 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     publishPlugins() {
       snapshot = {
         ...snapshot,
-        pluginCapabilities: {
-          ok: true,
-          generation: (snapshot.pluginCapabilities?.generation ?? 0) + 1,
-          descriptors: [],
-          methods: snapshot.hello?.features?.methods ?? [],
-          controlUiTabs: [],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        },
+        pluginCapabilities: createPluginCapabilities(
+          (snapshot.pluginCapabilities?.generation ?? 0) + 1,
+          snapshot.hello?.features?.methods ?? [],
+        ),
       };
       for (const listener of listeners) {
         listener(snapshot);
@@ -387,6 +384,7 @@ export function createContext(
     plugins,
     basePath: "",
     resourceBasePath: "",
+    router: createRouter({ routes: [] }),
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),

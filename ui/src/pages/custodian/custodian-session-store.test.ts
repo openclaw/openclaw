@@ -127,7 +127,7 @@ it.each(["cold", "startup", "metadata"] as const)("retains %s drafts", async (ph
     const edited = store.input;
     await store.send();
     expect(request).toHaveBeenCalledOnce();
-    store.retry();
+    await store.retry();
     await waitForFast(() => expect(store.canSend).toBe(true));
     expect(store.input).toBe(edited);
   }
@@ -414,7 +414,7 @@ it.each([
   expect(request).toHaveBeenCalledTimes(live ? 2 : 1);
   const draft = live ? "Next question" : "Keep my draft";
   store.setInput(draft);
-  store.retry();
+  await store.retry();
   await waitForFast(() => expect(store.messages.at(-1)?.text).toBe(live ? "Recovered." : "Ready."));
   expect(store).toMatchObject({ input: draft, error: null });
   expect(request).toHaveBeenCalledTimes(live ? 3 : 2);

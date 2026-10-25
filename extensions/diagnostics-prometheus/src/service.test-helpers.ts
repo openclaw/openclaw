@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -13,6 +14,19 @@ import { createDiagnosticsPrometheusExporter } from "./service.js";
 
 export const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
 export const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
+
+export function expectMetrics(actual: string | readonly string[]) {
+  const lines = typeof actual === "string" ? actual.split("\n") : actual;
+  return (samples: string) => {
+    for (const sample of samples.trim().split("\n")) {
+      expect(lines).toContain(sample.trim());
+    }
+  };
+}
+
+export function expectExcludes(actual: string, ...samples: string[]) {
+  samples.forEach((sample) => expect(actual).not.toContain(sample));
+}
 type EventInput<T = DiagnosticEventPayload> = T extends DiagnosticEventPayload
   ? Omit<T, "seq" | "ts">
   : never;
@@ -34,12 +48,13 @@ export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
 
 export function scrapeMetrics(handler: OpenClawPluginHttpRouteHandler): string {
   const response = createMockServerResponse();
+  response.flushHeaders = () => {};
   response.req.method = "GET";
   response.req.url = "/api/diagnostics/prometheus";
   expect(handler(response.req, response)).toBe(true);
   expect(response.statusCode).toBe(200);
   expect(response.headersSent).toBe(true);
-  return expectDefined(response.body, "Prometheus scrape body");
+  return response.body?.toString() ?? "";
 }
 
 export function createMetricsHarness(
@@ -82,6 +97,7 @@ export function createMetricsHarness(
   };
   const start = () => exporter.service.start(context);
   start();
+  const stop = () => exporter.service.stop?.();
   return {
     handler: exporter.handler,
     logger: context.logger,
@@ -94,8 +110,23 @@ export function createMetricsHarness(
     },
     render: () => scrapeMetrics(exporter.handler),
     start,
-    stop: () => exporter.service.stop?.(),
+    stop,
+    [Symbol.dispose]: stop,
   };
+}
+
+export function expectRecordedMetrics(
+  events: readonly EventInput[],
+  samples: string,
+  excluded: readonly string[] = [],
+) {
+  using metrics = createMetricsHarness();
+  for (const event of events) {
+    metrics.record(event);
+  }
+  const rendered = metrics.render();
+  expectMetrics(rendered)(samples);
+  expectExcludes(rendered, ...excluded);
 }
 
 export async function withMetricsServer(
@@ -106,15 +137,8 @@ export async function withMetricsServer(
     void metrics.handler(req, res);
   });
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP server address");
-    }
-    await run(`http://127.0.0.1:${address.port}/api/diagnostics/prometheus`);
+    const port = await listenOnLoopback(server);
+    await run(`http://127.0.0.1:${port}/api/diagnostics/prometheus`);
   } finally {
     try {
       if (server.listening) {

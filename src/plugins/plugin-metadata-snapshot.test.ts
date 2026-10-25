@@ -27,6 +27,7 @@ import {
 } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -668,7 +669,7 @@ describe("plugin metadata snapshot", () => {
     plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
     plugin.contracts = { tools: [], webSearchProviders: ["demo-search"] };
     other.cliBackends = ["demo-cli"];
-    plugin.providerEndpoints = [
+    plugin.providerEndpoints = normalizeManifestProviderEndpoints([
       {
         endpointClass: " openai-public ",
         hosts: [" API.EXAMPLE.COM ", "api.example.com", " "],
@@ -692,7 +693,7 @@ describe("plugin metadata snapshot", () => {
         hosts: ["GLOBAL.VERTEX.EXAMPLE.COM"],
         googleVertexRegion: " GLOBAL ",
       },
-    ];
+    ]);
     other.providerEndpoints = [{ endpointClass: "azure-openai", hosts: ["api.example.com"] }];
     registry.plugins.push(other);
     index.plugins = [...index.plugins, ...makeIndex("other").plugins];

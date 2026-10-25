@@ -25,6 +25,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -38,14 +39,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 test("sidebar wire caches retain deltas across real runtime publications", async () => {
   const origin = "https://sidebar.example.test";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   const controlUi = { allowedOrigins: [origin] };
   testState.gatewayControlUi = controlUi;

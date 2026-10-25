@@ -13,7 +13,7 @@ import { projectChatMobilePeople } from "./chat-mobile-people.ts";
 import type {
   HumanMentionAccess,
   HumanMentionRead,
-} from "./components/chat-composer-mention-menu.tsx";
+} from "./components/chat-composer-mention-menu-state.ts";
 import { ChatMobilePeopleGrid } from "./components/chat-mobile-people-grid.tsx";
 import {
   ChatMobilePeopleBody,
@@ -75,6 +75,12 @@ it("projects native identities and mentions through the People body without send
       },
       sessionKey: "agent:main:chat",
       viewers: [
+        {
+          id: "owner",
+          identity: owner.identity,
+          name: owner.label,
+          watchedSessions: ["agent:main:chat"],
+        },
         {
           id: "profile-alex-online",
           identity: alex.identity,
@@ -182,4 +188,33 @@ it("ignores retired activation results and preserves explicit failure and retry 
   access = undefined;
   expect(mentions.status).toBe("unavailable");
   expect(mentions.read()).toBeNull();
+});
+
+it("shows only concurrent viewers in the header, never a lone creator or visitor", () => {
+  const identity = { type: "profile" as const, id: "creator" };
+  const creator = { type: "human" as const, id: "creator", identity, label: "Creator" };
+  const viewers = [
+    { id: "creator", identity, name: "Creator", watchedSessions: ["chat"] },
+    {
+      id: "guest",
+      identity: { type: "profile" as const, id: "guest" },
+      name: "Guest",
+      watchedSessions: ["chat"],
+    },
+  ];
+  const project = (active: typeof viewers) =>
+    projectChatMobilePeople({
+      session: { createdActor: creator, owner: { actor: creator } },
+      sessionKey: "chat",
+      viewers: active,
+      mentionableUsers: [],
+    });
+  expect(project([]).header).toEqual([]);
+  expect(project([viewers[0]!]).header).toEqual([]);
+  expect(project([viewers[1]!]).header).toEqual([]);
+  expect(project([viewers[0]!, viewers[0]!]).header).toEqual([]);
+  expect(project(viewers).header.map((person) => person.label)).toEqual(["Creator", "Guest"]);
+  expect(project([viewers[1]!, { ...viewers[0]!, watchedSessions: ["elsewhere"] }]).header).toEqual(
+    [],
+  );
 });

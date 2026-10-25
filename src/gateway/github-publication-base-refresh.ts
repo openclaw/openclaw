@@ -492,9 +492,10 @@ export async function integrateManagedWorkspaceSource(
                 snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
               }
               const buildCacheInputs = await state.buildCacheInputs();
+              const baseline = await state.baselineDocument();
               const accepted = parseWorkerWorkspaceManifest(
-                state.current().baseline_json!,
-                state.current().baseline_ref!,
+                baseline.rawManifest,
+                baseline.manifestRef,
                 buildCacheInputs,
               );
               const before = snapshots[0]!.manifest;
@@ -519,8 +520,8 @@ export async function integrateManagedWorkspaceSource(
                 root: cwd,
                 stagingRoot: path.join(temporary, "after"),
                 stagedResultRef: stagedRef,
-                baseManifestRef: state.current().baseline_ref!,
-                baseManifestRaw: state.current().baseline_json!,
+                baseManifestRef: baseline.manifestRef,
+                baseManifestRaw: baseline.rawManifest,
                 currentManifestRef:
                   "sha256:" + createHash("sha256").update(currentRaw).digest("hex"),
                 currentManifestRaw: currentRaw,

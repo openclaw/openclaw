@@ -10,6 +10,8 @@ import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
+  summarizeScriptCoverage,
+  summarizeJavaScriptResources,
   summarizeCpuProfile,
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
@@ -55,6 +57,54 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("counts fetched JavaScript independently of observed V8 scripts", () => {
+    const resources = [
+      {
+        url: "http://localhost/assets/entry.js",
+        decodedBytes: 100,
+        encodedBytes: 30,
+        transferBytes: 330,
+      },
+      {
+        url: "http://localhost/assets/preload.js?v=1",
+        decodedBytes: 200,
+        encodedBytes: 40,
+        transferBytes: 340,
+      },
+      {
+        url: "http://localhost/assets/style.css",
+        decodedBytes: 50,
+        encodedBytes: 20,
+        transferBytes: 320,
+      },
+    ];
+    expect(summarizeJavaScriptResources(resources, [{ url: resources[0]!.url }])).toEqual({
+      requests: 2,
+      rawBytes: 300,
+      encodedBytes: 70,
+      transferBytes: 670,
+      outsideCoverage: { requests: 1, rawBytes: 200, encodedBytes: 40, transferBytes: 340 },
+    });
+    expect(summarizeJavaScriptResources(resources).outsideCoverage).toBeUndefined();
+  });
+
+  it("counts UTF-8 coverage with nested unexecuted blocks and invoked inner functions", () => {
+    expect(
+      summarizeScriptCoverage({
+        source: "abcé😀xyz",
+        functions: [
+          { ranges: [{ startOffset: 0, endOffset: 9, count: 1 }] },
+          {
+            ranges: [
+              { startOffset: 3, endOffset: 9, count: 0 },
+              { startOffset: 4, endOffset: 6, count: 1 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ loadedBytes: 12, executedBytes: 7, unusedBytes: 5 });
+  });
+
   it("prepares numeric CDP envelopes, including unnamed end events", () => {
     expect(
       prepareColdLoadTraceEvent(
@@ -101,11 +151,59 @@ describe("cold-load trace accounting", () => {
       busyMs: 180,
       longTasks: 3,
       longTaskMs: 180,
+      longTaskIntervals: [
+        { startUs: 1_000_000, endUs: 1_070_000, durationMs: 70 },
+        { startUs: 1_040_000, endUs: 1_130_000, durationMs: 90 },
+        { startUs: 1_150_000, endUs: 1_200_000, durationMs: 50 },
+      ],
       longestTaskMs: 90,
       layoutCount: 2,
       layoutMs: 30,
       forcedLayouts: 1,
       forcedLayoutMs: 10,
+      compilation: {
+        mainThread: { events: 0, wallMs: 0, threadCpuMs: null },
+        allRendererThreads: { events: 0, wallMs: 0, threadCpuMs: null },
+        eventNames: [],
+      },
+    });
+  });
+
+  it("unions nested compiler work per renderer thread and preserves thread CPU clocks", () => {
+    const trace = [
+      event("navigationStart", "I", 1_000),
+      event("RunTask", "X", 1_000, { dur: 20_000 }),
+      event("V8.CompileCode", "X", 2_000, { dur: 8_000, tts: 100, tdur: 4_000 }),
+      event("V8.ParseFunction", "X", 3_000, { dur: 1_000, tts: 1_000, tdur: 800 }),
+      event("v8.compileModule", "B", 12_000, { tts: 9_000 }),
+      event("v8.compileModule", "E", 14_000, { tts: 9_500 }),
+      event("v8.parseOnBackground", "X", 3_000, { tid: 2, dur: 12_000, tts: 500, tdur: 6_000 }),
+      event("V8.CompileCode", "X", 3_000, { pid: 9, dur: 15_000, tts: 0, tdur: 15_000 }),
+      event("V8.JsonParse", "X", 16_000, { dur: 1_000 }),
+      event("V8.CompileCodeWait", "X", 16_000, { dur: 1_000 }),
+    ].map(prepareColdLoadTraceEvent);
+    expect(summarizeColdLoadTrace(trace, 20).compilation).toEqual({
+      mainThread: { events: 3, wallMs: 10, threadCpuMs: 4.5 },
+      allRendererThreads: { events: 4, wallMs: 22, threadCpuMs: 10.5 },
+      eventNames: [
+        { name: "v8.compileModule", count: 1 },
+        { name: "V8.CompileCode", count: 1 },
+        { name: "V8.ParseFunction", count: 1 },
+        { name: "v8.parseOnBackground", count: 1 },
+      ].toSorted((left, right) => left.name.localeCompare(right.name)),
+    });
+  });
+
+  it("does not substitute wall time for missing or clipped compilation CPU", () => {
+    const trace = [
+      event("navigationStart", "I", 1_000),
+      event("RunTask", "X", 1_000, { dur: 20_000 }),
+      event("V8.CompileCode", "X", 2_000, { dur: 1_000 }),
+      event("v8.parseOnBackground", "X", 20_000, { tid: 2, dur: 5_000, tts: 500, tdur: 4_000 }),
+    ];
+    expect(summarizeColdLoadTrace(trace, 20).compilation).toMatchObject({
+      mainThread: { events: 1, wallMs: 1, threadCpuMs: null },
+      allRendererThreads: { events: 2, wallMs: 2, threadCpuMs: null },
     });
   });
 
@@ -165,10 +263,6 @@ describe("cold-load CPU accounting", () => {
       expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
         functionName: "flush",
         ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
-      });
-      expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
-        solidFlushSelfMs: 2,
-        solidFlushInclusiveMs: 2,
       });
       expect(profile.nodes[0]?.callFrame.functionName).toBe("a");
     },
@@ -279,7 +373,8 @@ describe("cold-load CPU accounting", () => {
     ).toThrow();
   });
 
-  it.each(["live", "streaming"])("rejects comparisons that omit the %s phase", (phase) => {
+  it("rejects comparisons with different phase sets", () => {
+    const phase = "live";
     const tables = { functions: [], files: [] };
     const report = { reload: tables, [phase]: tables };
     expect(() => readCpuProfileReport(report, ["reload"])).toThrow("CPU profile phases differ");

@@ -40,73 +40,7 @@ function resolveProviderLabel(providerId: string): string {
   }
 }
 
-function formatVoiceMeta(voice: SpeechVoiceOption): string | undefined {
-  const parts = [voice.locale, voice.gender];
-  const personalities = voice.personalities?.filter((value) => value.trim().length > 0) ?? [];
-  if (personalities.length > 0) {
-    parts.push(personalities.join(", "));
-  }
-  const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
-  return filtered.length > 0 ? filtered.join(" · ") : undefined;
-}
-
-function formatVoiceList(voices: SpeechVoiceOption[], limit: number, providerId: string): string {
-  const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
-  const lines: string[] = [];
-  lines.push(`${resolveProviderLabel(providerId)} voices: ${voices.length}`);
-  lines.push("");
-  for (const v of sliced) {
-    const name = (v.name ?? "").trim() || "(unnamed)";
-    const category = (v.category ?? "").trim();
-    const meta = category ? ` · ${category}` : "";
-    lines.push(`- ${name}${meta}`);
-    lines.push(`  id: ${v.id}`);
-    const details = formatVoiceMeta(v);
-    if (details) {
-      lines.push(`  meta: ${details}`);
-    }
-    const description = (v.description ?? "").trim();
-    if (description) {
-      lines.push(`  note: ${description}`);
-    }
-  }
-  if (voices.length > sliced.length) {
-    lines.push("");
-    lines.push(`(showing first ${sliced.length})`);
-  }
-  return lines.join("\n");
-}
-
-function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOption | null {
-  const q = query.trim();
-  if (!q) {
-    return null;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(q);
-  return (
-    voices.find((v) => v.id === q) ??
-    voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower) ??
-    voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower)) ??
-    null
-  );
-}
-
-function resolveCommandLabel(channel: string): string {
-  return channel === "discord" ? "/talkvoice" : "/voice";
-}
-
 const TALK_ADMIN_SCOPE = "operator.admin";
-
-function requiresAdminToSetVoice(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const { senderIsOwner, gatewayClientScopes } = params;
-  if (Array.isArray(gatewayClientScopes)) {
-    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
-  }
-  return senderIsOwner !== true;
-}
 
 export default definePluginEntry({
   id: "talk-voice",
@@ -147,7 +81,7 @@ export default definePluginEntry({
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const assertOwnerCurrent = ctx.assertOwnerCurrent;
-        const commandLabel = resolveCommandLabel(ctx.channel);
+        const commandLabel = ctx.channel === "discord" ? "/talkvoice" : "/voice";
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
@@ -188,9 +122,37 @@ export default definePluginEntry({
               apiKey: apiKey || undefined,
               baseUrl,
             });
-            return {
-              text: formatVoiceList(voices, limit, providerId),
-            };
+            const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
+            const lines: string[] = [];
+            lines.push(`${providerLabel} voices: ${voices.length}`);
+            lines.push("");
+            for (const v of sliced) {
+              const name = (v.name ?? "").trim() || "(unnamed)";
+              const category = (v.category ?? "").trim();
+              const meta = category ? ` · ${category}` : "";
+              lines.push(`- ${name}${meta}`);
+              lines.push(`  id: ${v.id}`);
+              const parts = [v.locale, v.gender];
+              const personalities =
+                v.personalities?.filter((value) => value.trim().length > 0) ?? [];
+              if (personalities.length > 0) {
+                parts.push(personalities.join(", "));
+              }
+              const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
+              const details = filtered.length > 0 ? filtered.join(" · ") : undefined;
+              if (details) {
+                lines.push(`  meta: ${details}`);
+              }
+              const description = (v.description ?? "").trim();
+              if (description) {
+                lines.push(`  note: ${description}`);
+              }
+            }
+            if (voices.length > sliced.length) {
+              lines.push("");
+              lines.push(`(showing first ${sliced.length})`);
+            }
+            return { text: lines.join("\n") };
           } catch (error) {
             const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice list failed: ${message}` };
@@ -200,12 +162,11 @@ export default definePluginEntry({
         if (action === "set") {
           // Persistent Talk voice changes are gateway config writes, so the
           // mutating subcommand requires explicit admin or owner authority.
-          if (
-            requiresAdminToSetVoice({
-              senderIsOwner: ctx.senderIsOwner,
-              gatewayClientScopes: ctx.gatewayClientScopes,
-            })
-          ) {
+          const { senderIsOwner, gatewayClientScopes } = ctx;
+          const requiresAdmin = Array.isArray(gatewayClientScopes)
+            ? !gatewayClientScopes.includes(TALK_ADMIN_SCOPE)
+            : senderIsOwner !== true;
+          if (requiresAdmin) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
@@ -225,7 +186,12 @@ export default definePluginEntry({
             const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice lookup failed: ${message}` };
           }
-          const chosen = findVoice(voices, query);
+          const lower = normalizeLowercaseStringOrEmpty(query);
+          const chosen =
+            voices.find((v) => v.id === query) ??
+            voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower) ??
+            voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower)) ??
+            null;
           if (!chosen) {
             const hint = isLikelyVoiceId(query) ? query : `"${query}"`;
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };

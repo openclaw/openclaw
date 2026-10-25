@@ -23,7 +23,6 @@ import {
   captureClientVoiceSessionSettlement,
   prepareClientVoiceSessionClose,
 } from "./client-voice-session-lifecycle.js";
-import { resolveClientVoiceAgentSessionId } from "./client-voice-session-read.js";
 import * as voiceSessionReads from "./client-voice-session-read.js";
 import { ensureClientVoiceAgentSessionEntry } from "./client-voice-session-write.js";
 import {
@@ -101,7 +100,7 @@ describe("client voice session lifecycle", () => {
   it("joins accepted digest delivery beyond both slots after the closing caller returns", async ({
     signal,
   }) => {
-    await seedSession("agent:main:main", { channel: "discord", to: "channel:voice-updates" });
+    await seedSession(mainTarget.sessionKey, { channel: "discord", to: "channel:voice-updates" });
     const ids: string[] = [];
     for (let index = 0; index < 4; index += 1) {
       ids.push(await createVoiceSession({ voiceSessionId: `queued-digest-${index}` }));
@@ -176,7 +175,7 @@ describe("client voice session lifecycle", () => {
   it.for([false, true])(
     "keeps a delayed digest in its original shutdown owner after a state switch (expired successor=%s)",
     async (expiredSuccessor, { signal }) => {
-      const sessionKey = "agent:main:main";
+      const { sessionKey } = mainTarget;
       await seedSession(sessionKey, { channel: "discord", to: "channel:original-voice" });
       const closeOriginal = prepareClientVoiceSessionClose();
       const voiceSessionId = await createVoiceSession({ sessionKey });
@@ -241,7 +240,10 @@ describe("client voice session lifecycle", () => {
         const sessionKey = incognito ? "agent:main:dashboard:incognito-digest" : "agent:main:main";
         const to = incognito ? "channel:incognito-voice-updates" : "channel:voice-updates";
         if (incognito) {
-          await seedSession("agent:main:main", { channel: "discord", to: "channel:durable-decoy" });
+          await seedSession(mainTarget.sessionKey, {
+            channel: "discord",
+            to: "channel:durable-decoy",
+          });
           await createSessionEntryWithTranscript({ agentId: "main", sessionKey }, () => ({
             ok: true as const,
             entry: {
@@ -336,10 +338,7 @@ describe("client voice session lifecycle", () => {
         expect(resolveClientVoiceRunBinding(binding.runId)).toBeUndefined();
         if (replacement) {
           await createOrResumeClientVoiceSession({ ...successor, origin: "client" });
-          releaseReplacement = await registerRun({
-            ...successor,
-            runId: binding.runId,
-          });
+          releaseReplacement = await registerRun({ ...successor, runId: binding.runId });
         }
         resume.resolve();
         const releaseReplay = await registering;
@@ -606,7 +605,7 @@ describe("client voice session lifecycle", () => {
           }));
         }
         const sessionId = await ensureClientVoiceAgentSessionEntry(storage);
-        expect(await resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
+        expect(await voiceSessionReads.resolveClientVoiceAgentSessionId(storage)).toBe(sessionId);
         const voiceTarget = { agentId: "main", sessionKey: "main" };
         const voiceSessionId = await createOrResumeClientVoiceSession({ ...voiceTarget, origin });
         const append =
@@ -623,14 +622,12 @@ describe("client voice session lifecycle", () => {
           { ...storage, sessionId },
           { maxBytes: 4096, maxMessages: 10, offset: 0 },
         );
-        expect(transcript.events).toEqual([
-          expect.objectContaining({
-            event: expect.objectContaining({
-              message: expect.objectContaining({
-                content: [{ type: "text", text: "Stored in the prepared session" }],
-              }),
-            }),
-          }),
+        expect(transcript.events).toMatchObject([
+          {
+            event: {
+              message: { content: [{ type: "text", text: "Stored in the prepared session" }] },
+            },
+          },
         ]);
         expect(readRecord(voiceSessionId)).toMatchObject({
           sessionKey: "main",
@@ -652,28 +649,24 @@ describe("client voice session lifecycle", () => {
     );
 
     it("does not create an agent session after a browser-session deadline", async () => {
-      const sessionKey = "agent:main:talk:expired";
-
+      const target = { ...mainTarget, sessionKey: "agent:main:talk:expired" };
       await expect(
-        ensureClientVoiceAgentSessionEntry({
-          agentId: "main",
-          sessionKey,
-          deadlineAt: Date.now() - 1,
-        }),
+        ensureClientVoiceAgentSessionEntry({ ...target, deadlineAt: Date.now() - 1 }),
       ).rejects.toThrow("Realtime browser session expired during startup");
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+      expect(loadSessionEntry(target)).toBeUndefined();
     });
 
     it("repairs an incomplete existing row without claiming its creation actor", async () => {
-      const sessionKey = "agent:main:talk:incomplete";
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey },
-        { sessionId: "", updatedAt: 1, createdVia: "internal", createdAt: 1 },
-      );
+      const target = { ...mainTarget, sessionKey: "agent:main:talk:incomplete" };
+      await replaceSessionEntry(target, {
+        sessionId: "",
+        updatedAt: 1,
+        createdVia: "internal",
+        createdAt: 1,
+      });
 
-      await ensureClientVoiceAgentSessionEntry({ agentId: "main", sessionKey });
-
-      const repaired = loadSessionEntry({ agentId: "main", sessionKey });
+      await ensureClientVoiceAgentSessionEntry(target);
+      const repaired = loadSessionEntry(target);
       expect(repaired?.sessionId).toBeTruthy();
       expect(repaired).toMatchObject({ createdVia: "internal", createdAt: 1 });
       expect(repaired?.createdActor).toBeUndefined();

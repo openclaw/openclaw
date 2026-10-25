@@ -1,6 +1,10 @@
-import { formatCompactTokenCount } from "@openclaw/normalization-core";
+import { formatCompactTokenCount, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   findTranscriptEvent,
   type SessionTranscriptRuntimeTarget,
@@ -10,7 +14,7 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isSilentAssistantTranscriptMessage } from "../../../shared/chat-message-content.js";
-import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
+import { isContractToolCallBlock, readToolCallName } from "../../../shared/tool-block-contract.js";
 import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
@@ -24,6 +28,7 @@ import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  readSubagentRunFinalAnswerUsing,
   SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
@@ -35,7 +40,30 @@ import {
   readSessionMessagesAsync,
   resolveSessionStorePathCore,
 } from "./subagent-announce.runtime.js";
-import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
+
+function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {
+  const record = asOptionalRecord(content);
+  if (record) {
+    return record;
+  }
+  if (typeof content === "string") {
+    return safeParseJsonRecord(content.trim());
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    const text = asOptionalRecord(block)?.text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const parsed = safeParseJsonRecord(text.trim());
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -89,7 +117,21 @@ function summarizeSubagentOutputHistory(
       continue;
     }
     if (role === "assistant") {
-      previousAssistantCalledYield = assistantCallsSessionsYield(message);
+      previousAssistantCalledYield =
+        !Array.isArray(record) &&
+        ((Array.isArray(record.content) &&
+          record.content.some(
+            (block) =>
+              isContractToolCallBlock(block) && readToolCallName(block) === "sessions_yield",
+          )) ||
+          [record.toolCalls, record.tool_calls].some(
+            (toolCalls) =>
+              Array.isArray(toolCalls) &&
+              toolCalls.some((toolCall) => {
+                const callRecord = asOptionalRecord(toolCall);
+                return callRecord ? readToolCallName(callRecord) === "sessions_yield" : false;
+              }),
+          ));
       snapshot.waitingForContinuation = previousAssistantCalledYield;
       if (completedCollectorTurn && previousAssistantCalledYield) {
         // The yielded result replaces earlier progress, even for a timed-out collector.
@@ -127,7 +169,15 @@ function summarizeSubagentOutputHistory(
       }
       continue;
     }
-    if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
+    // Some providers omit the tool name on results; use adjacency plus yielded status as fallback.
+    if (
+      !Array.isArray(record) &&
+      (role === "toolResult" || role === "tool") &&
+      (readToolCallName(record) === "sessions_yield" ||
+        (previousAssistantCalledYield &&
+          (asOptionalRecord(record.details)?.status === "yielded" ||
+            readStructuredToolPayload(record.content)?.status === "yielded")))
+    ) {
       if (!completedCollectorTurn) {
         snapshot.latestText = undefined;
       }
@@ -161,7 +211,7 @@ export async function readSubagentOutput(
   const collectorTurn = options?.completedCollectorTurn;
   if (
     collectorTurn &&
-    (!options?.sessionTarget ||
+    (!options.sessionTarget ||
       !Number.isFinite(collectorTurn.startedAt) ||
       !Number.isFinite(collectorTurn.endedAt) ||
       collectorTurn.endedAt < collectorTurn.startedAt)
@@ -308,6 +358,19 @@ export async function readSubagentRunAnnounceResult(
 ): Promise<PreparedAnnounceResult> {
   return await readSubagentRunAnnounceResultUsing(child, {
     readSubagentRun: readSubagentRun ?? (await prepareAnnounceRunReader([child.runId])),
+    findTranscriptEvent,
+    findSessionTranscriptArchiveEventReadOnly,
+    getRuntimeConfig,
+    readSubagentSessionEntry,
+    resolveSessionStorePathCore,
+  });
+}
+
+/** The complete final answer recorded by this run, or undefined when retention removed it. */
+export async function readSubagentRunFinalAnswer(
+  child: SubagentRunRecord,
+): Promise<string | undefined> {
+  return await readSubagentRunFinalAnswerUsing(child, {
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,

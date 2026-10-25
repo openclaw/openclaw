@@ -17,11 +17,8 @@ export function createDesktopPictureInPicture(
   host: Pick<HTMLElement, "ownerDocument" | "isConnected">,
   readSource: () => HTMLCanvasElement | null,
 ) {
-  const [feedback, setFeedback] = createSignal<{
-    active?: boolean;
-    pending?: boolean;
-    errorText?: string;
-  }>({});
+  const [active, setActive] = createSignal(false);
+  const [outcome, setOutcome] = createSignal<{ result: Promise<void> }>();
   const [opening, setOpening] = createOptimistic(false);
   let activePopup: Window | null = null;
   let pending: { cancelled: boolean } | undefined;
@@ -47,7 +44,8 @@ export function createDesktopPictureInPicture(
       pending.cancelled = true;
     }
     release();
-    setFeedback({});
+    setActive(false);
+    setOutcome(undefined);
   };
   const toggle = action(function* (): Generator<Promise<Window>, void, Window> {
     if (activePopup) {
@@ -64,7 +62,6 @@ export function createDesktopPictureInPicture(
     pending = request;
     setOpening(true);
     let popup: Window | null = null;
-    let errorText: string | undefined;
     try {
       // Must happen directly in the click's user activation, before yielding.
       popup = yield api.requestWindow({ width: 640, height: 400 });
@@ -84,12 +81,12 @@ export function createDesktopPictureInPicture(
       popup?.close();
       if (pending === request && !request.cancelled) {
         release();
-        errorText = t("desktop.errors.pictureInPictureFailed");
+        throw new Error(t("desktop.errors.pictureInPictureFailed"));
       }
     } finally {
       if (pending === request) {
         pending = undefined;
-        setFeedback({ active: activePopup !== null, errorText });
+        setActive(activePopup !== null);
       }
     }
   });
@@ -171,17 +168,29 @@ export function createDesktopPictureInPicture(
       } catch {
         // Never leave a frozen image presented as a connected viewer.
         close();
-        setFeedback({ errorText: t("desktop.errors.pictureInPictureFailed") });
+        const result = Promise.reject(new Error(t("desktop.errors.pictureInPictureFailed")));
+        setOutcome({ result });
+        void result.catch(() => {});
       }
     };
     frame = popup.requestAnimationFrame(paint);
   };
 
   return {
-    feedback: (): ReturnType<typeof feedback> => (opening() ? { pending: true } : feedback()),
+    feedback: () => (opening() ? { pending: true } : { active: active() }),
+    outcome,
     supported,
     close,
-    toggle,
+    toggle() {
+      // A duplicate click must keep observing the admitted native request.
+      if (pending) {
+        return undefined;
+      }
+      const result = toggle();
+      setOutcome({ result });
+      void result.catch(() => {});
+      return result;
+    },
   };
 }
 

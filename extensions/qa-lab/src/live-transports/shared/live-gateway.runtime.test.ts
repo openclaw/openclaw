@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startQaGatewayChild, startQaProviderServer, gatewayStop } = vi.hoisted(() => ({
@@ -19,14 +18,6 @@ vi.mock("../../providers/server-runtime.js", () => ({
 }));
 
 import { createQaLiveLaneGateway } from "./live-gateway.runtime.js";
-
-type GatewayOptions = {
-  forcedRuntime?: string;
-  providerBaseUrl?: string;
-  providerMode?: string;
-  transportBaseUrl?: string;
-  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
 
 function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
   return {
@@ -56,8 +47,10 @@ function gatewayParams(overrides: Partial<StartOptions> = {}): StartOptions {
   };
 }
 
-function firstGatewayOptions(): GatewayOptions | undefined {
-  return startQaGatewayChild.mock.calls[0]?.[0] as GatewayOptions | undefined;
+function firstGatewayOptions() {
+  return startQaGatewayChild.mock.calls[0]?.[0] as
+    | (Partial<StartOptions> & { providerBaseUrl?: string })
+    | undefined;
 }
 
 describe("createQaLiveLaneGateway", () => {
@@ -69,6 +62,8 @@ describe("createQaLiveLaneGateway", () => {
     owners.push(owner);
     return owner;
   };
+  const start = (overrides: Partial<StartOptions> = {}) =>
+    ownGateway().start(gatewayParams(overrides));
 
   beforeEach(() => {
     gatewayStop.mockReset().mockResolvedValue({ process: "confirmed-stopped", errors: [] });
@@ -155,7 +150,7 @@ describe("createQaLiveLaneGateway", () => {
   });
 
   it("disables memory search for transport-only live lanes", async () => {
-    await ownGateway().start(gatewayParams());
+    await start();
 
     const { mutateConfig } = firstGatewayOptions() ?? {};
     if (!mutateConfig) {
@@ -177,14 +172,14 @@ describe("createQaLiveLaneGateway", () => {
       memory: { search: { enabled: true } },
     });
 
-    expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
-    expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
-    expect(cfg?.plugins?.slots).toEqual({ memory: "none", contextEngine: "custom-context" });
-    expect(cfg?.memory?.search?.enabled).toBe(false);
+    expect(cfg.plugins?.allow).toEqual(["acpx", "qa-channel"]);
+    expect(cfg.plugins?.slots).toEqual({ memory: "none", contextEngine: "custom-context" });
+    expect(cfg.memory?.search?.enabled).toBe(false);
+    expect(cfg.plugins?.entries).not.toHaveProperty("memory-core");
   });
 
   it("forwards gateway stop options to the child harness", async () => {
-    const harness = await ownGateway().start(gatewayParams({ controlUiEnabled: false }));
+    const harness = await start();
 
     await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
     expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
@@ -192,58 +187,43 @@ describe("createQaLiveLaneGateway", () => {
   });
 
   it("skips mock bootstrap for live frontier runs", async () => {
-    const harness = await ownGateway().start(
-      gatewayParams({
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna",
-      }),
-    );
+    const harness = await start({
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
+    });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
       modelRefs: ["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"],
     });
-    const gatewayOptions = firstGatewayOptions();
-    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
-    expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
-    expect(gatewayOptions?.providerMode).toBe("live-frontier");
+    const options = firstGatewayOptions();
+    expect(options?.transportBaseUrl).toBe("http://127.0.0.1:43123");
+    expect(options?.providerBaseUrl).toBeUndefined();
+    expect(options?.providerMode).toBe("live-frontier");
 
     await harness.stop();
     expect(gatewayStop).toHaveBeenCalledTimes(1);
   });
 
-  it("finalizes failed startup with the caller's artifact policy", async () => {
-    const owner = ownGateway();
-    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
+  it.each([false, true])(
+    "finalizes failed startup (mock cleanup failure: %s)",
+    async (cleanupFails) => {
+      const owner = ownGateway();
+      startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
+      if (cleanupFails) {
+        mockStop.mockRejectedValueOnce(new Error("mock stuck"));
+      }
+      await expect(owner.start(gatewayParams())).rejects.toThrow("gateway failed");
 
-    await expect(owner.start(gatewayParams({ controlUiEnabled: false }))).rejects.toThrow(
-      "gateway failed",
-    );
-
-    const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
-    await expect(owner.stop(options)).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
-    expect(gatewayStop).toHaveBeenCalledWith(options);
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports mock cleanup failures separately from the original startup failure", async () => {
-    const owner = ownGateway();
-    startQaGatewayChild.mockRejectedValueOnce(new Error("gateway failed"));
-    mockStop.mockRejectedValueOnce(new Error("mock stuck"));
-
-    await expect(owner.start(gatewayParams({ controlUiEnabled: false }))).rejects.toThrow(
-      "gateway failed",
-    );
-    await expect(owner.stop()).resolves.toMatchObject({
-      process: "confirmed-stopped",
-      errors: [expect.objectContaining({ message: "mock stuck" })],
-    });
-
-    expect(mockStop).toHaveBeenCalledTimes(1);
-  });
+      const options = { preserveToDir: ".artifacts/qa-e2e/debug" };
+      await expect(owner.stop(options)).resolves.toEqual({
+        process: "confirmed-stopped",
+        errors: cleanupFails ? [expect.objectContaining({ message: "mock stuck" })] : [],
+      });
+      expect(gatewayStop).toHaveBeenCalledWith(options);
+      expect(mockStop).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("reports both gateway and mock shutdown failures together", async () => {
     gatewayStop.mockResolvedValueOnce({
@@ -251,38 +231,32 @@ describe("createQaLiveLaneGateway", () => {
       errors: [new Error("gateway down")],
     });
     mockStop.mockRejectedValueOnce(new Error("mock down"));
-    const harness = await ownGateway().start(gatewayParams({ controlUiEnabled: false }));
+    const harness = await start();
 
     await expect(harness.stop()).rejects.toThrow(
       "failed to stop QA live lane resources: gateway down; mock down",
     );
   });
 
-  it("retries only mock cleanup after gateway preservation succeeds", async () => {
-    mockStop.mockRejectedValueOnce(new Error("mock down"));
-    const harness = await ownGateway().start(gatewayParams());
+  it.each(["mock", "gateway"] as const)("retries only failed %s cleanup", async (failed) => {
+    if (failed === "mock") {
+      mockStop.mockRejectedValueOnce(new Error("mock down"));
+    } else {
+      gatewayStop.mockResolvedValueOnce({
+        process: "unconfirmed",
+        errors: [new Error("gateway down")],
+      });
+    }
+    const harness = await start();
     const stopOptions = { preserveToDir: ".artifacts/qa-e2e/debug" };
-
-    await expect(harness.stop(stopOptions)).rejects.toThrow("mock down");
+    await expect(harness.stop(stopOptions)).rejects.toThrow(`${failed} down`);
+    expect(mockStop).toHaveBeenCalledTimes(1);
     await expect(harness.stop(stopOptions)).resolves.toBeUndefined();
-
     expect(startQaGatewayChild).toHaveBeenCalledOnce();
     expect(gatewayStop).toHaveBeenCalledWith(stopOptions);
-    expect(mockStop).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries only gateway cleanup after mock shutdown succeeds", async () => {
-    gatewayStop.mockResolvedValueOnce({
-      process: "unconfirmed",
-      errors: [new Error("gateway down")],
-    });
-    const harness = await ownGateway().start(gatewayParams());
-
-    await expect(harness.stop()).rejects.toThrow("gateway down");
-    expect(mockStop).toHaveBeenCalledTimes(1);
-    await expect(harness.stop()).resolves.toBeUndefined();
-
-    expect(gatewayStop).toHaveBeenCalledTimes(2);
-    expect(mockStop).toHaveBeenCalledTimes(1);
+    if (failed === "gateway") {
+      expect(gatewayStop).toHaveBeenCalledTimes(2);
+    }
+    expect(mockStop).toHaveBeenCalledTimes(failed === "mock" ? 2 : 1);
   });
 });

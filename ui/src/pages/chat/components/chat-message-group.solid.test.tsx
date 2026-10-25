@@ -25,6 +25,50 @@ import {
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
+it("shares the mobile layout query while preserving initial and updated message actions", () => {
+  const query =
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  const media = Object.assign(new EventTarget(), { matches: true });
+  const matchMedia = vi.fn((value: string) =>
+    value === query ? media : Object.assign(new EventTarget(), { matches: false }),
+  );
+  vi.stubGlobal("matchMedia", matchMedia);
+  const subscribe = vi.spyOn(media, "addEventListener");
+  const unsubscribe = vi.spyOn(media, "removeEventListener");
+  const message = { role: "user", content: "First message", timestamp: 1000 };
+  const group = createMessageGroup(message, "user", {
+    messages: [
+      { key: "first", message },
+      { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
+    ],
+  });
+  const view = mountSolid(() => (
+    <>
+      <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
+      <MessageGroup
+        group={{ ...group, key: "another-group" }}
+        options={{ showReasoning: false, onReply: vi.fn() }}
+      />
+    </>
+  ));
+  try {
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".chat-message-footer")).toHaveLength(2);
+    flush();
+    expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(1);
+    expect(subscribe).toHaveBeenCalledOnce();
+    media.matches = false;
+    media.dispatchEvent(new Event("change"));
+    flush();
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    vi.unstubAllGlobals();
+  }
+});
+
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
   (unavailable) => {
@@ -242,7 +286,7 @@ it("retains aggregate disclosure and legacy card focus when options refresh", as
   ));
   await waitForSolid(() => {
     expect(
-      view.container.querySelectorAll(".chat-tools-inline .chat-tool-msg-collapse"),
+      view.container.querySelectorAll(".chat-tools-inline .chat-tool-row:not([aria-busy])"),
     ).toHaveLength(2);
   });
   const summary = view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!;
@@ -282,6 +326,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,
+    inlineViewLabel: () => undefined,
     reload: async () => undefined,
     refresh: async () => undefined,
     registrations: () => [],

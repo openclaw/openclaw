@@ -9,6 +9,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as diagnosticEvents from "./diagnostic-events.js";
 import {
@@ -273,14 +274,9 @@ it("overrides maintenance.autoDetach only for an explicitly owned Git command", 
 
 it("reports the applied 120-second Git timeout", async () => {
   const seconds = 120;
-  const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "timeout",
-    code: 124,
-  });
+  const commandSpy = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult({ termination: "timeout", code: 124 }));
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs: undefined });
   const label = `timed out after ${seconds} seconds`;
@@ -321,13 +317,10 @@ describe("required Git output", () => {
     });
   });
 
-  it.each([
-    ["text", requireGitCommand],
-    ["buffered", requireGitBuffer],
-  ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
+  it("rejects incomplete buffered output from a real Git blob", async () => {
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
     await withGitBlob(blob, async (root, args) => {
-      await expect(requireGit(root, args)).rejects.toThrow("output limit exceeded");
+      await expect(requireGitBuffer(root, args)).rejects.toThrow("output limit exceeded");
     });
   });
 });

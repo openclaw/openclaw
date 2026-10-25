@@ -25,13 +25,14 @@ describe("cron view saved metadata", () => {
         enabled,
         ...(displayName === undefined ? {} : { displayName }),
       });
-      const row = renderCronView({ jobs: [job], onSelectJob, onRun, onToggle });
+      const row = await renderCronView({ jobs: [job], onSelectJob, onRun, onToggle });
       const name = row.querySelector<HTMLSpanElement>(".cron-table__name-text");
       expect(name?.textContent).toBe(expected);
       expect(row.querySelector(".cron-row-run")?.getAttribute("aria-label")).toContain(expected);
       expect(row.querySelector(".cron-job-menu__trigger")?.getAttribute("aria-label")).toContain(
         expected,
       );
+      expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(0);
       const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
       const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
       const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
@@ -45,6 +46,7 @@ describe("cron view saved metadata", () => {
       toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onToggle).toHaveBeenCalledExactlyOnceWith(job, !enabled);
       await openCronMenu(row, ".cron-job-menu");
+      expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(3);
       getElement(row, '.cron-job-menu [data-value="run-if-due"]', HTMLButtonElement).click();
       await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
       expect(onRun).toHaveBeenCalledTimes(2);
@@ -56,7 +58,7 @@ describe("cron view saved metadata", () => {
       const state = createInitialCronState();
       startCronEdit(state, job);
       expect(state.cronEditingJob).toEqual(job);
-      const detail = renderCronView({
+      const detail = await renderCronView({
         editingJob: state.cronEditingJob,
         form: state.cronForm,
         onRun,
@@ -76,7 +78,7 @@ describe("cron view saved metadata", () => {
       await waitForSolid(() => expect(onRun).toHaveBeenCalledTimes(3));
       expect(onRun).toHaveBeenLastCalledWith(job, "due");
 
-      const draft = renderCronView({
+      const draft = await renderCronView({
         editingJob: state.cronEditingJob,
         form: { ...state.cronForm, name: "Unsaved stable name" },
       });
@@ -89,12 +91,12 @@ describe("cron view saved metadata", () => {
     },
   );
 
-  it("shows the saved description inline without changing row selection", () => {
+  it("shows the saved description inline without changing row selection", async () => {
     const onSelectJob = vi.fn();
     const job = createCronViewJob("described-job", {
       description: "  Summarize overnight deployment activity  ",
     });
-    const container = renderCronView({ jobs: [job], onSelectJob });
+    const container = await renderCronView({ jobs: [job], onSelectJob });
     const description = container.querySelector<HTMLSpanElement>(
       `[data-test-id="cron-row-description-${job.id}"]`,
     );
@@ -106,10 +108,10 @@ describe("cron view saved metadata", () => {
     expect(onSelectJob).toHaveBeenCalledWith(job);
   });
 
-  it("renders saved descriptions as escaped text", () => {
+  it("renders saved descriptions as escaped text", async () => {
     const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
     const job = createCronViewJob("escaped-description", { description, displayName: description });
-    const container = renderCronView({ jobs: [job] });
+    const container = await renderCronView({ jobs: [job] });
 
     expect(container.querySelector(".cron-table__name-text")?.textContent).toBe(description);
     expect(container.querySelector(".cron-table__description")?.textContent).toContain(description);
@@ -117,11 +119,11 @@ describe("cron view saved metadata", () => {
     expect(container.querySelector(".cron-table__name script")).toBeNull();
   });
 
-  it("shows the saved task description instead of unsaved form edits", () => {
+  it("shows the saved task description instead of unsaved form edits", async () => {
     const job = createCronViewJob("saved-job", {
       description: "  Saved description for the selected task  ",
     });
-    const container = renderCronView({
+    const container = await renderCronView({
       jobs: [],
       editingJob: job,
       form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },

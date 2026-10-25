@@ -13,7 +13,7 @@ import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -145,11 +145,7 @@ async function withTwitchMonitor(
           },
         },
       });
-    const builder = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime,
-      activateGlobalSideEffects: false,
-    });
+    const builder = createTestPluginRegistry(runtime);
     const record = createPluginRecord({ id: "twitch", origin: "bundled" });
     const api = builder.createApi(record, { config: cfg, registrationMode: "full" });
     api.registerChannel({ plugin: twitchPlugin });

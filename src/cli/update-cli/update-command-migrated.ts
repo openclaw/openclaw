@@ -11,6 +11,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUserPath } from "../../infra/home-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   resolveUpdateStateContentVersion,
@@ -186,9 +190,13 @@ export async function continueMigratedUpdateInFreshProcess(
     if (!root) {
       throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
+    const workerRuntime = params.packageUpdateNodeRunner ?? resolveNodeRunner();
     const workerCommand = [
-      params.packageUpdateNodeRunner ?? resolveNodeRunner(),
-      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateMigratedFinalize, root }),
+        workerRuntime,
+      ),
     ];
     const workerOptions = {
       cwd: root,
@@ -295,12 +303,13 @@ export async function continueMigratedUpdateInFreshProcess(
       deadline: _deadline,
       ...runIdentity
     } = run;
+    const { onResult: _onResult, ...serializableOptions } = params.opts;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
         ...serializable,
         opts: {
-          ...params.opts,
+          ...serializableOptions,
           timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,

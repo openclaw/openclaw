@@ -6,9 +6,10 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
-import * as scheduledTasks from "../../daemon/schtasks.js";
+import * as scheduledTasks from "../../daemon/schtasks-control.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -79,8 +80,8 @@ function expectPendingReport(fields: Record<string, unknown>) {
 }
 
 function materialSnapshot(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .map(String)
     .toSorted()
     .map((name) => {

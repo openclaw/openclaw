@@ -1,4 +1,4 @@
-import type { Model, StreamFn, Usage } from "@openclaw/llm-core";
+import type { Model, ModelRequestHeaders, StreamFn, Usage } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -312,7 +312,7 @@ export async function generateSummary(
   model: Model,
   reserveTokens: number,
   apiKey: string | undefined,
-  headers?: Record<string, string>,
+  headers?: ModelRequestHeaders,
   signal?: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
@@ -559,7 +559,7 @@ export async function compact(
   preparation: CompactionPreparation,
   model: Model,
   apiKey: string | undefined,
-  headers?: Record<string, string>,
+  headers?: ModelRequestHeaders,
   customInstructions?: string,
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,

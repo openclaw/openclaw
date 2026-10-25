@@ -172,6 +172,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             url,
             timeoutMs,
+            signal,
             ...(assertCurrent ? { assertCurrent } : {}),
             ...(resolveRelayTarget
               ? {
@@ -331,7 +332,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                   timeoutMs,
                   signal,
                 })
@@ -499,7 +500,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ? await pwModule
                 .getObservedBrowserStateViaPlaywright({
                   ...playwrightTarget,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                 })
                 .catch(() => undefined)
             : undefined;
@@ -579,7 +580,7 @@ export function registerBrowserAgentSnapshotRoutes(
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
               ...playwrightTarget,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
               signal,
@@ -684,7 +685,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ...playwrightTarget,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               signal,
             });
           } else {

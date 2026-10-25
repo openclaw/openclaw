@@ -6,24 +6,17 @@ import {
 import { DesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
   if (error instanceof DesktopCredentialsRequiredError) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
-        details: { code: error.detailCode, auth: error.auth },
-      }),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, error.message, {
+      details: { code: error.detailCode, auth: error.auth },
+    });
     return;
   }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback),
-  );
+  respondError(respond, ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : fallback);
 }
 
 export async function respondDesktopObserve(params: {
@@ -36,13 +29,10 @@ export async function respondDesktopObserve(params: {
   if (request.source.kind !== "environment") {
     const host = request.source.kind === "host";
     if (host && context.getRuntimeConfig().desktop?.host?.enabled !== true) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
       );
       return;
     }
@@ -60,15 +50,12 @@ export async function respondDesktopObserve(params: {
         ? hostService?.observe.bind(hostService, options)
         : nodeService?.observe.bind(nodeService, { ...options, nodeId: request.source.nodeId });
     if (!observe) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          host
-            ? "gateway host desktop is unavailable in this Gateway runtime"
-            : "node desktop service is unavailable; reconnect to the Gateway and retry",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        host
+          ? "gateway host desktop is unavailable in this Gateway runtime"
+          : "node desktop service is unavailable; reconnect to the Gateway and retry",
       );
       return;
     }
@@ -116,11 +103,7 @@ async function respondWorkerDesktop(
 ) {
   const service = params.context.workerEnvironmentService;
   if (!service) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
-    );
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, "unknown environmentId");
     return;
   }
   try {

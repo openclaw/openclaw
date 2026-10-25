@@ -68,6 +68,20 @@ it("patchAllowlistUsersInConfigEntries canonicalizes nested users", () => {
   expect(patched).toEqual({ alpha: { users: ["111", "Bob"] }, beta: { users: ["*"] } });
 });
 
+it("patchAllowlistUsersInConfigEntries keeps original users before resolved IDs by default", () => {
+  const patched = patchAllowlistUsersInConfigEntries({
+    entries: { alpha: { users: [" Alice ", "Bob"], enabled: true }, beta: { topic: "room" } },
+    resolvedMap: new Map([
+      ["Alice", { input: "Alice", resolved: true, id: "111" }],
+      ["Bob", { input: "Bob", resolved: false }],
+    ]),
+  });
+  expect(patched).toEqual({
+    alpha: { users: ["Alice", "Bob", "111"], enabled: true },
+    beta: { topic: "room" },
+  });
+});
+
 describe("summarizeMapping", () => {
   it("logs sampled resolved and unresolved entries", () => {
     const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

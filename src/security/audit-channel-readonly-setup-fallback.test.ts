@@ -91,7 +91,6 @@ describe("security audit channel read-only setup fallback", () => {
       config: cfg,
       sourceConfig: cfg,
       includeFilesystem: false,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
 

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSnapshot } from "../../../config/mutate.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 
 const { migrateLegacyConfigMock, stripUnknownConfigKeysMock, noteMock } = vi.hoisted(() => ({
@@ -29,16 +30,8 @@ function createLegacyStepResult(
 ) {
   return applyLegacyCompatibilityStep({
     snapshot: {
-      exists: true,
-      path: "/tmp/config.json",
-      valid: true,
+      ...createSnapshot({ hash: "fixture", path: "/tmp/config.json", sourceConfig }),
       raw: "{}",
-      resolved: sourceConfig,
-      sourceConfig,
-      config: sourceConfig,
-      runtimeConfig: sourceConfig,
-      issues: [],
-      warnings: [],
       ...snapshot,
     },
     state: mutationState(),

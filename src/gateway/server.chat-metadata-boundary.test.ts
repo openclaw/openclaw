@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearConfigCache,
@@ -8,11 +9,16 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { installGatewayTestHooks, rpcReq, startConnectedServerWithClient } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  rpcReq,
+  startServerWithClient,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-type ConnectedGateway = Awaited<ReturnType<typeof startConnectedServerWithClient>>;
+type ConnectedGateway = Awaited<ReturnType<typeof startServerWithClient>>;
 
 let gateway: ConnectedGateway;
 let minimalGatewayEnv: ReturnType<typeof captureEnv> | undefined;
@@ -22,8 +28,10 @@ beforeAll(async () => {
   // Minimal mode hides the production lifecycle's sticky-publication regression.
   setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
   await writeGatewayConfig(boundaryConfig());
-  gateway = await startConnectedServerWithClient();
+  gateway = await startServerWithClient();
   await gateway.server.startupSettled;
+  await waitForGatewayStartup(gateway.port);
+  await connectOk(gateway.ws);
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });

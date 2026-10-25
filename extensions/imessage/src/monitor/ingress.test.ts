@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIMessageDurableIngress } from "./ingress.js";
 
@@ -59,14 +60,6 @@ function createIngress(options: Partial<Parameters<typeof createIMessageDurableI
   return ingress;
 }
 
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 afterEach(async () => {
   for (const ingress of ingresses.toReversed()) {
     await ingress.stop();
@@ -111,8 +104,8 @@ describe("iMessage durable ingress", () => {
   });
 
   it("serializes durable cursor advancement before admitting the next row", async () => {
-    const cursorGate = deferred();
-    const cursorStarted = deferred();
+    const cursorGate = deferred<void>();
+    const cursorStarted = deferred<void>();
     let currentTime = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => currentTime);
     const onDurableEnqueue = vi.fn(async () => {
@@ -145,9 +138,9 @@ describe("iMessage durable ingress", () => {
   });
 
   it("lets an approval poll vote overtake the conversation turn awaiting it", async () => {
-    const firstStarted = deferred();
-    const releaseFirst = deferred();
-    const voteStarted = deferred();
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const voteStarted = deferred<void>();
     const dispatch = vi.fn(async (message: { id?: number | null }) => {
       if (message.id === 101) {
         firstStarted.resolve();
@@ -193,9 +186,9 @@ describe("iMessage durable ingress", () => {
   });
 
   it("keeps an unowned poll vote behind the earlier conversation turn", async () => {
-    const firstStarted = deferred();
-    const releaseFirst = deferred();
-    const unrelatedChecked = deferred();
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const unrelatedChecked = deferred<void>();
     const dispatch = vi.fn(async (message: { id?: number | null }) => {
       if (message.id === 101) {
         firstStarted.resolve();

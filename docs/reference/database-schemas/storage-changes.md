@@ -70,6 +70,19 @@ writes and validates the exact serialized row before persisting it. Offline
 migration and repair retain explicit pending work and invalidate session-validation
 receipts; they never reuse readiness to admit unvalidated imports.
 
+Unknown persisted and imported session entries admit optional numeric metadata, including spawn
+depth, usage counters, timestamps, and costs, before typed consumers use it.
+Wrong types and non-finite values stop admission with a repair diagnostic rather
+than being coerced or discarded. Existing snooze normalization keeps its own
+deadline policy, and extensible plugin and nested payload contracts are unchanged.
+With the Gateway stopped, `openclaw doctor --fix` converts supported legacy
+numeric strings; spawn depth requires a nonnegative decimal integer. Unusable
+values remain available for offline repair or restoration. This uses the existing
+backed-up Doctor path and requires no schema-version change. Trusted internal
+projections and writes reuse admitted numeric fields without revalidating them.
+Doctor commits converted archive, activity, and run-timing query columns with the
+repaired JSON in the same transaction, preserving unrelated indexed facts.
+
 The pending table remains derived and stores no authority or copied payloads.
 Migration validates the prior schema, retires its validation triggers, queues all
 existing nodes, and clears the old session-validation receipt atomically with version
@@ -131,6 +144,22 @@ their state DDL. The generated `runtime.ts` module packages that same SQL with
 fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
+
+Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
+primary-key columns. Nullable columns and expression keys retain SQLite's
+`ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
+`ORDER BY` use non-null indexes without changing observable nullable ordering.
+State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
+Team Reports schema 2 rebuild only changed explicit indexes through versioned
+schema admission under its existing advisory lock. Absent first-use fragments
+stay absent. SQLite advances version metadata without changing canonical DDL.
+Historical admission and backup descriptors retain the preceding index definitions;
+rollback restores the verified pre-upgrade backup. Update and Doctor retain their
+existing migration progress and recovery handling.
+
+The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
+`postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
+owners share that cutover and exact predecessor reconstruction for generated DDL.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -958,7 +987,7 @@ transaction and commit admission. Only an actual scratch write marks its busines
 completion receipt. Unset tombstones, byte limits, source provenance and uncertain
 outcome handling are unchanged. Doctor's migration and compensation keep the same
 synchronous kernel. Ordinary scratch reads use the shared-state reader, with job
-definition and scratch in one native snapshot. The service rejects a changed
+definition and scratch in one joined statement snapshot. The service rejects a changed
 definition, and the Gateway rechecks the caller before returning private content.
 Scratch reads and writes reuse the original projection's creation-time fallback
 for legacy rows missing that metadata; finite persisted values always win.
@@ -2267,9 +2296,17 @@ that scope while retaining a healthy idle worker. Database retirement revokes qu
 requests, drains dispatched work, and joins native exit. The process keeps at most one
 reusable archive worker; scopes in the same state directory transfer it with fresh
 authority. Different state directories and unhealthy workers require native exit
-before replacement.
-Cold preparation and mutations retain their separate one-shot workers; cold mutations
-join their existing page maintenance and native exit.
+before replacement. Five minutes without archive work retires the idle worker and
+releases its loaded heap. Only actual work renews that deadline; empty scope
+preparation does not. Admission racing retirement joins native exit before creating
+a replacement, and an open archive scope remains usable afterward.
+Cold mutations share that archive worker through a private operation port. Each
+mutation retains its own live writer admission and commit checks, closes its agent
+database, source readers, and shared-state database, then acknowledges cleanup on
+the same port as its result. Cleanup uncertainty retires the worker and joins native
+exit before returning an error. No native connection or lease survives between
+mutations. Cold preparation still uses a separate one-shot worker, and cold
+maintenance retains its existing page reclamation.
 
 History eviction prepares its deletion snapshot in that archive worker's existing
 materialization request. The final reclamation transaction rereads durable references,

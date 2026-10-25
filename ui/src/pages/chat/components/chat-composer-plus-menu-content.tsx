@@ -16,8 +16,9 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
+import "./chat-camera-capture.tsx";
 import { resolveComposerSkills } from "../composer-capability-catalog.ts";
-import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
+import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -26,6 +27,7 @@ import {
   toolsForServer,
   isToolDenied,
   MCP_DISCOVERY_NOTICE_IDS,
+  menuRenderInputs,
 } from "./chat-composer-menu-inputs.ts";
 import {
   renderBackRow,
@@ -35,6 +37,7 @@ import {
 } from "./chat-composer-menu-rows.tsx";
 import type {
   ChatComposerMenuSkill,
+  ChatComposerPlusMenuBodyProps,
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.types.ts";
@@ -45,11 +48,17 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
-    for (const [id, icon, label] of useSingleAttachmentPicker()
-      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
+    const mediaOption = menu.attachments.imagesOnly
+      ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
+      : (["media", "image", t("chat.composer.attachMedia")] as const);
+    for (const [id, icon, label] of useNativeAttachmentSourceMenu()
+      ? ([
+          ...(!menu.attachments.imagesOnly ? [mediaOption] : []),
+          ["file", "paperclip", t("chat.composer.attach")],
+        ] as const)
       : ([
           ["camera", "camera", t("chat.composer.takePhoto")],
-          ["photo", "image", t("chat.composer.attachPhoto")],
+          mediaOption,
           // Image-only composers keep the single picker's file input, filtered to images.
           ...(menu.attachments.imagesOnly
             ? []
@@ -370,7 +379,7 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
   return entries;
 }
 
-export function handleMenuSelection(
+function handleMenuSelection(
   { id: value }: MenuItem,
   event: CustomEvent<MenuItem>,
   menu: MenuHandle,
@@ -381,7 +390,7 @@ export function handleMenuSelection(
   const { surface } = overlay;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    (value === "camera" || value === "photo" || value === "file")
+    (value === "camera" || value === "photo" || value === "file" || value === "media")
   ) {
     props.inputHandle.open(value);
     return;
@@ -523,9 +532,7 @@ export function handleMenuSelection(
   }
 }
 
-export { menuRenderInputs } from "./chat-composer-menu-inputs.ts";
-
-export function menuItems(
+function menuItems(
   menu: ChatComposerPlusMenuContentProps,
   view: ChatComposerPlusMenuView,
   readMenu: () => ChatComposerPlusMenuContentProps,
@@ -539,4 +546,36 @@ export function menuItems(
         : view.startsWith("library:")
           ? composerLibraryMenuItems(menu.library, view.slice("library:".length))
           : rootItems(menu);
+}
+
+export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps) {
+  const inputs = createMemo(
+    () => {
+      const view = props.view;
+      const menu = props.menu;
+      return { view, menu, values: menuRenderInputs(menu, view) };
+    },
+    {
+      lazy: true,
+      equals: (previous, next) =>
+        previous.view === next.view &&
+        previous.values.length === next.values.length &&
+        previous.values.every((value, index) => Object.is(value, next.values[index])),
+    },
+  );
+  const items = createMemo(
+    () => {
+      const { view, menu } = inputs();
+      return menuItems(menu, view, () => inputs().menu);
+    },
+    { lazy: true },
+  );
+  onSettled(() => {
+    props.onReady({
+      items,
+      select: (item, event) => handleMenuSelection(item, event, props.readMenu(), props),
+    });
+    return () => props.onReady(undefined);
+  });
+  return <>{props.renderItems(items)}</>;
 }

@@ -10,6 +10,7 @@ import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import {
+  createReleaseCheckSelection,
   createReleaseSourceSelection,
   createReleaseWorkflowMatrixPlan,
 } from "../../scripts/plan-release-workflow-matrix.mjs";
@@ -130,6 +131,37 @@ function expectStableMatrices(docker: MatrixEntry[], live: MatrixEntry[]) {
   expect(docker.map((row) => row.chunk_id)).toEqual(FULL_DOCKER_CHUNKS);
   expect(live.map((row) => row.providers)).toEqual(STABLE_PROVIDERS);
 }
+
+describe("Windows node release-check selection", () => {
+  it.each([
+    ["all", "all", true],
+    ["all", "candidate", true],
+    ["all", "independent", false],
+    ["windows-node", "all", true],
+    ["windows-node", "candidate", true],
+    ["windows-node", "independent", false],
+    ["cross-os", "candidate", false],
+  ])("schedules %s/%s only with candidate execution", (rerunGroup, phase, scheduled) => {
+    const selected = createReleaseCheckSelection({ rerunGroup, phase });
+    expect(selected.windows_node_scheduled).toBe(scheduled);
+    if (scheduled) {
+      expect(selected.package_required).toBe(true);
+      expect(JSON.parse(selected.release_check_groups_json)).toContain("windows-node");
+    }
+    if (rerunGroup === "windows-node") {
+      expect(selected).toMatchObject({
+        package_required: scheduled,
+        cross_os_scheduled: false,
+        package_acceptance_scheduled: false,
+        docker_required: false,
+        install_smoke_scheduled: false,
+        live_e2e_scheduled: false,
+        qa_parity_scheduled: false,
+        qa_live_scheduled: false,
+      });
+    }
+  });
+});
 
 describe("scripts/plan-release-workflow-matrix.mjs", () => {
   it("normalizes an empty CLI profile to stable matrices", () => {
@@ -418,7 +450,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
     const { steps } = plannerJob;
     const setup = requiredStep(plannerJob, "Setup admission Node.js");
     expect(setup.if).toBeUndefined();
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
     const planner = requiredStep(plannerJob, "Plan shared live image plugins");

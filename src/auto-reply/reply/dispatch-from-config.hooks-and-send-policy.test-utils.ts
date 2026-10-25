@@ -15,6 +15,7 @@ import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerFastAutoProgressCases } from "./dispatch-from-config.fast-progress.cases.js";
 import { registerQueuedFollowupNoticeCases } from "./dispatch-from-config.queue-notices.test-support.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -49,12 +50,110 @@ import { buildTestCtx } from "./test-ctx.js";
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
 
-function sendPolicySessionEntry(sendPolicy: "allow" | "deny") {
-  return { sessionId: "s1", updatedAt: 0, sendPolicy };
+function createThreadedSlackContext(
+  sessionKey: string,
+  body: string,
+  overrides: Partial<MsgContext> = {},
+) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    SessionKey: sessionKey,
+    ParentSessionKey: "agent:main:slack:channel:c1",
+    Body: body,
+    CommandBody: body,
+    RawBody: body,
+    InboundAccessAuthorized: true,
+    InboundEventKind: "user_request",
+    InputProvenance: { kind: "external_user", sourceChannel: "slack" },
+    ...overrides,
+  });
+}
+
+function createArchivedDiscordContext(to: string, sessionKey: string) {
+  return buildTestCtx({
+    Provider: "discord",
+    Surface: "discord",
+    OriginatingChannel: "discord",
+    OriginatingTo: to,
+    ChatType: "channel",
+    From: "discord:user:12345",
+    To: to,
+    AccountId: "default",
+    SessionKey: sessionKey,
+    Body: "start work",
+    CommandBody: "start work",
+    RawBody: "start work",
+    CommandSource: undefined,
+    InboundAccessAuthorized: true,
+    InboundEventKind: "user_request",
+    InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+  });
+}
+
+function exhaustedRecoveryState() {
+  return {
+    cycleId: "cycle-1",
+    revision: 4,
+    chargedAttempts: 3,
+    tombstone: { reason: "automatic recovery exhausted" },
+  };
 }
 
 function groupSilenceConfig(group: "allow" | "disallow"): OpenClawConfig {
   return { agents: { defaults: { silentReply: { group } } } };
+}
+
+function createMentionedGroupContext(channel: "telegram" | "feishu" = "telegram") {
+  return buildTestCtx({
+    ChatType: "group",
+    Surface: channel,
+    Provider: channel,
+    SessionKey: `agent:main:${channel}:group:oc_group`,
+    WasMentioned: true,
+  });
+}
+
+function mockTelegramTopicPluginBinding(bindingId: string) {
+  mockPluginBinding({
+    bindingId,
+    targetSessionKey: "plugin-binding:codex:abc123",
+    conversation: {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890:topic:11",
+      parentConversationId: "-1001234567890",
+    },
+    pluginRoot: "/tmp/plugin",
+  });
+}
+
+function createTelegramTopicContext(overrides: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:-1001234567890",
+    To: "telegram:-1001234567890",
+    AccountId: "default",
+    MessageThreadId: 11,
+    ChatType: "group",
+    GroupSubject: "Dev",
+    WasMentioned: false,
+    ...overrides,
+  });
+}
+
+function crossChannelGroupContext() {
+  return buildTestCtx({
+    ChatType: "group",
+    Surface: "slack",
+    Provider: "slack",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:999",
+    SessionKey: "agent:main:slack:group:oc_group",
+    WasMentioned: true,
+  });
 }
 
 beforeAll(globalBeforeAll0);
@@ -503,13 +602,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
     {
       name: "mentioned group turns",
-      ctx: buildTestCtx({
-        ChatType: "group",
-        Surface: "feishu",
-        Provider: "feishu",
-        SessionKey: "agent:main:feishu:group:oc_group",
-        WasMentioned: true,
-      }),
+      ctx: createMentionedGroupContext("feishu"),
       cfg: groupSilenceConfig("disallow"),
     },
   ])("does not let a silence callback waive a required reply in $name", async ({ ctx, cfg }) => {
@@ -569,7 +662,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   );
 
-  it.each(["heartbeat", "internal event"] as const)(
+  it.each(["internal event"] as const)(
     "does not add a missing-answer backstop after an empty %s",
     async (kind) => {
       setNoAbort();
@@ -588,7 +681,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         }),
         cfg: emptyConfig,
         dispatcher,
-        replyOptions: { isHeartbeat: kind === "heartbeat" },
+        replyOptions: {},
         replyResolver: async (_ctx, opts) => {
           const runState = resolveReplyOperationRunState(opts);
           if (!runState) {
@@ -690,13 +783,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "feishu",
-      Provider: "feishu",
-      SessionKey: "agent:main:feishu:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext("feishu");
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -863,13 +950,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     // No silentReply config: group default is "allow", but an explicit mention
     // is a directed turn and must never end silently.
@@ -893,13 +974,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -987,15 +1062,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1021,15 +1088,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1049,15 +1108,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1083,15 +1134,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onBlockReply?.({ mediaUrl: "https://example.com/seatmap.png" });
       return undefined;
     });
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1119,13 +1162,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onBlockReply?.({ text: "Streamed answer content." });
       return undefined;
     });
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1149,13 +1186,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     delete dispatcher.supportsSettledReceipt;
     dispatcher.waitForIdle = vi.fn(async () => {});
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1180,13 +1211,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1206,13 +1231,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     dispatcher.sendFinalReply = vi.fn(() => false);
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1243,15 +1262,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "real answer" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1284,13 +1295,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onBlockReply?.({ text: "Streamed answer content." });
       return undefined;
     });
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1317,13 +1322,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       beforeDeliver: async () => null,
     });
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1348,13 +1347,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
     });
     const replyResolver = vi.fn(async () => ({ text: "cancelled answer" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "telegram",
-      Provider: "telegram",
-      SessionKey: "agent:main:telegram:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = createMentionedGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1582,24 +1575,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:archived-test",
-      ChatType: "channel",
-      From: "discord:user:12345",
-      To: "discord:channel:archived-test",
-      AccountId: "default",
-      SessionKey: "agent:main:discord:channel:archived-test",
-      Body: "start work",
-      CommandBody: "start work",
-      RawBody: "start work",
-      CommandSource: undefined,
-      InboundAccessAuthorized: true,
-      InboundEventKind: "user_request",
-      InputProvenance: { kind: "external_user", sourceChannel: "discord" },
-    });
+    const ctx = createArchivedDiscordContext(
+      "discord:channel:archived-test",
+      "agent:main:discord:channel:archived-test",
+    );
 
     await expect(
       dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
@@ -1663,24 +1642,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         : undefined;
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
-      const ctx = buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:restored-test",
-        ChatType: "channel",
-        From: "discord:user:12345",
-        To: "discord:channel:restored-test",
-        AccountId: "default",
-        SessionKey: sessionKey,
-        Body: "start work",
-        CommandBody: "start work",
-        RawBody: "start work",
-        CommandSource: undefined,
-        InboundAccessAuthorized: true,
-        InboundEventKind: "user_request",
-        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
-      });
+      const ctx = createArchivedDiscordContext("discord:channel:restored-test", sessionKey);
 
       const dispatch = dispatchReplyFromConfig({
         ctx,
@@ -1728,12 +1690,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       updatedAt: Date.now(),
       archivedAt,
       status: "failed",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
+      mainRestartRecovery: exhaustedRecoveryState(),
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
@@ -1781,18 +1738,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => ({ text: "thread handled" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        SessionKey: "agent:main:slack:channel:c1:thread:healthy",
-        ParentSessionKey: "agent:main:slack:channel:c1",
-        Body: "thread reply",
-        CommandBody: "thread reply",
-        RawBody: "thread reply",
-        InboundAccessAuthorized: true,
-        InboundEventKind: "user_request",
-        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
-      }),
+      ctx: createThreadedSlackContext("agent:main:slack:channel:c1:thread:healthy", "thread reply"),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -1814,12 +1760,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sessionId: "preseed-thread-session",
       updatedAt: Date.now(),
       archivedAt,
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
+      mainRestartRecovery: exhaustedRecoveryState(),
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => {
@@ -1828,18 +1769,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        SessionKey: "agent:main:slack:channel:c1:thread:123",
-        ParentSessionKey: "agent:main:slack:channel:c1",
-        Body: "thread reply",
-        CommandBody: "thread reply",
-        RawBody: "thread reply",
-        InboundAccessAuthorized: true,
-        InboundEventKind: "user_request",
-        InputProvenance: { kind: "external_user", sourceChannel: "slack" },
-      }),
+      ctx: createThreadedSlackContext("agent:main:slack:channel:c1:thread:123", "thread reply"),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -1866,31 +1796,18 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionStoreMocks.currentEntry = {
       sessionId: "preseed-thread-session",
       updatedAt: Date.now(),
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
+      mainRestartRecovery: exhaustedRecoveryState(),
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     await expect(
       dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "slack",
-          Surface: "slack",
-          SessionKey: "agent:main:slack:channel:c1:thread:123",
-          ParentSessionKey: "agent:main:slack:channel:c1",
-          Body: "thread event",
-          CommandBody: "thread event",
-          RawBody: "thread event",
-          InboundAccessAuthorized: true,
-          InboundEventKind: "user_request",
-          InputProvenance: { kind: "external_user", sourceChannel: "slack" },
-          ...context,
-        }),
+        ctx: createThreadedSlackContext(
+          "agent:main:slack:channel:c1:thread:123",
+          "thread event",
+          context,
+        ),
         cfg: emptyConfig,
         dispatcher,
         replyResolver,
@@ -2206,32 +2123,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
-      bindingId: "binding-message-tool-fallback",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
-      pluginRoot: "/tmp/plugin",
-    });
+    mockTelegramTopicPluginBinding("binding-message-tool-fallback");
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
+    const ctx = createTelegramTopicContext({
       Body: "observed message",
-      WasMentioned: false,
     });
 
     const result = await dispatchReplyFromConfig({
@@ -2352,38 +2249,18 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
-      bindingId: "binding-message-tool-command",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
-      pluginRoot: "/tmp/plugin",
-    });
+    mockTelegramTopicPluginBinding("binding-message-tool-command");
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const cfg = { messages: { visibleReplies: "message_tool" } } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "reset ack" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
+    const ctx = createTelegramTopicContext({
       Body: "/reset@openclaw",
       RawBody: "/reset@openclaw",
       CommandBody: "/reset@openclaw",
       BotUsername: "openclaw",
       CommandSource: undefined,
       CommandAuthorized: true,
-      WasMentioned: false,
     });
 
     await dispatchReplyFromConfig({
@@ -2402,36 +2279,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     mockPluginBindingClaim();
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
-      bindingId: "binding-native-unauthorized",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
-      pluginRoot: "/tmp/plugin",
-    });
+    mockTelegramTopicPluginBinding("binding-native-unauthorized");
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
+    const ctx = createTelegramTopicContext({
       Body: "/status",
       RawBody: "/status",
       CommandBody: "/status",
       CommandSource: "native",
       CommandAuthorized: false,
-      WasMentioned: false,
     });
 
     await dispatchReplyFromConfig({
@@ -2459,30 +2316,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     setNoAbort();
     mockPluginBindingClaim();
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
-      bindingId: "binding-structured-normal-turn",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
-      pluginRoot: "/tmp/plugin",
-    });
+    mockTelegramTopicPluginBinding("binding-structured-normal-turn");
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
+    const ctx = createTelegramTopicContext({
       Body: "through this",
       RawBody: "through this",
       CommandBody: "/think high through this",
@@ -2493,7 +2331,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         authorized: false,
         body: "/think high through this",
       },
-      WasMentioned: false,
     });
 
     await dispatchReplyFromConfig({
@@ -2699,12 +2536,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers fast auto progress in message-tool-only mode when verbose progress is on", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const payload = {
       text: "💨Fast: auto-off(75s>=60s)",
@@ -2740,12 +2572,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     "suppresses $label fast auto progress for room-event message-tool-only turns",
     async ({ forceToolResultProgress, verboseLevel }) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", {
         verboseLevel,
-      };
+      });
       const dispatcher = createDispatcher();
       const onToolResult = vi.fn(() => true);
       const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -2925,12 +2754,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("delivers verbose tool progress in message-tool-only mode", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => false);
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {

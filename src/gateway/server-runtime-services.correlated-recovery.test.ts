@@ -42,9 +42,7 @@ import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 
 const { resume } = vi.hoisted(() => ({ resume: vi.fn() }));
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({ resumeSubagentRun: resume }));
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: () => ({ stop() {}, updateConfig() {} }),
-}));
+
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop() {} }),
 }));
@@ -266,12 +264,11 @@ describe("registered correlated completion recovery custody", () => {
           cfgAtStart: cfg,
           deps: {},
           sessionDeliveryRecoveryMaxEnqueuedAt: queued.enqueuedAt,
-          cronEnabled: false,
           log: { ...log, child: () => log },
         });
       let services = startServices();
       const replaySettlement = async () => {
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
         services = startServices();
         await clock.advanceBy(1_250);
         await services.stopDeliveryRecovery();
@@ -345,7 +342,7 @@ describe("registered correlated completion recovery custody", () => {
         }
       } finally {
         await services.stopDeliveryRecovery();
-        services.heartbeatRunner.stop();
+        await services.stopScheduledServices();
         await scheduler.stop();
         subagentRuns.delete(child.runId);
         vi.unstubAllEnvs();

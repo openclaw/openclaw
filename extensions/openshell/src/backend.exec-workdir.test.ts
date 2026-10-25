@@ -6,35 +6,22 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  tempWorkspace,
-  type TempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
+import type { TempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOpenShellSandboxBackendFactory } from "./backend.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { resolveOpenShellPluginConfig } from "./config.js";
+import {
+  cliMocks,
+  sandboxMocks as sdkMocks,
+  createOpenShellSandboxBackendFactory as createFactory,
+  installOpenShellBackendMocks,
+  uninstallOpenShellBackendMocks,
+} from "./openshell-backend.test-support.js";
+import { createOpenShellTestWorkspace, writeFiles } from "./openshell-fs.test-support.js";
 import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
-const sdkMocks = vi.hoisted(() => ({
-  runSshSandboxCommand: vi.fn(),
-  disposeSshSandboxSession: vi.fn(),
-  prepareSshSandboxExec: vi.fn(),
-}));
-
-const cliMocks = vi.hoisted(() => ({
-  runOpenShellCli: vi.fn(),
-  createOpenShellSshSession: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/sandbox", async (importOriginal) => {
-  return { ...(await importOriginal<typeof import("openclaw/plugin-sdk/sandbox")>()), ...sdkMocks };
-});
-
-vi.mock("./cli.js", async (importOriginal) => {
-  return { ...(await importOriginal<typeof import("./cli.js")>()), ...cliMocks };
-});
+beforeAll(installOpenShellBackendMocks);
+afterAll(uninstallOpenShellBackendMocks);
 
 const tempWorkspaces: TempWorkspace[] = [];
 const createdBackends: SandboxBackendHandle[] = [];
@@ -58,7 +45,7 @@ async function createBackend(
     workspaceAccess = "rw",
     ...config
   } = params;
-  const factory = createOpenShellSandboxBackendFactory({
+  const factory = createFactory({
     pluginConfig: resolveOpenShellPluginConfig(config),
   });
   const backend = await factory({
@@ -74,10 +61,7 @@ async function createBackend(
 }
 
 async function createWorkspace(prefix = "workspace") {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: `openclaw-openshell-${prefix}-`,
-  });
+  const workspace = await createOpenShellTestWorkspace(prefix);
   tempWorkspaces.push(workspace);
   return await fs.realpath(workspace.dir);
 }
@@ -87,14 +71,6 @@ async function createRoots(scopeKey: string, params: Parameters<typeof createBac
   const agentWorkspaceDir = await createWorkspace("agent");
   const backend = await createBackend(scopeKey, workspaceDir, { agentWorkspaceDir, ...params });
   return { workspaceDir, agentWorkspaceDir, backend };
-}
-
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const target = path.join(root, name);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, contents);
-  }
 }
 
 async function finalize(backend: SandboxBackendHandle, token: unknown) {
@@ -246,6 +222,15 @@ it("validates locally and uploads the workspace once when exec begins", async ()
   );
   const nestedFile = path.join(workspaceDir, "nested", "note.txt");
   const bridge = createBridge(backend, workspaceDir);
+  expect(bridge.pathMappings).toContainEqual({
+    hostRoot: path.resolve(workspaceDir),
+    containerRoot: "/sandbox",
+  });
+  expect(bridge.resolvePath({ filePath: "nested/note.txt" })).toEqual({
+    hostPath: nestedFile,
+    relativePath: "nested/note.txt",
+    containerPath: "/sandbox/nested/note.txt",
+  });
   await bridge.writeFile({ filePath: "nested/note.txt", data: "nested", mkdir: true });
   expect(cliMocks.runOpenShellCli).toHaveBeenLastCalledWith({
     context: expect.objectContaining({ sandboxName: backend.runtimeId }),

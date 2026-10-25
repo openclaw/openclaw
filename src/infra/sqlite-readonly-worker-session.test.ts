@@ -15,6 +15,7 @@ import {
   createScopedSqliteReadOnlyWorker,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 type Send = (message: unknown, callback: (error: Error | null) => void) => boolean;
@@ -66,15 +67,6 @@ function requestId(child: MockChild): number {
   }
   return request.id;
 }
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const mark = () => {
-    settled = true;
-  };
-  void promise.then(mark, mark);
-  return () => settled;
-}
-
 function reply(child: MockChild, result: unknown) {
   child.emit("message", { id: requestId(child), result });
 }
@@ -88,12 +80,12 @@ async function expectRetirement(
   const settled = observeSettlement(result);
   await nextTurn();
   expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-  expect(settled()).toBe(false);
+  expect(settled.settled).toBe(false);
   const closing = session.close();
   const closeSettled = observeSettlement(closing);
   try {
     await nextTurn();
-    expect([closeSettled(), settled()]).toEqual([false, false]);
+    expect([closeSettled.settled, settled.settled]).toEqual([false, false]);
   } finally {
     child.emit("close", null, "SIGKILL");
     await closing;
@@ -127,7 +119,7 @@ it.each([
     }
     child.emit("error", failure);
     await nextTurn();
-    expect(settled()).toBe(false);
+    expect(settled.settled).toBe(false);
     expect(session.notStarted).toBe(false);
     child.emit("close", -1, null);
     const error = await observed;
@@ -155,6 +147,14 @@ it("does not mark a runnable runtime unavailable after an ordinary worker abort"
   child.emit("close", null, "SIGABRT");
   await expect(result).rejects.toThrow("SQLite read-only worker exited with signal SIGABRT");
   expect(readChildRuntimeViability().available).toBe(true);
+});
+
+it("leaves inspection budgeting to the caller that owns the deadline", async () => {
+  const { session, child, readBudget } = createSession();
+  const result = session.run("/fixture/caller-owned.sqlite", { mode: "staging-create" });
+  reply(child, { ok: true, location: "/fixture/staged" });
+  await expect(result).resolves.toBe("/fixture/staged");
+  expect(readBudget).not.toHaveBeenCalled();
 });
 
 it("reuses its child after a well-formed staging refusal", async () => {

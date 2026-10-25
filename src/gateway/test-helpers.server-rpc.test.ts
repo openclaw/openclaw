@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -90,16 +91,12 @@ async function ownedDirectory(name: string) {
 
 async function retainGatewayEvent() {
   const root = tryBeginGatewayRootWorkAdmission("test:transcript-event");
-  if (!root) {
-    throw new Error("expected gateway root admission");
-  }
+  assert(root, "expected gateway root admission");
   try {
     const continuation = await root.run(async () =>
       retainGatewayRootWorkAdmissionContinuationScope(),
     );
-    if (!continuation) {
-      throw new Error("expected retained gateway event");
-    }
+    assert(continuation, "expected retained gateway event");
     return continuation;
   } finally {
     root.release();
@@ -113,9 +110,7 @@ describe("Gateway RPC fixture session writes", () => {
     expect((await rpcReq(ws, "chat.history", { sessionKey: "main" })).ok).toBe(true);
     const runtime = getGatewayRecoveryRuntime();
     const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
-    if (!projection) {
-      throw new Error("Suite Gateway projection is missing");
-    }
+    assert(projection, "Suite Gateway projection is missing");
     await projection.ensureMaterialized();
     const entered = createDeferred();
     const release = createDeferred();

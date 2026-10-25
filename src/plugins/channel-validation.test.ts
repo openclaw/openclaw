@@ -40,44 +40,30 @@ function createChannelPlugin(overrides?: Partial<ChannelPlugin>): ChannelPlugin 
   };
 }
 
-it("fills bundled channel metadata from the canonical core baseline", () => {
-  const { register, expectDiagnostic } = createChannelRegistry();
-  const normalized = register({
-    id: "telegram",
-    meta: { id: "telegram" } as never,
-  });
-
-  const telegram = getChatChannelMeta("telegram");
-  expect(normalized?.meta).toMatchObject({
-    label: telegram.label,
-    selectionLabel: telegram.selectionLabel,
-    docsPath: telegram.docsPath,
-    blurb: telegram.blurb,
-  });
-  expectDiagnostic(
-    'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
-  );
-});
-
-it("falls back to the channel id for external channels with incomplete metadata", () => {
-  const { register, expectDiagnostic } = createChannelRegistry();
-  const normalized = register({
-    id: "external-chat",
-    meta: { id: "external-chat" } as never,
-  });
-
-  expect({ id: normalized?.id, meta: normalized?.meta }).toEqual({
-    id: "external-chat",
-    meta: {
+const { label, selectionLabel, docsPath, blurb } = getChatChannelMeta("telegram");
+it.each([
+  ["telegram", { label, selectionLabel, docsPath, blurb }, false],
+  [
+    "external-chat",
+    {
       id: "external-chat",
       label: "external-chat",
       selectionLabel: "external-chat",
       docsPath: "/channels/external-chat",
       blurb: "",
     },
-  });
+    true,
+  ],
+] as const)("fills incomplete metadata for %s", (id, meta, exact) => {
+  const { register, expectDiagnostic } = createChannelRegistry();
+  const normalized = register({ id, meta: { id } as never });
+  if (exact) {
+    expect({ id: normalized?.id, meta: normalized?.meta }).toEqual({ id, meta });
+  } else {
+    expect(normalized?.meta).toMatchObject(meta);
+  }
   expectDiagnostic(
-    'channel "external-chat" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    `channel "${id}" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb`,
   );
 });
 

@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -468,6 +469,24 @@ describe("command selection with configured model facts", () => {
     }
   });
 
+  it("reports the configured default replaced by a wildcard catalog route", async () => {
+    const capture = createWarnLogCapture("command-model-fallback");
+    try {
+      const fixture = createFixture();
+      fixture.store[sessionKey] = sessionEntry();
+      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+      fixture.inventory.mockReturnValue([
+        catalogEntry("remote", "z-first"),
+        catalogEntry("remote", "a-second"),
+      ]);
+      expect(await fixture.unchanged()).toMatchObject(expectedRoute("z-first", "remote"));
+      expect(await capture.findText("Falling back to")).toContain('"custom/base"');
+      expect(await capture.findText("Falling back to")).toContain('"remote/z-first"');
+    } finally {
+      capture.cleanup();
+    }
+  });
+
   it("keeps a literal catalog model over its alias", async () => {
     const fixture = createFixture();
     fixture.defaults.modelPolicy = { allow: ["custom/base", "custom/alias", "custom/actual"] };
@@ -548,7 +567,9 @@ describe("command selection with session routing", () => {
         messageChannel: fixture.ctx.Provider,
         groupId: child.groupId,
         groupChannel: child.groupChannel,
-        ...(fixture.heartbeat ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true } : {}),
+        ...(fixture.turnModelOverride
+          ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true }
+          : {}),
       },
       pluginsEnabled: false,
       configuredThinkingCatalog: [],
@@ -565,7 +586,7 @@ describe("command selection with session routing", () => {
     expect(
       turnModelVerdict(
         { provider: selection.provider, model: selection.model },
-        fixture.locked ? "locked" : fixture.heartbeat ? "explicit" : undefined,
+        fixture.locked ? "locked" : fixture.turnModelOverride ? "explicit" : undefined,
       ),
     ).toEqual(fixture.expected.command);
   });

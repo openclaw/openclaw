@@ -206,8 +206,36 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
           expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
         } else {
           expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+          if (change === "changed") {
+            expect(panel.querySelector("iframe")).toBe(frame);
+          }
         }
       }
     });
+
+    if (change === "failed") {
+      const recovered = createDeferred<ArrayBuffer | null>();
+      readBytes.mockImplementationOnce(() => recovered.promise);
+      panel.content = {
+        ...panel.content,
+        src: "/__openclaw__/assistant-media?mediaTicket=recovered",
+      };
+      await panel.updateComplete;
+      await waitForSolid(() => {
+        expect(readBytes).toHaveBeenCalledTimes(3);
+        expect(panel.querySelector(".sidebar-attachment-preview__loading")).not.toBeNull();
+        expect(panel.querySelector("[role=alert]")).toBeNull();
+        expect(panel.querySelector("iframe")).toBeNull();
+      });
+      recovered.resolve(bytes.slice(0));
+      await recovered.promise;
+      await waitForSolid(() => {
+        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        expect(panel.querySelector("iframe")).not.toBe(frame);
+        expect(urls.createObjectURL).toHaveBeenCalledTimes(2);
+        expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:original");
+        expect(panel.querySelector("[role=alert]")).toBeNull();
+      });
+    }
   },
 );

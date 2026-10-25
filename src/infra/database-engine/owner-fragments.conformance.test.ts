@@ -23,9 +23,14 @@ import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-wor
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
 import { NodeWorkerTurnStore } from "../../node-host/node-worker-turn-store.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -97,6 +102,152 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           state: "completed",
           resultJson: '{"marker":"pgfacts-turn"}',
         });
+        const next = { ...claim, launchId: "pgfacts-next-turn", runId: "pgfacts-next-run" };
+        const now = Date.now();
+        await turns.claim({
+          claim: next,
+          ownerLaunchId: claim.launchId,
+          supervisor,
+          worker: supervisor,
+          nowMs: now + 2,
+        });
+        // A predecessor only knows the physical journal; the next read settles its turn.
+        admit(() =>
+          runOpenClawStateWriteTransaction(({ db }) =>
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StateDatabase>(db)
+                .updateTable("node_worker_launches")
+                .set({
+                  state: "failed",
+                  error_text: "synthetic predecessor",
+                  completed_at_ms: now + 1,
+                  updated_at_ms: now + 1,
+                })
+                .where("launch_id", "=", claim.launchId),
+            ),
+          ),
+        );
+        const recovered = await turns.get(next.launchId);
+        expect(recovered).toMatchObject({
+          state: "failed",
+          resultJson: null,
+          errorText: "synthetic predecessor",
+          completedAtMs: now + 2,
+          updatedAtMs: now + 2,
+        });
+        expect(await turns.get(next.launchId)).toEqual(recovered);
+        expect(await turns.get(claim.launchId)).toMatchObject({
+          state: "completed",
+          resultJson: '{"marker":"pgfacts-turn"}',
+        });
+        // Ordinary settlement may update zero rows after all turns are recorded.
+        await launches.finish({ ...claim, supervisor, worker: supervisor, state: "failed" });
+        expect(await turns.get(next.launchId)).toEqual(recovered);
+
+        const cancelled = { ...claim, launchId: "pgfacts-cancelled", runId: "pgfacts-cancel-run" };
+        await launches.claim(cancelled, supervisor, 1);
+        await turns.claim({ claim: cancelled, ownerLaunchId: cancelled.launchId, supervisor });
+        await launches.finishCancelled({ expected: cancelled, supervisor, worker: null });
+        expect(await turns.get(cancelled.launchId)).toMatchObject({
+          state: "cancelled",
+          errorText: "node worker launch cancelled",
+        });
+      } finally {
+        await journal.drain();
+      }
+    });
+
+    it("returns launch claim postimages for successful and zero-row reclaims", async () => {
+      const journal = new NodeWorkerJournalWorker({});
+      const launches = new NodeWorkerLaunchStore(journal);
+      const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+      const predecessor = { pid: 2_147_483_647, startTime: 1 };
+      const claim = {
+        launchId: "postimage-launch",
+        planHash: "a".repeat(64),
+        gatewayNamespace: "postimage-gateway",
+        environmentId: "postimage-environment",
+        sessionId: "postimage-session",
+        ownerEpoch: 1,
+        placementGeneration: 1,
+        runId: "postimage-run",
+      };
+      const now = Date.now();
+      try {
+        const created = await launches.claim(claim, predecessor, 1, now + 7);
+        expect(created).toMatchObject({
+          action: "start",
+          receipt: { supervisor: predecessor, state: "pending", updatedAtMs: now + 7 },
+        });
+        expect(created).toEqual({
+          action: "start",
+          nonterminalCount: 1,
+          receipt: await launches.get(claim.launchId),
+        });
+        const reclaimed = await launches.claim(claim, supervisor, 1, now);
+        expect(reclaimed).toMatchObject({
+          action: "start",
+          receipt: { supervisor, state: "pending", updatedAtMs: now + 7 },
+        });
+        expect(reclaimed).toEqual({
+          action: "start",
+          nonterminalCount: 1,
+          receipt: await launches.get(claim.launchId),
+        });
+        const bootId = (await launches.get(claim.launchId))?.bootId;
+        admit(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StateDatabase>(db)
+                .updateTable("node_worker_launches")
+                .set({
+                  supervisor_pid: predecessor.pid,
+                  supervisor_start_time: predecessor.startTime,
+                })
+                .where("launch_id", "=", claim.launchId),
+            );
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StateDatabase>(db)
+                .updateTable("node_worker_launch_boots")
+                .set({ boot_id: "synthetic-old-boot" })
+                .where("launch_id", "=", claim.launchId),
+            );
+            // Exercise an actual zero-row write while preserving every launch constraint.
+            db.exec(
+              engine === "sqlite"
+                ? `CREATE TRIGGER skip_reclaim BEFORE UPDATE OF supervisor_pid ON node_worker_launches
+                   WHEN OLD.launch_id = 'postimage-launch' BEGIN SELECT RAISE(IGNORE); END`
+                : `CREATE FUNCTION skip_reclaim() RETURNS trigger LANGUAGE plpgsql AS
+                     $$ BEGIN RETURN NULL; END $$;
+                   CREATE TRIGGER skip_reclaim BEFORE UPDATE OF supervisor_pid ON node_worker_launches
+                     FOR EACH ROW WHEN (OLD.launch_id = 'postimage-launch')
+                     EXECUTE FUNCTION skip_reclaim()`,
+            );
+          }),
+        );
+        const noClaim = await launches.claim(claim, supervisor, 1, now + 20);
+        expect(noClaim).toMatchObject({
+          action: "replay",
+          receipt: {
+            supervisor: predecessor,
+            worker: null,
+            state: "pending",
+            updatedAtMs: now + 7,
+          },
+        });
+        expect(noClaim).toEqual({
+          action: "replay",
+          nonterminalCount: 1,
+          receipt: await launches.get(claim.launchId),
+        });
+        if (bootId) {
+          expect(noClaim).toHaveProperty("receipt.bootId", bootId);
+        } else {
+          expect(noClaim).not.toHaveProperty("receipt.bootId");
+        }
       } finally {
         await journal.drain();
       }

@@ -1,7 +1,7 @@
 import type { Locator } from "playwright";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 
-export type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
+type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
 export type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
 
 export function sampleHistoryAnchor(anchor: Locator) {

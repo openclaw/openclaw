@@ -1,5 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
+import type { MessagePort, Transferable } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   LeaseHeartbeatParentMessage,
@@ -13,11 +14,16 @@ const fixture = vi.hoisted(() => ({
   renew: vi.fn<() => number | undefined>(),
   readExpiry: vi.fn<() => number | undefined>(),
   receive: undefined as ((message: LeaseHeartbeatParentMessage) => void) | undefined,
+  ports: new Set<MessagePort>(),
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
+  const trackPort = (port: MessagePort) => {
+    fixture.ports.add(port);
+    port.once("close", () => fixture.ports.delete(port));
+  };
   return {
     ...actual,
     isMainThread: false,
@@ -33,15 +39,31 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           fixture.receive = undefined;
         }
       },
-      postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
+      postMessage(message: unknown, transfer: Transferable[] = []) {
+        const cloned = structuredClone(message, { transfer });
+        if (
+          cloned &&
+          typeof cloned === "object" &&
+          "port" in cloned &&
+          cloned.port instanceof actual.MessagePort
+        ) {
+          trackPort(cloned.port);
+        }
+        fixture.worker?.emit("message", cloned);
+      },
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
     },
     Worker: class extends EventEmitter {
       stdout = { resume() {} };
       stderr = { resume() {} };
-      constructor(_url: URL, options: { workerData: LeaseHeartbeatWorkerData }) {
+      constructor(
+        _url: URL,
+        options: { workerData: LeaseHeartbeatWorkerData; transferList?: Transferable[] },
+      ) {
         super();
-        fixture.data = options.workerData;
+        const data = structuredClone(options.workerData, { transfer: options.transferList });
+        fixture.data = data;
+        trackPort(data.databaseAdmissionPort);
         fixture.worker = this;
       }
       postMessage(message: LeaseHeartbeatParentMessage) {
@@ -121,7 +143,18 @@ beforeEach(() => {
   fixture.readExpiry.mockReset().mockReturnValue(acquiredAt + 60_000);
   fixture.receive = undefined;
 });
-afterEach(() => vi.useRealTimers());
+afterEach(async () => {
+  await Promise.all(
+    [...fixture.ports].map(
+      (port) =>
+        new Promise<void>((resolve) => {
+          port.once("close", resolve);
+          port.close();
+        }),
+    ),
+  );
+  vi.useRealTimers();
+});
 
 async function start() {
   const { startOpenClawStateLeaseHeartbeat } = await import("./openclaw-state-lease-heartbeat.js");

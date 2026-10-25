@@ -9,8 +9,8 @@ import { t } from "../../i18n/index.ts";
 import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-session-skill-library.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
+import { invalidateSessionSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { invalidateSessionSlashCommands } from "./chat-commands.ts";
 
 registerSessionSkillLibraryEnglish();
 

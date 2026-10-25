@@ -17,7 +17,7 @@ export function cloudWorkspaceResponses(sessionKey?: string) {
     "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
     ...(sessionKey
       ? {
-          "sessions.create": { key: sessionKey },
+          "sessions.create": { key: sessionKey, sessionId: `session:${sessionKey}` },
           "sessions.list": createdSessionListResult(sessionKey),
         }
       : {}),

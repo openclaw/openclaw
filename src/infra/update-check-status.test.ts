@@ -7,11 +7,7 @@ import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveVersionFromModuleUrl } from "../version.js";
-import {
-  checkUpdateStatus,
-  resolveUpdateInstallIdentity,
-  resolveUpdateInstallKind,
-} from "./update-check.js";
+import { checkUpdateStatus, resolveUpdateInstallKind } from "./update-check.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 
 const runCommandWithTimeout = processExec.runCommandWithTimeout;
@@ -202,7 +198,6 @@ it.for([
 
 it.for([
   { scope: "install kind", commands: 1 },
-  { scope: "identity", commands: 2 },
   { scope: "full status", commands: 5 },
 ] as const)(
   "joins $scope Git discovery before reporting cancellation",
@@ -237,9 +232,7 @@ it.for([
     const pending =
       scope === "install kind"
         ? resolveUpdateInstallKind(root, { signal: controller.signal })
-        : scope === "identity"
-          ? resolveUpdateInstallIdentity({ root, signal: controller.signal })
-          : inspectStatus(root, { signal: controller.signal });
+        : inspectStatus(root, { signal: controller.signal });
     const outcome = pending
       .then(
         () => undefined,
@@ -381,13 +374,11 @@ it.for([
     kind === "npm" ? "npm@10.0.0" : kind === "bun" ? "bun@1.2.0" : undefined,
     lockfiles,
   );
-  const resolveRegistryChannel = vi.fn(() => "extended-stable" as const);
   const env = kind === "lockless npm" ? { BUN_INSTALL: path.join(base, "custom-bun-home") } : {};
   await withEnvAsync(env, async () => {
     const status = await inspectStatus(root, {
       fetchGit: false,
       timeoutMs: 1000,
-      resolveRegistryChannel,
     });
     expect(status).toMatchObject({
       root,
@@ -413,10 +404,6 @@ it.for([
               ? { reason: "unknown package manager" }
               : {}),
       },
-    });
-    expect(resolveRegistryChannel).toHaveBeenCalledWith({
-      installKind: "package",
-      git: undefined,
     });
   });
 });

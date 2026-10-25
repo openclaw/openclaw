@@ -170,7 +170,7 @@ it("settles accepted incognito outbox work after the close prelude and before ac
       async run() {
         accepted.resolve();
         await release.promise;
-        writing = outbox.enqueueIntent({ ...filter, admission, isHeartbeat: false });
+        writing = outbox.enqueueIntent({ ...filter, admission });
         await writing;
         persisted = await outbox.readNextPending(filter);
       },
@@ -652,7 +652,7 @@ it.skipIf(process.platform !== "linux")(
       // Session delivery recovery joins its accepted reply before its service stops.
       const replyAborted = waitForAbortSignal(operation.abortSignal);
       kernel.kernel.setScheduledServiceHandles({
-        heartbeatRunner: kernel.runtimeState.heartbeatRunner,
+        stopScheduledServices: kernel.runtimeState.stopScheduledServices,
         stopDeliveryRecovery: () => Promise.race([replyAborted, release.promise]),
       });
       const releaseClaim = admitted.databaseClaim.release;

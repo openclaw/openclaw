@@ -105,8 +105,8 @@ it("resolves labels from label, task, or fallback", () => {
   expect([
     resolveSubagentLabel({ ...baseRun, label: "Label" }),
     resolveSubagentLabel({ ...baseRun, label: " ", task: "Task" }),
-    resolveSubagentLabel({ ...baseRun, label: " ", task: " " }, "fallback"),
-  ]).toEqual(["Label", "Task", "fallback"]);
+    resolveSubagentLabel({ ...baseRun, label: " ", task: " " }),
+  ]).toEqual(["Label", "Task", "subagent"]);
 });
 
 it("formats run labels with truncation", () => {

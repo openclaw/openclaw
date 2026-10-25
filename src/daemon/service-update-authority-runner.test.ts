@@ -6,6 +6,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import {
@@ -55,14 +56,7 @@ it("revokes a captured native runner when its service authority scope closes", a
   expect(nativeCommand).not.toHaveBeenCalled();
 });
 
-const result = {
-  stdout: "native",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
+const result = createCommandResult({ stdout: "native" });
 
 it("expires a queued deadline without invoking it or releasing its predecessor", async () => {
   vi.useFakeTimers();

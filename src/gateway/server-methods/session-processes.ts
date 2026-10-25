@@ -12,7 +12,10 @@ import {
 } from "../../agents/bash-process-observation.js";
 import type { WorkerProcessOperation } from "../../worker/worker-process-observation.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -20,6 +23,7 @@ import { requireSessionRowProjection } from "../session-row-projection-access.js
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -33,11 +37,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
       ? { ...params }
       : undefined;
   if (!input) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Invalid session process request"),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "Invalid session process request");
     return;
   }
   const authority = readGatewayRequestMutationAuthority(options);
@@ -70,11 +70,8 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
           row.agentId !== captured.agentId ||
           row.storeTarget.storePath !== captured.storeTarget.storePath))
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Session process access changed; refresh the conversation.",
-        ),
+      throw sessionMutationForbiddenError(
+        "Session process access changed; refresh the conversation.",
       );
     }
     return row;
@@ -82,13 +79,10 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
   const selected = await withReadySessionRows(projection, queries, select);
   const sessionId = selected.entry.sessionId;
   if ("sessionId" in input && input.sessionId !== sessionId) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Session changed; refresh the process list before stopping a process.",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "Session changed; refresh the process list before stopping a process.",
     );
     return;
   }

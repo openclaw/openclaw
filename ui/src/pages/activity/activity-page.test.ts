@@ -30,6 +30,7 @@ import {
   createActivityGatewayStub,
   inspectorGateway,
   createActivityPage,
+  createActivityContext,
   expandFirst,
   previews,
   toolEvent,
@@ -60,79 +61,7 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
     agentIdentity = createAgentIdentityCapability(source);
     activeIdentities.set(source, agentIdentity);
   }
-  return {
-    gateway: source,
-    sessions,
-    agents,
-    agentIdentity,
-    basePath,
-    resourceBasePath: "",
-    replace: vi.fn(),
-    navigate: vi.fn(),
-    navigateAndWait: vi.fn(async () => {}),
-    revalidate: vi.fn(async () => {}),
-    preload: vi.fn(async () => {}),
-    nativeDeviceSettings: null,
-    nativeNotifications: null,
-    // These tests exercise Activity only; unexpected capability reads must fail.
-    get router(): never {
-      throw new Error("Activity fixture does not provide router");
-    },
-    get connectionBootstrap(): never {
-      throw new Error("Activity fixture does not provide connectionBootstrap");
-    },
-    get agentSelection(): never {
-      throw new Error("Activity fixture does not provide agentSelection");
-    },
-    get settingsAgentSelection(): never {
-      throw new Error("Activity fixture does not provide settingsAgentSelection");
-    },
-    get channels(): never {
-      throw new Error("Activity fixture does not provide channels");
-    },
-    get config(): never {
-      throw new Error("Activity fixture does not provide config");
-    },
-    get scopeUpgrade(): never {
-      throw new Error("Activity fixture does not provide scopeUpgrade");
-    },
-    get sidebarAttention(): never {
-      throw new Error("Activity fixture does not provide sidebarAttention");
-    },
-    get runtimeConfig(): never {
-      throw new Error("Activity fixture does not provide runtimeConfig");
-    },
-    get placementStartup(): never {
-      throw new Error("Activity fixture does not provide placementStartup");
-    },
-    get plugins(): never {
-      throw new Error("Activity fixture does not provide plugins");
-    },
-    get assistantDock(): never {
-      throw new Error("Activity fixture does not provide assistantDock");
-    },
-    get overlays(): never {
-      throw new Error("Activity fixture does not provide overlays");
-    },
-    get navigation(): never {
-      throw new Error("Activity fixture does not provide navigation");
-    },
-    get theme(): never {
-      throw new Error("Activity fixture does not provide theme");
-    },
-    get nativeChatDrafts(): never {
-      throw new Error("Activity fixture does not provide nativeChatDrafts");
-    },
-    get webPush(): never {
-      throw new Error("Activity fixture does not provide webPush");
-    },
-    get chatSubmissions(): never {
-      throw new Error("Activity fixture does not provide chatSubmissions");
-    },
-    get chatAttachmentHandoff(): never {
-      throw new Error("Activity fixture does not provide chatAttachmentHandoff");
-    },
-  };
+  return createActivityContext(source, { sessions, agents, agentIdentity }, basePath);
 }
 
 function activityGateway() {
@@ -621,6 +550,8 @@ describe("ActivityPage gateway lifecycle", () => {
     flush();
     const rows = () => page.container.querySelectorAll(".activity-current-work__row");
     expect(rows()).toHaveLength(2);
+    const firstRow = rows()[0];
+    const currentWork = () => page.container.querySelector(".activity-current-work");
 
     current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     flush();
@@ -634,6 +565,8 @@ describe("ActivityPage gateway lifecycle", () => {
     current().testOptions.onHello?.(activityHello());
     flush();
     expect(rows()).toHaveLength(2);
+    expect(rows()[0]).toBe(firstRow);
+    expect(currentWork()?.getAttribute("aria-busy")).toBe("true");
     expect(filter.value).toBe("my draft filter");
     failed.reject(new Error("Current Work refresh unavailable"));
     const retry = () =>
@@ -643,6 +576,8 @@ describe("ActivityPage gateway lifecycle", () => {
       "Could not load active sessions",
     );
     expect(rows()).toHaveLength(2);
+    expect(rows()[0]).toBe(firstRow);
+    expect(currentWork()?.getAttribute("aria-busy")).toBe("false");
     const refreshed = createDeferred<SessionsListResult>();
     current().request.mockImplementation(async (method, params) =>
       method === "sessions.list" ? refreshed.promise : activityResponse(method, params),
@@ -650,6 +585,8 @@ describe("ActivityPage gateway lifecycle", () => {
     retry()!.click();
     flush();
     expect(rows()).toHaveLength(2);
+    expect(rows()[0]).toBe(firstRow);
+    expect(currentWork()?.getAttribute("aria-busy")).toBe("true");
     refreshed.resolve(activityRoster([]));
     await waitForSolid(() => expect(rows()).toHaveLength(0));
     expect(retry()).toBeNull();
@@ -788,8 +725,14 @@ describe("ActivityPage gateway lifecycle", () => {
     const loadMore = () =>
       page.container.querySelector<HTMLButtonElement>(".run-inspector__pagination button")!;
     await waitForSolid(() => expect(receipts()).toHaveLength(1));
-    inspection = Promise.resolve(second);
+    const nextPage = createDeferred<AuditRunInspectResult>();
+    inspection = nextPage.promise;
     loadMore().click();
+    flush();
+    expect(receipts()).toHaveLength(1);
+    expect(loadMore().disabled).toBe(true);
+    expect(loadMore().textContent).toContain("Loading");
+    nextPage.resolve(second);
     await waitForSolid(() => expect(receipts()).toHaveLength(2));
 
     const stale = createDeferred<AuditRunInspectResult>();

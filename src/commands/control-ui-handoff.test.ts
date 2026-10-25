@@ -94,21 +94,24 @@ it.runIf(openssl)(
     const csrPath = path.join(root, "leaf.csr");
     await fs.writeFile(keyPath, TEST_TLS_KEY_PEM, { mode: 0o600 });
     await fs.writeFile(caPath, TEST_TLS_CERT_PEM);
-    const run = (command: string[], flags: Record<string, string>) =>
-      promisify(execFile)(
-        openssl!,
-        [...command, ...Object.entries(flags).flatMap(([key, value]) => [`-${key}`, value])],
-        { timeout: 10_000 },
-      );
-    await run(["req", "-new"], { key: keyPath, subj: "/CN=gateway.test", out: csrPath });
-    await run(["x509", "-req"], {
-      in: csrPath,
-      CA: caPath,
-      CAkey: keyPath,
-      set_serial: "2",
-      days: "1",
-      out: certPath,
-    });
+    const run = (...args: string[]) => promisify(execFile)(openssl!, args, { timeout: 10_000 });
+    await run("req", "-new", "-key", keyPath, "-subj", "/CN=gateway.test", "-out", csrPath);
+    await run(
+      "x509",
+      "-req",
+      "-in",
+      csrPath,
+      "-CA",
+      caPath,
+      "-CAkey",
+      keyPath,
+      "-set_serial",
+      "2",
+      "-days",
+      "1",
+      "-out",
+      certPath,
+    );
     const cert = await fs.readFile(certPath, "utf8");
     await fs.unlink(keyPath);
     await fs.unlink(caPath);
@@ -183,27 +186,20 @@ it.each(["ready", "timeout", "immediate"])("handles preparing dashboards: %s", a
   expect(ready.release).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
 });
 
-it.each(["fails", "becomes HTML"])(
-  "keeps the HTTP failure when diagnostics %s",
-  async (outcome) => {
-    const head = guardedResponse(503, {});
-    const fetch = mockFetch().mockResolvedValueOnce(head);
-    if (outcome === "fails") {
-      fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
-    } else {
-      fetch.mockResolvedValueOnce(
-        guardedResponse(
-          200,
-          { "content-type": "text/html" },
-          "<html>private-looking UI content</html>",
-        ),
-      );
-    }
-    await expect(probe()).resolves.toEqual(unavailable);
-    expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
-    expect(head.release).toHaveBeenCalledOnce();
-  },
-);
+it.each(["fails", "becomes HTML"])("keeps HTTP failure: diagnostic %s", async (outcome) => {
+  const head = guardedResponse(503, {});
+  const fetch = mockFetch().mockResolvedValueOnce(head);
+  if (outcome === "fails") {
+    fetch.mockRejectedValueOnce(new Error("diagnostic request failed"));
+  } else {
+    fetch.mockResolvedValueOnce(
+      guardedResponse(200, { "content-type": "text/html" }, "private UI"),
+    );
+  }
+  await expect(probe()).resolves.toEqual(unavailable);
+  expect(fetch.mock.calls.map(([request]) => request.init?.method)).toEqual(["HEAD", "GET"]);
+  expect(head.release).toHaveBeenCalledOnce();
+});
 
 it.each(["complete", "broken"] as const)(
   "preserves a real HTTP failure with a %s diagnostic body",

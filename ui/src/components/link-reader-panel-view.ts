@@ -6,6 +6,8 @@ import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
+import type { LinkReaderPanelProps } from "./link-reader-panel-lifecycle.ts";
+import type { LinkReaderMetadataUpdate } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
@@ -45,6 +47,10 @@ export type ReaderSection = ControlUiLinkReaderDeferredSection;
 export type ReaderReadyView = {
   status: "ready";
   detail: ControlUiLinkReaderDocument;
+  scope: Pick<LinkReaderMetadataUpdate, "client" | "agentId" | "sessionKey"> & {
+    generation: number;
+    recoveryScope: string | undefined;
+  };
   images?: LinkReaderImages;
   refreshing?: boolean;
   message?: string;
@@ -53,9 +59,10 @@ export type ReaderReadyView = {
 
 export function createReaderReadyView(
   detail: ControlUiLinkReaderDocument,
+  scope: ReaderReadyView["scope"],
   previous?: ReaderReadyView,
 ): ReaderReadyView {
-  const next: ReaderReadyView = { status: "ready", detail, sections: {} };
+  const next: ReaderReadyView = { status: "ready", detail, scope, sections: {} };
   for (const deferred of detail.deferredSections ?? []) {
     next.sections[deferred] = "idle";
   }
@@ -90,6 +97,35 @@ export type ReaderTab = {
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
   return tab?.history[tab.index] ?? null;
 }
+
+export function* readerTabMetadata(
+  props: Pick<LinkReaderPanelProps, "client" | "agentId" | "sessionKey" | "readers">,
+  tabs: ReaderTab[],
+): Generator<LinkReaderMetadataUpdate> {
+  const { client, agentId, sessionKey } = props;
+  if (!client?.connected) {
+    return;
+  }
+  for (const tab of tabs) {
+    const target = tabTarget(tab);
+    const view = tab.view;
+    if (
+      target &&
+      props.readers.includes(target.reader) &&
+      view.status === "ready" &&
+      view.scope.client === client &&
+      view.scope.agentId === agentId &&
+      view.scope.sessionKey === sessionKey &&
+      view.scope.generation === client.connectionGeneration &&
+      view.scope.recoveryScope === client.recoveryScope &&
+      !tab.reloadPending &&
+      !view.detail.stale
+    ) {
+      yield { client, agentId, sessionKey, target, preview: view.detail };
+    }
+  }
+}
+
 export function tabLabel(tab: ReaderTab): string {
   if (tab.view.status === "ready") {
     return tab.view.detail.title;

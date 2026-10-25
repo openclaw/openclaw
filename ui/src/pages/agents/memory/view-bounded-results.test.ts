@@ -5,7 +5,7 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
-  fullDreamingViewAccess,
+  createDreamingViewProps,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
 import { renderDreaming } from "./view.tsx";
@@ -31,33 +31,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
   // Count every returned item while rendering only the small selected cluster.
   viewState.diaryPage = 1;
   const clusterSizes = [2_499, 1];
-  const props: DreamingProps = {
-    access: fullDreamingViewAccess,
-    viewState,
-    active: true,
-    selectedAgentId: "main",
-    statusError: null,
-    readStatus: () => null,
-    readStatusData: () => ({
-      shortTermCount: 0,
-      promotedCount: 0,
-      shortTermEntries: [],
-      promotedEntries: [],
-      phases: undefined,
-      nextCycle: null,
-      timezone: null,
-    }),
-    readDiary: () => props.dreamDiaryContent,
-    readImports: () => props.wikiImportInsights,
-    readOverview: () => props.wikiOverview,
-    modeSaving: false,
-    dreamDiaryLoading: false,
-    dreamDiaryActionLoading: false,
-    dreamDiaryActionMessage: null,
-    dreamDiaryActionArchivePath: null,
-    dreamDiaryContent: null,
-    memoryWikiEnabled: true,
-    wikiImportInsightsLoading: false,
+  const props: DreamingProps = createDreamingViewProps(viewState, {
     wikiImportInsights:
       tab === "insights"
         ? {
@@ -92,7 +66,6 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
             })),
           }
         : null,
-    wikiOverviewLoading: false,
     wikiOverview:
       tab === "wiki"
         ? {
@@ -124,21 +97,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
             })),
           }
         : null,
-    onRefreshDiary: () => {},
-    onRefreshImports: () => {},
-    onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
-    onOpenWikiPage: async () => {},
-    onCloseWikiPreview: () => {},
-    wikiPreview: null,
-    onBackfillDiary: () => {},
-    onCopyDreamingArchivePath: () => {},
-    onDedupeDreamDiary: () => {},
-    onResetDiary: () => {},
-    onResetGroundedShortTerm: () => {},
-    onRepairDreamingArtifacts: () => {},
-    onViewStateChange: (update) => update(viewState),
-  };
+  });
   return props;
 }
 

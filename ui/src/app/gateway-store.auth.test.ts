@@ -146,6 +146,50 @@ describe("createApplicationGateway authentication diagnostics", () => {
     );
   }
 
+  it.each([undefined, "serving-build"])(
+    "reloads a protocol rejection once with server build %s",
+    async (gatewayBuildId) => {
+      vi.useFakeTimers();
+      const { replace, fetchMock } = stubBuildReloadDocument();
+      fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+      gateway.start();
+      current().testOptions.onClose?.(
+        rejection(
+          { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH, gatewayBuildId, reloadRequired: true },
+          "INVALID_REQUEST",
+          "protocol mismatch",
+          1002,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replace).toHaveBeenCalledOnce();
+      expect(gateway.snapshot.phase).toBe("stopped");
+      expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).not.toBeNull();
+    },
+  );
+
+  it.each([
+    { previousBuild: "replacement-build", age: 120_000 },
+    { previousBuild: "another-build", age: 59_000 },
+  ])(
+    "stops a repeated mismatch without scheduling another reload: %j",
+    async ({ previousBuild, age }) => {
+      vi.useFakeTimers();
+      const { replace, fetchMock } = stubBuildReloadDocument();
+      fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+      sessionStorage.setItem(
+        RELOAD_GUARD_KEY,
+        JSON.stringify({ buildId: previousBuild, at: Date.now() - age }),
+      );
+      gateway.start();
+      rejectStaleBuild();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(replace).not.toHaveBeenCalled();
+      expect(gateway.snapshot.phase).toBe("reload-required");
+      expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+    },
+  );
+
   it.each([
     { action: "resume", jitter: 0, elapsed: 1_000, reloads: 1 },
     { action: "stop during initial jitter", jitter: 0.5, elapsed: 30_000, reloads: 0 },

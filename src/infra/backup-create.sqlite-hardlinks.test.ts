@@ -48,34 +48,31 @@ type HardlinkedDatabase = {
 function hardlinkCase<Args extends unknown[]>(
   run: (fixture: HardlinkedDatabase, ...args: Args) => Promise<void>,
   opaque = false,
+  ownerName = "alpha.sqlite",
 ) {
+  const aliasName = ownerName.startsWith("alpha")
+    ? `zeta${ownerName.slice("alpha".length)}`
+    : `alpha${ownerName.slice("zeta".length)}`;
   return (...args: Args) =>
     withBackupFixture({ layout: "split", prefix: "backup-plugin-hardlinks-" }, async (state) => {
       if (!opaque) {
         await declarePluginSqliteResources(state, "plugins/hardlinks");
       }
       const directory = state.statePath("plugins", "hardlinks");
-      const ownerPath = path.join(directory, opaque ? "zeta.sqlite" : "alpha.sqlite");
-      const aliasPath = path.join(directory, opaque ? "alpha.sqlite" : "zeta.sqlite");
+      const ownerPath = path.join(directory, opaque ? aliasName : ownerName);
+      const aliasPath = path.join(directory, opaque ? ownerName : aliasName);
       await fs.mkdir(directory, { recursive: true });
-      const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(ownerPath);
-      try {
-        database.exec(`
+      using database = new (requireNodeSqlite().DatabaseSync)(ownerPath);
+      database.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA wal_autocheckpoint = 0;
           CREATE TABLE hardlink_records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
           INSERT INTO hardlink_records (id, value) VALUES (7, 'committed-in-wal');
         `);
-        await fs.link(ownerPath, aliasPath);
-        expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-        await expectAbsent(`${aliasPath}-wal`);
-        await run({ state, database, ownerPath, aliasPath }, ...args);
-      } finally {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
+      await fs.link(ownerPath, aliasPath);
+      expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
+      await expectAbsent(`${aliasPath}-wal`);
+      await run({ state, database, ownerPath, aliasPath }, ...args);
     });
 }
 
@@ -125,15 +122,10 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       );
       const archive = await createVerifiedBackup(state);
       expect(archive.verified).toBe(true);
-      expect(
-        archive.warnings
-          ?.map<[string, boolean]>((warning) => [path.basename(warning), /opaque/iu.test(warning)])
-          .toSorted(([left], [right]) => left.localeCompare(right)),
-      ).toEqual(
-        names
-          .map<[string, boolean]>((name) => [name, true])
-          .toSorted(([left], [right]) => left.localeCompare(right)),
+      expect(archive.warnings?.map((warning) => path.basename(warning)).toSorted()).toEqual(
+        names.toSorted(),
       );
+      expect(archive.warnings?.every((warning) => /opaque/iu.test(warning))).toBe(true);
       const restored = await restoreBackup(state, archive);
       const asset = expectDefined(
         archive.assets.find((candidate) => candidate.kind === "state"),
@@ -168,6 +160,33 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
       expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
     }),
+  );
+
+  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
+    "preserves a live writer's main-file POSIX lock when header-probing a declared plugin %s named .db",
+    hardlinkCase(
+      async ({ state, ownerPath, aliasPath }, layout: string) => {
+        if (layout === "singleton") {
+          await fs.unlink(aliasPath);
+        }
+        const locksBefore = readMainDatabasePosixLocks(ownerPath);
+        expect(locksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+
+        const archive = await createArchive(state);
+
+        // The header probe must run outside this process: closing a raw
+        // descriptor here would drop the live writer's POSIX locks above.
+        expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+        // Verified snapshots (not opaque copies) prove the probe classified
+        // the .db names as SQLite databases.
+        expect(archive.warnings ?? []).toEqual([]);
+        expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+      },
+      false,
+      "alpha.db",
+    ),
   );
 
   it.each([

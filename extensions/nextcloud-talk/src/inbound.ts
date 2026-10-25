@@ -1,6 +1,8 @@
 import {
   createChannelInboundEnvelopeBuilderAsync,
+  filterChannelInboundQuoteContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -11,7 +13,9 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -225,6 +229,13 @@ export async function handleNextcloudTalkInbound(params: {
       },
     });
   let access = await resolveAccess();
+  const logAuthorizationChanged = () => {
+    runtime.log?.(
+      isGroup && access.activationAccess.shouldSkip
+        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+    );
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "nextcloud-talk",
@@ -312,11 +323,7 @@ export async function handleNextcloudTalkInbound(params: {
   access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
-    runtime.log?.(
-      isGroup && access.activationAccess.shouldSkip
-        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-    );
+    logAuthorizationChanged();
     return;
   }
 
@@ -456,11 +463,7 @@ export async function handleNextcloudTalkInbound(params: {
             access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
             throwIfIngressAborted();
             if (access.ingress.admission !== "dispatch") {
-              runtime.log?.(
-                isGroup && access.activationAccess.shouldSkip
-                  ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-                  : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-              );
+              logAuthorizationChanged();
               return;
             }
             try {
@@ -527,17 +530,32 @@ export async function handleNextcloudTalkInbound(params: {
       }
     }
 
-    if (performedAsyncMediaWork) {
+    const quote = message.quote;
+    let quoteAllowFrom = hasAllowEntries(outerGroupAllowFrom) ? outerGroupAllowFrom : roomAllowFrom;
+    let quoteRoomAllowFrom = roomAllowFrom;
+    const hasQuotePolicyWork = quote !== undefined && isGroup && groupPolicy === "allowlist";
+    if (hasQuotePolicyWork) {
+      const expandQuoteAllowFrom = (entries: string[]) =>
+        expandAllowFromWithAccessGroups({
+          cfg: config,
+          allowFrom: entries,
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+          senderId: quote.senderId,
+          isSenderAllowed: (id, allow) =>
+            resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed,
+        });
+      quoteAllowFrom = await expandQuoteAllowFrom(quoteAllowFrom);
+      quoteRoomAllowFrom = await expandQuoteAllowFrom(roomAllowFrom);
+    }
+
+    if (performedAsyncMediaWork || hasQuotePolicyWork) {
       throwIfIngressAborted();
       access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
       throwIfIngressAborted();
       if (access.ingress.admission !== "dispatch") {
         await deleteStagedMedia();
-        runtime.log?.(
-          isGroup && access.activationAccess.shouldSkip
-            ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-            : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-        );
+        logAuthorizationChanged();
         return;
       }
     }
@@ -559,6 +577,35 @@ export async function handleNextcloudTalkInbound(params: {
 
     const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+    const visibleQuote = quote
+      ? filterChannelInboundQuoteContext(
+          resolveChannelContextVisibilityMode({
+            cfg: config,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+          }),
+          {
+            id: quote.id,
+            body: quote.body,
+            sender: quote.senderName || quote.senderId,
+            senderAllowed: resolveInboundSupplementalSenderAllowed({
+              isGroup,
+              groupPolicy,
+              allowFrom: quoteAllowFrom,
+              isSenderAllowed: (candidateAllowFrom) =>
+                resolveNextcloudTalkAllowlistMatch({
+                  allowFrom: [...candidateAllowFrom],
+                  senderId: quote.senderId,
+                }).allowed &&
+                (!hasAllowEntries(quoteRoomAllowFrom) ||
+                  resolveNextcloudTalkAllowlistMatch({
+                    allowFrom: quoteRoomAllowFrom,
+                    senderId: quote.senderId,
+                  }).allowed),
+            }),
+          },
+        )
+      : undefined;
 
     const ctxPayload = core.channel.inbound.buildContext({
       channelIngress: access,
@@ -595,6 +642,19 @@ export async function handleNextcloudTalkInbound(params: {
       extra: {
         GroupSubject: isGroup ? roomName || roomToken : undefined,
         GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+        // ReplyChain carries quoted identity without changing the outgoing ReplyToId fallback.
+        ReplyChain:
+          quote && visibleQuote
+            ? [
+                {
+                  messageId: visibleQuote.id,
+                  senderId: quote.senderId,
+                  sender: visibleQuote.sender,
+                  body: visibleQuote.body,
+                  isQuote: true,
+                },
+              ]
+            : undefined,
       },
     });
 

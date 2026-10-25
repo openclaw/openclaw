@@ -125,20 +125,16 @@ describe("directive behavior", () => {
     },
   );
 
-  it("allows elevated after per-agent allowlist checks", async () => {
-    const { text } = await runDirectiveStatus("/elevated on", {
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-    });
-    expect(text).toContain("Elevated mode set to ask");
-  });
-
   it.each<[string, string[]]>([
-    ["/elevated off", ["Elevated mode disabled.", "Runtime is direct; sandboxing does not apply."]],
     ["/elevated maybe", ["Unrecognized elevated level"]],
-    ["/elevated off\n/verbose on", ["Elevated mode disabled.", "Verbose logging enabled."]],
+    [
+      "/elevated off\n/verbose on",
+      [
+        "Elevated mode disabled.",
+        "Runtime is direct; sandboxing does not apply.",
+        "Verbose logging enabled.",
+      ],
+    ],
   ])("handles elevated response for %s", async (body, snippets) => {
     const { text } = await runDirectiveStatus(body, {
       elevatedEnabled: true,

@@ -120,7 +120,10 @@ it.each([false, true])("retains offline metadata on replacement=%s", async (repl
   try {
     await h.sessions.refresh({ agentId: "main" });
     h.offline();
-    await expect(h.patch({ label: "First" })).resolves.toEqual({ queued: true });
+    const first = h.patch({ label: "First" });
+    expect(h.row()?.label).toBe("First");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+    await expect(first).resolves.toEqual({ queued: true });
     await expect(h.patch({ label: "Final" })).resolves.toEqual({ queued: true });
     await h.patch({ icon: "heart", color: "red", category: "Home" });
     expect(h.row()).toMatchObject({

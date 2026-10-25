@@ -2,7 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState } from "./dreaming.ts";
-import { renderDreamingView } from "./view.test-helpers.ts";
+import {
+  createDreamingViewProps,
+  fullDreamingViewAccess,
+  renderDreamingView,
+} from "./view.test-helpers.ts";
 import { renderDreaming } from "./view.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
@@ -25,37 +29,8 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
     const viewState = createDreamingViewState();
     viewState.activeSubTab = "diary";
     viewState.activeDiarySubTab = "dreams";
-    const props: Parameters<typeof renderDreaming>[0] = {
-      access: {
-        canOpenConfig: true,
-        canBackfillDiary: true,
-        canDedupeDreamDiary: true,
-        canResetDiary: true,
-        canResetGroundedShortTerm: true,
-        canRepairDreamingArtifacts: true,
-      },
-      viewState,
-      active: true,
-      selectedAgentId: "main",
-      statusError: null,
-      readStatus: () => null,
-      readStatusData: () => ({
-        shortTermCount: 0,
-        promotedCount: 0,
-        shortTermEntries: [],
-        promotedEntries: [],
-        phases: undefined,
-        nextCycle: null,
-        timezone: null,
-      }),
-      readDiary: () => props.dreamDiaryContent,
-      readImports: () => props.wikiImportInsights,
-      readOverview: () => props.wikiOverview,
-      modeSaving: false,
-      dreamDiaryLoading: false,
-      dreamDiaryActionLoading: false,
-      dreamDiaryActionMessage: null,
-      dreamDiaryActionArchivePath: null,
+    const props: Parameters<typeof renderDreaming>[0] = createDreamingViewProps(viewState, {
+      access: { ...fullDreamingViewAccess },
       dreamDiaryContent: [
         "# Dream Diary",
         "---",
@@ -69,28 +44,11 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
         ),
       ].join("\n\n"),
       memoryWikiEnabled: false,
-      wikiImportInsightsLoading: false,
-      wikiImportInsights: null,
-      wikiOverviewLoading: false,
-      wikiOverview: null,
-      onRefreshDiary: () => {},
-      onRefreshImports: () => {},
-      onRefreshWikiOverview: () => {},
-      onOpenConfig: () => {},
-      onOpenWikiPage: async () => {},
-      onCloseWikiPreview: () => {},
-      wikiPreview: null,
-      onBackfillDiary: () => {},
-      onCopyDreamingArchivePath: () => {},
-      onDedupeDreamDiary: () => {},
-      onResetDiary: () => {},
-      onResetGroundedShortTerm: () => {},
-      onRepairDreamingArtifacts: () => {},
       onViewStateChange: (update) => {
         update(viewState);
         renderDreamingView(props, host!);
       },
-    };
+    });
     renderDreamingView(props, host);
 
     const diary = host.querySelector<HTMLElement>(".dreams-diary");

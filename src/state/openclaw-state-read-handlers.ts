@@ -2,20 +2,28 @@ import {
   prepareAcpSessionMetadataRead,
   readAcpSessionCommand,
 } from "../acp/runtime/session-meta-read.worker.js";
+import {
+  readSandboxBrowserRegistryInDatabase,
+  readSandboxRegistryEntryInDatabase,
+  readSandboxRegistryInDatabase,
+  readSandboxRuntimeIdsInDatabase,
+} from "../agents/sandbox/registry.kernel.js";
 import { loadSubagentSessionListRunsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { listRegistryWorktreesInDatabase } from "../agents/worktrees/registry-read.kernel.js";
+import { readWorktreeRunLeaseStateInDatabase } from "../agents/worktrees/run-lease-owner.js";
+import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
+import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
 import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
+import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
-import {
-  readSharedGitHubPublicationRequestInDatabase,
-  readSharedRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-publication-shared-read.kernel.js";
 import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
@@ -45,6 +53,8 @@ import {
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import { listPendingWorkerWorkspaceResultsInDatabase } from "../gateway/worker-environments/placement-workspace-result.js";
+import { readPreparedPoolPresenceDemandInDatabase } from "../gateway/worker-environments/prepared-pool-presence-store.worker.js";
+import { readWorkerEnvironmentFacts } from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
@@ -69,12 +79,20 @@ import {
 import { isPluginStateReadCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import { readPluginStateCommand } from "../plugin-state/plugin-state.worker.js";
 import {
+  readDebugProxyCaptureBlob,
+  readDebugProxyCaptureSessionEvents,
+} from "../proxy-capture/store-readonly.js";
+import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
-import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
+import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import {
+  readAgentDatabaseDeletionWorkerSnapshot,
+  readRetainedAgentDeletionIds,
+} from "./agent-deletion-journal.snapshot.worker.js";
 import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import {
   isConfigMachineStateReadCommand,
@@ -84,15 +102,9 @@ import { readGitHubPublicationSessionLifecycle } from "./github-publication-sess
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
-import {
-  isStateDiagnosticCommand,
-  readStateDiagnosticCommand,
-} from "./openclaw-state-read-diagnostics.js";
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
-import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
-import { readStateStream } from "./openclaw-state-read-stream.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
@@ -101,7 +113,7 @@ import { readUserPreferences, selectUserPreferenceValues } from "./user-preferen
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
-export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
+export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
@@ -118,6 +130,7 @@ export function readOpenClawStateDatabaseCommand(
           | "meetingTranscripts.export"
           | "gatewayOwnerLease.read"
           | "agentDatabaseRegistry.read"
+          | "localWorkspace.manifest"
           | "subagents.sessionList";
       }
   >,
@@ -211,8 +224,52 @@ export function readOpenClawStateDatabaseCommand(
       }),
     };
   }
-  if (isStateDiagnosticCommand(command)) {
-    return readStateDiagnosticCommand(db, command);
+  if (command.type === "capture.readOnlyEvents") {
+    return {
+      type: command.type,
+      events: readDebugProxyCaptureSessionEvents(db, command.sessionId, command.limit),
+    };
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    return { type: command.type, blob: readDebugProxyCaptureBlob(db, command.blobId) };
+  }
+  if (command.type === "config.snapshot.read") {
+    return {
+      type: command.type,
+      snapshot: readConfigSnapshotAuditRecordInDatabase(db),
+    };
+  }
+  if (command.type === "audit.run.inspect") {
+    try {
+      return {
+        type: command.type,
+        result: {
+          status: "inspected",
+          inspection: runSqliteReadSnapshotSync(db, () =>
+            inspectExecutionIdentityRunInDatabase(db, command.input, {
+              executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
+              auditEvents: tableExists(db, "audit_events"),
+              cronRunReceipts: tableExists(db, "cron_run_receipts"),
+              executionOwnerLifecycleBindings: tableExists(
+                db,
+                "execution_owner_lifecycle_bindings",
+              ),
+            }),
+          ),
+        } satisfies ExecutionIdentityInspectionOutcome,
+      };
+    } catch (error) {
+      if (!(error instanceof ExecutionDecisionCursorError)) {
+        throw error;
+      }
+      return {
+        type: command.type,
+        result: {
+          status: "invalid-cursor",
+          message: error.message,
+        } satisfies ExecutionIdentityInspectionOutcome,
+      };
+    }
   }
   if (command.type === "pluginBlob.entries") {
     return {
@@ -343,15 +400,6 @@ export function readOpenClawStateDatabaseCommand(
       lifecycle: readGitHubPublicationSessionLifecycle(command, db),
     };
   }
-  if (command.type === "githubPublication.sharedObservation") {
-    const { session, selector, entry } = command.input;
-    return {
-      type: command.type,
-      row:
-        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
-    };
-  }
   if (command.type === "githubPublication.request") {
     return {
       type: command.type,
@@ -479,7 +527,48 @@ export function readOpenClawStateDatabaseCommand(
       ),
     };
   }
-  return isTuiLastSessionReadCommand(command)
-    ? readTuiLastSessionCommand(db, command)
-    : readStateRegistryCommand(db, command);
+  if (isTuiLastSessionReadCommand(command)) {
+    return readTuiLastSessionCommand(db, command);
+  }
+  if (command.type === "preparedPoolPresence.read") {
+    return { type: command.type, demand: readPreparedPoolPresenceDemandInDatabase(db) };
+  }
+  if (command.type === "workerEnvironments.snapshot") {
+    return {
+      type: command.type,
+      facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, command.ids)),
+    };
+  }
+  if (command.type === "agentDeletionJournal.status") {
+    return {
+      type: command.type,
+      status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+    };
+  }
+  if (command.type === "agentDeletionJournal.retainedIds") {
+    return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
+  }
+  if (command.type === "sandboxRegistry.list") {
+    return { type: command.type, entries: readSandboxRegistryInDatabase(db) };
+  }
+  if (command.type === "sandboxRegistry.get") {
+    return {
+      type: command.type,
+      entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
+    };
+  }
+  if (command.type === "sandboxRegistry.runtimeIds") {
+    return {
+      type: command.type,
+      runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
+    };
+  }
+  if (command.type === "sandboxRegistry.browsers") {
+    return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
+  }
+  return {
+    type: command.type,
+    records: listRegistryWorktreesInDatabase(db),
+    leases: readWorktreeRunLeaseStateInDatabase(db),
+  };
 }

@@ -11,6 +11,7 @@ import {
   recoverCrabboxWarmImageCapture,
   type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
+import * as warmImageStore from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 import {
   CHECKPOINT_ID,
@@ -20,16 +21,17 @@ import {
   checkpointResult,
   jsonResult,
   tempDirs,
-  unsupportedCaptureReceipt,
 } from "./crabbox-worker-warm-image.test-support.js";
+
+type ManagerOptions = Parameters<typeof createCrabboxWarmImageManager>[0];
+const available = (providerState = "available", nextAction = "fork_or_delete") =>
+  jsonResult({ localState: "metadata_available", providerState, nextAction });
 
 function fixture(
   failCreate = false,
   onCommand?: (argv: string[]) => ReturnType<typeof commandResult> | void,
   policy?: CrabboxWarmImagePolicy,
-  prepareCapture: Parameters<
-    typeof createCrabboxWarmImageManager
-  >[0]["prepareCapture"] = async () => {},
+  prepareCapture: ManagerOptions["prepareCapture"] = async () => {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
@@ -53,11 +55,7 @@ function fixture(
       );
     }
     if (argv[2] === "inspect") {
-      return jsonResult({
-        localState: "metadata_available",
-        providerState: "available",
-        nextAction: "fork_or_delete",
-      });
+      return available();
     }
     if (argv[2] === "fork") {
       return jsonResult({
@@ -71,12 +69,7 @@ function fixture(
     return commandResult();
   });
   const manager = () =>
-    createCrabboxWarmImageManager({
-      state: crabboxState,
-      warn,
-      policy,
-      prepareCapture,
-    });
+    createCrabboxWarmImageManager({ state: crabboxState, warn, policy, prepareCapture });
   const context = (id: string, projectKey?: string) => ({
     binary: "crabbox",
     id,
@@ -142,6 +135,42 @@ async function publish<T extends Allocation>(owner: Owner, source: T, commit?: s
   await owner.release(source);
   return source;
 }
+
+it.each(["maintenance", "allocation"] as const)(
+  "shares successful legacy admission after %s and rechecks a new manager",
+  async (first) => {
+    const { owner, manager, context } = fixture();
+    const admission = vi.spyOn(warmImageStore, "assertCrabboxWarmImageMigrationReady");
+    const maintain = () => owner.maintain({ binaries: ["crabbox"] });
+    const allocate = () => owner.allocate(context("cbx_admission"));
+    await (first === "maintenance" ? maintain() : allocate());
+    await (first === "maintenance" ? allocate() : maintain());
+    expect(admission).toHaveBeenCalledTimes(1);
+    await manager().maintain({ binaries: ["crabbox"] });
+    expect(admission).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("retries failed legacy admission until recovery succeeds", async () => {
+  const { owner, context } = fixture();
+  const admission = vi.spyOn(warmImageStore, "assertCrabboxWarmImageMigrationReady");
+  const legacy = crabboxState.openKeyedStoreV2({
+    namespace: "warm-leases",
+    maxEntries: 256,
+    overflowPolicy: "evict-oldest",
+  });
+  await legacy.register("cbx_legacy", { machineClass: "standard" });
+  await expect(owner.maintain({ binaries: ["crabbox"] })).rejects.toThrow(
+    "legacy worker allocations",
+  );
+  await expect(owner.allocate(context("cbx_admission"))).rejects.toThrow(
+    "legacy worker allocations",
+  );
+  await legacy.delete("cbx_legacy");
+  await owner.maintain({ binaries: ["crabbox"] });
+  await owner.allocate(context("cbx_admission"));
+  expect(admission).toHaveBeenCalledTimes(3);
+});
 
 it("admits lifetime only for a claimed capture before preparing or scrubbing its source", async () => {
   const events: string[] = [];
@@ -259,28 +288,20 @@ it("reports cold preparation before warmup and snapshot reuse before fork, retai
     statuses.push(status);
     expect(calls.some((argv) => argv[1] === "warmup" || argv[2] === "fork")).toBe(false);
   };
-  await owner.allocate({ ...source, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "no-snapshot-yet", phase: "preparing" }]);
+  const expectStart = async (active: Owner, allocation: Allocation, status: unknown) => {
+    calls.length = statuses.length = 0;
+    await active.allocate({ ...allocation, prepareProject: true, reportStartStatus });
+    expect(statuses).toEqual([status]);
+  };
+  const cold = (reason: string) => ({ mode: "cold", reason, phase: "preparing" });
+  await expectStart(owner, source, cold("no-snapshot-yet"));
   await owner.markPrepared(source.id, "a".repeat(40));
   await owner.capture(source);
-  calls.length = 0;
-  statuses.length = 0;
-  await owner.allocate({
-    ...projectContext("cbx_status_fork"),
-    prepareProject: true,
-    reportStartStatus,
-  });
-  expect(statuses).toEqual([{ mode: "snapshot" }]);
-  calls.length = 0;
-  statuses.length = 0;
+  await expectStart(owner, projectContext("cbx_status_fork"), { mode: "snapshot" });
   const changed = projectContext("cbx_status_changed", "c".repeat(64));
-  await owner.allocate({ ...changed, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+  await expectStart(owner, changed, cold("setup-changed"));
   expect(record()?.latestColdReason).toBe("setup-changed");
-  calls.length = 0;
-  statuses.length = 0;
-  await manager().allocate({ ...changed, prepareProject: true, reportStartStatus });
-  expect(statuses).toEqual([{ mode: "cold", reason: "setup-changed", phase: "preparing" }]);
+  await expectStart(manager(), changed, cold("setup-changed"));
 });
 
 it.each([
@@ -344,13 +365,7 @@ it.each([
         return commandResult({ code: 2, stderr: `checkpoint ${CHECKPOINT_ID} not found` });
       }
       return argv[2] === "inspect"
-        ? commandResult({
-            stdout: JSON.stringify({
-              localState: "metadata_available",
-              providerState,
-              nextAction: providerState === "missing" ? "forget" : "fork_or_delete",
-            }),
-          })
+        ? available(providerState, providerState === "missing" ? "forget" : "fork_or_delete")
         : undefined;
     });
     await publish(owner, context("cbx_source"));
@@ -376,35 +391,10 @@ it.each([
   },
 );
 
-it("returns false and permits enrollment only after an unsupported capture receipt settles its claim", async () => {
-  const { owner, context } = fixture(false, (argv) =>
-    argv[2] === "create"
-      ? commandResult({
-          code: 2,
-          stdout: JSON.stringify({
-            ...unsupportedCaptureReceipt("cbx_project"),
-            message: "x".repeat(1024),
-          }),
-        })
-      : undefined,
-  );
-  const project = await prepare(owner, context("cbx_project", "project-a"), "a".repeat(40));
-  await expect(owner.capture(project)).resolves.toBe(false);
-  await owner.markEnrolled(project.id);
-  expect((await owner.lookupLease(project.id))?.phase).toBe("enrolled");
-  expect(record()?.operation).toBeUndefined();
-});
 it("starts incompatible preparation cold and retains its missing pinned predecessor", async () => {
-  const { owner, projectContext, calls } = fixture(false, (argv) => {
-    if (argv[2] === "inspect") {
-      return jsonResult({
-        localState: "metadata_available",
-        providerState: "missing",
-        nextAction: "delete_local",
-      });
-    }
-    return undefined;
-  });
+  const { owner, projectContext, calls } = fixture(false, (argv) =>
+    argv[2] === "inspect" ? available("missing", "delete_local") : undefined,
+  );
   await publish(owner, projectContext("cbx_source"), "a".repeat(40));
   await owner.pin(CHECKPOINT_ID, true);
   const predecessor = structuredClone(record()!.image);

@@ -34,6 +34,7 @@ export type SessionSharingEntry = Pick<
 function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
+    clientCapabilities: entry.clientCapabilities,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,

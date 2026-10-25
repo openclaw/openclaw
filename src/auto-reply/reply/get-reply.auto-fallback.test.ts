@@ -5,10 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { ThinkLevel } from "../thinking.js";
 import { emptyAliasIndex, withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as fixtures from "./get-reply.test-fixtures.js";
@@ -49,8 +46,6 @@ function makeTestModel(id: string, name: string, reasoning: boolean): ModelDefin
     maxTokens: 8192,
   };
 }
-
-const heartbeat = { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" };
 
 function reply(cfg = makeReasoningModelConfig(), opts?: Parameters<typeof getReplyFromConfig>[1]) {
   return getReplyFromConfig(fixtures.buildGetReplyCtx(), opts, cfg);
@@ -210,45 +205,6 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     catalog.resolve([]);
     await catalog.promise;
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
-  });
-
-  it("suppresses heartbeat model overrides for a model-locked session", async () => {
-    setupFallback({ modelSelectionLocked: true });
-
-    await expect(reply(undefined, heartbeat)).resolves.toEqual({ text: "ok" });
-
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
-      provider: "anthropic",
-      model: "claude-fallback",
-      hasResolvedHeartbeatModelOverride: false,
-    });
-    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).not.toHaveProperty(
-      "configuredProfileId",
-      "openai:metered",
-    );
-    expectRun({
-      provider: "anthropic",
-      model: "claude-fallback",
-      autoFallbackPrimaryProbe: undefined,
-    });
-  });
-
-  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
-    const { sessionKey, storePath } = setupFallback({ provider: "openai", model: "gpt-5.5" });
-    const cfg = makeReasoningModelConfig();
-    await reply(cfg, heartbeat);
-    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-      configuredProfileId: "openai:metered",
-    });
-    expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await reply(cfg);
-    expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
-      "configuredProfileId",
-      "openai:metered",
-    );
   });
 
   it.each([

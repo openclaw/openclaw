@@ -446,6 +446,7 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: |
           node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable test --locked --bin openclaw-desktop
 
       - name: Build Windows installer without publishing

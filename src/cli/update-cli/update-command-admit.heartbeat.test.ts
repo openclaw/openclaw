@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
@@ -10,6 +13,7 @@ import {
 import { parseUpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 
@@ -28,6 +32,7 @@ const operatorScratch = "Operator-owned checklist.\n";
 type Scenario = {
   name: string;
   scratch: string;
+  source?: string;
   invalidSource?: boolean;
   message?: string;
 };
@@ -41,18 +46,16 @@ function fixture(scenario: Scenario, withDatabase = true) {
     fs.mkdirSync(directory, { recursive: true });
   }
   const configPath = path.join(state, "openclaw.json");
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      agents: { entries: { main: { workspace, heartbeat: { every: "30m", target: "none" } } } },
-    }),
-  );
+  const config = {
+    agents: { entries: { main: { workspace, heartbeat: { every: "30m", target: "none" } } } },
+  };
+  fs.writeFileSync(configPath, JSON.stringify(config));
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.8"}');
   const sourcePath = path.join(workspace, "HEARTBEAT.md");
   if (scenario.invalidSource) {
     fs.mkdirSync(sourcePath);
   } else {
-    fs.writeFileSync(sourcePath, source);
+    fs.writeFileSync(sourcePath, scenario.source ?? source);
   }
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -129,8 +132,8 @@ function fixture(scenario: Scenario, withDatabase = true) {
     }
   }
   const snapshot = () =>
-    fs
-      .readdirSync(home, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(home)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => {
         const filename = path.join(entry.parentPath, entry.name);
@@ -140,16 +143,20 @@ function fixture(scenario: Scenario, withDatabase = true) {
           fs.statSync(filename).mode,
         ];
       });
-  return { configPath, contextPath, snapshot };
+  return { config, configPath, contextPath, sourcePath, snapshot };
 }
 
 it.each<Scenario>([
   {
     name: "conflicting operator scratch",
     scratch: operatorScratch,
-    message: "different cron scratch",
   },
   { name: "matching operator scratch", scratch: source },
+  {
+    name: "incomplete tasks in a retained source beside operator scratch",
+    scratch: operatorScratch,
+    source: "tasks:\n- name: retained\n  interval: 1h\n",
+  },
   {
     name: "unreadable source shape",
     scratch: operatorScratch,
@@ -182,6 +189,41 @@ it.each<Scenario>([
   });
   expect(errors).not.toHaveBeenCalled();
   expect(f.snapshot()).toEqual(before);
+
+  if (scenario.scratch === operatorScratch && !scenario.invalidSource) {
+    const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+    const next = await withStateMigrationBackupForTest({}, () =>
+      retireHeartbeatWithDoctor(f.config),
+    );
+    expect(next.agents?.entries?.main?.heartbeat).toBeUndefined();
+    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(scenario.source ?? source));
+    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
+    try {
+      expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
+        {
+          store_key: path.join(path.dirname(f.configPath), "cron", "jobs.json"),
+          job_id: "july-monitor",
+          content: operatorScratch,
+          revision: 4,
+          source_sha256: null,
+          updated_at_ms: 1,
+        },
+      ]);
+      expect(database.prepare("SELECT job_id, payload_kind FROM cron_jobs").all()).toEqual([
+        { job_id: "july-monitor", payload_kind: "agentTurn" },
+      ]);
+    } finally {
+      database.close();
+    }
+    expect(notes).toHaveBeenCalledWith(
+      expect.stringContaining("different cron scratch"),
+      "Doctor notices",
+    );
+    expect(notes).toHaveBeenCalledWith(
+      expect.stringContaining("HEARTBEAT.md was retained for review"),
+      "Doctor notices",
+    );
+  }
 });
 
 it.each([
@@ -269,3 +311,41 @@ it.each([
   expect(f.snapshot()).toEqual(before);
   expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
 });
+
+it.each([
+  ["file", false],
+  ["imported scratch", false],
+  ["file", true],
+  ["imported scratch", true],
+] as const)(
+  "checks task conversion in %s (incomplete: %s) before activation without mutating the source",
+  async (location, incomplete) => {
+    const content = incomplete
+      ? "tasks:\n- name: inbox\n  interval: 1h\n"
+      : "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
+    const f = fixture({ name: location, scratch: content }, location === "imported scratch");
+    if (location === "file") {
+      fs.writeFileSync(f.sourcePath, content);
+    } else {
+      fs.unlinkSync(f.sourcePath);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: incomplete ? "refuse" : "admit",
+      reasons: incomplete
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("no complete name/interval/prompt entries"),
+            }),
+          ]
+        : [],
+    });
+    expect(process.exitCode).toBe(incomplete ? 3 : 0);
+    expect(f.snapshot()).toEqual(before);
+  },
+);

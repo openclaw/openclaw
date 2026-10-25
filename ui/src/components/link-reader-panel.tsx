@@ -25,6 +25,7 @@ import {
   type ReaderTab,
   type ReaderSection,
 } from "./link-reader-panel-view.ts";
+import { LINK_READER_METADATA_REQUEST_EVENT } from "./link-reader-response.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
@@ -229,6 +230,9 @@ function PanelView(
       }
     }),
   );
+  onSettled(() =>
+    listen(window, LINK_READER_METADATA_REQUEST_EVENT, () => owner.publishMetadata()),
+  );
   const tab = () => view().activeTab();
   const target = () => view().target();
   const railMenuId = createUniqueId();
@@ -411,6 +415,23 @@ function PanelView(
                     () => owner.refresh(),
                     !target() || !props.available || !props.client || loading(),
                   )}
+                <a
+                  class="lr-external"
+                  href={target()!.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-link-reader-external
+                  aria-label={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  title={t("linkReader.openExternal", { provider: target()!.reader.label })}
+                >
+                  <span class="lr-external-label">
+                    {t("linkReader.openExternal", { provider: target()!.reader.label })}
+                  </span>
+                  <span class="lr-external-provider" aria-hidden="true">
+                    {target()!.reader.label}
+                  </span>
+                  <Icon name="externalLink" />
+                </a>
                 <Menu
                   id={railMenuId}
                   label={t("linkReader.moreActions")}
@@ -425,20 +446,6 @@ function PanelView(
                   disabled={!target()}
                   items={[
                     { id: "copy", label: t("linkReader.copyLink"), icon: <Icon name="copy" /> },
-                    {
-                      id: "external",
-                      label: props.mobile
-                        ? t("linkReader.openInBrowser")
-                        : t("linkReader.openExternal", { provider: target()?.reader.label ?? "" }),
-                      icon: <Icon name="externalLink" />,
-                      href: target()?.href,
-                      class: "lr-external",
-                      attributes: {
-                        target: "_blank",
-                        rel: "noopener noreferrer",
-                        "data-link-reader-external": "",
-                      },
-                    },
                   ]}
                   onSelect={(item) => {
                     const href = target()?.href;

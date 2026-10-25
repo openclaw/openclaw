@@ -113,7 +113,7 @@ it.each([
         input.dispatchEvent(new Event("change"));
         await waitForSolid(() => {
           expect(input.checked).toBe(false);
-          expect(input.disabled).toBe(true);
+          expect(input.getAttribute("aria-disabled")).toBe("true");
         });
       }
       if (replacement === "route") {

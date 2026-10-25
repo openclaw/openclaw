@@ -12,6 +12,7 @@ import { validateConfigObject } from "../config/validation.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import * as exec from "../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -50,7 +51,7 @@ async function cleanup(pending: ReturnType<typeof prepare>) {
 
 async function withRehearsal(
   pending: ReturnType<typeof prepare>,
-  run: (rehearsal: Awaited<typeof pending>) => Promise<void>,
+  run: (rehearsal: Awaited<typeof pending>) => Promise<void> = async () => {},
 ) {
   try {
     await run(await pending);
@@ -70,6 +71,12 @@ function capacity(available: (target: string) => number | null, totalBytes = 102
 
 async function expectSize(file: string, size: number) {
   expect((await fs.stat(file)).size).toBe(size);
+}
+const readConfig = async (file: string): Promise<OpenClawConfig> =>
+  JSON.parse(await fs.readFile(file, "utf8"));
+function readDatabase(file: string, query: string) {
+  using db = openNodeSqliteDatabase(file, { readOnly: true });
+  return db.prepare(query).get();
 }
 
 async function fixture(sizeMiB = 0, ids = ["main"], worker = true) {
@@ -136,7 +143,7 @@ it.each([
   },
 );
 
-async function syntheticSnapshotWorker(body: string) {
+it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
   const root = tempDirs.make("candidate-progress-");
   const stateDir = path.join(root, "source");
   const receipt = path.join(root, "child.json");
@@ -162,15 +169,6 @@ async function syntheticSnapshotWorker(body: string) {
         pid: process.pid,
         directory: input.targetStateDir,
       }));
-      ${body}
-    `,
-  );
-  return { root, stateDir, receipt };
-}
-
-it("reaps an expired snapshot worker before removing its database and WAL scratch", async () => {
-  const { root, stateDir, receipt } = await syntheticSnapshotWorker(
-    `
       await fs.writeFile(path.join(scratch, "database.sqlite"), "partial database");
       await fs.writeFile(path.join(scratch, "database.sqlite-wal"), "partial WAL");
       process.on("SIGTERM", () => {});
@@ -230,57 +228,17 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
   }
 });
 
-it("keeps the SQLite startup floor when the caller supplies a smaller timeout", async () => {
-  const f = await fixture(8);
-  await withRehearsal(prepare(f, { timeoutMs: 1 }), async (rehearsal) => {
-    using db = openNodeSqliteDatabase(
-      path.join(rehearsal.stateDir, "agents/main/agent/openclaw-agent.sqlite"),
-    );
-    expect(db.prepare("SELECT length(value) AS bytes FROM evidence").get()).toEqual({
-      bytes: 8 * 1024 * 1024,
-    });
-  });
+it("rejects insufficient snapshot capacity before copying", async () => {
+  const f = await fixture();
+  const before = await fs.readFile(f.file);
+  capacity(() => 0, 10 * 1024 ** 3);
+  const pending = prepare(f);
+  await expect(withRehearsal(pending)).rejects.toThrow(/snapshot.*requires.*available/i);
+  await expect(pending).rejects.toThrow(os.tmpdir());
+  await expect(pending).rejects.toThrow(`${f.stateDir}.update-captures`);
+  expect(await fs.readdir(f.stateDir)).toEqual(["agents"]);
+  expect(await fs.readFile(f.file)).toEqual(before);
 });
-
-it.each([false, true])(
-  "admits snapshot capacity before copying (state volume full: %s)",
-  async (full) => {
-    const f = await fixture();
-    const before = await fs.readFile(f.file);
-    capacity(
-      (target) => (!full && target === `${f.stateDir}.update-captures` ? 10 * 1024 ** 3 : 0),
-      10 * 1024 ** 3,
-    );
-    const pending = prepare(f);
-    if (full) {
-      try {
-        const outcome = await pending.then(
-          () => "unexpected success",
-          (error: unknown) => (error instanceof Error ? error.message : String(error)),
-        );
-        expect(outcome).toMatch(/snapshot.*requires.*available/i);
-        expect(outcome).toContain(os.tmpdir());
-        expect(outcome).toContain(`${f.stateDir}.update-captures`);
-        expect(await fs.readdir(f.stateDir)).toEqual(["agents"]);
-      } finally {
-        await cleanup(pending);
-      }
-    } else {
-      await withRehearsal(pending, async (rehearsal) => {
-        expect(
-          rehearsal.stateDir.startsWith(
-            `${await fs.realpath(f.stateDir)}.update-captures${path.sep}`,
-          ),
-        ).toBe(true);
-        expect(rehearsal.env).toMatchObject({
-          TMPDIR: rehearsal.stateDir,
-          XDG_CACHE_HOME: path.join(rehearsal.stateDir, "cache"),
-        });
-      });
-    }
-    expect(await fs.readFile(f.file)).toEqual(before);
-  },
-);
 
 it.each([
   { explicit: 1024 ** 3, state: 1024 ** 3, system: 1024 ** 3, kind: "explicit-tmpdir" },
@@ -307,11 +265,10 @@ it.each([
       expect(rehearsal.snapshotCapacity).toMatchObject({
         reason: kind,
         selection: { kind, directory: rehearsal.stateDir },
-        candidates: [
-          { kind: "explicit-tmpdir", directory: nominated, availableBytes: explicit },
-          { kind: "state-volume", directory: sibling, availableBytes: state },
-          { kind: "system-tmpdir", directory: os.tmpdir(), availableBytes: system },
-        ],
+      });
+      expect(rehearsal.env).toMatchObject({
+        TMPDIR: rehearsal.stateDir,
+        XDG_CACHE_HOME: path.join(rehearsal.stateDir, "cache"),
       });
     },
   );
@@ -402,11 +359,9 @@ it.each([false, true])(
       } else {
         const rehearsal = await pending;
         expect(rehearsal.stateDir.startsWith(sibling + path.sep)).toBe(true);
-        expect(rehearsal).toMatchObject({
-          snapshotCapacity: {
-            pluginBytes: expect.any(Number),
-            selection: { kind: "state-volume", directory: rehearsal.stateDir },
-          },
+        expect(rehearsal.snapshotCapacity).toMatchObject({
+          pluginBytes: expect.any(Number),
+          selection: { kind: "state-volume", directory: rehearsal.stateDir },
         });
         await expectSize(
           path.join(rehearsal.stateDir, "npm/projects/demo/node_modules/demo/payload.bin"),
@@ -442,7 +397,8 @@ async function capacityFixture(mebibytes: number | null, worker = false) {
         stateDir: f.stateDir,
         env: {},
       }),
-    prepare: (config: OpenClawConfig = {}) => prepare(f, { config }),
+    prepare: (options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {}) =>
+      prepare(f, options),
     unchanged: async () => expect(await hashes()).toEqual(before),
   };
 }
@@ -464,23 +420,56 @@ it.each([
   },
 );
 
-it("copies and verifies both databases within the admitted capacity", async () => {
+it("preflights activation backup separately from candidate copy capacity", async () => {
+  const f = await fixture(0, ["main", "second"], false);
+  // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
+  for (const file of f.files) {
+    await fs.truncate(file, 8 * 1024 ** 2);
+  }
+  const backupDirectory = path.join(f.root, "backup");
+  let freeMiB: number | null = 100;
+  capacity((target) =>
+    target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
+  );
+  const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+  for (freeMiB of [100, 140, null]) {
+    const result = await assessInitialUpdateSnapshotCapacity({
+      config: {},
+      stateDir: f.stateDir,
+      env: {},
+      backupDirectory,
+    });
+    expect(result.exitCode, result.stderrTail ?? undefined).toBe(freeMiB === 100 ? 1 : 0);
+    if (freeMiB === 100) {
+      expect(result.stderrTail).toContain("Update database backup");
+      expect(result.stderrTail).toContain("125829120 bytes");
+      expect(result.stderrTail).toContain("104857600 bytes");
+      for (const file of f.files) {
+        expect(result.stderrTail).toContain(file);
+      }
+    }
+  }
+  await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const [index, file] of f.files.entries()) {
+    expect((await fs.readFile(file)).equals(before[index]!)).toBe(true);
+  }
+});
+
+it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {
   const f = await capacityFixture(100, true);
-  const rehearsal = await f.prepare();
-  try {
+  let copiedState = "";
+  await withRehearsal(f.prepare({ timeoutMs: 1 }), async (rehearsal) => {
+    copiedState = rehearsal.stateDir;
     expect(rehearsal.snapshotCapacity.requiredBytes).toBeLessThan(100 * 1024 ** 2);
     for (const file of f.files) {
       const copy = path.join(rehearsal.stateDir, path.relative(f.stateDir, file));
-      using db = openNodeSqliteDatabase(copy, { readOnly: true });
-      expect(db.prepare("SELECT length(value) AS bytes FROM evidence").get()).toEqual({
+      expect(readDatabase(copy, "SELECT length(value) AS bytes FROM evidence")).toEqual({
         bytes: 8 * 1024 ** 2,
       });
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(readDatabase(copy, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
     }
-  } finally {
-    await rehearsal.cleanup();
-  }
-  await expect(fs.stat(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  await expect(fs.stat(copiedState)).rejects.toMatchObject({ code: "ENOENT" });
   await f.unchanged();
 });
 
@@ -519,19 +508,18 @@ it.each(["global", "mixed-workboard", "global with SQLite built-in overrides"] a
         ]),
       );
     }
-    const rehearsal = f.prepare({
-      database: {
-        ...database,
-        postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
-      },
-    });
-    await rehearsal.then(
-      async (result) => {
-        await result.cleanup();
-        expect.fail("Capacity preflight unexpectedly admitted a portable PostgreSQL export");
-      },
-      (error: unknown) => expect(error).toMatchObject(capacityFailure),
-    );
+    await expect(
+      withRehearsal(
+        f.prepare({
+          config: {
+            database: {
+              ...database,
+              postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
+            },
+          },
+        }),
+      ),
+    ).rejects.toMatchObject(capacityFailure);
     await f.unchanged();
   },
 );
@@ -541,18 +529,43 @@ const { registerPolicyDoctorChecks } = await loadBundledPluginFacade<{
 }>({ pluginId: "policy", artifactBasename: "api.ts" });
 
 it.each(["token", "password"] as const)(
-  "preserves policy rate limits while isolating %s authentication",
+  "preserves 2026.10.5 config, state and policy for %s authentication",
   async (mode) => {
     const root = tempDirs.make("candidate-policy-");
     await materializeUpdateCandidateStateWorker(root);
     const policyPath = path.join(root, "policy.jsonc");
     await fs.writeFile(
       policyPath,
-      JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
+      JSON.stringify({
+        gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } },
+        dataHandling: { sensitiveLogging: { requireRedaction: true } },
+        secrets: { allowInsecureProviders: true },
+      }),
     );
     const user = "operator@example.invalid";
     const config: OpenClawConfig = {
-      plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
+      plugins: {
+        entries: {
+          policy: {
+            enabled: true,
+            config: {
+              path: policyPath,
+              expectedAttestationHash:
+                mode === "token"
+                  ? "sha256:4fdc3e88ded7ecdfcdec09f8b30be01337df919cf9e51211e92a7a4d664ae545"
+                  : "sha256:ede6e4f088dd6d2177dc3e8bbafcc80388a051381fc75301f01d42fef9d42218",
+            },
+          },
+        },
+      },
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          captureContent: true,
+          headers: { Authorization: "synthetic-otel-secret", "X-Reference": "${OTEL_SECRET}" },
+        },
+      },
       gateway: {
         bind: "lan",
         port: 18789,
@@ -569,6 +582,19 @@ it.each(["token", "password"] as const)(
       },
     };
     const original = structuredClone(config);
+    const source = path.join(root, "source");
+    const database = path.join(source, "agents/main/agent/openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(database), { recursive: true });
+    {
+      using db = openNodeSqliteDatabase(database);
+      db.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
+      db.exec(`PRAGMA user_version = 25;
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 25, 'main', '2026.10.5', 1, 1);
+        INSERT INTO cache_entries (scope, key, value_json, updated_at)
+        VALUES ('fixture', 'retained', '{"keep":true}', 1);`);
+    }
+    const sourceBytes = await fs.readFile(database);
     const checks: HealthCheck[] = [];
     registerPolicyDoctorChecks({ registerHealthCheck: (check) => checks.push(check) });
     const lint = (cfg: OpenClawConfig, configPath: string) =>
@@ -580,7 +606,7 @@ it.each(["token", "password"] as const)(
 
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
-      stateDir: path.join(root, "source"),
+      stateDir: source,
       candidateRoot: root,
       env: {
         ...process.env,
@@ -589,25 +615,29 @@ it.each(["token", "password"] as const)(
       },
     });
     try {
-      const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const copied = await readConfig(rehearsal.configPath);
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
-      expect(copied.gateway).toMatchObject({
-        bind: "loopback",
-        port: rehearsal.port,
-        trustedProxies: config.gateway?.trustedProxies,
-        auth: {
-          mode: "token",
-          rateLimit: config.gateway?.auth?.rateLimit,
-          identityScopes: config.gateway?.auth?.identityScopes,
-          trustedProxy: config.gateway?.auth?.trustedProxy,
-          allowTailscale: false,
-          token: expect.any(String),
-        },
+      expect(copied.gateway).toEqual({
+        ...config.gateway,
+        auth: { ...config.gateway?.auth, token: expect.any(String) },
       });
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      expect(copied.gateway?.auth?.password).toBeUndefined();
+      expect(copied.diagnostics).toEqual({
+        ...config.diagnostics,
+        otel: {
+          ...config.diagnostics?.otel,
+          headers: { Authorization: expect.any(String), "X-Reference": "${OTEL_SECRET}" },
+        },
+      });
+      expect(copied.diagnostics?.otel?.headers?.Authorization).not.toBe("synthetic-otel-secret");
+      const copiedDatabase = path.join(rehearsal.stateDir, path.relative(source, database));
+      expect(readDatabase(copiedDatabase, "PRAGMA user_version")).toEqual({ user_version: 25 });
+      expect(
+        readDatabase(copiedDatabase, "SELECT value_json FROM cache_entries WHERE key = 'retained'"),
+      ).toEqual({ value_json: '{"keep":true}' });
+      expect(await fs.readFile(database)).toEqual(sourceBytes);
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);
@@ -666,15 +696,10 @@ it("keeps workspace-confined avatars as valid as the serving config", async () =
     "agents.entries.relativeRenamed.identity.avatar",
   ]);
 
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config,
-    stateDir: path.join(root, "source"),
-    candidateRoot: root,
-  });
-  try {
-    const copied: unknown = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-    expect(issuePaths(copied)).toEqual(issuePaths(config));
-  } finally {
-    await rehearsal.cleanup();
-  }
+  await withRehearsal(
+    prepare({ root, stateDir: path.join(root, "source") }, { config }),
+    async (rehearsal) => {
+      expect(issuePaths(await readConfig(rehearsal.configPath))).toEqual(issuePaths(config));
+    },
+  );
 });

@@ -218,14 +218,22 @@ function buildSyncCacheRows(payload: PersistedMatrixSyncStore): {
 export async function readLegacyMatrixSyncCacheState(
   storageRootDir: string,
 ): Promise<PersistedMatrixSyncStore | null> {
+  const { decodeUtf8Input, Utf8InputError } =
+    await import("openclaw/plugin-sdk/runtime-doctor-migrations");
   try {
-    const raw = await fs.readFile(resolveLegacySyncCachePath(storageRootDir), "utf8");
+    const raw = decodeUtf8Input(
+      await fs.readFile(resolveLegacySyncCachePath(storageRootDir)),
+      "Legacy Matrix sync cache",
+    );
     const persisted = normalizeLegacyPersistedStore(JSON.parse(raw));
     if (!persisted?.savedSync && !persisted?.clientOptions) {
       return null;
     }
     return persisted;
-  } catch {
+  } catch (error) {
+    if (error instanceof Utf8InputError) {
+      throw error;
+    }
     return null;
   }
 }

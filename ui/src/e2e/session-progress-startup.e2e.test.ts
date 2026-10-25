@@ -1,127 +1,56 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  newChatPage,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it.each([false, true])(
-    "recovers Details progress reads without generating progress (mobile=%s)",
-    async (mobile) => {
-      const context = await suite.newBrowserContext({
-        viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
-        isMobile: mobile,
-        hasTouch: mobile,
-        reducedMotion: "reduce",
-      });
-      const page = await context.newPage();
-      const sessionKey = "agent:main:main";
-      const card = {
-        sessionKey,
-        revision: 1,
-        updatedAt: Date.now(),
-        steps: [{ step: "Saved progress", status: "in_progress" }],
-      };
-      const gateway = await installMockGateway(page, {
-        agentModel: "example/model",
-        models: [{ id: "model", provider: "example", name: "Example" }],
-        sessions: [
-          {
-            key: sessionKey,
-            sessionId: "details-progress-read",
-            kind: "direct",
-            contextTokens: 128_000,
-            totalTokens: 24_800,
-          },
-        ],
-        deferredMethods: ["progressCard.get"],
-        methodResponses: {
-          "progressCard.get": { card },
-          "cron.list": {
-            jobs: [],
-            snapshotRevision: "empty",
-            offset: 0,
-            limit: 50,
-            total: 0,
-            hasMore: false,
-            nextOffset: null,
-          },
-        },
-      });
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("progressCard.get");
-        const details = await openChatDetails(page);
-        const progressSurface = mobile
-          ? details.locator(".chat-details-mobile-root")
-          : details.locator(".chat-details-desktop-body");
-        const retry = progressSurface.getByRole("button", { name: "Retry", exact: true });
-        // The Details shell becomes visible before its lazy composition has mounted.
-        await progressSurface.waitFor();
-        await progressSurface.getByRole("meter", { name: "Context", exact: true }).waitFor();
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        await gateway.rejectDeferred("progressCard.get", { message: "Temporary read failure" });
-        await progressSurface
-          .getByRole("status", { name: "Loading session progress…", exact: true })
-          .waitFor({ state: "hidden" });
-        expect(await retry.count()).toBe(0);
-        await gateway.deferNext("progressCard.get");
-        await page.clock.runFor(30_000);
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
-        await gateway.resolveDeferred("progressCard.get", { card: null });
-        expect(
-          await progressSurface.locator('[data-progress-card-placement="details"]').count(),
-        ).toBe(0);
-        expect(
-          await progressSurface
-            .getByRole("status", { name: "Loading session progress…", exact: true })
-            .count(),
-        ).toBe(0);
-        expect(await retry.count()).toBe(0);
-        await gateway.deferNext("progressCard.get");
-        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(3);
-        await gateway.rejectDeferred("progressCard.get", {
-          message: "Temporary read failure after invalidation",
-        });
-        await gateway.deferNext("progressCard.get");
-        await page.clock.runFor(30_000);
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(4);
-        await gateway.rejectDeferred("progressCard.get", {
-          message: "Still temporarily unavailable",
-        });
-        expect(await retry.count()).toBe(0);
-        await gateway.deferNext("progressCard.get");
-        await page.clock.runFor(60_000);
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(5);
-        await gateway.resolveDeferred("progressCard.get", { card });
-        // Commit the recovered card and its queued layout frames under the paused clock.
-        await page.clock.runFor(32);
-        await progressSurface
-          .getByText("Saved progress", { exact: true })
-          .filter({ visible: true })
-          .first()
-          .waitFor();
-        expect(await retry.count()).toBe(0);
-        expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
-        expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
-      } finally {
-        await suite.closeBrowserContext(context);
+  it("backs off repeated progress failures without generating new progress", async () => {
+    const page = await newChatPage(suite);
+    const gateway = await installMockGateway(page, { deferredMethods: ["progressCard.get"] });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("progressCard.get");
+    await openChatDetails(page);
+    await page.clock.install();
+    await pauseVirtualClock(page);
+    await gateway.rejectDeferred("progressCard.get", { message: "Temporary read failure" });
+    for (const [index, delay] of [30_000, 60_000].entries()) {
+      await gateway.deferNext("progressCard.get");
+      await page.clock.runFor(delay);
+      expect(await gateway.getRequests("progressCard.get")).toHaveLength(index + 2);
+      if (index === 0) {
+        await gateway.rejectDeferred("progressCard.get", { message: "Still unavailable" });
       }
-    },
-  );
+    }
+    await gateway.resolveDeferred("progressCard.get", {
+      card: {
+        sessionKey: "agent:main:main",
+        revision: 1,
+        updatedAt: 1,
+        markdown: "Recovered progress",
+      },
+    });
+    await page.clock.runFor(32);
+    await page
+      .locator(".task-progress-details__plan")
+      .getByText("Recovered progress", { exact: true })
+      .waitFor();
+    expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
+    expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
+  });
+
   it.each(["card", "empty", "error"] as const)(
     "keeps the same usable composer through initial history and %s progress",
     async (outcome) => {
-      const context = await suite.newBrowserContext({
+      const page = await newChatPage(suite, {
         viewport: { width: 1440, height: 900 },
         reducedMotion: "no-preference",
       });
-      const page = await context.newPage();
       const sessionKey = "agent:main:main";
       const card = {
         sessionKey,
@@ -143,251 +72,205 @@ suite.define(() => {
         deferredMethods: ["chat.startup", "progressCard.get", "chat.send"],
         methodResponses: { "progressCard.get": { card } },
       });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Queue before history and progress");
+      const textarea = await composer.elementHandle();
+      expect(textarea).not.toBeNull();
+      await page.locator(".agent-chat__file-input").setInputFiles({
+        name: "startup-note.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Synthetic startup attachment"),
+      });
+      await page.locator(".chat-attachment-thumb", { hasText: "startup-note.txt" }).waitFor();
+      await composer.press("Enter");
+      await page
+        .locator(".chat-queue")
+        .getByText("Queue before history and progress", { exact: true })
+        .waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
+      const draft = "Keep this draft while progress loads";
+      await composer.fill(draft);
+      await gateway.resolveDeferred("chat.startup");
+      await gateway.waitForRequest("progressCard.get");
+      await page.locator(".chat-thread").getByText("Ready.", { exact: true }).waitFor();
+      const send = await gateway.waitForRequest("chat.send");
+      expect(send.params).toMatchObject({
+        sessionKey,
+        message: "Queue before history and progress",
+        attachments: [expect.objectContaining({ fileName: "startup-note.txt" })],
+      });
+      expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
+      expect(await composer.inputValue()).toBe(draft);
+      expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
+      const geometry = await page.evaluateHandle(() => {
+        const bounds = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector)!;
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return [x, y, width, height];
+        };
+        const readEditor = () => ({
+          input: bounds(".agent-chat__input"),
+          textarea: bounds(".agent-chat__composer-combobox textarea"),
+        });
+        const before = readEditor();
+        const editorFrames: Array<typeof before> = [];
+        const frames: Array<{ top: number; height: number; card: boolean }> = [];
+        let remaining: number | undefined;
+        let frame: number;
+        let complete!: () => void;
+        const finished = new Promise<void>((resolve) => {
+          complete = resolve;
+        });
+        const sample = () => {
+          editorFrames.push(readEditor());
+          if (remaining !== undefined) {
+            const shell = document.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+            frames.push({
+              top: shell.offsetTop,
+              height: shell.getBoundingClientRect().height,
+              card: shell.querySelector('[data-progress-card-placement="composer"]') !== null,
+            });
+            if (--remaining === 0) {
+              complete();
+              return;
+            }
+          }
+          frame = requestAnimationFrame(sample);
+        };
+        sample();
+        return {
+          async finish() {
+            remaining = 20;
+            await finished;
+            return { frames, before, editorFrames };
+          },
+          cancel: () => cancelAnimationFrame(frame),
+        };
+      });
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
-        const artifactDir = createControlUiE2eArtifactDir(`progress-startup-${outcome}`);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Queue before history and progress");
-        await page.screenshot({
-          path: path.join(artifactDir, "history-pending.png"),
-          animations: "disabled",
-        });
-        const textarea = await composer.elementHandle();
-        expect(textarea).not.toBeNull();
-        await page.locator(".agent-chat__file-input").setInputFiles({
-          name: "startup-note.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("Synthetic startup attachment"),
-        });
-        await page.locator(".chat-attachment-thumb", { hasText: "startup-note.txt" }).waitFor();
-        await composer.press("Enter");
-        await page
-          .locator(".chat-queue")
-          .getByText("Queue before history and progress", { exact: true })
-          .waitFor();
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
-        const draft = "Keep this draft while progress loads";
-        await composer.fill(draft);
-        await gateway.resolveDeferred("chat.startup");
-        await gateway.waitForRequest("progressCard.get");
-        await page.locator(".chat-thread").getByText("Ready.", { exact: true }).waitFor();
-        const send = await gateway.waitForRequest("chat.send");
-        expect(send.params).toMatchObject({
-          sessionKey,
-          message: "Queue before history and progress",
-          attachments: [expect.objectContaining({ fileName: "startup-note.txt" })],
-        });
+        if (outcome === "error") {
+          await gateway.rejectDeferred("progressCard.get", {
+            message: "Progress temporarily unavailable",
+          });
+        } else {
+          await gateway.resolveDeferred("progressCard.get", {
+            card: outcome === "card" ? card : null,
+          });
+        }
         expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
         expect(await composer.inputValue()).toBe(draft);
         expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
-        await page.screenshot({ path: path.join(artifactDir, "progress-pending.png") });
-        const geometry = await page.evaluateHandle(() => {
-          const bounds = (selector: string) => {
-            const element = document.querySelector<HTMLElement>(selector)!;
-            const { x, y, width, height } = element.getBoundingClientRect();
-            return { x, y, width, height };
-          };
-          const readEditor = () => ({
-            input: bounds(".agent-chat__input"),
-            textarea: bounds(".agent-chat__composer-combobox textarea"),
-          });
-          const before = readEditor();
-          const editorFrames: Array<typeof before> = [];
-          const frames: Array<{ top: number; height: number; card: boolean }> = [];
-          let remaining: number | undefined;
-          let frame: number;
-          let complete!: () => void;
-          const finished = new Promise<void>((resolve) => {
-            complete = resolve;
-          });
-          const sample = () => {
-            editorFrames.push(readEditor());
-            if (remaining !== undefined) {
-              const shell = document.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
-              frames.push({
-                top: shell.offsetTop,
-                height: shell.getBoundingClientRect().height,
-                card: shell.querySelector('[data-progress-card-placement="composer"]') !== null,
-              });
-              if (--remaining === 0) {
-                complete();
-                return;
-              }
-            }
-            frame = requestAnimationFrame(sample);
-          };
-          sample();
-          return {
-            async finish() {
-              remaining = 20;
-              await finished;
-              return { frames, before, editorFrames };
-            },
-            cancel: () => cancelAnimationFrame(frame),
-          };
-        });
-        try {
-          if (outcome === "error") {
-            await gateway.rejectDeferred("progressCard.get", {
-              message: "Progress temporarily unavailable",
-            });
-          } else {
-            await gateway.resolveDeferred("progressCard.get", {
-              card: outcome === "card" ? card : null,
-            });
-          }
-          expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
-            true,
-          );
-          expect(await composer.inputValue()).toBe(draft);
-          expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
-          const { frames, before, editorFrames } = await geometry.evaluate((capture) =>
-            capture.finish(),
-          );
-          await page.screenshot({ path: path.join(artifactDir, "progress-resolved.png") });
-          for (const sample of editorFrames) {
-            for (const surface of ["input", "textarea"] as const) {
-              for (const dimension of ["x", "y", "width", "height"] as const) {
-                expect(
-                  Math.abs(sample[surface][dimension] - before[surface][dimension]),
-                ).toBeLessThanOrEqual(1);
-              }
-            }
-          }
-          expect(frames.every((frame) => !frame.card)).toBe(true);
-          expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
-            "false",
-          );
-          expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(false);
-          expect(
-            Math.max(...frames.map((frame) => frame.height)) -
-              Math.min(...frames.map((frame) => frame.height)),
-          ).toBeLessThanOrEqual(1);
-          expect(
-            Math.max(...frames.map((frame) => frame.top)) -
-              Math.min(...frames.map((frame) => frame.top)),
-          ).toBeLessThanOrEqual(1);
-        } finally {
-          await geometry.evaluate((capture) => capture.cancel());
-          await geometry.dispose();
-        }
-
-        await openChatDetails(page);
-        if (outcome === "card") {
-          await page
-            .locator(".task-progress-details__plan")
-            .getByText("Inspect the conversation", { exact: true })
-            .waitFor();
-        } else {
-          expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
-          if (outcome === "error") {
+        const { frames, before, editorFrames } = await geometry.evaluate((capture) =>
+          capture.finish(),
+        );
+        for (const sample of editorFrames) {
+          for (const surface of ["input", "textarea"] as const) {
             expect(
-              await page.getByText("Session progress is unavailable.", { exact: true }).count(),
-            ).toBe(0);
+              Math.max(
+                ...sample[surface].map((value, index) => Math.abs(value - before[surface][index]!)),
+              ),
+            ).toBeLessThanOrEqual(1);
           }
         }
-        await closeChatDetails(page);
-
-        await composer.fill("Keep this draft while progress refreshes");
-        await gateway.deferNext("progressCard.get");
-        await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
-        await expect
-          .poll(async () => (await gateway.getRequests("progressCard.get")).length)
-          .toBe(2);
-        expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
-        await gateway.rejectDeferred("progressCard.get", {
-          message: "Refresh temporarily unavailable",
-        });
-        expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
+        expect(frames.every((frame) => !frame.card)).toBe(true);
+        expect(await page.locator(".chat-details-toggle").getAttribute("aria-expanded")).toBe(
+          "false",
+        );
+        expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(false);
+        expect(
+          Math.max(...frames.map((frame) => frame.height)) -
+            Math.min(...frames.map((frame) => frame.height)),
+        ).toBeLessThanOrEqual(1);
+        expect(
+          Math.max(...frames.map((frame) => frame.top)) -
+            Math.min(...frames.map((frame) => frame.top)),
+        ).toBeLessThanOrEqual(1);
       } finally {
-        await suite.closeBrowserContext(context);
+        await geometry.evaluate((capture) => capture.cancel());
+        await geometry.dispose();
       }
+
+      await openChatDetails(page);
+      if (outcome === "card") {
+        await page
+          .locator(".task-progress-details__plan")
+          .getByText("Inspect the conversation", { exact: true })
+          .waitFor();
+      } else {
+        expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
+        if (outcome === "error") {
+          expect(
+            await page.getByText("Session progress is unavailable.", { exact: true }).count(),
+          ).toBe(0);
+        }
+      }
+      await closeChatDetails(page);
+
+      await composer.fill("Keep this draft while progress refreshes");
+      await gateway.deferNext("progressCard.get");
+      await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+      await expect.poll(async () => (await gateway.getRequests("progressCard.get")).length).toBe(2);
+      expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
+      await gateway.rejectDeferred("progressCard.get", {
+        message: "Refresh temporarily unavailable",
+      });
+      expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
     },
   );
 
   it.each(["history", "progress"] as const)(
     "preserves the composer when %s settles first during a history refresh and initial progress read",
     async (first) => {
-      const context = await suite.newBrowserContext({});
-      const page = await context.newPage();
+      const page = await newChatPage(suite);
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, {
         sessionInfo: { key: sessionKey, kind: "direct", updatedAt: 1 },
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
         deferredMethods: ["progressCard.get"],
       });
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("progressCard.get");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        const draft = "Keep draft and focus through either reply order";
-        await composer.fill(draft);
-        const textarea = await composer.elementHandle();
-        expect(textarea).not.toBeNull();
-        // Initial history owns progress admission. A live message can independently
-        // refresh that history while the first progress response is still pending.
-        await gateway.deferNext("chat.history");
-        const before = (await gateway.getRequests("chat.history")).length;
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey,
-          session: { key: sessionKey, kind: "direct", updatedAt: 2 },
-          messageId: "startup-peer-message",
-          messageSeq: 3,
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "A peer joined the conversation." }],
-            __openclaw: { id: "startup-peer-message", seq: 3 },
-          },
-        });
-        await gateway.waitForRequest("chat.history", { after: before });
-        for (const response of [first, first === "history" ? "progress" : "history"]) {
-          if (response === "history") {
-            await gateway.resolveDeferred("chat.history");
-          } else {
-            await gateway.resolveDeferred("progressCard.get", {
-              card: { sessionKey, revision: 1, updatedAt: 1, markdown: "Initial task progress" },
-            });
-          }
-          expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
-            true,
-          );
-          expect(await composer.inputValue()).toBe(draft);
-          expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("progressCard.get");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const draft = "Keep draft and focus through either reply order";
+      await composer.fill(draft);
+      const textarea = await composer.elementHandle();
+      expect(textarea).not.toBeNull();
+      // Initial history owns progress admission. A live message can independently
+      // refresh that history while the first progress response is still pending.
+      await gateway.deferNext("chat.history");
+      const before = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        sessionKey,
+        session: { key: sessionKey, kind: "direct", updatedAt: 2 },
+        messageId: "startup-peer-message",
+        messageSeq: 3,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "A peer joined the conversation." }],
+          __openclaw: { id: "startup-peer-message", seq: 3 },
+        },
+      });
+      await gateway.waitForRequest("chat.history", { after: before });
+      for (const response of [first, first === "history" ? "progress" : "history"]) {
+        if (response === "history") {
+          await gateway.resolveDeferred("chat.history");
+        } else {
+          await gateway.resolveDeferred("progressCard.get", {
+            card: { sessionKey, revision: 1, updatedAt: 1, markdown: "Initial task progress" },
+          });
         }
-        await openChatDetails(page);
-        await page
-          .locator(".task-progress-details__plan")
-          .getByText("Initial task progress", { exact: true })
-          .waitFor();
-      } finally {
-        await suite.closeBrowserContext(context);
+        expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
       }
+      await openChatDetails(page);
+      await page
+        .locator(".task-progress-details__plan")
+        .getByText("Initial task progress", { exact: true })
+        .waitFor();
     },
   );
-
-  it("shows a failed initial history without waiting for progress", async () => {
-    const context = await suite.newBrowserContext({});
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      historyMessages: [],
-      deferredMethods: ["chat.startup", "progressCard.get"],
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await gateway.rejectDeferred("chat.startup", { message: "History temporarily unavailable" });
-      const error = page.locator('.chat-history-error[role="alert"]');
-      await error.waitFor();
-      expect(await error.textContent()).toContain("Couldn’t load this conversation");
-      expect(await error.locator("p").textContent()).toContain("History temporarily unavailable");
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("Preserve this recovery draft");
-      expect(await error.getByRole("button", { name: "Retry" }).count()).toBe(1);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
 });

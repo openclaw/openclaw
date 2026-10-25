@@ -39,6 +39,7 @@ import {
   readSessionTranscriptHistoryEventById as messageById,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { readPreviousIndexedTranscriptEventSync as readPrevious } from "./session-accessor.sqlite-suffix-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -291,7 +292,7 @@ describe("SQLite active transcript event projection", () => {
     "keeps pre-fence control facts through a later reset (human=%s)",
     async (human) => {
       await persistMessages([
-        userMessage("source", null, "result"),
+        userMessage("source", null, `result ${"x".repeat(20_000)}`),
         ...(human ? [userMessage("human", "source", "new work")] : []),
         userMessage("admitted", human ? "human" : "source"),
       ]);
@@ -300,6 +301,9 @@ describe("SQLite active transcript event projection", () => {
       await persistMessages([
         transcriptMessage("after-reset", "later-reset", { role: "user", content: "fresh" }),
       ]);
+      expect(activeStats(scope)).toMatchObject({ eventCount: 1 });
+      expect(activeStats(scope).sizeBytes).toBeLessThan(1_000);
+      expect(readLatest(scope)?.event).toMatchObject({ id: "after-reset" });
       expect(accept()).toBe(false);
       const seen: unknown[] = [];
       const result = withReadFence(anchor, () =>
@@ -315,18 +319,6 @@ describe("SQLite active transcript event projection", () => {
     },
   );
 
-  it("stops counting discarded transcript bytes after a reset", async () => {
-    await persistMessages([
-      makeMessage("discarded-old", null, "user", `discarded ${"x".repeat(20_000)}`),
-    ]);
-    await reset("reset-boundary", "discarded-old", "2026-08-15T00:00:00.000Z");
-    await persistMessages([makeMessage("post-reset", "reset-boundary", "user", "fresh turn")]);
-
-    expect(activeStats(scope)).toMatchObject({ eventCount: 1 });
-    expect(activeStats(scope).sizeBytes).toBeLessThan(1_000);
-    expect(readLatest(scope)?.event).toMatchObject({ id: "post-reset" });
-  });
-
   it("reads the latest message before an admission fence and follows a selected older leaf", async () => {
     expect(readLatest(scope)).toBeUndefined();
     await persistMessages([
@@ -339,7 +331,8 @@ describe("SQLite active transcript event projection", () => {
     if (!anchor) {
       throw new Error("expected admitted message anchor");
     }
-    expect(readLatest(scope)?.event).toMatchObject({ id: "later" });
+    const latest = readLatest(scope);
+    expect(latest?.event).toMatchObject({ id: "later" });
     expect(
       withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
         readLatest(scope),
@@ -354,6 +347,7 @@ describe("SQLite active transcript event projection", () => {
     });
     await reconcile();
     expect(readLatest(scope)?.event).toMatchObject({ id: "prior" });
+    expect(readPrevious(scope, latest!.eventSeq + 1)?.event).toMatchObject({ id: "prior" });
   });
 
   it("streams only user control facts from an exact visible input within the read fence", async () => {
@@ -445,26 +439,9 @@ describe("SQLite active transcript event projection", () => {
     expect(everyUserInput(scope, "fresh:user", () => true)).toBe(true);
   });
 
-  it("skips oversized tail rows before materializing a bounded message page", async () => {
-    await persistMessages([
-      makeMessage("small", null, "user", "keep"),
-      makeMessage("oversized", "small", "assistant", "x".repeat(16_384)),
-    ]);
-
-    const page = readTailPage(scope, {
-      maxBytes: 512,
-      maxMessages: Number.MAX_SAFE_INTEGER,
-      offset: 0,
-    });
-
-    expect(page).toMatchObject({ scannedMessages: 2, newestContiguousEventCount: 0 });
-    expect(page.serializedBytes).toBeLessThanOrEqual(512);
-    expect(eventIds(page.events)).toEqual(["small"]);
-  });
-
-  it("reuses page sizes for omission checks and observes an oversized append", async () => {
+  it("bounds oversized tail rows and reuses page sizes for omission checks", async () => {
     await persistMessages([makeMessage("small", null, "user", "keep")]);
-    const options = { maxBytes: 512, maxMessages: 10, offset: 0 };
+    const options = { maxBytes: 512, maxMessages: Number.MAX_SAFE_INTEGER, offset: 0 };
     readTailPage(scope, options);
     const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     try {
@@ -483,9 +460,17 @@ describe("SQLite active transcript event projection", () => {
     }
 
     await persistMessages([makeMessage("oversized", "small", "assistant", "x".repeat(16_384))]);
-    expect(
-      readTailPage(scope, { ...options, oversizedMessageCheck: { roles: ["assistant"] } }),
-    ).toMatchObject({ hasOversizedMessages: true, scannedMessages: 2 });
+    const page = readTailPage(scope, {
+      ...options,
+      oversizedMessageCheck: { roles: ["assistant"] },
+    });
+    expect(page).toMatchObject({
+      hasOversizedMessages: true,
+      scannedMessages: 2,
+      newestContiguousEventCount: 0,
+    });
+    expect(page.serializedBytes).toBeLessThanOrEqual(512);
+    expect(eventIds(page.events)).toEqual(["small"]);
     expect(
       readTailPage(scope, { ...options, oversizedMessageCheck: { roles: ["user"] } }),
     ).toMatchObject({ hasOversizedMessages: false });
@@ -498,7 +483,7 @@ describe("SQLite active transcript event projection", () => {
     ).toMatchObject({ hasOversizedMessages: true, scannedMessages: 0 });
   });
 
-  it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
+  it("projects reset kept-tail positions and invalidates the window after a branch change", async () => {
     await persistMessages([
       makeMessage("old", null, "user", "old"),
       makeMessage("kept-user", "old", "user", "kept question"),
@@ -519,6 +504,15 @@ describe("SQLite active transcript event projection", () => {
     const recent = readRecent(3, 10, 1_024);
     expect(eventIds(recent.events)).toEqual(["kept-user", "kept-assistant", "post-reset"]);
 
+    await persistMessages([makeMessage("branch-message", "old", "assistant", "branched")]);
+    await reconcile();
+    expect(eventIds(readPage(scope, { maxMessages: 10, offset: 0 }).events)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+      "branch-message",
+    ]);
+
     await appendTranscriptEvent(scope, {
       type: "compaction",
       id: "newer-compaction",
@@ -528,6 +522,7 @@ describe("SQLite active transcript event projection", () => {
       firstKeptEntryId: "post-reset",
       tokensBefore: 10,
     });
+    await reconcile();
     expect(readRecent(1, 1, 1_024).activeLeafEntryId).toBe("newer-compaction");
     expect(entryRelation(scope, "newer-compaction")).toBe("exact");
     expect(entryRelation(scope, "post-reset")).toBe("ancestor");
@@ -546,28 +541,6 @@ describe("SQLite active transcript event projection", () => {
     ).run(scope.sessionId);
 
     expect(() => countMessages(scope)).toThrow();
-  });
-
-  it("recomputes a cached reset window after a branch-changing message", async () => {
-    await persistMessages([
-      makeMessage("old", null, "user", "old"),
-      makeMessage("kept-user", "old", "user", "kept"),
-      makeMessage("kept-assistant", "kept-user", "assistant", "kept answer"),
-    ]);
-    await reset("reset-boundary", "kept-assistant", "2026-07-22T00:00:00.000Z", "kept-user");
-    await persistMessages([makeMessage("post-reset", "reset-boundary", "user", "post reset")]);
-    expect(countMessages(scope)).toBe(3);
-
-    await persistMessages([makeMessage("branch-message", "old", "assistant", "branched")]);
-    await reconcile();
-
-    const page = readPage(scope, { maxMessages: 10, offset: 0 });
-    expect(eventIds(page.events)).toEqual([
-      "kept-user",
-      "kept-assistant",
-      "post-reset",
-      "branch-message",
-    ]);
   });
 
   it("reconciles work scheduled while an earlier pass is yielding", async () => {
@@ -863,7 +836,7 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistMessages([
       makeMessage("m100001", "m100000", "toolResult", "live-write"),
     ]);
-    expect(liveWrite.appendedCount).toBe(1);
+    expect(liveWrite.messages.filter((m) => m.appended)).toHaveLength(1);
     order.push("live-write");
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);

@@ -228,10 +228,10 @@ describe("Usage query failure ownership", () => {
       expect(page.textContent).toContain("Original query row");
       // Provider plans load on the page after the route data applies.
       await vi.waitFor(() => expect(page.textContent).toContain("QA Provider Plan"));
-      expect(page.querySelector(".cost-window-card--range")?.textContent).toContain("$1");
-      const originalRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
+      const originalRange = page.querySelector(".cost-window-range")?.textContent?.trim();
       const originalValue = page
-        .querySelector(".cost-window-card--range .cost-window-card__value")
+        .querySelector(".cost-window--range .cost-window__value")
         ?.textContent?.trim();
       expect(originalRange).toBeTruthy();
       expect(originalValue).toMatch(/^\$1(?:\.0+)?$/);
@@ -259,9 +259,9 @@ describe("Usage query failure ownership", () => {
           ? { startDate: "2026-07-01", endDate: "2026-07-01" }
           : { startDate: "2026-07-09", endDate: "2026-08-07" },
       );
-      const failedRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+      const failedRange = page.querySelector(".cost-window-range")?.textContent?.trim();
       const failedValue = page
-        .querySelector(".cost-window-card--range .cost-window-card__value")
+        .querySelector(".cost-window--range .cost-window__value")
         ?.textContent?.trim();
       if (change === "same query") {
         expect(page.textContent).toContain("Original query row");
@@ -279,10 +279,10 @@ describe("Usage query failure ownership", () => {
       await page.updateComplete;
       expect(page.querySelector(".usage-callout.danger")).toBeNull();
       expect(page.textContent).toContain("Recovered query row");
-      expect(page.querySelector(".cost-window-card--range")?.textContent).toContain("$1");
+      expect(page.querySelector(".cost-window--range")?.textContent).toContain("$1");
       expect(page.textContent).toContain("QA Provider Plan");
       if (change === "dates") {
-        const recoveredRange = page.querySelector(".cost-window-range-label")?.textContent?.trim();
+        const recoveredRange = page.querySelector(".cost-window-range")?.textContent?.trim();
         expect(recoveredRange).toBeTruthy();
         expect(recoveredRange).not.toBe(originalRange);
       }

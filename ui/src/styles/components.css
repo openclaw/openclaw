@@ -18,49 +18,10 @@
   font-size: 14px;
 }
 
-.connect-splash--skeleton,
 .loading-skeleton {
-  /* Several palettes share bg-muted and bg-hover, hiding the default sweep.
-     A translucent text tint stays visible in both light and dark themes. */
+  /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-}
-
-.connect-splash--skeleton {
-  position: relative;
-  align-items: stretch;
-}
-
-.connect-splash__layout {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.connect-splash__sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 28px 24px;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-}
-
-.connect-splash__new-session {
-  height: 40px;
-  margin: 16px 0;
-}
-
-.connect-splash--skeleton .connect-splash__status {
-  position: absolute;
-  inset: auto 24px 12px;
-  margin: 0;
-  text-align: center;
-}
-
-.loading-skeleton {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -121,14 +82,6 @@
 }
 
 @media (max-width: 768px) {
-  .connect-splash__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .connect-splash__sidebar {
-    display: none;
-  }
-
   .loading-skeleton {
     gap: 24px;
     padding: 20px 20px 40px;
@@ -1123,14 +1076,34 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: var(--secondary);
 }
 
-.btn svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
+.btn svg,
+.compaction-indicator svg,
+.chat-scroll-to-bottom svg,
+.btn--icon svg,
+.agent-select__chevron svg,
+.agent-select__avatar--icon svg,
+.session-row-badge svg,
+.session-action svg,
+.chat-queue__leading svg,
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg,
+.chat-queue__action svg,
+.chat-queue__retry svg,
+.plugins-tile--fallback svg,
+.settings-secret__toggle svg {
   fill: none;
-  stroke-width: 1.5px;
+  stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.btn svg,
+.compaction-indicator svg,
+.chat-scroll-to-bottom svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.5px;
   flex-shrink: 0;
 }
 
@@ -1412,11 +1385,7 @@ openclaw-toast-host[data-toast-placement="shell"]
   display: block;
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 openclaw-link-reader-hovercard-provider,
@@ -1939,7 +1908,8 @@ select.input {
   }
 }
 
-.field select {
+.field select,
+select.settings-select:not([multiple]) {
   appearance: none;
   padding-right: 36px;
   background-image: var(--select-chevron);
@@ -1951,7 +1921,8 @@ select.input {
 }
 
 @media (forced-colors: active) {
-  .field select {
+  .field select,
+  select.settings-select:not([multiple]) {
     appearance: auto;
     padding-inline-end: 10px;
     background-image: none;
@@ -2798,12 +2769,43 @@ select.input {
   color: var(--text);
 }
 
+/* Row detail buttons stay chromeless and share the same focus ring. */
+.channels-item__detail,
+.plugins-item__detail-button,
+.session-bar-selection {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.channels-item__detail:focus-visible,
+.plugins-item__detail-button:focus-visible,
+.session-bar-selection:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .data-table-sort-button {
   padding: 0;
   border: 0;
   background: transparent;
   letter-spacing: inherit;
   text-transform: inherit;
+}
+
+@media (forced-colors: active) {
+  /* Forced colors suppresses shadows; outrank the lazy page outline resets. */
+  button.channels-item__detail:focus-visible,
+  button.plugins-item__detail-button:focus-visible,
+  button.session-bar-selection:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
 }
 
 .data-table-sort-icon {
@@ -3598,11 +3600,7 @@ td.data-table-key-col {
 .agent-select__avatar--icon svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-select--compact .agent-select__trigger,
@@ -3893,11 +3891,11 @@ td.data-table-key-col {
 
   .cmd-palette__input::-webkit-scrollbar-thumb {
     border-radius: var(--radius-sm);
-    background: var(--muted);
+    background: var(--scrollbar-thumb);
   }
 
-  .cmd-palette__input::-webkit-scrollbar-track {
-    background: var(--bg-muted);
+  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
   }
 }
 
@@ -4012,7 +4010,8 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
-.device-pair-setup__get-apps button {
+.device-pair-setup__get-apps button,
+.apps-pair-hint button {
   padding: 0;
   border: 0;
   background: none;
@@ -4023,11 +4022,13 @@ td.data-table-key-col {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__get-apps button:hover {
+.device-pair-setup__get-apps button:hover,
+.apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__get-apps button:focus-visible {
+.device-pair-setup__get-apps button:focus-visible,
+.apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 4px;
@@ -4546,11 +4547,7 @@ td.data-table-key-col {
 .session-row-badge svg {
   width: 12px;
   height: 12px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-row-actions {
@@ -4559,7 +4556,13 @@ td.data-table-key-col {
   gap: 1px;
 }
 
-.session-action {
+/* Shared icon-button box; each surface retains positioning, paint, and state. */
+.session-action,
+.settings-secret__toggle,
+.chat-queue__remove,
+.chat-queue__more,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4568,8 +4571,11 @@ td.data-table-key-col {
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
+}
+
+.session-action {
+  background: transparent;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -4580,11 +4586,7 @@ td.data-table-key-col {
 .session-action svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-action--touch-menu {

@@ -34,7 +34,7 @@ import {
 const CHANNEL_ID = "channel-trace";
 const ROOT_ID = "root-trace";
 const ACCOUNT_ID = "main";
-// Matches the monitor's draft stream wiring (throttleMs: 1200).
+// Matches the draft stream's preview cadence.
 const DRAFT_THROTTLE_MS = 1200;
 
 const cfg: OpenClawConfig = {};
@@ -106,7 +106,6 @@ function setupMattermostTrace(recorder: WireRecorder) {
     client,
     channelId: CHANNEL_ID,
     rootId: ROOT_ID,
-    throttleMs: DRAFT_THROTTLE_MS,
     chunkText,
   });
   const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, string>({

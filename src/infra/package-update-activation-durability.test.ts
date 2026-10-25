@@ -29,14 +29,15 @@ import {
   resolvePackageActivationAnchor,
 } from "./package-update-activation-paths.js";
 import { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
-import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus as status,
   runPackageActivationRecovery as recovery,
 } from "./package-update-activation.js";
 import { createPackageIntegrityReader } from "./package-update-integrity.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import { swapStagedPackageInstall } from "./package-update-swap.js";
+import {
+  runPublicationSwap,
+  withPublicationFence,
+} from "./package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -94,16 +95,8 @@ describe.skipIf(process.platform === "win32")("package fingerprint bounds", () =
       const location = resolvePackageActivationAnchor(f.packageRoot);
       // Exhaust the budget before candidate hashing, but only on its first regular file.
       const assertOversized = oversizedFile(payload, true);
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
         expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
         assertOversized();
         expect(result.step.advisory?.message).toContain("full package contents are unverified");

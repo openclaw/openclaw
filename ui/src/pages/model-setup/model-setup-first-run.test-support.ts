@@ -1,8 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/types.ts";
+import type {
+  ModelCatalogEntry,
+  SystemAgentSetupDetectResult,
+  WizardNextResult,
+} from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -13,6 +18,33 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
+
+const onboarding = { search: "?onboarding=1" };
+export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+
+export const missingWizardError = () =>
+  new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "wizard not found",
+    details: { code: "WIZARD_NOT_FOUND" },
+  });
+
+export const running = { done: false, status: "running" } as const;
+
+export const nativeModel = (name = "Fixture model"): ModelCatalogEntry => ({
+  provider: "acp-opencode",
+  id: "fixture-model",
+  name,
+  available: true,
+  agentRuntime: { id: "acp-opencode", source: "implicit" },
+});
+
+export const configuredDetection = (configuredModel: string) => ({
+  ...detection,
+  configuredModel,
+  setupComplete: true,
+});
 
 export function authOption(
   id: string,
@@ -35,17 +67,6 @@ export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({
   status: "running" as const,
   step,
 });
-
-export function configSnapshot(config: Record<string, unknown> = {}, hash = "hash-1") {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    valid: true,
-    issues: [],
-  };
-}
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -172,6 +193,25 @@ export function mountDetection(
     firstRun,
     state: { phase: "ready", result: { ...detection, ...result } },
   });
+}
+
+export async function createMountedFirstRun(
+  result: Partial<SystemAgentSetupDetectResult>,
+  handlers?: Parameters<typeof mockRequests>[1],
+  options: {
+    firstRun?: boolean;
+    refreshError?: string;
+    beforeRefresh?: () => Promise<void>;
+  } = {},
+) {
+  const fixture = createFirstRunContext(options.refreshError, options.beforeRefresh);
+  if (handlers) {
+    mockRequests(fixture.request, handlers);
+  }
+  return {
+    ...fixture,
+    ...(await mountDetection(fixture.context, fixture.client, result, options.firstRun ?? true)),
+  };
 }
 
 export function modalButton(page: ParentNode, label: string) {

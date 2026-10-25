@@ -23,6 +23,7 @@ const DefaultProactiveJobReceiptSchema = z
     jobId: z.string().min(1),
     provisionedAtMs: z.number().int().nonnegative(),
     phase: z.enum(["pending", "complete"]),
+    heartbeatEnabled: z.boolean().optional(),
     convertedJobIds: z.array(z.string().min(1)).optional(),
   })
   .strict();
@@ -67,6 +68,7 @@ export function recordDefaultProactiveJobInDatabase(
   jobId: string,
   nowMs: number,
   phase: DefaultProactiveJobReceipt["phase"] = "complete",
+  heartbeatEnabled?: boolean,
 ): void {
   const previous = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
   if (previous && previous.jobId !== jobId) {
@@ -78,7 +80,13 @@ export function recordDefaultProactiveJobInDatabase(
     updateConfigMachineStateInDatabase<DefaultProactiveJobReceipt>(
       db,
       defaultProactiveJobReceiptKey(storePath, agentId),
-      () => ({ ...previous, jobId, provisionedAtMs: previous?.provisionedAtMs ?? nowMs, phase }),
+      () => ({
+        ...previous,
+        jobId,
+        provisionedAtMs: previous?.provisionedAtMs ?? nowMs,
+        phase,
+        ...(!previous && heartbeatEnabled !== undefined ? { heartbeatEnabled } : {}),
+      }),
       nowMs,
     );
   }

@@ -6,6 +6,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fileLocks from "./file-lock.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -227,3 +231,70 @@ it("keeps admitted reports in the selected state directory", async () => {
   expect(await fixture.write("ok", false)).toBe(fixture.outputPath);
   expect(await fixture.read()).toContain("Admitted update");
 });
+
+it.each(["history", "capture"] as const)(
+  "saves the target and failed swap from %s after rollback",
+  async (source) => {
+    const stateDir = tempDirs.make("update-report-swap-");
+    const result: UpdateRunResult = {
+      runId: "a4396fd1-6a2b-42fc-84d5-1c0abbdc3e5c",
+      status: "error",
+      mode: "npm",
+      reason: "global-install-failed",
+      before: { version: "2026.9.4" },
+      after: { version: "2026.9.4" },
+      steps: [
+        {
+          name: "global install swap",
+          command: "synthetic swap",
+          cwd: stateDir,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: "Package rollback verification timed out",
+        },
+      ],
+      durationMs: 0,
+    };
+    const run: UpdateRunRecord = {
+      runId: result.runId!,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      finishedAtMs: 2,
+      trigger: "cli",
+      phase: "finished",
+      status: "failed",
+      reason: result.reason!,
+      origin: {},
+      target: { kind: "package", version: "2026.10.6", channel: "stable" },
+      before: result.before!,
+      after: result.after!,
+      steps: result.steps.flatMap(updateRunStepsFromResultStep),
+      verification: {},
+      repair: [],
+      downtimeMs: null,
+      confirmedAtMs: null,
+    };
+    const reportPath = await writeUpdateRunReportArtifact({
+      result,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      ...(source === "history" ? { readRun: () => run } : { record: run }),
+      report: (record) => renderUpdateRunReport(updateRunReportInputFromResult(result, record)),
+    });
+    const markdown = await fs.readFile(reportPath, "utf8");
+    expect(markdown).toContain("Update target: 2026.10.6");
+    expect(markdown).toContain("Failed: global install swap");
+    const support = path.join(stateDir, "logs", "support");
+    const diagnostic = (await fs.readdir(support)).find((entry) =>
+      entry.startsWith("openclaw-update-failure-"),
+    )!;
+    expect(await readJson(path.join(support, diagnostic))).toMatchObject({
+      result: { target: { version: "2026.10.6" }, steps: [{ name: "global install swap" }] },
+    });
+    const issue = await prepareUpdateFailureReport(
+      { attemptId: run.runId, result, recordedRun: run },
+      { stateDir, env: {} },
+    );
+    expect(issue.body).toContain("Update target: 2026.10.6");
+    expect(issue.body).toContain("Failed phase: package-swap");
+  },
+);

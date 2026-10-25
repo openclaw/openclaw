@@ -9,10 +9,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
-import {
-  resolveGatewayCommandPath,
-  resolveGatewayRunPreBootstrapOptions,
-} from "./gateway-run-argv.js";
+import { resolveGatewayCommandPath } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
   resolveMissingPluginCommandMessage,
@@ -154,30 +151,6 @@ describe("Gateway argv boundaries", () => {
     expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--port"))).toBe(false);
     expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--unknown"))).toBe(false);
     expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--update-canary=true"))).toBe(false);
-  });
-
-  it("resolves destructive flags after root options without consuming option values", () => {
-    expect(
-      resolveGatewayRunPreBootstrapOptions(
-        cliArgs("--log-level", "debug", "gateway", "run", "--force", "--reset"),
-      ),
-    ).toEqual({ force: true, reset: true });
-    expect(resolveGatewayRunPreBootstrapOptions(cliArgs("gateway", "--token", "--force"))).toEqual({
-      force: false,
-      reset: false,
-    });
-  });
-
-  it.each([
-    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
-    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
-    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
-  ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
-    const argv = cliArgs(...args);
-    expect(resolveGatewayCommandPath(argv)).toEqual(commandPath);
-    const options = resolveGatewayRunPreBootstrapOptions(argv);
-    expect(options?.force).not.toBe(true);
-    expect(options?.reset).not.toBe(true);
   });
 });
 

@@ -10,29 +10,30 @@ import {
   untrack,
   useContext,
 } from "solid-js";
-import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
+import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import {
+  isInternalCanvasEntryUrl,
+  resolveCanvasIframeUrl,
+  resolveEmbedSandbox,
+  type EmbedSandboxMode,
+} from "../../../lib/chat/canvas-embed-policy.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
   ToolPreview as ToolPreviewModel,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  isInternalCanvasEntryUrl,
-  resolveCanvasIframeUrl,
-  resolveEmbedSandbox,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -41,14 +42,17 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
-import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
+import "./browser-tab-card.css";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   WidgetCardMenu,
   type WidgetAction,
   type WidgetRawDetailsLabel,
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
+import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -58,10 +62,40 @@ const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
   export: "YouTubeVideoCard",
 });
 
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
+});
+
+const CanvasWidgetMount = lazy(() => import("./canvas-widget-mount.tsx"), {
+  export: "CanvasWidgetMount",
+});
+
+const McpAppPreview = lazy(async () => {
+  await import("../../../components/mcp-app-view.tsx");
+  // Native hosts retain their context admission when a transcript is detached.
+  return { default: McpAppHost };
+});
+
+function McpAppHost(
+  props: Pick<McpAppViewProps, "sessionKey" | "viewId" | "height" | "onHeightChange" | "title">,
+) {
+  return (
+    <mcp-app-view
+      prop:sessionKey={props.sessionKey}
+      prop:viewId={props.viewId}
+      prop:height={props.height}
+      prop:onHeightChange={props.onHeightChange}
+      style={{ display: "block", "min-height": `${props.height}px` }}
+      title={props.title}
+    />
+  );
+}
+
 type WidgetCardOptions = {
   rawText?: string | null;
   toggleRawDetails?: () => boolean;
   canvasPluginSurfaceUrl?: string | null;
+  mediaReadAllowed?: boolean;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
@@ -71,44 +105,6 @@ type WidgetCardOptions = {
 };
 
 type WidgetExportSource = HTMLIFrameElement | OpenClawCanvasWidgetView | undefined;
-
-async function pinWidget(
-  event: Event,
-  preview: CanvasToolPreview,
-  provider: BoardProvider,
-  name: string,
-  mcpAppViewId?: string,
-): Promise<void> {
-  const viewId = mcpAppViewId || preview.viewId?.trim();
-  if (!viewId) {
-    return;
-  }
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) {
-    return;
-  }
-  button.disabled = true;
-  const pendingLabel = t("chat.toolCards.pinToDashboardPending");
-  button.title = button.ariaLabel = pendingLabel;
-  try {
-    const identity = {
-      name,
-      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    };
-    await (mcpAppViewId
-      ? provider.pinMcpApp({ ...identity, viewId })
-      : provider.pinWidget({ ...identity, docId: viewId }));
-    const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
-    button.title = button.ariaLabel = pinnedLabel;
-    button.dataset.pinned = "true";
-  } catch {
-    button.disabled = false;
-    button.ariaLabel = t("chat.toolCards.pinToDashboard");
-    const failureLabel = t("chat.toolCards.pinToDashboardFailed");
-    button.title = failureLabel;
-    showToast({ message: failureLabel });
-  }
-}
 
 function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
   const viewId = preview.viewId?.trim();
@@ -394,10 +390,6 @@ function PreviewFrame(props: {
   );
 }
 
-const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
-
-const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
-
 function WidgetContent(props: {
   preview: CanvasToolPreview;
   sandbox: string;
@@ -406,90 +398,95 @@ function WidgetContent(props: {
 }) {
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
+  const layoutKey = () =>
+    props.preview.mcpApp
+      ? `mcp:${props.preview.mcpApp.viewId}`
+      : managed()
+        ? `canvas:${props.preview.viewId!.trim()}`
+        : `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`;
+  const height = () =>
+    props.options?.widgetLayout?.read(layoutKey()) ??
+    props.preview.preferredHeight ??
+    (props.preview.mcpApp ? 600 : 420);
   return (
     <Show
-      when={props.preview.mcpApp}
-      fallback={
-        <Show
-          when={managed()}
-          fallback={
-            <PreviewFrame
-              onExportSource={props.onExportSource}
-              params={{
-                title: props.preview.title?.trim() || t("chat.toolCards.canvas"),
-                src: resolveCanvasIframeUrl(
-                  props.preview.url,
-                  props.options?.canvasPluginSurfaceUrl,
-                  props.options?.allowExternalEmbedUrls ?? false,
-                ),
-                frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
-                height:
-                  props.options?.widgetLayout?.read(
-                    `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
-                  ) ?? props.preview.preferredHeight,
-                onHeightChange: (height) =>
-                  props.options?.widgetLayout?.write(
-                    `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
-                    height,
-                  ),
-                sandbox: props.sandbox,
-                promptCapable: isInternalCanvasEntryUrl(props.preview.url),
-              }}
-            />
-          }
-        >
-          {(_managed) => {
-            void ensureCustomElementDefined(
-              "openclaw-canvas-widget-view",
-              loadCanvasWidgetView,
-            ).catch((error: unknown) =>
-              console.error("[openclaw] failed to load widget view", error),
-            );
-            return (
-              <CanvasWidgetMount
-                onElement={props.onExportSource}
-                docId={props.preview.viewId!.trim()}
-                sessionKey={props.options?.sessionKey ?? ""}
-                messageTimestamp={props.options?.messageTimestamp}
-                title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
-                preferredHeight={
-                  props.options?.widgetLayout?.read(`canvas:${props.preview.viewId!.trim()}`) ??
-                  props.preview.preferredHeight
-                }
-                onHeightChange={(height) =>
-                  props.options?.widgetLayout?.write(
-                    `canvas:${props.preview.viewId!.trim()}`,
-                    height,
-                  )
-                }
-                allowScripts={props.sandbox.includes("allow-scripts")}
-                connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
-              />
-            );
-          }}
-        </Show>
-      }
+      when={props.options?.mediaReadAllowed !== false}
+      fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
     >
-      {(app) => {
-        void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
-          console.error("[openclaw] failed to load MCP App view", error);
-        });
-        const key = () => `mcp:${app().viewId}`;
-        const height = () =>
-          props.options?.widgetLayout?.read(key()) ?? props.preview.preferredHeight ?? 600;
-        return (
-          <mcp-app-view
-            prop:sessionKey={props.options?.sessionKey ?? ""}
-            prop:viewId={app().viewId}
-            prop:height={height()}
-            prop:onHeightChange={(nextHeight: number) =>
-              props.options?.widgetLayout?.write(key(), nextHeight)
+      <Show
+        when={props.preview.mcpApp}
+        fallback={
+          <Show
+            when={managed()}
+            fallback={
+              <PreviewFrame
+                onExportSource={props.onExportSource}
+                params={{
+                  title: props.preview.title?.trim() || t("chat.toolCards.canvas"),
+                  src: resolveCanvasIframeUrl(
+                    props.preview.url,
+                    props.options?.canvasPluginSurfaceUrl,
+                    props.options?.allowExternalEmbedUrls ?? false,
+                  ),
+                  frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
+                  height: height(),
+                  onHeightChange: (nextHeight) =>
+                    props.options?.widgetLayout?.write(layoutKey(), nextHeight),
+                  sandbox: props.sandbox,
+                  promptCapable: isInternalCanvasEntryUrl(props.preview.url),
+                }}
+              />
             }
-            style={{ display: "block", "min-height": `${height()}px` }}
-            title={props.preview.title?.trim() || t("mcpApp.title")}
-          />
-        );
-      }}
+          >
+            {(_managed) => {
+              return (
+                <ChatLazyBoundary
+                  fallback={
+                    <div
+                      style={{
+                        display: "block",
+                        "min-height": `${height()}px`,
+                      }}
+                    />
+                  }
+                >
+                  <CanvasWidgetMount
+                    onElement={props.onExportSource}
+                    docId={props.preview.viewId!.trim()}
+                    sessionKey={props.options?.sessionKey ?? ""}
+                    messageTimestamp={props.options?.messageTimestamp}
+                    title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
+                    preferredHeight={height()}
+                    onHeightChange={(nextHeight) =>
+                      props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                    }
+                    allowScripts={props.sandbox.includes("allow-scripts")}
+                    connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
+                  />
+                </ChatLazyBoundary>
+              );
+            }}
+          </Show>
+        }
+      >
+        {(app) => {
+          return (
+            <ChatLazyBoundary
+              fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
+            >
+              <McpAppPreview
+                sessionKey={props.options?.sessionKey ?? ""}
+                viewId={app().viewId}
+                height={height()}
+                onHeightChange={(nextHeight: number) =>
+                  props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                }
+                title={props.preview.title?.trim() || t("mcpApp.title")}
+              />
+            </ChatLazyBoundary>
+          );
+        }}
+      </Show>
     </Show>
   );
 }
@@ -574,10 +571,6 @@ function CanvasPreview(props: {
         (props.preview.viewId?.trim()
           ? canvasWidgetNameForDocument(props.preview.viewId.trim())
           : undefined);
-  const pinned = () =>
-    Boolean(
-      pinName() && provider()?.snapshot$.value.widgets.find((widget) => widget.name === pinName()),
-    );
   const canPin = () => {
     const board = provider();
     return (
@@ -592,9 +585,26 @@ function CanvasPreview(props: {
   };
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
-  const hasActions = () => Boolean(canPin() || hasMenu());
-  const pinLabel = () =>
-    t(pinned() ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
+  const hasActions = () =>
+    props.options?.mediaReadAllowed !== false && Boolean(canPin() || hasMenu());
+  const pinTarget = createMemo(
+    (): WidgetPinTarget | undefined =>
+      canPin()
+        ? {
+            board: provider()!,
+            name: pinName()!,
+            viewId: mcpAppViewId() || props.preview.viewId!.trim(),
+            mcpApp: Boolean(props.preview.mcpApp),
+          }
+        : undefined,
+    {
+      equals: (previous, next) =>
+        previous?.board === next?.board &&
+        previous?.name === next?.name &&
+        previous?.viewId === next?.viewId &&
+        previous?.mcpApp === next?.mcpApp,
+    },
+  );
   return (
     <div
       ref={widgetActionsPlacementRef(hasActions)}
@@ -606,21 +616,8 @@ function CanvasPreview(props: {
     >
       <Show when={hasActions()}>
         <div class="chat-tool-card__preview-actions" data-widget-actions>
-          <Show when={canPin()}>
-            <button
-              class="btn btn--ghost btn--icon chat-tool-card__widget-action"
-              type="button"
-              data-pin-widget
-              disabled={pinned()}
-              data-pinned={pinned() ? "" : undefined}
-              title={pinLabel()}
-              aria-label={pinLabel()}
-              onClick={(event) =>
-                void pinWidget(event, props.preview, provider()!, pinName()!, mcpAppViewId())
-              }
-            >
-              <Icon name="pin" />
-            </button>
+          <Show when={pinTarget()} keyed>
+            {(target) => <WidgetPinButton target={target} title={props.preview.title} />}
           </Show>
           <Show when={hasMenu()}>
             <WidgetCardMenu
@@ -669,7 +666,7 @@ export function ToolPreview(props: ToolPreviewProps) {
       : undefined;
   return (
     <Show
-      when={browser()}
+      when={props.options?.mediaReadAllowed !== false && browser()}
       fallback={
         <Show when={canvas()}>
           {(preview) => {
@@ -678,7 +675,7 @@ export function ToolPreview(props: ToolPreviewProps) {
             );
             return (
               <Show
-                when={video()}
+                when={props.options?.mediaReadAllowed !== false && video()}
                 fallback={
                   <CanvasPreview
                     preview={preview()}
@@ -721,7 +718,11 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      {(preview) => (
+        <ChatLazyBoundary>
+          <BrowserTabCardHost preview={preview()} latest={false} />
+        </ChatLazyBoundary>
+      )}
     </Show>
   );
 }

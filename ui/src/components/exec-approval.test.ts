@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   ExecApproval,
   type ExecApprovalElement,
@@ -93,6 +94,23 @@ describe("openclaw-exec-approval", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses one pending presentation for keyboard and button decisions", async () => {
+    const pending = createDeferred();
+    const onDecision = vi.fn<ExecApprovalProps["onDecision"]>(() => pending.promise);
+    const { dialog } = await renderOpenedApproval(createExecRequest(), { onDecision });
+    dialog.dispatchEvent(chord("Enter"));
+    await waitForSolid(() => {
+      expect(onDecision).toHaveBeenCalledOnce();
+      expect(query(".exec-approval-actions button")?.hasAttribute("disabled")).toBe(true);
+    });
+    dialog.dispatchEvent(chord("Enter"));
+    expect(onDecision).toHaveBeenCalledOnce();
+    pending.resolve();
+    await waitForSolid(() =>
+      expect(query(".exec-approval-actions button")?.hasAttribute("disabled")).toBe(false),
+    );
+  });
+
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
     await renderOpenedApproval(
       createExecRequest({
@@ -140,6 +158,41 @@ describe("openclaw-exec-approval", () => {
 
     expect(dialog.getAttribute("aria-description")).toBe("expires in 01:30");
     expect(container.querySelector(".exec-approval-card")).toBe(card);
+  });
+
+  it("releases the clock while a retained modal shows an expired approval", async () => {
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const cleared = vi.spyOn(globalThis, "clearInterval");
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const request = createExecRequest({ expiresAtMs: -1 });
+    const { dialog } = await renderOpenedApproval(request);
+    const card = query(".exec-approval-card");
+    const countdown = query(".exec-approval-countdown");
+    expect(countdown?.textContent?.trim()).toBe("expired");
+    expect(dialog.getAttribute("aria-description")).toBe("expired");
+    expect(intervals.mock.calls.filter(([, delay]) => delay === 1_000)).toHaveLength(0);
+
+    await renderApproval({ ...request, expiresAtMs: 2_000 });
+    expect(query(".exec-approval-card")).toBe(card);
+    expect(countdown?.textContent?.trim()).toBe("expires in 00:02");
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 00:02");
+    const clockIntervals = intervals.mock.calls.flatMap(([tick, delay], index) =>
+      delay === 1_000 ? [{ tick, handle: intervals.mock.results[index]?.value }] : [],
+    );
+    expect(clockIntervals).toHaveLength(1);
+    const clock = clockIntervals[0];
+    if (typeof clock?.tick !== "function") {
+      throw new Error("Expected countdown interval");
+    }
+    nowMs = 2_000;
+    clock.tick();
+    flush();
+    await getRenderedModalDialog(container);
+    expect(query(".exec-approval-card")).toBe(card);
+    expect(countdown?.textContent?.trim()).toBe("expired");
+    expect(dialog.getAttribute("aria-description")).toBe("expired");
+    expect(cleared).toHaveBeenCalledWith(clock.handle);
   });
 
   it("selects another queued request without changing queue order", async () => {

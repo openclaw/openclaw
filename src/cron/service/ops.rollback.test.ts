@@ -38,7 +38,6 @@ describe("cron service ops persist rollback", () => {
     const expectCalls = (count = 0) => {
       expect(callback).toHaveBeenCalledTimes(count);
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     };
     return { callback, expectCalls };
   }

@@ -382,6 +382,8 @@ Snapshots from supported older schema versions can be verified and restored with
 
 Verification validates a private content-pinned copy so pathname races cannot swap the bytes SQLite inspects. By default, that temporary copy is created beside the snapshot repository and removed before the command returns. The staging root and its ancestor chain must prevent other users from replacing it. POSIX roots must be current-user-owned and not group/world writable; sticky ancestors such as `/tmp` are accepted for user-owned children. macOS ACL grants that expose or make staging replaceable are rejected. Windows roots and ancestors must be owned by the current user or a trusted OS principal, with ACLs that deny untrusted staging access. For a read-only mount or network share, pass `--scratch <existing-private-directory>` on storage with equivalent encryption and destination controls.
 
+When the Windows filesystem helper verifies that an ancestor is a local volume root, DELETE-self alone does not make that ancestor replaceable. Child deletion, ownership and DACL changes, unknown rights, and private repository access are still checked. Helpers that cannot verify volume-root identity retain the stricter refusal; drive-letter or path spelling alone never grants this exception. Network shares remain unsupported as private staging roots.
+
 Snapshot creation applies the same owner, ACL, ancestor, and path-identity checks to the repository before staging or publishing database bytes. Newly created directory edges and final publication metadata are synchronized through the shared `fs-safe` durability boundary before success is reported on supported filesystems.
 
 Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. The target parent has the same path-security requirements as verification scratch. Activating a restored database remains an explicit offline operator step.
@@ -389,6 +391,8 @@ Restore repeats verification and writes only to a fresh target. It refuses an ex
 Snapshot repositories are local directories. Scheduling, upload, retention, incremental WAL bundles, failover, and restore-on-boot behavior are intentionally outside this command.
 
 ## Versioned Git backups
+
+Human-readable Git backup reports escape control characters in paths, commit subjects, and diagnostics. Push-failure diagnostics keep escaped lines separated so credential redaction preserves the stderr and stdout tails. JSON values and recorded diagnostics are unchanged.
 
 `openclaw backup git create --all` also includes PostgreSQL stores discovered
 through declared plugin backup resources, including retained roots. Each store
@@ -668,7 +672,8 @@ openclaw backup record --status failed --target host-restic --error "Backup dest
 ```
 
 `--status ok|failed` and `--target <label>` are required. `--bytes <n>` optionally
-records a nonnegative integer byte count; `--error <text>` records a diagnostic.
+records a nonnegative decimal integer byte count (not radix or exponent notation);
+`--error <text>` records a diagnostic.
 `--json` emits a machine-readable result. The command adds a `kind: "external"`
 outcome using the same best-effort recording semantics as built-in backups. It
 does not run or verify the external backup. Use a stable target label and run
@@ -752,6 +757,9 @@ agent moves or is removed from configuration. Distinct databases belonging to
 the same agent are captured separately. `--no-include-workspace` preserves this
 database coverage.
 
+SQLite headers identify regular database files even when they use `.db`,
+`.sqlite3`, or no extension. Existing `.sqlite` filename handling is unchanged.
+
 Database files under activated plugins' declared `backupResources` with
 `disposition: "include"` also receive managed snapshots. Workboard declares its
 existing store this way, so its PostgreSQL anchor selects a matched PostgreSQL
@@ -763,7 +771,9 @@ offline with `VACUUM`. Committed write-ahead log (WAL) changes are included,
 deleted-page remnants are removed, and sidecars are omitted. Shared and agent
 databases also receive their existing transient-state sanitization and must match
 their expected role and agent owner. Unsafe aliasing or an owner mismatch stops the backup. A declared plugin database that requires unavailable SQLite capabilities
-also stops the backup rather than falling back to a direct file copy.
+also stops the backup rather than falling back to a direct file copy. Restore
+the required SQLite capabilities or use the plugin's own backup procedure before
+retrying. This also applies to newly recognized database filenames.
 
 Other SQLite files under state and configured agent roots, including their
 sidecars, are copied as opaque bytes. Creation reports each filename in
@@ -797,6 +807,10 @@ Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are a
 Symbolic links are archived as link entries, including absolute and dangling targets. Windows target separators are stored as forward slashes to match tar's reader; POSIX target text, including literal backslashes, is preserved. Creation never follows a link to copy its target. Targets outside the state directory, including separately backed-up config, credentials, or workspace targets, are recorded in the manifest and JSON result's `externalSymbolicLinks` list and reported in the text summary. Restore recreates the links after extracting the file content; it never writes through a restored link. Verification rejects archive entries nested beneath a symbolic link.
 
 Absolute links retain their original location after restore, including links to separately backed-up config or credentials. They are no longer rewritten to relative targets. Review these links before activating a restored tree on another host or at another path. Older releases, including v2026.9.4, reject archives with absolute or escaping link targets; use the current release to restore those archives. Existing archives remain readable.
+
+Older backups with source-relative hardlink targets remain restorable when each
+target resolves unambiguously to an archived regular file. Missing or ambiguous
+targets are rejected instead of selecting different recovery data.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and

@@ -6,15 +6,15 @@ import type { SessionEntryCurrentCheck } from "../../config/sessions/session-ent
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
-import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronJobScratchState } from "../scratch-contract.js";
 import type { CronStreamExecApproval, CronStreamExecPolicy } from "../stream-exec-authority.js";
@@ -116,9 +116,21 @@ export type CronServiceDeps = {
     ownSessionKey?: string,
     ownReplyOperation?: ReplyOperationObservation,
   ) => boolean;
+  /**
+   * Loaded plugin instances that can serve requester-command schedules. The claim re-arms a
+   * restartable schedule from an earlier Gateway process onto a matching one; without it, such
+   * schedules retire at their next occurrence.
+   */
+  resolvePluginCommandScheduleHosts?: () => PluginCommandScheduleHost[];
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
+  /**
+   * Admits one occurrence before any trigger or payload work. When unset (local
+   * harnesses), every run's context is a `fail` result.
+   */
+  admitScheduledOccurrence?: (params: { job: CronStoredJob }) => Promise<ScheduledOccurrence>;
   evaluateCronTrigger?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     script: string;
@@ -177,16 +189,6 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
-  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
-  requestHeartbeatAndWait?: (
-    opts: HeartbeatWakeRequest,
-    lifecycle: SessionEventWakeWaitOptions,
-  ) => Promise<HeartbeatRunResult>;
-  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
-  resolveHeartbeatTimeoutMs?: (
-    opts: HeartbeatWakeRequest & { agentId: string },
-  ) => number | undefined;
   /** Producer events enter ordinary session admission even when scheduling is disabled. */
   enqueueSessionEvent?: (
     text: string,
@@ -219,6 +221,7 @@ export type CronServiceDeps = {
     sessionKey?: string;
   };
   runIsolatedAgentJob: (params: {
+    occurrence: ScheduledOccurrence;
     waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
@@ -240,6 +243,7 @@ export type CronServiceDeps = {
   >;
   /** Shared-conversation work settles through the session controller's ordinary turn owner. */
   runSessionEvent?: (params: {
+    occurrence: ScheduledOccurrence;
     waitForIdle?: CronIdleAdmissionWait;
     sessionPreparation?: CronSessionRunPreparation;
     deliveryContext?: DeliveryContext;
@@ -260,11 +264,14 @@ export type CronServiceDeps = {
       CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
   >;
   runCommandJob?: (params: {
+    /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     streamBatch?: string;
@@ -526,7 +533,12 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Validated host invocation facts; immutable after fresh command-job creation. */
+  pluginCommand?: CronStoredJob["pluginCommand"];
+  /** Captured source digest of the admitting plugin instance; enables restart continuity. */
+  pluginCommandSourceDigest?: string;
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  operatorSourceExecutionRevision?: string;
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
@@ -535,7 +547,7 @@ export type CronAddOptions = {
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
+  /** Reserved declaration namespaces require trusted ownership at creation. */
   systemOwned?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;
@@ -559,6 +571,8 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
+  | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
   | "commitGuard"

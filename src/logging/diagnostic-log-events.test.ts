@@ -92,6 +92,7 @@ it("redacts and bounds internal log records before diagnostic emission", async (
     toPinoLikeLogger(tracedLogger(), "info").info(
       {
         token: secret,
+        password: "hunter2",
         longValue: "x".repeat(5000),
         nested: { secret },
         "bad key": "drop-me",
@@ -103,6 +104,8 @@ it("redacts and bounds internal log records before diagnostic emission", async (
   expect(event.message).not.toContain(secret);
   expect(event.message.length).toBeLessThanOrEqual(4200);
   expect(event.attributes?.token).not.toBe(secret);
+  expect(event.attributes?.password).toBe("***");
+  expect(JSON.stringify(event)).not.toContain("hunter2");
   expect(String(event.attributes?.token)).toContain("…");
   expect(String(event.attributes?.longValue).length).toBeLessThanOrEqual(2100);
   expectAbsentKeys(event.attributes ?? {}, ["nested", "bad key"]);

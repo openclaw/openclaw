@@ -67,23 +67,23 @@ CREATE TABLE "standups" (
   PRIMARY KEY ("day")
 );
 
-CREATE INDEX "idx_logbook_batches_pending" ON "batches" (("start_ms") ASC NULLS FIRST, ("id") ASC NULLS FIRST) WHERE ("status" = 'pending');
+CREATE INDEX "idx_logbook_batches_pending" ON "batches" (("start_ms") ASC, ("id") ASC) WHERE ("status" = 'pending');
 
-CREATE INDEX "idx_logbook_cards_day" ON "cards" (("day") ASC NULLS FIRST, ("start_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_logbook_cards_day" ON "cards" (("day") ASC, ("start_ms") ASC);
 
 CREATE INDEX "idx_logbook_cards_keyframe" ON "cards" (("keyframe_id") ASC NULLS FIRST) WHERE "keyframe_id" IS NOT NULL;
 
-CREATE INDEX "idx_logbook_frames_batch" ON "frames" (("batch_id") ASC NULLS FIRST, ("captured_at_ms") ASC NULLS FIRST) WHERE "batch_id" IS NOT NULL;
+CREATE INDEX "idx_logbook_frames_batch" ON "frames" (("batch_id") ASC NULLS FIRST, ("captured_at_ms") ASC) WHERE "batch_id" IS NOT NULL;
 
-CREATE INDEX "idx_logbook_frames_captured_at" ON "frames" (("captured_at_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_logbook_frames_captured_at" ON "frames" (("captured_at_ms") ASC);
 
-CREATE INDEX "idx_logbook_frames_day" ON "frames" (("day") ASC NULLS FIRST, ("captured_at_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_logbook_frames_day" ON "frames" (("day") ASC, ("captured_at_ms") ASC);
 
 CREATE INDEX "idx_logbook_frames_unbatched" ON "frames" (("batch_id") ASC NULLS FIRST) WHERE "batch_id" IS NULL;
 
-CREATE INDEX "idx_logbook_observations_batch" ON "observations" (("batch_id") ASC NULLS FIRST);
+CREATE INDEX "idx_logbook_observations_batch" ON "observations" (("batch_id") ASC);
 
-CREATE INDEX "idx_logbook_observations_day" ON "observations" (("day") ASC NULLS FIRST, ("start_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_logbook_observations_day" ON "observations" (("day") ASC, ("start_ms") ASC);
 
 ALTER TABLE "cards" ADD FOREIGN KEY ("keyframe_id") REFERENCES "frames" ("id") ON UPDATE NO ACTION ON DELETE SET NULL NOT DEFERRABLE;
 

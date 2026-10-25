@@ -42,6 +42,8 @@ const { values } = parseArgs({
     "activity-delete-sessions": { type: "string" },
     "activity-row-mix": { type: "boolean", default: false },
     "activity-service-tiers": { type: "boolean", default: false },
+    "activity-run-mix": { type: "boolean", default: false },
+    "activity-interactions": { type: "boolean", default: false },
     "gateway-pid": { type: "string" },
     "activity-catalog-refresh": { type: "boolean", default: false },
     "activity-cron": { type: "boolean", default: false },
@@ -83,6 +85,24 @@ if (values["load-runs"]) {
 async function measureLoads(runs: number) {
   const activityModels = values["activity-models"].split(",").filter(Boolean);
   const serviceTiers = values["activity-service-tiers"];
+  const runMix = values["activity-run-mix"];
+  if (
+    runMix &&
+    (!values["activity-session"] ||
+      activityModels.length !== 1 ||
+      serviceTiers ||
+      values["activity-patch-sessions"] ||
+      values["activity-delete-sessions"] ||
+      values["activity-row-mix"] ||
+      values["activity-catalog-refresh"])
+  ) {
+    throw new Error(
+      "--activity-run-mix requires --activity-session and one fixed --activity-models value",
+    );
+  }
+  if (values["activity-interactions"] && !runMix) {
+    throw new Error("--activity-interactions requires --activity-run-mix");
+  }
   const tierRun = randomUUID();
   const tierSessions = ["priority", "ultrafast"].map(
     (tier) => `agent:main:perf-tier-${tierRun}-${tier}`,
@@ -128,6 +148,12 @@ async function measureLoads(runs: number) {
     values["activity-session"] ??
     patchSessions[0] ??
     (deleteSessions.length || serviceTiers ? values["expect-session"] : undefined);
+  const mixId = randomUUID();
+  const mixAgentId = parseAgentSessionKey(activitySession)?.agentId;
+  if (runMix && !mixAgentId) {
+    throw new Error("--activity-run-mix requires a canonical agent session key");
+  }
+  const mixSessions = runMix ? [activitySession!, `agent:${mixAgentId}:perf-run-${mixId}`] : [];
   if (patchSessions.length && (values["activity-session"] || values["activity-cron"])) {
     throw new Error(
       "--activity-patch-sessions uses existing sessions and excludes turn/cron activity",
@@ -218,25 +244,65 @@ async function measureLoads(runs: number) {
           key: activitySession,
           visibility: "shared",
           model: activityModels[0],
+          ...(runMix ? { fastMode: true, thinkingLevel: "off" } : {}),
         });
       }
     }
-    const sendTierTurn = async (sessionKey: string) => {
+    const sendSyntheticTurn = async (
+      sessionKey: string,
+      message = "Reply with one short synthetic response.",
+    ) => {
       const result = await activityRpc("chat.send", {
         sessionKey,
-        message: "Reply with one short synthetic response.",
+        message,
         deliver: false,
         idempotencyKey: randomUUID(),
       });
       if (typeof result?.runId !== "string") {
-        throw new Error("Synthetic tier turn has no run ID");
+        throw new Error("Synthetic turn has no run ID");
       }
       const terminal = await activityRpc("agent.wait", { runId: result.runId, timeoutMs: 30_000 });
       if (terminal?.status !== "ok") {
-        throw new Error(`Synthetic tier turn did not finish: ${JSON.stringify(terminal)}`);
+        throw new Error(`Synthetic turn did not finish: ${JSON.stringify(terminal)}`);
       }
       return result.runId;
     };
+    if (runMix) {
+      await sendSyntheticTurn(activitySession!, `Synthetic subagent seed ${mixAgentId} ${mixId}`);
+      const children = await activityRpc("sessions.list", {
+        spawnedBy: activitySession,
+        label: `perf-child-${mixId}`,
+        limit: 2,
+      });
+      const rows = Array.isArray(children?.sessions) ? children.sessions : [];
+      const childKey = asOptionalRecord(rows[0])?.key;
+      if (
+        rows.length !== 1 ||
+        typeof childKey !== "string" ||
+        !childKey.startsWith(`agent:${mixAgentId}:subagent:`)
+      ) {
+        throw new Error("Synthetic provider did not create exactly one native subagent");
+      }
+      mixSessions.push(childKey);
+      await activityRpc("sessions.patch", {
+        key: childKey,
+        model: activityModels[0],
+        fastMode: true,
+        thinkingLevel: "off",
+      });
+      for (const [index, key] of mixSessions.entries()) {
+        if (index === 1) {
+          await activityRpc("sessions.create", {
+            key,
+            model: activityModels[0],
+            fastMode: true,
+            thinkingLevel: "off",
+            visibility: "shared",
+          });
+        }
+        await sendSyntheticTurn(key);
+      }
+    }
     if (serviceTiers) {
       for (const [index, key] of tierSessions.entries()) {
         await activityRpc("sessions.create", { key, model: "openai/gpt-5", visibility: "shared" });
@@ -245,7 +311,7 @@ async function measureLoads(runs: number) {
           fastMode: index === 0 ? true : "ultrafast",
           thinkingLevel: "off",
         });
-        await sendTierTurn(key);
+        await sendSyntheticTurn(key);
       }
     }
     if (activityClient && values["activity-cron"]) {
@@ -551,6 +617,15 @@ async function measureLoads(runs: number) {
       let activityMainThreadCpuMs: number | undefined;
       let menuBeforeActivity: Awaited<ReturnType<typeof menuInventory>> | undefined;
       if (activityClient) {
+        if (runMix) {
+          await page.waitForFunction(() =>
+            Reflect.get(window, "__catalogLoad").requests.every(
+              (request: { method: string; responseAtMs?: number }) =>
+                !["models.list", "sessions.describe"].includes(request.method) ||
+                request.responseAtMs !== undefined,
+            ),
+          );
+        }
         await page.waitForTimeout(5_000);
         if (startAt !== undefined) {
           const activityStartAt = scheduledAt + 30_000;
@@ -567,9 +642,86 @@ async function measureLoads(runs: number) {
           await page.waitForTimeout(Math.max(0, startedAt + step * intervalMs - Date.now()));
           const atMs = await page.evaluate(() => performance.now());
           const started = Date.now();
+          if (runMix) {
+            if (activityCronJobId && step % 4 === 3) {
+              const result = await activityRpc("cron.run", {
+                id: activityCronJobId,
+                mode: "force",
+                waitTimeoutMs: 30_000,
+              });
+              if (typeof result?.runId !== "string" || (!result.finished && !result.run)) {
+                throw new Error("Mixed activity cron did not finish within the bounded wait");
+              }
+              activity.push({
+                method: "cron.run",
+                atMs,
+                elapsedMs: Date.now() - started,
+                result: { runId: result.runId, status: "finished" },
+              });
+            } else {
+              const turns = await Promise.all(
+                mixSessions.map(async (sessionKey) => ({
+                  sessionKey,
+                  runId: await sendSyntheticTurn(sessionKey),
+                  status: "ok",
+                })),
+              );
+              activity.push({
+                method: "chat.send-cohort",
+                atMs,
+                elapsedMs: Date.now() - started,
+                result: { turns },
+              });
+            }
+            if (values["activity-interactions"]) {
+              const interactionAtMs = await page.evaluate(() => performance.now());
+              const interactionStarted = Date.now();
+              const kind = step % 3;
+              if (kind === 0) {
+                await page
+                  .locator("openclaw-app-sidebar [data-session-key]")
+                  .filter({ visible: true })
+                  .first()
+                  .hover();
+              } else if (kind === 1) {
+                const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+                await pane.locator("[data-chat-model-select]").first().click();
+                await pane
+                  .locator(".chat-controls__model-menu")
+                  .filter({ visible: true })
+                  .first()
+                  .waitFor();
+                await page.keyboard.press("Escape");
+              } else {
+                const sessionKey = mixSessions[Math.floor(step / 3) % 2]!;
+                const pathname = buildControlUiSessionPath({
+                  namespace: "chat",
+                  sessionKey,
+                  exactKey: true,
+                });
+                if (!pathname) {
+                  throw new Error("Mixed activity session has no route");
+                }
+                await page.evaluate(
+                  (nextPath) => window.openclawControlUi!.navigate("chat", { pathname: nextPath }),
+                  pathname,
+                );
+                await page.waitForFunction(
+                  (key) => window.openclawControlUi?.snapshot().sessionKey === key,
+                  sessionKey,
+                );
+              }
+              activity.push({
+                method: ["sidebar-hover", "model-picker", "session-open"][kind]!,
+                atMs: interactionAtMs,
+                elapsedMs: Date.now() - interactionStarted,
+              });
+            }
+            continue;
+          }
           if (serviceTiers) {
             const key = tierSessions[step % tierSessions.length]!;
-            const runId = await sendTierTurn(key);
+            const runId = await sendSyntheticTurn(key);
             activity.push({
               method: "chat.send",
               atMs,
@@ -812,6 +964,42 @@ async function measureLoads(runs: number) {
       } else {
         await page.waitForTimeout(Math.max(0, durationMs - readyAtMs));
       }
+      let modelHintVerification: unknown;
+      if (runMix) {
+        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        const effort = pane.locator("[data-chat-thinking-select]").first();
+        const selectedKey = await page.evaluate(
+          () => window.openclawControlUi?.snapshot().sessionKey,
+        );
+        if (
+          !values["activity-interactions"] &&
+          values["expect-session"] &&
+          selectedKey !== values["expect-session"]
+        ) {
+          throw new Error("Background runs changed the visible conversation");
+        }
+        const title = await effort.getAttribute("title");
+        await effort.click();
+        await pane
+          .locator(".chat-controls__effort-menu")
+          .filter({ visible: true })
+          .first()
+          .waitFor();
+        modelHintVerification = {
+          selectedKey,
+          model: await pane.locator("[data-chat-model-select]").first().textContent(),
+          title,
+          speedOptions: await pane.locator("[data-chat-speed-option]").evaluateAll((buttons) =>
+            buttons.map((button) => ({
+              value: button.getAttribute("data-chat-speed-option"),
+              disabled: button.hasAttribute("disabled"),
+              selected: button.getAttribute("aria-checked"),
+              text: button.textContent,
+            })),
+          ),
+        };
+        await page.keyboard.press("Escape");
+      }
       let detailsVerification: unknown;
       if (activityClient && values["open-details"]) {
         await openDetails();
@@ -975,6 +1163,7 @@ async function measureLoads(runs: number) {
         menuAtReadiness,
         menuBeforeActivity,
         detailsVerification,
+        modelHintVerification,
         activityBlockingMs: result.tasks
           .filter(
             (task: { startTime: number }) =>
@@ -1027,6 +1216,13 @@ async function measureLoads(runs: number) {
       reloadCensus: values["reload-census"],
       rowMix: values["activity-row-mix"],
       serviceTiers,
+      runMix: runMix
+        ? {
+            sessions: mixSessions,
+            interactions: values["activity-interactions"],
+            childDispatch: "native sessions_spawn child, then real chat.send turns",
+          }
+        : undefined,
       deleteSessions: deleteSessions.length || undefined,
       cpuMeasurement: gatewayPid
         ? "Linux Gateway main-thread CPU over the warm activity window; includes controller patches and background work. Per-browser-RPC normalization is workload cost, not handler self-time."

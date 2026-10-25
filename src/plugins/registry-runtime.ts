@@ -188,6 +188,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     const runtime = new Proxy(registryParams.runtime, {
       get(_target, prop, receiver) {
         const getRuntimeProperty = () => readRuntimeProperty(record, prop, receiver);
+        if (prop === "capabilities") {
+          const capabilities: PluginRuntime["capabilities"] = getRuntimeProperty();
+          return record.contracts?.subagentProfiles?.length
+            ? capabilities
+            : capabilities?.filter((capability) => capability !== "native-subagent-profiles-v1");
+        }
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           return {
@@ -392,6 +398,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
             readSessionFacts: (params) =>
               runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
+            appendAgentMessage: (params) =>
+              runWithCurrentPluginScope(() => gateway.appendAgentMessage(params)),
             withSessionFacts: (select, run) =>
               runWithCurrentPluginScope(() =>
                 gateway.withSessionFacts(select, (snapshot) => {
@@ -507,7 +515,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await runWithPluginScope(async () => {
                 const resolveCurrentExecutionOwner = () =>
                   resolveStoredSessionExecutionOwner({
-                    action: "admit work on",
                     sessionKey: params.sessionKey,
                     storePath: params.storePath,
                   });

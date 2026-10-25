@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
@@ -14,18 +13,15 @@ import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 const tempDirs: string[] = [];
 const scriptExecPath = process.platform === "win32" ? resolveTestNodeExecPath() : process.execPath;
 
-function makePackage(): { root: string; entrypoint: string; implementation: string } {
-  const root = fs.realpathSync.native(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-artifact-")),
-  );
-  tempDirs.push(root);
+function makePackage(fields: Record<string, unknown> = {}) {
+  const root = fs.realpathSync.native(makeTempDir(tempDirs, "openclaw-cli-artifact-"));
   const entrypoint = path.join(root, "bin", "cli.js");
   const implementation = path.join(root, "dist", "main.js");
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
   fs.mkdirSync(path.dirname(implementation), { recursive: true });
   fs.writeFileSync(
     path.join(root, "package.json"),
-    `${JSON.stringify({ name: "@fixture/verified-cli", version: "1.0.0" })}\n`,
+    `${JSON.stringify({ name: "@fixture/verified-cli", version: "1.0.0", ...fields })}\n`,
   );
   fs.writeFileSync(entrypoint, `#!${scriptExecPath}\nimport "../dist/main.js";\n`, {
     mode: 0o755,
@@ -237,9 +233,8 @@ describe("CLI executable implementation identity", () => {
         fs.symlinkSync(path.dirname(entrypoint), path.dirname(shimEntrypoint), "junction");
       } else {
         const hookRoot = fs.realpathSync.native(
-          fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-unbound-hook-")),
+          makeTempDir(tempDirs, "openclaw-cli-unbound-hook-"),
         );
-        tempDirs.push(hookRoot);
         const hook = path.join(hookRoot, "unbound-hook.cjs");
         fs.writeFileSync(hook, 'throw new Error("unbound-hook-loaded");\n');
         // Windows invokes Node with the script path, so shebang flags must remain inert.
@@ -299,8 +294,7 @@ describe("CLI executable implementation identity", () => {
         },
       );
       expect(child.error).toBeUndefined();
-      expect(child.status).toBe(0);
-      expect(child.stdout).toBe("identity-ok");
+      expect(child).toMatchObject({ status: 0, stdout: "identity-ok" });
     });
 
     it("does not bind a missing PATH command to an executable in the current directory", async () => {
@@ -373,15 +367,7 @@ describe("CLI executable implementation identity", () => {
   it.each(["dependencies", "peerDependencies"] as const)(
     "rejects required %s that may resolve outside the package tree",
     async (field) => {
-      const fixture = makePackage();
-      fs.writeFileSync(
-        path.join(fixture.root, "package.json"),
-        `${JSON.stringify({
-          name: "@fixture/verified-cli",
-          version: "1.0.0",
-          [field]: { "@fixture/external-runtime": "1.0.0" },
-        })}\n`,
-      );
+      const fixture = makePackage({ [field]: { "@fixture/external-runtime": "1.0.0" } });
 
       await expect(packageIdentity(fixture.entrypoint)).resolves.toBeUndefined();
     },
@@ -397,8 +383,7 @@ describe("CLI executable implementation identity", () => {
   });
 
   it("requires a positive native executable name under a backend package policy", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-native-policy-"));
-    tempDirs.push(root);
+    const root = makeTempDir(tempDirs, "openclaw-cli-native-policy-");
     const executable = path.join(root, "claude");
     copyExecutable(executable);
 

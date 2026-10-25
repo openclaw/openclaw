@@ -72,14 +72,27 @@ describe("link reader document content", () => {
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        private readonly targets = new Set<Element>();
+        constructor(
+          private readonly callback: (
+            entries: { target: Element; isIntersecting: boolean }[],
+          ) => void,
+        ) {}
         private readonly notify = (isIntersecting: boolean) => {
-          this.callback([{ isIntersecting }]);
+          this.callback([...this.targets].map((element) => ({ target: element, isIntersecting })));
         };
-        observe() {
+        observe(element: Element) {
+          this.targets.add(element);
           visible.add(this.notify);
         }
+        unobserve(element: Element) {
+          this.targets.delete(element);
+          if (this.targets.size === 0) {
+            visible.delete(this.notify);
+          }
+        }
         disconnect() {
+          this.targets.clear();
           visible.delete(this.notify);
         }
       },
@@ -194,6 +207,23 @@ describe("link reader document content", () => {
     expect(container.querySelector(".lr-checks")?.textContent).toContain(
       "Some checks could not be shown",
     );
+    update(container, {
+      ...detail("Description"),
+      checks: {
+        state: "failure",
+        summary: "Partial checks",
+        total: 4,
+        truncated: true,
+        items: [],
+        url: url + "/checks",
+      },
+    });
+    const source = container.querySelector<HTMLAnchorElement>(".lr-checks .lr-note a")!;
+    expect(source).not.toBeNull();
+    expect(source.textContent).toBe("View all checks on GitHub");
+    expect(source.href).toBe(url + "/checks");
+    expect(source.target).toBe("_blank");
+    expect(source.hasAttribute("data-link-reader-external")).toBe(true);
   });
 
   it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {

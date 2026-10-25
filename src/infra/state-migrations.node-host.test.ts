@@ -15,8 +15,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
@@ -133,24 +133,48 @@ describe("legacy node-host Doctor migration", () => {
     expect((await loadNodeHostConfig(env))?.gateway?.contextPath).toBeUndefined();
   });
 
+  it.each(["source", "claim", "pair"] as const)(
+    "retains malformed UTF-8 %s bytes before recovery and accepts corrected Unicode",
+    async (kind) => {
+      const displayName = "Café 会议 �";
+      const { env, sourcePath, migrate } = await legacyFixture({ displayName });
+      const valid = await fsp.readFile(sourcePath, "utf8");
+      const malformed = Buffer.from(valid, "latin1");
+      const claimPath = `${sourcePath}.doctor-importing`;
+      const originals = new Map([[sourcePath, malformed]]);
+      await fsp.writeFile(sourcePath, malformed);
+      if (kind === "claim") {
+        await fsp.rename(sourcePath, claimPath);
+        originals.delete(sourcePath);
+        originals.set(claimPath, malformed);
+      } else if (kind === "pair") {
+        const claim = Buffer.from(malformed);
+        claim[claim.indexOf(0xe9)] = 0xea;
+        await fsp.writeFile(claimPath, claim);
+        originals.set(claimPath, claim);
+      }
+
+      const refused = await migrate();
+      expect(refused.changes).toEqual([]);
+      expect(refused.warningDisposition).toBe("recoverable");
+      expect(refused.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(refused.warnings.join("\n")).toMatch(/Back up .+, replace it .*retry Doctor/);
+      expect(readCanonicalRow(env)).toBeUndefined();
+      for (const [file, bytes] of originals) {
+        expect(await fsp.readFile(file)).toEqual(bytes);
+        await fsp.writeFile(file, valid);
+      }
+
+      expect((await migrate()).warnings).toEqual([]);
+      await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ displayName });
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(claimPath)).toBe(false);
+    },
+  );
+
   it("requires exclusive state ownership", async () => {
     const { env, sourcePath, migrate } = await legacyFixture();
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_789,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let blocked: Awaited<ReturnType<typeof migrateLegacyNodeHostConfig>>;
-    try {
-      blocked = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const blocked = await withGatewayLockHeld(env, 18_789, () => migrate());
     expect(blocked.warnings[0]).toContain("OpenClaw state database is busy");
     expect(readCanonicalRow(env)).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(true);

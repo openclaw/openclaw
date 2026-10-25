@@ -49,23 +49,11 @@ describe("plugin install path warnings", () => {
     ]);
   });
 
-  it("uses the second candidate path when the first one is stale", async () => {
+  it.each([false, true])("detects active paths with a stale first candidate: %s", async (stale) => {
     await withTempHome(async (home) => {
       const pluginPath = path.join(home, "matrix-plugin");
       await fs.mkdir(pluginPath, { recursive: true });
-      expect(await detect(missingPath, pluginPath)).toEqual({
-        kind: "custom-path",
-        pluginId: "matrix",
-        path: pluginPath,
-      });
-    });
-  });
-
-  it("detects active custom plugin install paths", async () => {
-    await withTempHome(async (home) => {
-      const pluginPath = path.join(home, "matrix-plugin");
-      await fs.mkdir(pluginPath, { recursive: true });
-      expect(await detect(pluginPath)).toEqual({
+      expect(await detect(stale ? missingPath : pluginPath, pluginPath)).toEqual({
         kind: "custom-path",
         pluginId: "matrix",
         path: pluginPath,

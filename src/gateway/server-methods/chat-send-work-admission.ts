@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
@@ -50,6 +50,7 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { withCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
+import { respondError } from "./response.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -100,13 +101,10 @@ export function consumeChatSendAdmissionRetry(
       entry: params.context.dedupe.get(params.session.pendingChatSendKey),
     });
     if (pending?.payload.goalFingerprint) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Run ID is reserved by a Goal request; use a new ID.",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Run ID is reserved by a Goal request; use a new ID.",
       );
       return false;
     }

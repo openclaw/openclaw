@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -100,7 +101,10 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   expect(status!.open).toBe(true);
   expect(status!.querySelector(".chat-working-indicator")).not.toBeNull();
   button!.click();
-  await waitForSolid(() => expect(find(".chat-activity-group.is-open")).not.toBeNull());
+  await waitForSolid(() => {
+    expect(find(".chat-activity-group.is-open")).not.toBeNull();
+    expect(find(".chat-activity-group__body .chat-tool-msg-summary:enabled")).not.toBeNull();
+  });
   const tool = container.querySelector<HTMLButtonElement>(
     ".chat-activity-group__body .chat-tool-msg-summary",
   );
@@ -122,16 +126,85 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   });
 });
 
-it.each([
-  { label: "Starting model", options: { startupLabel: "Starting model" } },
-  { label: "Waiting for approval", options: { waitingApproval: true } },
-])("keeps $label visible instead of replacing it with working dots", ({ label, options }) => {
+it("keeps model startup quiet and approval actionable in bubble mode", () => {
   const { container, dispose } = mountSolid(ChatWorkingIndicator, {
     part: { kind: "reading-indicator", key: "status", startedAt: 1 },
-    options: { bubbleMode: true, ...options },
+    options: { bubbleMode: true, startupLabel: "Starting model", outputTokens: 42 },
   });
   onTestFinished(dispose);
-  expect(container.querySelector("details")).toBeNull();
-  expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(label);
-  expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
+  const summary = container.querySelector("summary")!;
+  expect(summary.textContent?.trim()).toBe("");
+  expect(summary.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
+  expect(container.querySelector("openclaw-working-phrase")).toBeNull();
+  summary.click();
+  expect(container.querySelector("details")?.open).toBe(true);
+  expect(container.textContent).toContain("Starting model");
+  const approval = mountSolid(ChatWorkingIndicator, {
+    part: { kind: "reading-indicator", key: "approval", startedAt: 1 },
+    options: { bubbleMode: true, waitingApproval: true },
+  });
+  onTestFinished(approval.dispose);
+  expect(approval.container.querySelector("summary")?.textContent).toContain(
+    "Waiting for approval",
+  );
+  expect(approval.container.querySelector("summary .chat-bubble-dots")).toBeNull();
+  expect(approval.container.querySelector("svg")).toBeNull();
+});
+
+it("uses one live work bubble and restores dots when the operation settles", async () => {
+  const call = (phase: "start" | "result") => ({
+    role: "assistant",
+    runId: "bubble-run",
+    timestamp: 3,
+    content: [
+      {
+        type: "toolcall",
+        id: "check",
+        name: "exec",
+        arguments: { command: "pnpm test", title: "Checking the tests" },
+      },
+    ],
+    activity: [
+      projectAgentToolActivity({
+        toolCallId: "check",
+        name: "exec",
+        args: { command: "pnpm test", title: "Checking the tests" },
+        phase,
+      }),
+    ],
+  });
+  const { container, props, draw } = mountThread("bubble-live-work", {
+    showToolCalls: true,
+    toolMessages: [call("start")],
+  });
+  await waitForSolid(() => {
+    const summary = container.querySelector(".chat-activity-group--working > button");
+    expect(summary?.textContent).toContain("Checking the tests");
+    expect(summary?.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
+    expect(container.querySelector("details.chat-bubble-activity--working")).toBeNull();
+  });
+  props.toolMessages = [call("result")];
+  draw();
+  await waitForSolid(() => {
+    expect(container.querySelector(".chat-activity-group--working")).toBeNull();
+    expect(container.querySelectorAll("summary .chat-bubble-dots--working")).toHaveLength(1);
+  });
+});
+
+it("keeps the active parent's work bubble and child count without embedding child rows", () => {
+  const onOpenSubagents = vi.fn();
+  const { container, dispose } = mountSolid(ChatWorkingIndicator, {
+    part: { kind: "reading-indicator", key: "parallel", startedAt: 1 },
+    options: { bubbleMode: true, runningSubagents: 2, onOpenSubagents },
+  });
+  onTestFinished(dispose);
+  expect(container.querySelectorAll("summary .chat-bubble-dots--working")).toHaveLength(1);
+  expect(container.querySelector("[data-subagent-session-key]")).toBeNull();
+  expect(container.querySelector("summary")?.textContent?.trim()).toBe("");
+  container.querySelector("summary")!.click();
+  expect(container.querySelector("details")?.open).toBe(true);
+  const count = container.querySelector<HTMLButtonElement>(".chat-working-indicator__subagents");
+  expect(count?.textContent).toBe("2 subagents running");
+  count?.click();
+  expect(onOpenSubagents).toHaveBeenCalledOnce();
 });

@@ -3,6 +3,7 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionGoal } from "../../../api/types.ts";
+import * as modalHosts from "../../../components/promise-modal-host.ts";
 import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import {
   installDialogPolyfill,
@@ -23,6 +24,42 @@ const goal: SessionGoal = {
   tokensUsed: 120,
   continuationTurns: 0,
 };
+
+it("reports failed edit-dialog preparation and permits a fresh attempt", async () => {
+  const restore = installDialogPolyfill();
+  const prepare = vi
+    .spyOn(modalHosts, "withPromiseModalHost")
+    .mockRejectedValueOnce(new Error("Goal dialog unavailable. Try again."));
+  const view = mountSolid(() => (
+    <ChatDetailsGoal
+      goal={goal}
+      sessionId="session-original"
+      presented
+      connected
+      canAct
+      onGoalAction={() => {}}
+      onGoalSubmit={() => Promise.resolve(true)}
+    />
+  ));
+  try {
+    view.getByRole("button", { name: "Edit goal" }).click();
+    view.getByRole("button", { name: "Edit goal" }).click();
+    await waitForSolid(() =>
+      expect(view.getByRole("alert").textContent).toBe("Goal dialog unavailable. Try again."),
+    );
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    view.getByRole("button", { name: "Edit goal" }).click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    await waitForSolid(() => expect(view.queryByRole("alert")).toBeNull());
+    expect(modal.querySelector("textarea")?.value).toBe(goal.objective);
+    modal.querySelector<HTMLButtonElement>('button[type="button"]')!.click();
+  } finally {
+    view.unmount();
+    prepare.mockRestore();
+    restore();
+  }
+});
 
 it("retains the objective while hidden and keeps recovery available after the goal is removed", () => {
   vi.useFakeTimers();
@@ -126,6 +163,7 @@ it.each(["session", "goal", "presentation"] as const)(
         expect(modal.querySelector('[role="alert"]')?.textContent).toBe(submissionError),
       );
       expect(input.value).toBe(objective);
+      expect(input.getAttribute("aria-invalid")).toBe("true");
       expect(save.disabled).toBe(false);
       expect(document.activeElement).toBe(input);
       setGoal({ ...goal, tokensUsed: 240 });
@@ -151,3 +189,55 @@ it.each(["session", "goal", "presentation"] as const)(
     }
   },
 );
+
+it("keeps callback failures outside objective validation and retains the form through retry", async () => {
+  const restore = installDialogPolyfill();
+  const retry = createDeferred<boolean>();
+  const onSubmit = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Goal save failed"))
+    .mockReturnValue(retry.promise);
+  const view = mountSolid(() => (
+    <ChatDetailsGoal
+      goal={goal}
+      sessionId="session-original"
+      presented
+      connected
+      canAct
+      onGoalAction={vi.fn()}
+      onGoalSubmit={onSubmit}
+    />
+  ));
+  try {
+    view.getByRole("button", { name: "Edit goal" }).click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const input = modal.querySelector("textarea")!;
+    const form = modal.querySelector("form")!;
+    const objective = "Keep this edited objective";
+    input.value = objective;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await waitForSolid(() => {
+      expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Goal save failed");
+      expect(input.hasAttribute("aria-invalid")).toBe(false);
+    });
+    expect(input.disabled).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe(objective);
+
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    flush();
+    await waitForSolid(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(modal.querySelector("textarea")).toBe(input);
+    expect(input.disabled).toBe(true);
+    expect(input.hasAttribute("aria-invalid")).toBe(false);
+    expect(modal.querySelector('[role="alert"]')).toBeNull();
+    retry.resolve(true);
+    await waitForSolid(() => expect(document.body.contains(modal)).toBe(false));
+  } finally {
+    view.unmount();
+    restore();
+  }
+});

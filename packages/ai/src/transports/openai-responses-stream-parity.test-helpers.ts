@@ -149,20 +149,58 @@ export function toolCall(id: string, name: string, args: Record<string, unknown>
   return { type: "toolCall" as const, id, name, arguments: args, partialJson: false };
 }
 
-export function textEvents(text: string, contentIndex = 0) {
+export function textEvents(text: string, contentIndex = 0, deltas: readonly string[] = []) {
   return [
     { type: "text_start", contentIndex },
+    ...deltas.map((delta) => ({ type: "text_delta", contentIndex, delta })),
     { type: "text_end", contentIndex, content: text },
   ];
 }
 
-export function expected(
+export function thinkingEvents(text: string, contentIndex = 0, deltas: readonly string[] = []) {
+  return [
+    { type: "thinking_start", contentIndex },
+    ...deltas.map((delta) => ({ type: "thinking_delta", contentIndex, delta })),
+    { type: "thinking_end", contentIndex, content: text },
+  ];
+}
+
+export function blockEvent(
+  type: `${"text" | "thinking" | "toolcall"}_${"start" | "end" | "delta"}`,
+  contentIndex = 0,
+  value?: string,
+) {
+  return {
+    type,
+    contentIndex,
+    ...(value === undefined ? {} : { [type.endsWith("_delta") ? "delta" : "content"]: value }),
+  };
+}
+
+export const textBlock = (text: string) => ({ type: "text" as const, text });
+export const thinkingBlock = (thinking: string, encrypted = false) => ({
+  type: "thinking" as const,
+  thinking,
+  encrypted,
+});
+
+function expected(
   responseId: string | null,
   events: ProcessResult["events"],
   content: ProcessResult["content"],
   outcome: Partial<Pick<ProcessResult, "error" | "stopReason">> = {},
 ): ProcessResult {
   return { responseId, events, content, error: null, stopReason: "stop", ...outcome };
+}
+
+export function fixture(
+  name: string,
+  events: ParityFixture["events"],
+  emitted: ProcessResult["events"],
+  content: ProcessResult["content"],
+  outcome: Partial<Pick<ProcessResult, "responseId" | "error" | "stopReason">> = {},
+): ParityFixture {
+  return { name, events, canonical: { ...expected("resp", emitted, content), ...outcome } };
 }
 
 export function outputTextDelta(item_id: string, delta: string, output_index = 0) {

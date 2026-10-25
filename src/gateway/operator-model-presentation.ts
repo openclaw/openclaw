@@ -17,6 +17,7 @@ import {
   readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
 } from "../agents/operator-model-policy.js";
+import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -173,9 +174,20 @@ export function prepareOperatorModelPresentation(params: {
     policy: modelPolicy,
     manifestPlugins,
   });
+  return prepareOperatorModelPolicyPresentation({ cfg, policy, metadataSnapshot });
+}
+
+/** Same projection for a host-admitted requester without synthesizing a Gateway client. */
+export function prepareOperatorModelPolicyPresentation(params: {
+  cfg: OpenClawConfig;
+  policy?: PreparedOperatorModelPolicy;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
+}) {
+  const { cfg, policy, metadataSnapshot } = params;
   if (!policy) {
     return undefined;
   }
+  const manifestPlugins = metadataSnapshot ?? [];
   const filterModels = <T extends { provider: string; id: string }>(models: T[]) =>
     models.filter((model) => policy.allows({ provider: model.provider, model: model.id }));
   const hidden = (provider: unknown, model: unknown) =>

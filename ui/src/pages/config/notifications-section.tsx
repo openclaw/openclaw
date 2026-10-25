@@ -24,7 +24,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -38,6 +38,7 @@ registerEnglishCatalog(registerSettingsEnglish);
 export type NotificationsSectionProps = Pick<
   ConfigProps,
   | "connected"
+  | "presentationRetired"
   | "nativeNotifications"
   | "onNativeNotificationsRequestPermission"
   | "onNativeNotificationsSendTest"
@@ -99,6 +100,25 @@ function NotificationSection(props: {
   );
 }
 
+const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?: string }) => (
+  <SettingsRow
+    title={t("configView.notifications.testOutcome")}
+    description={props.message}
+    control={
+      <SettingsStatus
+        kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
+        label={t(
+          props.state === "pending"
+            ? "configView.notifications.sendingTest"
+            : props.state === "sent"
+              ? "configView.notifications.testQueued"
+              : "configView.notifications.testFailed",
+        )}
+      />
+    }
+  />
+);
+
 function NativeNotificationSection(props: {
   native: NonNullable<NotificationsSectionProps["nativeNotifications"]>;
   actions: NotificationsSectionProps;
@@ -106,13 +126,18 @@ function NativeNotificationSection(props: {
   const status = () => nativeNotificationsStatus(props.native.permission);
   const [sending, setSending] = createOptimistic(false);
   const testPending = () => sending() || props.native.test?.state === "pending";
-  const sendTest = action(function* () {
-    setSending(true);
-    yield props.actions.onNativeNotificationsSendTest?.();
+  const presentTest = action(function* (pending: Promise<unknown> | void, retired: Promise<void>) {
+    if (retired === props.actions.presentationRetired()) {
+      setSending(true);
+    }
+    yield Promise.race([pending, retired]);
   });
-  const testDescription = () => {
-    const test = props.native.test;
-    return !testPending() && test?.state === "error" ? test.message : undefined;
+  const sendTest = async () => {
+    const retired = props.actions.presentationRetired();
+    const pending = props.actions.onNativeNotificationsSendTest?.();
+    // Let the synchronous owner's pending outcome publish before joining its transition.
+    await Promise.resolve();
+    return presentTest(pending, retired);
   };
   return (
     <NotificationSection
@@ -155,29 +180,44 @@ function NativeNotificationSection(props: {
       <Show when={props.native.permission === "denied"}>
         <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
-      <Show when={testPending() || props.native.test}>
-        <SettingsRow
-          title={t("configView.notifications.testOutcome")}
-          description={testDescription()}
-          control={
-            <SettingsStatus
-              kind={
-                testPending() ? "accent" : props.native.test?.state === "sent" ? "ok" : "danger"
-              }
-              label={t(
-                testPending()
-                  ? "configView.notifications.sendingTest"
-                  : props.native.test?.state === "sent"
-                    ? "configView.notifications.testQueued"
-                    : "configView.notifications.testFailed",
-              )}
-            />
-          }
-        />
+      <Show
+        when={testPending()}
+        fallback={
+          <Show when={props.native.test} keyed>
+            {(test) => {
+              // A new attempt retires the old error region without replacing the send control.
+              const outcome = createMemo(() => {
+                if (test.state === "error") {
+                  throw new UserFacingError(test.message);
+                }
+                return test.state;
+              });
+              return (
+                <Errored
+                  fallback={(error) => (
+                    <NativeTestStatus state="error" message={formatUiError(error())} />
+                  )}
+                >
+                  <NativeTestStatus state={outcome()} />
+                </Errored>
+              );
+            }}
+          </Show>
+        }
+      >
+        <NativeTestStatus state="pending" />
       </Show>
     </NotificationSection>
   );
 }
+
+const renderWebPushError = (error: () => unknown) => (
+  <div class="settings-row">
+    <div class="settings-row__text">
+      <span class="cfg-field__error">{formatUiError(error())}</span>
+    </div>
+  </div>
+);
 
 function WebPushSection(props: {
   push: NonNullable<NotificationsSectionProps["webPush"]>;
@@ -372,29 +412,13 @@ function WebPushSection(props: {
             </div>
           </div>
         </Show>
-        <Errored
-          fallback={(error) => (
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="cfg-field__error">{formatUiError(error())}</span>
-              </div>
-            </div>
-          )}
-        >
+        <Errored fallback={renderWebPushError}>
           <Loading on={props.push.command} fallback={null}>
             {(commandOutcome(), null)}
           </Loading>
         </Errored>
       </NotificationSection>
-      <Errored
-        fallback={(error) => (
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="cfg-field__error">{formatUiError(error())}</span>
-            </div>
-          </div>
-        )}
-      >
+      <Errored fallback={renderWebPushError}>
         <Loading on={props.push.read} fallback={null}>
           <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
             {(current) => (

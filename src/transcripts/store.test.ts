@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -110,6 +111,10 @@ function writeNotes(target: TranscriptSessionDescriptor, text: string) {
   );
 }
 
+function caseDistinctSessions() {
+  return [session("Capital"), session("capital", "2026-07-01T11:00:00.000Z")] as const;
+}
+
 function writeLegacyArtifact(directory: string, text = "legacy\n", name = "transcript.jsonl") {
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, name);
@@ -158,6 +163,30 @@ function session(
 ): TranscriptSessionDescriptor {
   return { sessionId, source: { providerId: "manual-transcript" }, startedAt };
 }
+
+it("lists summary presence by complete session identity in one read", async () => {
+  const first = await admit(session("repeated"));
+  const later = await admit(session("repeated", "2026-07-02T10:00:00.000Z"));
+  const sibling = await admit(session("sibling", later.startedAt));
+  const expected = (hasSummary: boolean) => [
+    { session: later, hasSummary: false },
+    { session: sibling, hasSummary: false },
+    { session: first, hasSummary },
+  ];
+  expect(await store.listSessionEntries()).toMatchObject(expected(false));
+  await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
+  expect(await store.listSessionEntries()).toMatchObject(expected(true));
+
+  const database = stateDatabase();
+  const statements: string[] = [];
+  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
+  try {
+    expect(readTranscriptSessionEntries(database)).toMatchObject(expected(true));
+    expect(statements).toHaveLength(1);
+  } finally {
+    sql.restore();
+  }
+});
 
 it("reuses list pages without worker requests and observes another store's writes", async () => {
   const writer = createStore();
@@ -231,49 +260,41 @@ it.each(["empty", "speech", "summary", "export", "pending export", "rewritten"] 
 );
 
 it("keeps selector and overview columns aligned on insert, replacement, and removal", async () => {
+  const fields = [
+    ["accountId", "source_account_id", "account"],
+    ["guildId", "source_guild_id", "guild"],
+    ["channelId", "source_channel_id", "channel"],
+    ["meetingUrl", "source_meeting_url", "https://example.test/meeting"],
+    ["threadTs", "source_thread_ts", "thread"],
+    ["fileId", "source_file_id", "file"],
+  ] as const;
+  const columnValues = (empty = false) =>
+    Object.fromEntries(fields.map(([, column, value]) => [column, empty ? null : value]));
   const target = {
     ...session(),
     source: {
       providerId: "manual-transcript",
-      accountId: "account",
-      guildId: "guild",
-      channelId: "channel",
-      meetingUrl: "https://example.test/meeting",
-      threadTs: "thread",
-      fileId: "file",
+      ...Object.fromEntries(fields.map(([key, , value]) => [key, value])),
     },
     metadata: { agentId: "agent" },
   };
   const readColumns = () =>
     stateDatabase()
       .prepare(
-        `SELECT source_account_id, source_guild_id, source_channel_id, source_meeting_url,
-                  source_thread_ts, source_file_id, metadata_agent_id
-             FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?`,
+        `SELECT ${fields.map(([, column]) => column).join(", ")}, metadata_agent_id
+         FROM meeting_transcript_sessions WHERE session_id = ? AND started_at = ?`,
       )
       .get(target.sessionId, target.startedAt);
   await store.writeSession(target);
-  expect(readColumns()).toEqual({
-    source_account_id: "account",
-    source_guild_id: "guild",
-    source_channel_id: "channel",
-    source_meeting_url: "https://example.test/meeting",
-    source_thread_ts: "thread",
-    source_file_id: "file",
-    metadata_agent_id: "agent",
-  });
+  expect(readColumns()).toEqual({ ...columnValues(), metadata_agent_id: "agent" });
   await store.writeSession({
     ...target,
     source: { providerId: "manual-transcript", accountId: "replacement" },
     metadata: {},
   });
   expect(readColumns()).toEqual({
+    ...columnValues(true),
     source_account_id: "replacement",
-    source_guild_id: null,
-    source_channel_id: null,
-    source_meeting_url: null,
-    source_thread_ts: null,
-    source_file_id: null,
     metadata_agent_id: null,
   });
   const summary = summarizeTranscripts({ session: target, utterances: [] });
@@ -290,10 +311,8 @@ it("keeps summary snapshot queries bound to the current session and persisted re
   const first = session("summary-first");
   const second = { ...session("summary-second"), title: "Second meeting" };
   const later = session("summary-first", "2026-07-02T10:00:00.000Z");
-  await store.writeSession(first);
-  await store.writeSession(second);
-  await store.appendUtteranceForSession(first, { text: "First speech" });
-  await store.appendUtteranceForSession(second, { text: "Second speech" });
+  await admit(first, ["First speech"]);
+  await admit(second, ["Second speech"]);
   await admit(later, ["Next day speech"]);
   const firstSnapshot = await expectSnapshot(first, ["First speech"]);
   await expectSnapshot(second, ["Second speech"]);
@@ -589,8 +608,7 @@ it.each(["exported", "concurrent"] as const)(
 );
 
 it("stores case-distinct sessions and rejects only unsafe export collisions", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
+  const [upper, lower] = caseDistinctSessions();
   await store.writeSession(lower);
   await store.materializeSessionArtifacts(lower, "metadata");
   await expect(store.writeSession(upper)).resolves.toMatchObject({
@@ -612,18 +630,8 @@ it("stores case-distinct sessions and rejects only unsafe export collisions", as
   }
 });
 
-it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
-  await store.writeSession(upper);
-  updateExports(upper, { export_pending_json: '["metadata.json","transcript.jsonl"]' });
-  writeLegacyArtifact(store.sessionDir(lower));
-  await expectLegacyRejection(lower);
-});
-
 it("recognizes case-variant artifact names only when the filesystem aliases them", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
+  const [upper, lower] = caseDistinctSessions();
   await store.writeSession(upper);
   expect(fs.existsSync(store.sessionDir(upper))).toBe(false);
   writeLegacyArtifact(store.sessionDir(lower), "legacy\n", "TRANSCRIPT.JSONL");
@@ -639,12 +647,27 @@ it("recognizes case-variant artifact names only when the filesystem aliases them
   }
 });
 
-it("refuses to overwrite an unclaimed legacy export directory", async () => {
-  const target = session("legacy-collision");
-  const transcriptPath = writeLegacyArtifact(store.sessionDir(target), '{"text":"legacy line"}\n');
-  await expect(store.writeSession(target)).rejects.toThrow("run openclaw doctor --fix");
-  expect(readText(transcriptPath)).toContain("legacy line");
-});
+it.each(["unclaimed", "case-distinct owner", "dot-root"] as const)(
+  "does not overwrite a legacy directory with %s ownership",
+  async (kind) => {
+    const [upper, lower] = caseDistinctSessions();
+    const target =
+      kind === "case-distinct owner"
+        ? lower
+        : session(kind === "dot-root" ? ".." : "legacy-collision");
+    if (kind === "case-distinct owner") {
+      await store.writeSession(upper);
+      updateExports(upper, { export_pending_json: '["metadata.json","transcript.jsonl"]' });
+    } else if (kind === "dot-root") {
+      await store.writeSession(session("."));
+    }
+    const directory =
+      kind === "dot-root" ? path.join(suiteStateDir, "transcripts") : store.sessionDir(target);
+    const artifact = writeLegacyArtifact(directory, '{"text":"legacy line"}\n');
+    await expectLegacyRejection(target);
+    expect(readText(artifact)).toContain("legacy line");
+  },
+);
 
 it.runIf(process.platform !== "win32")(
   "checks the shipped slug path before inserting a portable encoded session",
@@ -656,12 +679,6 @@ it.runIf(process.platform !== "win32")(
     await expectLegacyRejection(target);
   },
 );
-
-it("does not let a dot session mask the shipped dot-dot root layout", async () => {
-  await store.writeSession(session("."));
-  writeLegacyArtifact(path.join(suiteStateDir, "transcripts"), "legacy root transcript\n");
-  await expectLegacyRejection(session(".."));
-});
 
 it("does not let a modified export block canonical session updates", async () => {
   const target = await admit(session("mutable-export"), ["canonical"]);
@@ -716,7 +733,7 @@ it("stores summaries in SQLite and materializes artifacts beneath a shared expor
   const artifacts = await store.materializeSessionArtifacts(target, "all");
 
   expect(markdownPath).toBe(path.join(store.sessionDir(target), "summary.md"));
-  expect(JSON.parse(readText(artifacts.summaryJsonPath))).toMatchObject({
+  expect(JSON.parse(readText(path.join(artifacts.sessionDir, "summary.json")))).toMatchObject({
     sessionId: target.sessionId,
   });
   expect(readText(artifacts.transcriptPath)).toContain('"text":"We decided to ship the CLI."');

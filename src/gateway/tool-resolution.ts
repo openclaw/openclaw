@@ -9,7 +9,10 @@ import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferre
 import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
-import { resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
+import {
+  isSchedulerSystemTurn,
+  resolveTurnToolSurface,
+} from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
@@ -60,6 +63,7 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readScheduledToolOptions } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
@@ -85,7 +89,6 @@ export async function resolveGatewayScopedTools(
     | "senderIsOwner"
     | "currentMessageId"
     | "nativeCronCreatorToolAllowlist"
-    | "toolsAllow"
     | "nodeExecAllowed"
     | "cronCreatorCallerOrigin"
   > & {
@@ -391,6 +394,7 @@ export async function resolveGatewayScopedTools(
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
+    requesterIsSubagent: subagentPolicy !== undefined,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
       surface === "loopback" && params.messageActionTurnCapability
@@ -432,6 +436,7 @@ export async function resolveGatewayScopedTools(
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
+    ...readScheduledToolOptions(params.admittedRunContext, params.toolsAllow),
     sourceReplyOnly: params.sourceReplyOnly,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
@@ -520,7 +525,6 @@ export async function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
-          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults
@@ -705,6 +709,7 @@ export async function resolveGatewayScopedTools(
           ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
           : undefined,
         ownerOnlyDenied: new Set(ownerOnlyGatewayDeny),
+        schedulerSystemTurn: isSchedulerSystemTurn(params),
       })
     : { tools: turnTools, exportedTools: turnTools };
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get

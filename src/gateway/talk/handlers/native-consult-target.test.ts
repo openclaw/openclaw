@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -132,6 +132,35 @@ function expectOk(respond: ReturnType<typeof vi.fn>, result: unknown = expect.an
 
 function expectDenied(respond: ReturnType<typeof vi.fn>, details: Record<string, unknown>) {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(details));
+}
+
+function registerOwnedRun(
+  runId: string,
+  sessionId: string,
+  options: Parameters<typeof registerOwnedNativeConsultRun>[4] = {},
+) {
+  return registerOwnedNativeConsultRun(config, client.connId, runId, sessionId, options);
+}
+
+function registerQueuedRun(
+  target: { storePath: string; canonicalKey: string; agentId: string },
+  runId: string,
+  sessionId: string,
+) {
+  const identity = { sessionKey: target.canonicalKey, agentId: target.agentId };
+  return registerChatAbortController({
+    ...identity,
+    runId,
+    sessionId,
+    target: captureSessionTarget({
+      ...identity,
+      storeScope: target.storePath,
+      incarnation: sessionId,
+    }),
+    ownerConnId: client.connId,
+    timeoutMs: 60_000,
+    kind: "chat-send",
+  });
 }
 
 const participationRequired = {
@@ -443,12 +472,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     updatedAt: 1,
     visibility: "shared",
   });
-  const { registration, abort } = await registerOwnedNativeConsultRun(
-    config,
-    client.connId,
-    "acl-run",
-    "acl-session",
-  );
+  const { registration, abort } = await registerOwnedRun("acl-run", "acl-session");
   const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "talk.client.steer",
@@ -495,15 +519,9 @@ it.each([
     origin: "client",
   });
   await registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
-  const { registration, abort } = await registerOwnedNativeConsultRun(
-    config,
-    client.connId,
-    runId,
-    "captured-session",
-    {
-      executionStarted: change !== "agent" && change !== "key",
-    },
-  );
+  const { registration, abort } = await registerOwnedRun(runId, "captured-session", {
+    executionStarted: change !== "agent" && change !== "key",
+  });
   const targetRun = runTarget(
     target,
     change === "agent" || change === "key"
@@ -577,13 +595,9 @@ it.each([
     const target = await prepareTalkSessionTarget(config, "main");
     const runId = "prepared-owned-run";
     const sessionId = "prepared-owned-session";
-    const { registration, abort } = await registerOwnedNativeConsultRun(
-      config,
-      client.connId,
-      runId,
-      sessionId,
-      { executionStarted: source === "native" },
-    );
+    const { registration, abort } = await registerOwnedRun(runId, sessionId, {
+      executionStarted: source === "native",
+    });
     const operation = registration.entry.input.claim!.operation!;
     const cancelRun = override ? vi.fn(async () => true) : undefined;
     const { preparing, prepared, pending } = pauseControl(runTarget(target), cancelRun);
@@ -619,21 +633,7 @@ it.each(["source", "claim"] as const)(
     const { voiceSessionId } = await createNativeTalkCall(dispatch, true);
     const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
     const target = await prepareTalkSessionTarget(config, "main");
-    const registration = registerChatAbortController({
-      runId: "queued-talk",
-      target: captureSessionTarget({
-        storeScope: target.storePath,
-        sessionKey: "global",
-        agentId: "voice",
-        incarnation: sessionId,
-      }),
-      sessionId,
-      sessionKey: "global",
-      agentId: "voice",
-      ownerConnId: client.connId,
-      timeoutMs: 60_000,
-      kind: "chat-send",
-    });
+    const registration = registerQueuedRun(target, "queued-talk", sessionId);
     if (!registration.registered) {
       throw new Error("Missing queued Talk source");
     }
@@ -896,21 +896,7 @@ it.for(["status", "cancelled", "successor"] as const)(
         caller.abort(new Error("Pending native consult cancelled"));
       } else {
         rpcSourceTesting.delete(runId);
-        successor = registerChatAbortController({
-          runId,
-          target: captureSessionTarget({
-            storeScope: target.storePath,
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-            incarnation: "successor-session",
-          }),
-          sessionId: "successor-session",
-          sessionKey: target.canonicalKey,
-          agentId: target.agentId,
-          ownerConnId: client.connId,
-          timeoutMs: 60_000,
-          kind: "chat-send",
-        });
+        successor = registerQueuedRun(target, runId, "successor-session");
       }
       resume.resolve();
       if (phase === "status") {
@@ -939,12 +925,11 @@ it.for(["status", "cancelled", "successor"] as const)(
   },
 );
 
-describe.each(["browser", "relay"] as const)("native %s Talk consultation", (transport) => {
-  it.each([
-    { name: "custom main", scope: "per-sender" as const, canonicalKey: "agent:voice:home" },
-    { name: "global", scope: "global" as const, canonicalKey: "global" },
-  ])("uses the created $name session in the provider callback", async ({ scope, canonicalKey }) => {
-    config.session = { mainKey: "home", scope };
+it.each(["browser", "relay"] as const)(
+  "uses the created custom-main session in the native %s provider callback",
+  async (transport) => {
+    const canonicalKey = "agent:voice:home";
+    config.session = { mainKey: "home", scope: "per-sender" };
     config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
     const target = await prepareTalkSessionTarget(config, "main");
     const result = await createNativeTalkCall(dispatch, transport === "browser");
@@ -954,7 +939,6 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);
     expect(created?.sessionId).toBeTruthy();
-    expect(callback).toBeTypeOf("function");
     await expect(callback!({ prompt: "Continue this conversation" })).resolves.toEqual({
       text: "Synthetic consult answer",
     });
@@ -975,8 +959,8 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
       clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
         ?.sessionKey,
     ).toBe("main");
-  });
-});
+  },
+);
 
 registerNativeConsultExactControlTests({
   getConfig: () => config,

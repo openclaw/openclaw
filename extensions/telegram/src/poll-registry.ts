@@ -150,11 +150,10 @@ export function createTelegramPollRegistryEntry(
 export async function findTelegramPollRegistryEntry(params: {
   accountId?: string;
   pollId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<TelegramPollRegistryEntry | null> {
   // Missing entries resolve to `undefined`; real store failures must propagate so
   // durable Telegram ingress can release the claim and retry the poll_answer.
-  const stored = await openPollRegistryStore(params.env).lookup(
+  const stored = await openPollRegistryStore().lookup(
     telegramPollRegistryKey(params.accountId, params.pollId),
   );
   return normalizePollRegistryEntry(stored);
@@ -163,9 +162,8 @@ export async function findTelegramPollRegistryEntry(params: {
 export async function retireTelegramPollRegistryEntry(params: {
   accountId?: string;
   pollId: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const store = openPollRegistryStore(params.env);
+  const store = openPollRegistryStore();
   const key = telegramPollRegistryKey(params.accountId, params.pollId);
   const entry = normalizePollRegistryEntry(await store.lookup(key));
   if (!entry) {

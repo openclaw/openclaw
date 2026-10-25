@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { setBoundedMap } from "./bounded-cache.js";
-import {
-  summarizeMatrixMessageContextEvent,
-  truncateMatrixContextBody,
-} from "./context-summary.js";
+import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
+
+const MAX_CONTEXT_BODY_LENGTH = 500;
 
 type MatrixEventContext = {
   summary?: string;
@@ -55,7 +55,13 @@ export function createMatrixEventContextResolver(params: {
     const context: MatrixEventContext = {};
     if (isThread || !event.unsigned?.redacted_because) {
       const body = summarizeMatrixMessageContextEvent(event);
-      let summary = body ? truncateMatrixContextBody(body) : undefined;
+      let summary = body
+        ? truncateWithMarker(body, MAX_CONTEXT_BODY_LENGTH, {
+            marker: "...",
+            reserve: 3,
+            trimEnd: false,
+          })
+        : undefined;
       if (isThread && !summary) {
         const msgtype = normalizeOptionalString(event.content.msgtype);
         const eventType = normalizeOptionalString(event.type);

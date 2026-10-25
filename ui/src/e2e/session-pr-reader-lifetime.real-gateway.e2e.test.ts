@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient, isGatewayProtocolResponseError } from "../../../src/gateway/client.ts";
@@ -30,6 +30,7 @@ import {
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
 const checksMethod = "controlUi.sessionPullRequests.checks";
@@ -302,35 +303,13 @@ suite.define(() => {
           controlUiEnabled: false,
           sidecarStartup: "defer",
         });
-        const forwarded = (email: string) => ({
-          "x-forwarded-for": "192.0.2.10",
-          "x-forwarded-proto": "http",
-          "x-forwarded-user": email,
-        });
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/retiring": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(retiringEmail),
-                rewrite: () => "/",
-              },
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(viewerEmail),
-              },
-            },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/retiring": {
+            ...gatewayProxyRoute(port, retiringEmail),
+            rewrite: () => "/",
           },
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -460,9 +439,9 @@ suite.define(() => {
                   pane
                     .locator(".chat-pane__workspace-chip")
                     .filter({ visible: true })
-                    .getAttribute("title"),
+                    .getAttribute("aria-label"),
                 )
-                .toBe(replacement.root);
+                .toBe("Workspace actions for replacement-workspace");
             };
             await expect
               .poll(() => prLink(original).getAttribute("href"))

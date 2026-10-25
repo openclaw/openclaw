@@ -155,6 +155,7 @@ export function applySessionActorAppend(
   const metadata = (
     input: SessionMetadataOperations["session.metadata.append"]["input"],
     scope = scopeForAppend(input.scope),
+    persistActorMutation = true,
   ) => {
     const scoped = {
       ...input,
@@ -174,7 +175,13 @@ export function applySessionActorAppend(
         : undefined,
       () =>
         runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
+          const value = applySessionMetadataAppendInTransaction(
+            database,
+            scoped,
+            beforeFresh,
+            undefined,
+            persistActorMutation,
+          );
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
           return value;
@@ -210,7 +217,12 @@ export function applySessionActorAppend(
     if (decodeMetadataAppendEvent(append.header).type !== "session") {
       throw new Error("Session actor header must be a session event");
     }
-    header = metadata(append.header);
+    // The required thinking append publishes the whole initialization transaction.
+    header = metadata(
+      append.header,
+      undefined,
+      !(append.kind === "metadata" && append.input.initialModel),
+    );
     if (!header.snapshot.ok) {
       throw new Error("Session actor header was refused");
     }

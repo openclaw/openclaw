@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
@@ -114,17 +115,14 @@ describe("memory host SDK package internals", () => {
 
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
-    let releaseTask!: () => void;
-    const release = new Promise<void>((resolve) => {
-      releaseTask = resolve;
-    });
+    const release = createDeferred();
     const started: number[] = [];
     const completed: number[] = [];
     const run = runWithConcurrency(
       [
         async () => {
           started.push(0);
-          await release;
+          await release.promise;
           completed.push(0);
           return 0;
         },
@@ -146,7 +144,7 @@ describe("memory host SDK package internals", () => {
     await Promise.resolve();
     expect(onSettled).not.toHaveBeenCalled();
 
-    releaseTask();
+    release.resolve();
     await expect(run).rejects.toBe(failure);
     expect(completed).toEqual([0]);
     expect(started).toEqual([0, 1]);

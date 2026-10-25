@@ -241,6 +241,32 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   expect(sidebar.sidebarEntries).toEqual(pins);
 });
 
+it("shows emoji destination icons in Pages and in pinned rail entries", async () => {
+  const { sidebar, context } = await mountZone();
+  pluginNavigation(context, sidebar, ["planning", "notes"], false, (id) => ({
+    parent: "boards",
+    icon: id === "planning" ? "⏰" : "toString",
+  }));
+  sidebar.sidebarEntries = ["plugin:example/planning"];
+  await selectSidebarView(sidebar, "pages");
+  const pages = sidebar.querySelector(
+    '.sidebar-pages [data-sidebar-entry="plugin:example/planning"] .nav-item__icon',
+  );
+  const rail = sidebar.querySelector(
+    '.sidebar-rail [data-sidebar-entry="plugin:example/planning"] .nav-item__icon',
+  );
+  for (const icon of [pages, rail]) {
+    expect(icon?.querySelector(".session-glyph__emoji")?.textContent).toBe("⏰");
+    expect(icon?.querySelector("svg")).toBeNull();
+  }
+  // Arbitrary text that is not an appearance keeps the fallback icon.
+  const notes = sidebar.querySelector(
+    '.sidebar-pages [data-sidebar-entry="plugin:example/notes"] .nav-item__icon',
+  );
+  expect(notes?.querySelector(".session-glyph__emoji")).toBeNull();
+  expect(notes?.querySelector("svg")).not.toBeNull();
+});
+
 it("keeps child icons and explicit unpins across registration", async () => {
   const { sidebar, context } = await mountZone();
   const register = () =>

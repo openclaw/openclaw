@@ -57,7 +57,12 @@ function mountProfiles(client: GatewayBrowserClient) {
     connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
   });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const context = { gateway, runtimeConfig, navigate: vi.fn() } as unknown as ApplicationContext;
+  const context = {
+    gateway,
+    runtimeConfig,
+    router: { subscribe: () => () => {} },
+    navigate: vi.fn(),
+  } as unknown as ApplicationContext;
   const view = mountSolid(() => (
     <ApplicationProvider value={context}>
       <CloudWorkersPage />
@@ -419,3 +424,63 @@ it.each([
     expect(renderingErrors).not.toHaveBeenCalled();
   },
 );
+
+it("keeps a rejected profile draft and retires pending save presentation on access loss", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  let pending = createDeferred<unknown>();
+  let patches = 0;
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "config.get") {
+      return configSnapshot(config, "initial");
+    }
+    if (method === "environments.list") {
+      return { environments: [], profiles: [] };
+    }
+    if (method === "config.patch") {
+      patches += 1;
+      return pending.promise;
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  const { gatewayHarness, runtimeConfig, view, page } = mountProfiles(client);
+  try {
+    await waitForSolid(() => expect(profileRow(page, "worker")).toBeTruthy());
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
+    );
+    change(lifetime, "9h");
+    click(page, "Save");
+    await waitForSolid(() => {
+      expect(patches).toBe(1);
+      expect(actionButton(page, "Saving…").disabled).toBe(true);
+      expect(lifetime.disabled).toBe(true);
+      expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
+    });
+    pending.reject(new Error("Synthetic profile save unavailable"));
+    await waitText(() => page, "Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+
+    pending = createDeferred<unknown>();
+    click(page, "Save");
+    await waitForSolid(() => expect(patches).toBe(2));
+    gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
+    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    pending.resolve({ ok: true, config, hash: "after" });
+    await pending.promise;
+    flush();
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    expect(page.textContent).not.toContain("Profile saved.");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});

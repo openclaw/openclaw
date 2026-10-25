@@ -12,10 +12,11 @@ import {
   SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
+registerEnglishCatalog(registerPreferencesEnglish);
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
   const gateway = asConfigRecord(root.gateway);
@@ -49,7 +50,7 @@ export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
 }
 
 export type SecurityViewProps = {
-  security: SecurityOverview;
+  security: ReturnType<typeof extractQuickSettingsSecurity>;
   configBusy: boolean;
   canPairDevice: boolean;
   onPairMobile?: () => void;

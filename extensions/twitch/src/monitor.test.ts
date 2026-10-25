@@ -41,23 +41,6 @@ vi.mock("./twitch-ingress.js", () => ({ createTwitchIngress: mocks.createIngress
 
 import { monitorTwitchProvider } from "./monitor.js";
 
-type DeliveryResult = { visibleReplySent: boolean };
-type InboundRunInput = {
-  raw: TwitchChatMessage;
-  adapter: {
-    ingest: (message: TwitchChatMessage) => unknown;
-    resolveTurn: (input: unknown) => Promise<{
-      delivery: {
-        deliver: (payload: ReplyPayload) => Promise<DeliveryResult>;
-        onDelivered: (
-          payload: ReplyPayload,
-          info: { kind: "final" },
-          result: DeliveryResult,
-        ) => void;
-      };
-    }>;
-  };
-};
 type DeliveryCase = [string, ReplyPayload, string | undefined, boolean, string?, string?];
 
 describe("monitorTwitchProvider", () => {
@@ -143,15 +126,6 @@ describe("monitorTwitchProvider", () => {
             sessionKey: "agent:main:twitch:group:testchannel",
           })),
         },
-        reply: {
-          formatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
-          resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-        },
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          recordInboundSession: vi.fn(),
-        },
       },
     });
   });
@@ -234,12 +208,26 @@ describe("monitorTwitchProvider", () => {
       if (providerError) {
         mocks.sendMessage.mockResolvedValueOnce({ ok: false, error: providerError });
       }
-      mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
-        const turn = await input.adapter.resolveTurn(input.adapter.ingest(input.raw));
-        const result = await turn.delivery.deliver(payload);
-        settled(result);
-        turn.delivery.onDelivered(payload, { kind: "final" }, result);
-      });
+      mocks.runInbound.mockImplementation(
+        async (input: ChannelInboundEventRunnerParams<TwitchChatMessage>) => {
+          const normalized = await input.adapter.ingest(input.raw);
+          if (!normalized) {
+            throw new Error("Expected a normalized message");
+          }
+          const turn = await input.adapter.resolveTurn(
+            normalized,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
+          if (!("delivery" in turn)) {
+            throw new Error("Expected a reply delivery turn");
+          }
+          const result = await turn.delivery.deliver(payload, { kind: "final" });
+          settled(result);
+          expect(turn.delivery.onDelivered).toBeTypeOf("function");
+          await turn.delivery.onDelivered?.(payload, { kind: "final" }, result);
+        },
+      );
       const config = makeConfig();
       const { monitor, runtimeError } = await startMonitor(config, statusSink);
       await dispatchMessage("message-1");

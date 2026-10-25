@@ -11,6 +11,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
 
@@ -30,14 +31,7 @@ const modelIds = [
 ] as const;
 
 const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
-const readToolResult = {
-  role: "toolResult",
-  toolCallId: "call_1",
-  toolName: "read",
-  content: [{ type: "text", text: "ok" }],
-  isError: false,
-  timestamp: 3,
-};
+const readToolResult = makeTextToolResult("call_1", "read", "ok", false, 3);
 const readTool = {
   name: "read",
   description: "Read data",

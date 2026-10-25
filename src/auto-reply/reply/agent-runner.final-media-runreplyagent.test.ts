@@ -1,7 +1,7 @@
 import path from "node:path";
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun, createReplyParams } from "./test-helpers.js";
 
 const executeAgentTurnMock = vi.fn();
 const resolveOutboundAttachmentFromUrlMock = vi.fn();
@@ -92,18 +92,13 @@ function makeRunReplyAgentParams(
   });
   onTestFinished(() => replyOperation.complete());
 
-  return {
+  const followupRun = createMockFollowupRun({
+    prompt,
+    run: { agentDir: "/tmp/agent", messageProvider: provider, workspaceDir: "/tmp/workspace" },
+  });
+  return createReplyParams(followupRun, {
     commandBody: prompt,
-    followupRun: createMockFollowupRun({
-      prompt,
-      run: { agentDir: "/tmp/agent", messageProvider: provider, workspaceDir: "/tmp/workspace" },
-    }),
     queueKey: "main",
-    resolvedQueue: { mode: "interrupt" },
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
       Surface: provider,
@@ -113,15 +108,11 @@ function makeRunReplyAgentParams(
       MessageSid: "msg-1",
     },
     defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
     blockStreamingEnabled,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
     typingMode: "instant",
     replyOperation,
     ...(blockStreamingEnabled ? { opts: { onBlockReply: vi.fn(async () => {}) } } : {}),
-  };
+  });
 }
 
 describe("runReplyAgent final MEDIA replies", () => {
@@ -180,7 +171,6 @@ describe("runReplyAgent final MEDIA replies", () => {
       const normalizeMediaPaths = params.replyMediaContext?.normalizePayload;
       assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
       const commonParams = {
-        isHeartbeat: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,

@@ -785,6 +785,7 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.root ?? options.cwd,
+          allowLinkedWorktrees: true,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
