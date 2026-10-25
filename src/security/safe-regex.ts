@@ -129,7 +129,11 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
-function hasNestedRepetition(source: string): boolean {
+function analyzeRepetition(source: string): {
+  nestedQuantifier: boolean;
+  ambiguousAlternation: boolean;
+} {
+  const result = { nestedQuantifier: false, ambiguousAlternation: false };
   const frames: ParseFrame[] = [createParseFrame()];
   let inCharClass = false;
 
@@ -226,10 +230,12 @@ function hasNestedRepetition(source: string): boolean {
       continue;
     }
     if (previousToken.containsRepetition) {
-      return true;
+      result.nestedQuantifier = true;
+      continue;
     }
     if (previousToken.hasAmbiguousAlternation && quantifier.maxRepeat === null) {
-      return true;
+      result.ambiguousAlternation = true;
+      continue;
     }
 
     const previousMinLength = previousToken.minLength;
@@ -250,7 +256,445 @@ function hasNestedRepetition(source: string): boolean {
     frame.branchMaxLength = addLength(branchMaxBase, previousToken.maxLength);
   }
 
+  return result;
+}
+
+function hasNestedRepetition(source: string): boolean {
+  const analysis = analyzeRepetition(source);
+  return analysis.nestedQuantifier || analysis.ambiguousAlternation;
+}
+
+/**
+ * Narrow admission predicate: true only when a quantifier repeats an atom that already
+ * contains a quantifier (e.g. `(a+)+$`). Unlike {@link hasNestedRepetition}, this does not
+ * apply the length-based alternation heuristic, so safe patterns such as `^(a|bc)+$` stay
+ * admissible. Intended for untrusted-schema admission where false positives break honest
+ * servers; operator-authored config keeps using the stricter guard.
+ */
+export function hasNestedQuantifierRepetition(source: string): boolean {
+  return analyzeRepetition(source).nestedQuantifier;
+}
+
+type BranchStartSet = { any: boolean; chars: Set<string> };
+
+type AlternationBranch = {
+  firstSet: BranchStartSet;
+  /** Exact matched string when the branch is a pure literal concat; null when complex. */
+  literal: string | null;
+  nullable: boolean;
+};
+
+const WORD_CLASS_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+const DIGIT_CLASS_CHARS = "0123456789";
+const SPACE_CLASS_CHARS = " \t\n\r\f\v";
+const CLASS_MATERIALIZE_LIMIT = 256;
+
+function singletonBranchSet(char: string): BranchStartSet {
+  return { any: false, chars: new Set([char]) };
+}
+
+const ANY_BRANCH_SET: BranchStartSet = { any: true, chars: new Set() };
+const EMPTY_BRANCH_SET: BranchStartSet = { any: false, chars: new Set() };
+
+function unionBranchSets(left: BranchStartSet, right: BranchStartSet): BranchStartSet {
+  if (left.any || right.any) {
+    return ANY_BRANCH_SET;
+  }
+  return { any: false, chars: new Set([...left.chars, ...right.chars]) };
+}
+
+function branchSetsOverlap(left: BranchStartSet, right: BranchStartSet): boolean {
+  if (left.any || right.any) {
+    return true;
+  }
+  for (const char of left.chars) {
+    if (right.chars.has(char)) {
+      return true;
+    }
+  }
   return false;
+}
+
+function classBranchSet(letter: string): BranchStartSet {
+  const chars =
+    letter === "d" || letter === "D"
+      ? DIGIT_CLASS_CHARS
+      : letter === "w" || letter === "W"
+        ? WORD_CLASS_CHARS
+        : SPACE_CLASS_CHARS;
+  if (letter === "D" || letter === "W" || letter === "S") {
+    return ANY_BRANCH_SET;
+  }
+  return { any: false, chars: new Set(chars) };
+}
+
+function isHexDigit(char: string | undefined): boolean {
+  return char !== undefined && /[0-9a-fA-F]/.test(char);
+}
+
+function readHexEscape(source: string, start: number, length: number): string | null {
+  if (start + length > source.length) {
+    return null;
+  }
+  const digits = source.slice(start, start + length);
+  if (![...digits].every(isHexDigit)) {
+    return null;
+  }
+  return String.fromCharCode(Number.parseInt(digits, 16));
+}
+
+/** Read a `[...]` character class starting at `openIndex`; null when malformed (unterminated). */
+function readClassStartSet(
+  source: string,
+  openIndex: number,
+): { set: BranchStartSet; literalChar: string | null; endIndex: number } | null {
+  let i = openIndex + 1;
+  let negated = false;
+  if (source[i] === "^") {
+    negated = true;
+    i += 1;
+  }
+  const chars = new Set<string>();
+  let first = true;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "]" && !first) {
+      if (negated) {
+        return { set: ANY_BRANCH_SET, literalChar: null, endIndex: i };
+      }
+      if (chars.size === 0) {
+        return null;
+      }
+      if (chars.size > CLASS_MATERIALIZE_LIMIT) {
+        return { set: ANY_BRANCH_SET, literalChar: null, endIndex: i };
+      }
+      return {
+        set: { any: false, chars },
+        literalChar: chars.size === 1 ? [...chars][0] : null,
+        endIndex: i,
+      };
+    }
+    first = false;
+    if (ch === "\\") {
+      const next = source[i + 1];
+      if (next === "d" || next === "D" || next === "w" || next === "W" || next === "s" || next === "S") {
+        const set = classBranchSet(next);
+        if (set.any) {
+          return { set: ANY_BRANCH_SET, literalChar: null, endIndex: source.length };
+        }
+        for (const char of set.chars) {
+          chars.add(char);
+        }
+        i += 2;
+        continue;
+      }
+      if (next === "x") {
+        const escaped = readHexEscape(source, i + 2, 2);
+        if (escaped === null) {
+          return null;
+        }
+        chars.add(escaped);
+        i += 4;
+        continue;
+      }
+      if (next === "u") {
+        const escaped = readHexEscape(source, i + 2, 4);
+        if (escaped === null) {
+          return null;
+        }
+        chars.add(escaped);
+        i += 6;
+        continue;
+      }
+      if (next === undefined) {
+        return null;
+      }
+      chars.add(next);
+      i += 2;
+      continue;
+    }
+    if (source[i + 1] === "-" && source[i + 2] !== undefined && source[i + 2] !== "]") {
+      const lo = ch.codePointAt(0);
+      const hi = source[i + 2].codePointAt(0);
+      if (lo === undefined || hi === undefined || hi - lo > CLASS_MATERIALIZE_LIMIT) {
+        return { set: ANY_BRANCH_SET, literalChar: null, endIndex: source.length };
+      }
+      for (let code = lo; code <= hi; code += 1) {
+        chars.add(String.fromCodePoint(code));
+      }
+      i += 3;
+      continue;
+    }
+    chars.add(ch);
+    i += 1;
+  }
+  return null;
+}
+
+type OverlapFrame = {
+  sawAlternation: boolean;
+  branches: AlternationBranch[];
+  firstSet: BranchStartSet;
+  literal: string | null;
+  startDecided: boolean;
+  hasToken: boolean;
+  /** Branches of the most recently closed alternation group awaiting a possible quantifier. */
+  pendingAlternation: AlternationBranch[] | null;
+};
+
+function createOverlapFrame(): OverlapFrame {
+  return {
+    sawAlternation: false,
+    branches: [],
+    firstSet: EMPTY_BRANCH_SET,
+    literal: "",
+    startDecided: false,
+    hasToken: false,
+    pendingAlternation: null,
+  };
+}
+
+function finalizeBranch(frame: OverlapFrame): AlternationBranch {
+  if (!frame.hasToken) {
+    // Empty alternative: matches the empty string, so it overlaps every other branch.
+    return { firstSet: ANY_BRANCH_SET, literal: "", nullable: true };
+  }
+  return {
+    firstSet: frame.firstSet,
+    literal: frame.literal,
+    nullable: !frame.startDecided,
+  };
+}
+
+function alternationBranchesAmbiguous(branches: AlternationBranch[]): boolean {
+  for (let a = 0; a < branches.length; a += 1) {
+    for (let b = a + 1; b < branches.length; b += 1) {
+      const left = branches[a];
+      const right = branches[b];
+      if (!branchSetsOverlap(left.firstSet, right.firstSet)) {
+        // Disjoint first characters: at any input position at most one branch can match.
+        continue;
+      }
+      if (left.literal !== null && right.literal !== null) {
+        // Same first character; deterministic unless one literal is a prefix of the other.
+        if (left.literal.startsWith(right.literal) || right.literal.startsWith(left.literal)) {
+          return true;
+        }
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Detect alternation groups repeated by an unbounded quantifier whose branches can match the
+ * same input position — the alternation form of catastrophic backtracking (e.g. `(a|aa)+$`).
+ * Branches that start with disjoint characters are provably deterministic per input position;
+ * same-start literal branches are ambiguous only when one is a prefix of the other. Branches
+ * involving classes, groups, or unbounded tokens fall back to conservative overlap detection.
+ * Returns false for malformed sources: invalid patterns never execute, so their diagnostics
+ * stay with the validation engines.
+ */
+export function hasAmbiguousAlternationOverlap(source: string): boolean {
+  const frames: OverlapFrame[] = [createOverlapFrame()];
+  const frame = () => frames[frames.length - 1];
+
+  const consumeToken = (
+    firstSet: BranchStartSet,
+    literalPiece: string | null,
+    nullable: boolean,
+  ) => {
+    const current = frame();
+    if (!current.startDecided) {
+      current.firstSet = unionBranchSets(current.firstSet, firstSet);
+      if (!nullable) {
+        current.startDecided = true;
+      }
+    }
+    if (literalPiece === null || nullable) {
+      current.literal = null;
+    } else if (current.literal !== null) {
+      current.literal += literalPiece;
+    }
+    current.hasToken = true;
+    current.pendingAlternation = null;
+  };
+
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      const next = source[i + 1];
+      if (next === "b" || next === "B") {
+        i += 2;
+        continue;
+      }
+      if (next === undefined) {
+        return false;
+      }
+      if (next === "d" || next === "D" || next === "w" || next === "W" || next === "s" || next === "S") {
+        consumeToken(classBranchSet(next), null, false);
+        i += 2;
+        continue;
+      }
+      if (/\d/.test(next)) {
+        // Backreference or named-group reference: unknown start.
+        consumeToken(ANY_BRANCH_SET, null, false);
+        i += 2;
+        continue;
+      }
+      if (next === "k") {
+        consumeToken(ANY_BRANCH_SET, null, false);
+        i += 2;
+        continue;
+      }
+      if (next === "x") {
+        const escaped = readHexEscape(source, i + 2, 2);
+        if (escaped === null) {
+          return false;
+        }
+        consumeToken(singletonBranchSet(escaped), escaped, false);
+        i += 4;
+        continue;
+      }
+      if (next === "u") {
+        const escaped = readHexEscape(source, i + 2, 4);
+        if (escaped === null) {
+          return false;
+        }
+        consumeToken(singletonBranchSet(escaped), escaped, false);
+        i += 6;
+        continue;
+      }
+      consumeToken(singletonBranchSet(next), next, false);
+      i += 2;
+      continue;
+    }
+    if (ch === "[") {
+      const cls = readClassStartSet(source, i);
+      if (!cls) {
+        return false;
+      }
+      consumeToken(cls.set, cls.literalChar, false);
+      i = cls.endIndex + 1;
+      continue;
+    }
+    if (ch === ".") {
+      consumeToken(ANY_BRANCH_SET, null, false);
+      i += 1;
+      continue;
+    }
+    if (ch === "^" || ch === "$") {
+      i += 1;
+      continue;
+    }
+    if (ch === "(") {
+      if (source[i + 1] === "?") {
+        const marker = source[i + 2];
+        if (marker === ":") {
+          frames.push(createOverlapFrame());
+          i += 3;
+          continue;
+        }
+        if (marker === "<" && source[i + 3] !== "=" && source[i + 3] !== "!") {
+          // Named capturing group: (?<name>...)
+          const close = source.indexOf(">", i + 3);
+          if (close === -1) {
+            return false;
+          }
+          frames.push(createOverlapFrame());
+          i = close + 1;
+          continue;
+        }
+        // Lookahead/lookbehind: opaque zero-width assertion with an unknown start set.
+        let depth = 1;
+        let j = i + 2;
+        while (j < source.length && depth > 0) {
+          if (source[j] === "\\") {
+            j += 2;
+            continue;
+          }
+          if (source[j] === "(") {
+            depth += 1;
+          } else if (source[j] === ")") {
+            depth -= 1;
+          }
+          j += 1;
+        }
+        if (depth !== 0) {
+          return false;
+        }
+        consumeToken(ANY_BRANCH_SET, null, true);
+        i = j;
+        continue;
+      }
+      frames.push(createOverlapFrame());
+      i += 1;
+      continue;
+    }
+    if (ch === ")") {
+      if (frames.length === 1) {
+        return false;
+      }
+      const closed = frames.pop();
+      const parent = frame();
+      const branch = finalizeBranch(closed);
+      if (closed.sawAlternation) {
+        const allBranches = [...closed.branches, branch];
+        const firstSet = allBranches
+          .map((entry) => entry.firstSet)
+          .reduce((acc, entry) => unionBranchSets(acc, entry), EMPTY_BRANCH_SET);
+        consumeToken(firstSet, null, allBranches.some((entry) => entry.nullable));
+        parent.pendingAlternation = allBranches;
+      } else {
+        consumeToken(branch.firstSet, branch.nullable ? null : branch.literal, branch.nullable);
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      const current = frame();
+      current.sawAlternation = true;
+      current.branches.push(finalizeBranch(current));
+      current.firstSet = EMPTY_BRANCH_SET;
+      current.literal = "";
+      current.startDecided = false;
+      current.hasToken = false;
+      current.pendingAlternation = null;
+      i += 1;
+      continue;
+    }
+    const quantifier = readQuantifier(source, i);
+    if (quantifier) {
+      const current = frame();
+      if (!current.hasToken && current.pendingAlternation === null) {
+        // Quantifier without a preceding atom: malformed pattern.
+        return false;
+      }
+      if (
+        quantifier.maxRepeat === null &&
+        current.pendingAlternation &&
+        alternationBranchesAmbiguous(current.pendingAlternation)
+      ) {
+        return true;
+      }
+      if (quantifier.minRepeat === 0) {
+        // The preceding atom became nullable, which makes the branch multi-string.
+        current.literal = null;
+        if (!current.startDecided) {
+          current.firstSet = ANY_BRANCH_SET;
+        }
+      }
+      current.pendingAlternation = null;
+      i += quantifier.consumed;
+      continue;
+    }
+    consumeToken(singletonBranchSet(ch), ch, false);
+    i += 1;
+  }
+  return frames.length === 1 ? false : false;
 }
 
 function testRegexFromStart(regex: RegExp, value: string): boolean {

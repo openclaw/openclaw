@@ -247,6 +247,17 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     ).toThrow(/not safe to compile/);
   });
 
+  it("rejects ambiguous alternation patterns under unbounded quantifiers", () => {
+    const provider = createMcpJsonSchemaValidator();
+    expect(() =>
+      provider.getValidator({
+        type: "object",
+        properties: { cmd: { type: "string", pattern: "^(a|aa)+$" } },
+        required: ["cmd"],
+      }),
+    ).toThrow(/not safe to compile/);
+  });
+
   it("rejects unsafe regex patterns in patternProperties keys", () => {
     const provider = createMcpJsonSchemaValidator();
     expect(() =>
@@ -257,8 +268,16 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
     ).toThrow(/not safe to compile/);
   });
 
-  it("rejects unsafe regex patterns nested in applicator schemas", () => {
+  it("rejects unsafe patterns in schema-valued dependencies and applicators", () => {
     const provider = createMcpJsonSchemaValidator();
+    expect(() =>
+      provider.getValidator({
+        type: "object",
+        dependencies: {
+          cmd: { properties: { cmd: { type: "string", pattern: "^(a+)+$" } } },
+        },
+      }),
+    ).toThrow(/not safe to compile/);
     expect(() =>
       provider.getValidator({
         type: "object",
@@ -270,6 +289,55 @@ describe.each(["dynamic-execution", "embedded-aot"])("MCP validation on %s", (ru
         ],
       }),
     ).toThrow(/not safe to compile/);
+  });
+
+  it("admits safe patterns that the stricter config guard would reject", () => {
+    const provider = createMcpJsonSchemaValidator();
+    const validate = provider.getValidator({
+      type: "object",
+      properties: {
+        // Disjoint alternation: deterministic segmentation, previously rejected by the
+        // length-based guard heuristic.
+        disjoint: { type: "string", pattern: "^(a|bc)+$" },
+        // Sequential quantified groups, no nesting.
+        sequential: { type: "string", pattern: "^(ab)+(cd)+$" },
+        // Same first character but diverging literals, neither a prefix of the other.
+        diverging: { type: "string", pattern: "^(ab|ac)+$" },
+      },
+    });
+    expect(validate({ disjoint: "abcbc", sequential: "abcd", diverging: "abac" }).valid).toBe(
+      true,
+    );
+    expect(validate({ disjoint: "abcbc", sequential: "abcd", diverging: "abX" }).valid).toBe(
+      false,
+    );
+  });
+
+  it("admits empty, whitespace-only, and malformed patterns for engine diagnostics", () => {
+    const provider = createMcpJsonSchemaValidator();
+    const validate = provider.getValidator({
+      type: "object",
+      properties: {
+        anything: { type: "string", pattern: "" },
+        spaced: { type: "string", pattern: " " },
+      },
+    });
+    expect(validate({ anything: "x", spaced: " " }).valid).toBe(true);
+    // An empty patternProperties key matches every property name; values must still validate.
+    const validateEmptyKey = provider.getValidator({
+      type: "object",
+      patternProperties: { "": { type: "number" } },
+    });
+    expect(validateEmptyKey({ a: 1, b: 2 }).valid).toBe(true);
+    expect(validateEmptyKey({ a: "no" }).valid).toBe(false);
+    // Malformed patterns keep the established draft-specific wrapper and cause.
+    expect(() =>
+      provider.getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { cmd: { type: "string", pattern: "[" } },
+      }),
+    ).toThrow(/Invalid MCP draft-2020-12 JSON Schema/);
   });
 
   it("keeps schemas with safe patterns validating unchanged", () => {

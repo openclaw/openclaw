@@ -7,7 +7,10 @@ import {
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { compileSafeRegexDetailed } from "../security/safe-regex.js";
+import {
+  hasAmbiguousAlternationOverlap,
+  hasNestedQuantifierRepetition,
+} from "../security/safe-regex.js";
 import { validateSchemaKeywordShapes, validateTypeKeyword } from "./json-schema-keywords.js";
 
 type LocalRefResolution =
@@ -392,69 +395,53 @@ export function findJsonSchemaShapeError(
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined, context);
 }
 
-const schemaAnnotationKeywords = new Set(["default", "example", "examples"]);
 const unsafeSchemaPatternPreviewLimit = 120;
 
-function collectSchemaRegexPatterns(
-  node: JsonSchemaNode,
-  patterns: string[],
-  seen: Set<object>,
-): void {
-  if (Array.isArray(node)) {
-    for (const entry of node) {
-      collectSchemaRegexPatterns(entry, patterns, seen);
-    }
-    return;
-  }
-  if (!isRecord(node) || seen.has(node)) {
-    return;
-  }
-  seen.add(node);
-  for (const [keyword, value] of Object.entries(node)) {
-    if (keyword === "pattern") {
-      if (typeof value === "string") {
-        patterns.push(value);
-      }
-      continue;
-    }
-    if (schemaAnnotationKeywords.has(keyword)) {
-      // Annotation payloads are data, not subschemas; their keys are never regex sources.
-      continue;
-    }
-    if (keyword === "patternProperties" && isRecord(value)) {
-      for (const pattern of Object.keys(value)) {
-        patterns.push(pattern);
-      }
-    }
-    if (schemaMapKeywords.has(keyword) && isRecord(value)) {
-      for (const child of Object.values(value)) {
-        collectSchemaRegexPatterns(child, patterns, seen);
-      }
-      continue;
-    }
-    if (schemaValueKeywords.has(keyword) || schemaArrayKeywords.has(keyword)) {
-      collectSchemaRegexPatterns(value, patterns, seen);
-    }
-  }
+function previewSchemaPattern(pattern: string): string {
+  const preview =
+    pattern.length > unsafeSchemaPatternPreviewLimit
+      ? `${pattern.slice(0, unsafeSchemaPatternPreviewLimit)}…`
+      : pattern;
+  return JSON.stringify(preview);
 }
 
 /**
- * Return the first `pattern` / `patternProperties` regex that the safe-regex guard rejects,
- * or undefined when every pattern in the schema is safe to compile and execute. Used to keep
- * remotely supplied schemas (e.g. MCP tool schemas) from executing catastrophic backtracking
- * in the host process.
+ * Return the first `pattern` / `patternProperties` regex in the schema whose execution is
+ * catastrophically backtracking, or undefined when every pattern is safe. Traversal reuses
+ * visitSchemaChildren so applicator and dependency subschemas (`properties`, `$defs`,
+ * `allOf`/`anyOf`/`oneOf`, `dependencies`, `items`, …) all contribute their patterns.
+ *
+ * Admission stays deliberately narrower than the operator-config safe-regex guard: it rejects
+ * nested-quantifier patterns and ambiguous-alternation patterns, but admits valid JSON Schema
+ * constructs an honest server may ship (disjoint alternations such as `^(a|bc)+$`, sequential
+ * groups such as `^(ab)+(cd)+$`, empty/whitespace-only patterns). Invalid patterns are not
+ * rejected here at all — the validation engines keep their established diagnostics for those.
  */
 export function findJsonSchemaUnsafePatternError(schema: JsonSchemaValue): string | undefined {
   const patterns: string[] = [];
-  collectSchemaRegexPatterns(schema, patterns, new Set());
+  const seen = new Set<object>();
+  const collectFrom = (node: unknown): string | undefined => {
+    if (!isRecord(node) || seen.has(node)) {
+      return undefined;
+    }
+    seen.add(node);
+    if (typeof node.pattern === "string") {
+      patterns.push(node.pattern);
+    }
+    if (isRecord(node.patternProperties)) {
+      for (const pattern of Object.keys(node.patternProperties)) {
+        patterns.push(pattern);
+      }
+    }
+    return visitSchemaChildren(node, collectFrom);
+  };
+  collectFrom(schema);
   for (const pattern of patterns) {
-    const result = compileSafeRegexDetailed(pattern);
-    if (!result.regex) {
-      const preview =
-        pattern.length > unsafeSchemaPatternPreviewLimit
-          ? `${pattern.slice(0, unsafeSchemaPatternPreviewLimit)}…`
-          : pattern;
-      return `regex pattern ${JSON.stringify(preview)} is not safe to compile (${result.reason ?? "unknown"})`;
+    if (hasNestedQuantifierRepetition(pattern)) {
+      return `regex pattern ${previewSchemaPattern(pattern)} is not safe to compile (unsafe-nested-repetition)`;
+    }
+    if (hasAmbiguousAlternationOverlap(pattern)) {
+      return `regex pattern ${previewSchemaPattern(pattern)} is not safe to compile (unsafe-ambiguous-alternation)`;
     }
   }
   return undefined;
