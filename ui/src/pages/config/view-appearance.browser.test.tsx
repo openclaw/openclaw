@@ -451,7 +451,9 @@ describe("config appearance preferences", () => {
     });
     const artwork = gallery.querySelector(".lobster-pet__svg");
     container.style.top = "2000px";
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
     expect(gallery.querySelector(".lobster-pet__svg")).toBe(artwork);
   });
 
