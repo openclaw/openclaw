@@ -299,6 +299,8 @@ export type ControlUiMockGatewayScenario = {
   omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
+  /** Handshake presentation fact from the authenticated role ceiling, not device scopes. */
+  roleAllowsAdmin?: boolean;
   /** Role-limited access to other people's sessions, as a configured Gateway role reports it. */
   operatorSessionCap?: "write" | "suggest" | "view" | "none" | null;
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
@@ -821,6 +823,7 @@ function normalizeScenario(
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorSessionCap: scenario.operatorSessionCap ?? null,
+    roleAllowsAdmin: scenario.roleAllowsAdmin ?? true,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -1674,6 +1677,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
+                  roleAllowsAdmin: scenario.roleAllowsAdmin,
                   ...(scenario.operatorSessionCap
                     ? { sessionCap: scenario.operatorSessionCap }
                     : {}),

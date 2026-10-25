@@ -224,7 +224,11 @@ export function renderSidebarUpdateSurface(params: {
 function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
   switch (state.phase) {
     case "guidance":
-      return t("connection.scopeUpgrade.guidance");
+      return t(
+        state.reason === "role"
+          ? "connection.scopeUpgrade.roleGuidance"
+          : "connection.scopeUpgrade.guidance",
+      );
     case "available":
       return t("connection.scopeUpgrade.limited");
     case "requesting":
@@ -251,7 +255,12 @@ export function renderSidebarScopeUpgradeItem(params: {
   onRetry: () => void;
 }) {
   const text = () => scopeUpgradeText(params.state);
-  const summary = () => t("connection.scopeUpgrade.inboxState");
+  const summary = () =>
+    t(
+      params.state.phase === "guidance" && params.state.reason === "role"
+        ? "connection.scopeUpgrade.roleState"
+        : "connection.scopeUpgrade.inboxState",
+    );
   const retryable = () =>
     params.state.phase === "error"
       ? params.state.retryable
