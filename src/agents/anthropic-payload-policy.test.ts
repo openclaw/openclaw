@@ -4,11 +4,6 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
-/**
- * Tests Anthropic payload policy mutation.
- * Covers service tier, cache-control retention, prompt cache boundaries, and
- * deprecated marker compatibility.
- */
 import { describe, expect, it } from "vitest";
 
 type TestPayload = {
@@ -30,108 +25,60 @@ function cachePolicy(overrides: Parameters<typeof resolveAnthropicPayloadPolicy>
   });
 }
 
-function textBlock(text: string, cache_control?: { type: "ephemeral"; ttl?: "1h" }) {
+const ephemeral = { type: "ephemeral" } as const;
+const longCache = { ...ephemeral, ttl: "1h" } as const;
+const textBlock = (text: string, cache_control?: typeof ephemeral | typeof longCache) => ({
+  type: "text",
+  text,
+  ...(cache_control ? { cache_control } : {}),
+});
+const user = (content: unknown) => ({ role: "user", content });
+function simpleTextPayload(system = [textBlock("Follow policy.")]): TestPayload {
   return {
-    type: "text",
-    text,
-    ...(cache_control ? { cache_control } : {}),
+    system,
+    messages: [user("Hello")],
   };
 }
-
-function boundarySystemPayload(): TestPayload {
-  return {
-    system: [
-      {
-        type: "text",
-        text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`,
-      },
-    ],
-    messages: [{ role: "user", content: "Hello" }],
-  };
-}
-
-function simpleTextPayload(): TestPayload {
-  return {
-    system: [{ type: "text", text: "Follow policy." }],
-    messages: [{ role: "user", content: "Hello" }],
-  };
-}
-
-function expectShortEphemeralTextPayload(payload: TestPayload) {
-  expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
-  expect(payload.messages[0]).toEqual({
-    role: "user",
-    content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
-  });
+function apply(payload: TestPayload, options: Parameters<typeof cachePolicy>[0] = {}) {
+  applyAnthropicPayloadPolicyToParams(payload, cachePolicy(options), new Set());
 }
 
 describe("anthropic payload policy", () => {
   it.each([
-    {
-      name: "uses 70 percent of the context window by default",
-      contextWindow: 200_000,
-      extraParams: { anthropicServerCompaction: true },
-      expectedThreshold: 140_000,
+    [200_000, undefined, 140_000],
+    [200_000, 120_000, 120_000],
+    [200_000, 42_000, 50_000],
+    [32_000, undefined, 50_000],
+  ])(
+    "compacts context %s with threshold %s at %s",
+    (contextWindow, threshold, expectedThreshold) => {
+      const payload = simpleTextPayload();
+      apply(payload, {
+        contextWindow,
+        enableCacheControl: false,
+        enableServerCompaction: true,
+        extraParams: { anthropicServerCompaction: true, anthropicCompactThreshold: threshold },
+      });
+      expect(payload.context_management).toEqual({
+        edits: [
+          {
+            type: "compact_20260112",
+            trigger: { type: "input_tokens", value: expectedThreshold },
+            instructions: expect.stringContaining("Do not call any tools"),
+          },
+        ],
+      });
     },
-    {
-      name: "uses an explicit threshold",
-      contextWindow: 200_000,
-      extraParams: {
-        anthropicServerCompaction: true,
-        anthropicCompactThreshold: 120_000,
-      },
-      expectedThreshold: 120_000,
-    },
-    {
-      name: "clamps an explicit threshold to the API minimum",
-      contextWindow: 200_000,
-      extraParams: {
-        anthropicServerCompaction: true,
-        anthropicCompactThreshold: 42_000,
-      },
-      expectedThreshold: 50_000,
-    },
-    {
-      name: "uses the API minimum for a small context window",
-      contextWindow: 32_000,
-      extraParams: { anthropicServerCompaction: true },
-      expectedThreshold: 50_000,
-    },
-  ])("$name", ({ contextWindow, extraParams, expectedThreshold }) => {
-    const policy = resolveAnthropicPayloadPolicy({
-      provider: "anthropic",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com/v1",
-      contextWindow,
-      enableServerCompaction: true,
-      extraParams,
-    });
-    const payload = simpleTextPayload();
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
-    expect(payload.context_management).toEqual({
-      edits: [
-        {
-          type: "compact_20260112",
-          trigger: { type: "input_tokens", value: expectedThreshold },
-          instructions: expect.stringContaining("Do not call any tools"),
-        },
-      ],
-    });
-  });
+  );
 
   it("honors the compaction opt-out and preserves authored context management", () => {
-    const disabledPolicy = resolveAnthropicPayloadPolicy({
-      provider: "anthropic",
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com/v1",
+    const disabledPayload = simpleTextPayload();
+    apply(disabledPayload, {
       contextWindow: 200_000,
+      enableCacheControl: false,
       enableServerCompaction: true,
       extraParams: { anthropicServerCompaction: false },
     });
-    const disabledPayload = simpleTextPayload();
-    applyAnthropicPayloadPolicyToParams(disabledPayload, disabledPolicy, new Set());
     expect(disabledPayload).not.toHaveProperty("context_management");
 
     const configuredPolicy = resolveAnthropicPayloadPolicy({
@@ -146,47 +93,32 @@ describe("anthropic payload policy", () => {
   });
 
   it("applies native Anthropic service tier and checkpoints the user-message tail", () => {
-    const policy = cachePolicy({ cacheRetention: "long", serviceTier: "standard_only" });
     const payload: TestPayload = {
-      system: [
-        { type: "text", text: "Follow policy." },
-        { type: "text", text: "Use tools carefully." },
-      ],
+      system: [textBlock("Follow policy."), textBlock("Use tools carefully.")],
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Working." }],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Hello" },
-            { type: "tool_result", tool_use_id: "tool_1", content: "done" },
-          ],
-        },
+        { role: "assistant", content: [textBlock("Working.")] },
+        user([textBlock("Hello"), { type: "tool_result", tool_use_id: "tool_1", content: "done" }]),
       ],
     };
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
+    apply(payload, { cacheRetention: "long", serviceTier: "standard_only" });
     expect(payload.service_tier).toBe("standard_only");
     expect(payload.system).toEqual([
-      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
-      textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
+      textBlock("Follow policy.", longCache),
+      textBlock("Use tools carefully.", longCache),
     ]);
     expect(payload.messages[0]).toEqual({
       role: "assistant",
-      content: [{ type: "text", text: "Working." }],
+      content: [textBlock("Working.")],
     });
     expect(payload.messages[1]).toEqual({
       role: "user",
       content: [
-        { type: "text", text: "Hello" },
+        textBlock("Hello"),
         {
           type: "tool_result",
           tool_use_id: "tool_1",
           content: "done",
-          cache_control: { type: "ephemeral", ttl: "1h" },
+          cache_control: longCache,
         },
       ],
     });
@@ -212,7 +144,6 @@ describe("anthropic payload policy", () => {
       earlierCache: false,
     },
   ])("$name", (row) => {
-    const policy = cachePolicy();
     const payload: TestPayload = {
       system: row.systemTexts.map((text) => textBlock(text)),
       ...(row.toolMarker
@@ -225,88 +156,57 @@ describe("anthropic payload policy", () => {
       ],
     };
 
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+    apply(payload);
 
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [
-        {
-          ...row.earlier,
-          ...(row.earlierCache ? { cache_control: { type: "ephemeral" } } : {}),
-        },
-      ],
-    });
-    expect(payload.messages[2]).toEqual({
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          ...row.latest,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-    });
+    expect(payload.messages[0]).toEqual(
+      user([{ ...row.earlier, ...(row.earlierCache ? { cache_control: ephemeral } : {}) }]),
+    );
+    expect(payload.messages[2]).toEqual(
+      user([{ type: "tool_result", ...row.latest, cache_control: ephemeral }]),
+    );
   });
 
   it("denies proxied Anthropic service tier but honors explicit long TTL for custom hosts", () => {
-    const policy = cachePolicy({
+    const payload = simpleTextPayload();
+    apply(payload, {
       baseUrl: "https://proxy.example.com/anthropic",
       cacheRetention: "long",
       serviceTier: "auto",
     });
-    const payload = simpleTextPayload();
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
     expect(payload).not.toHaveProperty("service_tier");
-    expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" })]);
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
-    });
+    expect(payload.system).toEqual([textBlock("Follow policy.", longCache)]);
+    expect(payload.messages[0]).toEqual(user([textBlock("Hello", longCache)]));
   });
 
   it("keeps explicit short retention unchanged for custom hosts", () => {
-    const policy = cachePolicy({ baseUrl: "https://proxy.example.com/anthropic" });
     const payload = simpleTextPayload();
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
-    expectShortEphemeralTextPayload(payload);
+    apply(payload, { baseUrl: "https://proxy.example.com/anthropic" });
+    expect(payload.system).toEqual([textBlock("Follow policy.", ephemeral)]);
+    expect(payload.messages[0]).toEqual(user([textBlock("Hello", ephemeral)]));
   });
 
   it("applies 1h TTL for Vertex AI endpoints with long cache retention", () => {
-    const policy = cachePolicy({
+    const payload = simpleTextPayload([
+      textBlock("Follow policy."),
+      textBlock("Use tools carefully."),
+    ]);
+    apply(payload, {
       provider: "anthropic-vertex",
       baseUrl: "https://us-east5-aiplatform.googleapis.com",
       cacheRetention: "long",
     });
-    const payload: TestPayload = {
-      system: [
-        { type: "text", text: "Follow policy." },
-        { type: "text", text: "Use tools carefully." },
-      ],
-      messages: [{ role: "user", content: "Hello" }],
-    };
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
     expect(payload.system).toEqual([
-      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
-      textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
+      textBlock("Follow policy.", longCache),
+      textBlock("Use tools carefully.", longCache),
     ]);
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
-    });
+    expect(payload.messages[0]).toEqual(user([textBlock("Hello", longCache)]));
   });
 
   it("strips the boundary even when cache retention is disabled", () => {
-    const policy = cachePolicy({ cacheRetention: "none" });
-    const payload = boundarySystemPayload();
-
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-
+    const payload = simpleTextPayload([
+      textBlock(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`),
+    ]);
+    apply(payload, { cacheRetention: "none" });
     expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
 });
