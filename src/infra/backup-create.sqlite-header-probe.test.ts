@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
-import { probeSqliteDatabaseHeaders } from "./sqlite-files.js";
+import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 
 afterEach(() => vi.restoreAllMocks());
 

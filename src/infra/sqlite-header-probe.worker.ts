@@ -1,8 +1,11 @@
 import fs from "node:fs";
 
 const magic = Buffer.from("SQLite format 3\0");
-// Only the typed header-probe launcher supplies this private process's input.
-const paths = JSON.parse(fs.readFileSync(0, "utf8")) as string[];
+const input: unknown = JSON.parse(fs.readFileSync(0, "utf8"));
+if (!Array.isArray(input) || !input.every((pathname) => typeof pathname === "string")) {
+  throw new Error("SQLite header probe expects a JSON array of paths");
+}
+const paths: string[] = input;
 const results = paths.map((pathname) => {
   try {
     if (!fs.lstatSync(pathname).isFile()) {
@@ -19,7 +22,7 @@ const results = paths.map((pathname) => {
       fs.closeSync(fd);
     }
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
     if (code === "ENOENT" || code === "ELOOP") {
       return false;
     }
