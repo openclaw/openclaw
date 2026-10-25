@@ -489,6 +489,52 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   expect(result.definitionDrift).toBeUndefined();
 });
 
+it("allows the installer to retire the legacy macOS CA bundle without discarding operator settings", async () => {
+  const { env, sourcePath, plist } = launchdFixture();
+  const environment = { PATH: "/usr/bin:/bin", OPERATOR_SETTING: "operator-secret" };
+  const command = {
+    programArguments,
+    environment: { ...environment, NODE_EXTRA_CA_CERTS: "/etc/ssl/cert.pem" },
+    sourcePath,
+  };
+  const content = buildLaunchAgentPlist({ ...plist, ...command });
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, content);
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "darwin",
+    expectedServicePath: environment.PATH,
+    expectedCommand: {
+      programArguments,
+      environment: { ...environment, NODE_USE_SYSTEM_CA: "1" },
+    },
+  });
+  expect(result.definitionDrift).toEqual([drift("outdated", "Environment.NODE_EXTRA_CA_CERTS")]);
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(content);
+});
+
+it.each([
+  { platform: "darwin", value: "/operator-private/ca.pem", replacement: undefined },
+  { platform: "darwin", value: "/etc/ssl/cert.pem", replacement: "/operator-private/ca.pem" },
+  { platform: "linux", value: "/etc/ssl/cert.pem", replacement: undefined },
+  { platform: "win32", value: "/etc/ssl/cert.pem", replacement: undefined },
+] as const)(
+  "refuses other CA changes ($platform, $value -> $replacement)",
+  ({ platform, value, replacement }) => {
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: value } },
+      { programArguments, environment: { NODE_EXTRA_CA_CERTS: replacement } },
+      platform,
+      findings,
+    );
+    expect(findings).toEqual([drift("unknown-edit", "Environment.NODE_EXTRA_CA_CERTS")]);
+    expect(JSON.stringify(findings)).not.toContain("operator-private");
+  },
+);
+
 it("bounds environment diffs and redacts nonnumeric timeout values", () => {
   const command = {
     programArguments,

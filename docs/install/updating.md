@@ -106,6 +106,14 @@ label even if its plist was deleted. Reinstall warns when the previous definitio
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
 
+Update-time service reconciliation also removes the historical macOS
+`NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem` setting when the candidate installer retires
+it. This requires the candidate to contain the repair and the installed updater
+to delegate service refresh to that candidate. Custom CA bundles at other paths
+remain preserved, and unknown operator edits still require manual repair.
+An intentionally configured `/etc/ssl/cert.pem` is indistinguishable from the old
+default; move a maintained custom bundle to a different path before updating.
+
 When an updater stops a macOS LaunchAgent, it waits for both launchd's process
 and the verified serving Gateway child to exit before continuing. An unloaded
 job or a closed listener does not prove that the child has released its agent

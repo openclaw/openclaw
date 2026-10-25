@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
+import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
@@ -166,6 +167,25 @@ export function auditGatewayInstallPreservation(
       upper === "OPENCLAW_GATEWAY_PORT" ||
       (upper === "OPENCLAW_SERVICE_VERSION" && /^\d{4}\.\d+\.\d+(?:[-+][\w.-]+)?$/u.test(value))
     ) {
+      continue;
+    }
+    if (
+      platform === "darwin" &&
+      key === "NODE_EXTRA_CA_CERTS" &&
+      value.trim() &&
+      replacement === undefined &&
+      resolveNodeStartupTlsEnvironment({ env: current.environment, platform })
+        .NODE_EXTRA_CA_CERTS === undefined
+    ) {
+      // Startup TLS policy retires the historical bundle; distinct operator CA paths survive.
+      findings.push({
+        kind: "outdated",
+        key: `Environment.${key}`,
+        current: "<redacted>",
+        expected: "<removed>",
+        sourcePath: command?.sourcePath,
+        message: `Gateway service Environment.${key} uses the outdated macOS CA bundle.`,
+      });
       continue;
     }
     if (upper === "PATH" && replacement !== undefined) {
