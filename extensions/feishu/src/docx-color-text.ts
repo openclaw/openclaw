@@ -42,12 +42,13 @@ function parseColorMarkup(content: string): DocxTextElement[] {
       for (const tag of normalizeLowercaseStringOrEmpty(match[1]).split(/\s+/)) {
         if (tag.startsWith("bg:")) {
           const color = tag.slice(3);
-          if (COLORS[color]) {
+          // Markup names must not resolve inherited Object.prototype keys.
+          if (Object.hasOwn(COLORS, color)) {
             bgColor = COLORS[color];
           }
         } else if (tag === "bold") {
           bold = true;
-        } else if (COLORS[tag]) {
+        } else if (Object.hasOwn(COLORS, tag)) {
           textColor = COLORS[tag];
         }
       }
