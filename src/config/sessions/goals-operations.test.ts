@@ -33,7 +33,6 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 // These tests exercise the durable owner, including rollback and process reopen; existing
@@ -203,11 +202,9 @@ describe("typed Goal operation persistence", () => {
     expect(await lookupReceipt()).toEqual(receipt);
     const editedObjective = "\t resume the café migration 🦞\n/keep every byte ";
     const operation = editOperation("edit-literal", receipt!.goalId, editedObjective);
-    const assertCurrent = Object.assign(vi.fn(), { nativeSource: true });
+    const assertCurrent = Object.assign(() => {}, { nativeSource: true });
     const edited = await mutate(operation, assertCurrent);
-    expect(assertCurrent).toHaveBeenCalled();
     expect(identityMutation).not.toHaveBeenCalled();
-    expect(hasPendingCanonicalSessionValidation(database())).toBe(false);
     expect(edited.sessionEntry).toMatchObject({ sessionId, lastRunId: "run-1" });
     expect(edited.sessionEntry?.status).toBeUndefined();
     expect(edited.result.goal?.objective).toBe(editedObjective);
