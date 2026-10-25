@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -35,22 +36,14 @@ afterEach(() => {
 });
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-type ObserverGateway = Awaited<ReturnType<typeof startObserverGateway>>;
+type ObserverGateway = {
+  gateway: GatewayHarness;
+  admin: WebSocket;
+  questionManager: NonNullable<GatewayRequestContext["questionManager"]>;
+  upgrades: NonNullable<GatewayRequestContext["scopeUpgradeCoordinator"]>;
+};
 
 async function withObserverGateway(run: (started: ObserverGateway) => Promise<void>) {
-  const started = await startObserverGateway();
-  try {
-    await run(started);
-  } finally {
-    started.admin.terminate();
-    await started.upgrades.close();
-    started.questionManager.close();
-    await started.gateway.server.close({ drainTimeoutMs: 0 });
-    resetTestPluginRegistry();
-  }
-}
-
-async function startObserverGateway() {
   const captured = createDeferredCore<GatewayRequestContext>();
   const registry = createEmptyPluginRegistry();
   registry.gatewayHandlers["test.observer-context"] = ({ context, respond }) => {
@@ -67,6 +60,7 @@ async function startObserverGateway() {
   setTestPluginRegistry(registry);
   let gateway: GatewayHarness | undefined;
   let admin: WebSocket | undefined;
+  let owners: Pick<ObserverGateway, "questionManager" | "upgrades"> | undefined;
   try {
     gateway = await createGatewaySuiteHarness({ serverOptions: { bind: "loopback" } });
     await gateway.server.startupSettled;
@@ -74,15 +68,17 @@ async function startObserverGateway() {
     await connectOk(admin, { scopes: ["operator.admin"] });
     expect((await rpcReq(admin, "test.observer-context", {})).ok).toBe(true);
     const { questionManager, scopeUpgradeCoordinator } = await captured.promise;
-    if (!questionManager || !scopeUpgradeCoordinator) {
-      throw new Error("Gateway observer owners were not initialized");
-    }
-    return { gateway, admin, questionManager, upgrades: scopeUpgradeCoordinator };
-  } catch (error) {
+    owners = {
+      questionManager: expectDefined(questionManager, "Gateway question owner"),
+      upgrades: expectDefined(scopeUpgradeCoordinator, "Gateway scope-upgrade owner"),
+    };
+    await run({ gateway, admin, ...owners });
+  } finally {
     admin?.terminate();
+    await owners?.upgrades.close();
+    owners?.questionManager.close();
     await gateway?.server.close({ drainTimeoutMs: 0 });
     resetTestPluginRegistry();
-    throw error;
   }
 }
 
@@ -124,10 +120,7 @@ async function requestPendingUpgrade(started: ObserverGateway, name: string) {
       scopes: ["operator.read", "operator.write"],
     });
     expect(registration.ok).toBe(true);
-    const requestId = registration.payload?.requestId;
-    if (!requestId) {
-      throw new Error("Scope upgrade did not return a request id");
-    }
+    const requestId = expectDefined(registration.payload?.requestId, "Scope upgrade request id");
     return { ws, requestId, deviceId: paired.deviceId };
   } catch (error) {
     ws.terminate();
@@ -213,10 +206,7 @@ async function proveObserverLifetime(
           ],
         });
         expect(registration.ok).toBe(true);
-        if (!registration.payload?.id) {
-          throw new Error("Question request did not return an id");
-        }
-        id = registration.payload.id;
+        id = expectDefined(registration.payload?.id, "Question request id");
         ws = admin;
         const originalWait = questions.waitAnswer.bind(questions);
         vi.spyOn(questions, "waitAnswer").mockImplementation((...args) => {

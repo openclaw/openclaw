@@ -49,6 +49,8 @@ export function readSessionRowFacts(params: {
     context: sourceContext,
   } = params;
   const { key, agentId } = params.target;
+  const matchesRuntimeOwnership = (next: typeof preparedRuntimeOwnership) =>
+    isDeepStrictEqual(preparedRuntimeOwnership, next);
   const context = sourceContext ?? {};
   const hasBoard = params.databaseFacts.hasBoard;
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -129,6 +131,7 @@ export function readSessionRowFacts(params: {
   let runtimeInstallVersion: number | undefined;
   return {
     hasBoard,
+    matchesRuntimeOwnership,
     matches(next: Parameters<typeof readSessionRowFacts>[0]) {
       return (
         cfg === next.cfg &&
@@ -139,7 +142,7 @@ export function readSessionRowFacts(params: {
         placementFactsReader === next.placementFactsReader &&
         activitySummaryEnabled === next.activitySummaryEnabled &&
         hasBoard === next.databaseFacts.hasBoard &&
-        isDeepStrictEqual(preparedRuntimeOwnership, next.preparedRuntimeOwnership) &&
+        matchesRuntimeOwnership(next.preparedRuntimeOwnership) &&
         isDeepStrictEqual(
           activitySummaryFacts.activitySummaryWatermark,
           next.databaseFacts.activitySummaryWatermark,

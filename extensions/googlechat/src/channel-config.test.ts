@@ -97,8 +97,8 @@ describe("googlechatPlugin config adapter", () => {
     const metadataPayload: ReplyPayload = { text, channelData: { execApproval: { approvalId } } };
     const structuredPayload: ReplyPayload = { text, presentation: { blocks: [] } };
 
-    expect(normalize(unrelatedPayload)).toBe(unrelatedPayload);
+    expect(normalize(unrelatedPayload)).toStrictEqual({ text: "/approve deadbeef allow-once" });
     expect(normalize(metadataPayload)).toBeNull();
-    expect(normalize(structuredPayload)).toBe(structuredPayload);
+    expect(normalize(structuredPayload)).toStrictEqual({ text, presentation: { blocks: [] } });
   });
 });

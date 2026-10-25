@@ -35,7 +35,6 @@ export function runWithMainThreadTask<T>(name: string, run: () => T, phase?: str
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
   const pending: { elapsedMs: number; task: string; taskMs: number }[] = [];
-  let stopped = false;
   let dropped = 0;
   let delayMaxMs = 0;
   let active = false;
@@ -58,10 +57,6 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   const observer: TaskObserver = {
     currentName: () => (active ? task : undefined),
     stop() {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
       if (taskState.observer === observer) {
         delete taskState.observer;
         taskState.context.disable();

@@ -1,14 +1,13 @@
-/* @vitest-environment jsdom */
-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+/* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import "../test-helpers/app-sidebar-suite.ts";
 import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import { createGatewayHarness, type SidebarLifecycleState } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -25,6 +24,7 @@ import {
   human,
   disposeRoster,
 } from "./app-sidebar-freshness.test-support.ts";
+import { setSessionsStatusFilter } from "./session-organizer-menu.runtime.ts";
 import "./app-sidebar.tsx";
 
 const mainAgents: AgentsListResult = makeBootRoster();
@@ -110,7 +110,7 @@ it("hides a selected active main child in Archived after fresh lineage completes
     await waitForRequest(request, "sessions.describe", { key: mainKey });
     await waitForFast(() => expect(row()).not.toBeNull());
 
-    sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
     expect(data.childSessionRowsByParent).toEqual({});
     expect(data.activeSessionLineageSelectedRow).toMatchObject({
       key: selected.key,

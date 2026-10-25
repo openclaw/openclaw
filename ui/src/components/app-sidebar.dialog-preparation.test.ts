@@ -21,6 +21,14 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 import { waitForConfirmDialogActions, answerConfirmDialog } from "../test-helpers/modal-dialog.ts";
+import {
+  runSessionAction,
+  runBatchSessionAction,
+  createSessionGroup,
+  renameSessionGroupFromMenu,
+  deleteSessionGroupFromMenu,
+  editSessionGroupDefaults,
+} from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "../lib/toast-host.tsx";
 
@@ -84,26 +92,27 @@ it.each([
   try {
     const pending =
       kind === "group delete"
-        ? organizer.deleteSessionGroupFromMenu("Drafts")
+        ? deleteSessionGroupFromMenu(organizer, "Drafts")
         : kind === "batch delete"
-          ? organizer.runBatchSessionAction({ kind: "delete" }, [row], false)
+          ? runBatchSessionAction(organizer, { kind: "delete" }, [row], false)
           : kind === "cloud worker stop"
-            ? organizer.runSessionAction(row, { kind: "stop-cloud-worker" })
+            ? runSessionAction(organizer, row, { kind: "stop-cloud-worker" })
             : kind === "session delete"
-              ? organizer.runSessionAction(row, { kind: "delete" })
+              ? runSessionAction(organizer, row, { kind: "delete" })
               : kind === "batch archive"
-                ? organizer.runBatchSessionAction(
+                ? runBatchSessionAction(
+                    organizer,
                     { kind: "toggle-archived" },
                     [{ ...row, hasActiveRun: true }],
                     false,
                   )
                 : kind === "session rename"
-                  ? organizer.runSessionAction(row, { kind: "rename" })
+                  ? runSessionAction(organizer, row, { kind: "rename" })
                   : kind === "group create"
-                    ? organizer.createSessionGroup()
+                    ? createSessionGroup(organizer)
                     : kind === "group rename"
-                      ? organizer.renameSessionGroupFromMenu("Drafts")
-                      : organizer.editSessionGroupDefaults("Drafts");
+                      ? renameSessionGroupFromMenu(organizer, "Drafts")
+                      : editSessionGroupDefaults(organizer, "Drafts");
     await expect(pending).resolves.toBeUndefined();
     await vi.waitFor(() =>
       expect(sidebar.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
@@ -164,7 +173,7 @@ it("does not publish a retired group dialog preparation error to a replacement c
   const failure = new Error("Retired dialog preparation failed");
   const restore = failModalPreparation(failure, preparation.promise);
   try {
-    const pending = sidebar.sessionOrganizer.createSessionGroup();
+    const pending = createSessionGroup(sidebar.sessionOrganizer);
     await vi.waitFor(() =>
       expect(lazyElements.ensureCustomElementDefined).toHaveBeenCalledWith(
         "openclaw-modal-dialog",

@@ -6,6 +6,7 @@ import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { expectBytes, observeFileIo, readText } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
@@ -117,8 +118,8 @@ it.each(["changed bytes", "escaping link"])(
     vi.spyOn(fs, "cpSync").mockImplementation((from, to, options) => {
       copy(from, to, options);
       const directory = String(to);
-      const relative = fs
-        .readdirSync(directory, { recursive: true, encoding: "utf8" })
+      const relative = listDirectoryTreeStrictSync(directory)
+        .map((walkEntry) => walkEntry.relativePath)
         .find((name) => name.endsWith("fixture.dat"));
       if (!relative) {
         throw new Error("fixture copy is missing its payload");
