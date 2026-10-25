@@ -65,6 +65,17 @@ type Usage = AuthProfileStore["usageStats"];
 function setUsage(store: AuthProfileStore, dir: string, usageStats: Usage) {
   setSnapshot({ ...store, usageStats }, dir);
 }
+function acquireReader(databasePath: string) {
+  const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
+  expect(reader.status).toBe("readable");
+  if (reader.status !== "readable") {
+    throw new Error("Expected a pooled auth reader");
+  }
+  return reader.db;
+}
+function withProfile(store: AuthProfileStore, id: string, provider: string, key: string) {
+  return { ...store, profiles: { ...store.profiles, [id]: createApiKeyCredential(provider, key) } };
+}
 
 const materialization = {
   provider: "openai",
@@ -89,30 +100,22 @@ describe("runtime auth profile snapshots", () => {
       );
     }
     setSnapshot(createStore("reader-owner"), agentDir);
-    const reader = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
-    expect(reader.status).toBe("readable");
-    if (reader.status !== "readable") {
-      throw new Error("Expected a pooled auth reader");
-    }
+    const reader = acquireReader(databasePath);
     const revision = getSnapshotRevision(agentDir);
     setUsage(createStore("reader-owner"), agentDir, { "openai:default": { lastUsed: 2 } });
     expect(getSnapshotRevision(agentDir)).not.toBe(revision);
-    expect(reader.db.isOpen).toBe(true);
+    expect(reader.isOpen).toBe(true);
     clearSnapshot(path.join(agentDir, "unrelated"));
-    expect(reader.db.isOpen).toBe(true);
-    expect(reader.db.prepare("SELECT value FROM reader_fixture").get()).toEqual({
+    expect(reader.isOpen).toBe(true);
+    expect(reader.prepare("SELECT value FROM reader_fixture").get()).toEqual({
       value: "available",
     });
 
     clearSnapshot(agentDir);
-    expect(reader.db.isOpen).toBe(false);
-    const replacement = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
-    expect(replacement.status).toBe("readable");
-    if (replacement.status !== "readable") {
-      throw new Error("Expected the pooled auth reader to reopen");
-    }
+    expect(reader.isOpen).toBe(false);
+    const replacement = acquireReader(databasePath);
     clearSnapshots();
-    expect(replacement.db.isOpen).toBe(false);
+    expect(replacement.isOpen).toBe(false);
   });
 
   it("marks default-owner materializations as inherited mutations", () => {
@@ -365,13 +368,12 @@ describe("runtime auth profile snapshots", () => {
   it("refreshes inherited usage without crossing an agent-local profile override", () => {
     const inheritedAuthDir = "/tmp/openclaw-auth-catalog-inherited";
     const agentDir = "/tmp/openclaw-auth-catalog-local";
-    const inherited = {
-      ...apiStore("inherited-not-real"),
-      profiles: {
-        ...apiStore("inherited-not-real").profiles,
-        "other:primary": createApiKeyCredential("other", "other-not-real"),
-      },
-    };
+    const inherited = withProfile(
+      apiStore("inherited-not-real"),
+      "other:primary",
+      "other",
+      "other-not-real",
+    );
     const local = apiStore("local-not-real", 30_000);
     setSnapshot(inherited, inheritedAuthDir);
     setSnapshot(local, agentDir);
@@ -395,13 +397,7 @@ describe("runtime auth profile snapshots", () => {
     const inheritedAuthDir = "/tmp/openclaw-auth-runtime-inherited";
     const agentDir = "/tmp/openclaw-auth-runtime-agent";
     setSnapshot(
-      {
-        ...createStore("inherited"),
-        profiles: {
-          ...createStore("inherited").profiles,
-          "anthropic:default": createApiKeyCredential("anthropic", "inherited-key"),
-        },
-      },
+      withProfile(createStore("inherited"), "anthropic:default", "anthropic", "inherited-key"),
       inheritedAuthDir,
     );
     setSnapshot(createStore("agent"), agentDir);
@@ -412,22 +408,16 @@ describe("runtime auth profile snapshots", () => {
       "openai:default": { type: "oauth", provider: "openai", access: "agent" },
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "inherited-key" },
     });
-    expect(
-      getPreparedSnapshot(
-        "/tmp/openclaw-auth-runtime-missing",
-        "/tmp/openclaw-auth-runtime-also-missing",
-      ),
-    ).toBeUndefined();
+    expect(getPreparedSnapshot("/tmp/missing-auth", "/tmp/also-missing-auth")).toBeUndefined();
   });
 
   it("does not attribute shared order to an agent without its own snapshot", () => {
     const inheritedAuthDir = "/tmp/openclaw-auth-order-inherited";
     const agentDir = "/tmp/openclaw-auth-order-missing-agent";
-    const inherited = {
-      ...createStore("inherited-order"),
-      runtimeLocalOrderProviderIds: ["openai"],
-    };
-    setSnapshot(inherited, inheritedAuthDir);
+    setSnapshot(
+      { ...createStore("inherited-order"), runtimeLocalOrderProviderIds: ["openai"] },
+      inheritedAuthDir,
+    );
     expect(getPreparedSnapshot(agentDir, inheritedAuthDir)).toMatchObject({
       order: { openai: ["openai:default"] },
       runtimeLocalOrderProviderIds: [],

@@ -140,8 +140,8 @@ afterEach(() => {
 
 it.each(["shared", "agent"] as const)(
   "publishes %s credentials before release and preserves authority for metadata and rollback",
-  async (target) => {
-    await withState(async (state) => {
+  (target) =>
+    withState(async (state) => {
       const agentDir = target === "agent" ? state.agentDir("child") : undefined;
       const replacement = credential("synthetic-after");
       save(makeStore({ selected: "synthetic-before" }), agentDir);
@@ -201,8 +201,7 @@ it.each(["shared", "agent"] as const)(
       } finally {
         unsubscribe();
       }
-    });
-  },
+    }),
 );
 
 it("keeps shared credentials denied after worker death without a native outcome", async () => {
@@ -300,8 +299,8 @@ it("rejects a native auth owner before initializing its state directory", async 
 
 it.for(["local", "legacy-shared"] as const)(
   "retains the %s physical store before waiting for auth FIFO preparation",
-  async (kind) => {
-    await withState(async (state) => {
+  (kind) =>
+    withState(async (state) => {
       const agentDir = state.agentDir(kind === "local" ? "child" : "main");
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
       runAuthProfileWriteTransaction(
@@ -338,14 +337,13 @@ it.for(["local", "legacy-shared"] as const)(
         reservation.release();
         await Promise.allSettled([updating]);
       }
-    });
-  },
+    }),
 );
 
 it.each(["stale", "newer-write", "rebound-owner"])(
   "invalidates an unacknowledged commit after release with a %s view",
-  async (scenario) => {
-    await withState(async (state) => {
+  (scenario) =>
+    withState(async (state) => {
       const agentDir = state.agentDir("child");
       seedSnapshot(makeStore({ selected: "synthetic-before" }), agentDir);
       const capture = executions.captureOpenClawAgentDatabaseExecution;
@@ -392,8 +390,7 @@ it.each(["stale", "newer-write", "rebound-owner"])(
       } else {
         expect(snapshot(agentDir)).toBeUndefined();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -404,8 +401,8 @@ it.each([
   { target: "shared", changed: "other", outcome: "interrupted" },
 ])(
   "reconciles an overtaking $target native save of $changed ($outcome)",
-  async ({ target, changed, outcome }) => {
-    await withState(async (state) => {
+  ({ target, changed, outcome }) =>
+    withState(async (state) => {
       const agentDir = target === "agent" ? state.agentDir("child") : undefined;
       const initial = makeStore({ selected: "synthetic-before", other: "synthetic-other" });
       seedSnapshot(initial, agentDir);
@@ -461,8 +458,7 @@ it.each([
           expect(snapshot(derivedDir)?.profiles).toEqual(expected);
         }
       }
-    });
-  },
+    }),
 );
 
 it("does not retain inherited order when a native rotation overtakes state publication", async () => {
@@ -531,8 +527,8 @@ it("keeps a shared rotation that commits while a local save awaits publication",
 
 it.each(["before-callback", "in-callback", "commit"] as const)(
   "refuses personal-account update authority revoked at %s",
-  async (phase) => {
-    await withState(async () => {
+  (phase) =>
+    withState(async () => {
       const original = {
         type: "token" as const,
         provider: "anthropic",
@@ -578,6 +574,5 @@ it.each(["before-callback", "in-callback", "commit"] as const)(
       ).rejects.toThrow("synthetic personal authority revoked");
       expect(updater).toHaveBeenCalledTimes(phase === "before-callback" ? 0 : 1);
       expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(original);
-    });
-  },
+    }),
 );
