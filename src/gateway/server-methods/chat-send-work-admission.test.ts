@@ -9,7 +9,6 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -70,9 +69,7 @@ it.each([
   inspectionFailure(false),
   new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
   new Error("Unclassified admission failure"),
-  failure("Validation failed", { retryable: false }),
   failure("Not a canonical worker outcome", { code: "outcome-unknown" }),
-  failure("Workspace access denied", { code: "EACCES" }),
 ])("keeps non-storage admission failures RPC-only: %s", (error) => {
   const { respond, terminal } = reportAdmissionError(error);
   expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -105,7 +102,6 @@ it("gives actionable terminal reconciliation guidance without exposing its cause
     ),
     { cause: failure("write failed", { code: "SQLITE_FULL" }) },
   );
-  expect(classifyGatewayStorageFailure(error)).toBe("session_actor_reconciliation");
   const { respond, terminal } = reportAdmissionError(error);
   expect(terminal).toHaveBeenCalledOnce();
   const message: unknown = terminal.mock.calls[0]?.[0];

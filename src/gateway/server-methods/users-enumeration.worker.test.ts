@@ -131,48 +131,6 @@ it.each(["role", "identity"] as const)(
   },
 );
 
-it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
-  "allows only self-service profile edits with %s without host SQL",
-  async (scope) => {
-    const person = ensureProfileForEmail("setter@example.test");
-    const other = ensureProfileForEmail("other@example.test");
-    catalog = await prepareUserProfileCatalog();
-    const refreshConnectedUserProfile = vi.fn();
-    context.refreshConnectedUserProfile = refreshConnectedUserProfile;
-    requireNodeSqlite();
-    const calls = observeMainThreadSql();
-    for (const [method, params, expected] of profileEdits) {
-      expect(
-        await rpc(method, person.id, [scope], { profileId: other.id, ...params }),
-      ).toHaveBeenCalledWith(...forbidden);
-      const respond = await rpc(method, person.id, [scope], {
-        profileId: person.id,
-        ...params,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        expect.objectContaining({
-          profile: expect.objectContaining({ id: person.id, ...expected }),
-        }),
-      );
-      expect(refreshConnectedUserProfile).toHaveBeenLastCalledWith(
-        expect.objectContaining({ id: person.id, ...expected }),
-      );
-    }
-    for (const [method, params] of [
-      ["users.setRole", { profileId: person.id, role: null }],
-      ["users.linkEmail", { email: "other@example.test", targetProfileId: person.id }],
-      ["users.merge", { sourceProfileId: other.id, targetProfileId: person.id }],
-    ] as const) {
-      expect(await rpc(method, person.id, [scope], params)).toHaveBeenCalledWith(...forbidden);
-    }
-    expect(await rpc("users.self", person.id, [scope])).toHaveBeenCalledWith(true, {
-      profile: expect.objectContaining({ displayName: "Current name", hasAvatar: true }),
-    });
-    calls.expectIdle();
-  },
-);
-
 it.each(
   ["operator.read", "operator.sessions.read", "operator.sessions.write"].flatMap((scope) =>
     ["unchanged", "revoked", "reassigned"].map((change) => ({ scope, change })),
@@ -183,9 +141,19 @@ it.each(
     const person = ensureProfileForEmail("commit-owner@example.test");
     const replacement = ensureProfileForEmail("commit-replacement@example.test");
     catalog = await prepareUserProfileCatalog();
+    const refresh = vi.fn();
+    context.refreshConnectedUserProfile = refresh;
+    requireNodeSqlite();
+    const calls = observeMainThreadSql();
     for (const [method, params, expected] of profileEdits) {
       const before = getUserProfileListItem(person.id);
       const replacementBefore = getUserProfileListItem(replacement.id);
+      calls.clear();
+      if (change === "unchanged") {
+        expect(
+          await rpc(method, person.id, [scope], { profileId: replacement.id, ...params }),
+        ).toHaveBeenCalledWith(...forbidden);
+      }
       const client = createOperatorClient({ profileId: person.id, scopes: [scope] });
       const createAdmission = writerAdmission.createSqliteWorkerOperationAdmission;
       let commitReached = 0;
@@ -214,11 +182,17 @@ it.each(
       await pending.request;
       const { respond } = pending;
       observation.mockRestore();
+      calls.expectIdle();
       expect(commitReached).toBeGreaterThan(0);
       if (change === "unchanged") {
-        expect(respond).toHaveBeenCalledWith(
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
           true,
-          expect.objectContaining({ profile: expect.objectContaining(expected) }),
+          expect.objectContaining({
+            profile: expect.objectContaining({ id: person.id, ...expected }),
+          }),
+        );
+        expect(refresh).toHaveBeenLastCalledWith(
+          expect.objectContaining({ id: person.id, ...expected }),
         );
         expect(getUserProfileListItem(person.id)).toMatchObject(expected);
       } else {
@@ -226,6 +200,20 @@ it.each(
         expect(getUserProfileListItem(person.id)).toEqual(before);
       }
       expect(getUserProfileListItem(replacement.id)).toEqual(replacementBefore);
+    }
+    if (change === "unchanged") {
+      calls.clear();
+      for (const [method, params] of [
+        ["users.setRole", { profileId: person.id, role: null }],
+        ["users.linkEmail", { email: "other@example.test", targetProfileId: person.id }],
+        ["users.merge", { sourceProfileId: replacement.id, targetProfileId: person.id }],
+      ] as const) {
+        expect(await rpc(method, person.id, [scope], params)).toHaveBeenCalledWith(...forbidden);
+      }
+      expect(await rpc("users.self", person.id, [scope])).toHaveBeenCalledWith(true, {
+        profile: expect.objectContaining({ displayName: "Current name", hasAvatar: true }),
+      });
+      calls.expectIdle();
     }
   },
 );

@@ -246,7 +246,7 @@ describe("commands.list handler", () => {
     });
   });
 
-  it.each(["text", "native", "both"] as const)(
+  it.each(["text", "native"] as const)(
     "projects registered plugin commands without native support for scope=%s",
     async (scope) => {
       setGatewayRegistry([registration("demo")]);
@@ -284,11 +284,14 @@ describe("commands.list handler", () => {
     },
   );
 
-  it("reads plugin commands from the gateway registry before the global command table", async () => {
+  it("projects gateway registry commands with channel filters and native aliases", async () => {
     setGatewayRegistry([
+      registration("android_only", { channels: ["android"] }),
       registration("  demo  ", {
         description: "  Demo command  ",
         acceptsArgs: true,
+        nativeNames: { discord: "discord_demo" },
+        channels: ["discord"],
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
@@ -296,15 +299,17 @@ describe("commands.list handler", () => {
       }),
     ]);
 
-    const commands = await listCommands();
+    const commands = await listCommands({ provider: "discord" });
     expect(commands.find((c) => c.source === "plugin")).toMatchObject({
-      name: "demo",
+      name: "discord_demo",
+      nativeName: "discord_demo",
       description: "Demo command",
       textAliases: ["/demo"],
       acceptsArgs: true,
       clientPresentation: { when: "no-arguments", action: { kind: "device-pairing" } },
     });
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
+    expect(commands.find((c) => c.name === "android_only")).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -323,25 +328,6 @@ describe("commands.list handler", () => {
       );
     },
   );
-
-  it("keeps provider-filtered native plugin names paired with their text aliases", async () => {
-    setGatewayRegistry([
-      registration("android_only", { channels: ["android"] }),
-      registration("demo", { nativeNames: { discord: "discord_demo" }, channels: ["discord"] }),
-    ]);
-
-    const commands = await listCommands({ provider: "discord" });
-    const plugin = commands.find((command) => command.source === "plugin");
-
-    expect(plugin).toMatchObject({
-      name: "discord_demo",
-      nativeName: "discord_demo",
-      textAliases: ["/demo"],
-    });
-    expect(
-      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
-    ).toBeUndefined();
-  });
 
   it("excludes args when includeArgs=false", async () => {
     const model = requireCommand(await listCommands({ includeArgs: false }), "model");

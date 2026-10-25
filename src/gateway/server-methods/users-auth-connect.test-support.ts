@@ -63,12 +63,6 @@ function selectionAuthority(reference: string) {
 
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
-  readResidentUserProfileIdentity: (reference: string) => {
-    const profileId = resolveProfileId(reference);
-    return profileId
-      ? { profileId, aliases: new Set([reference, profileId]), role: null }
-      : undefined;
-  },
   captureResidentUserProfileAccess: (profileId: string) => ({
     assertCurrent: () => ({ id: resolveProfileId(profileId), role: null, githubLogin: null }),
   }),

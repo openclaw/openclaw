@@ -232,15 +232,6 @@ describe("openclaw.chat caretaker welcome", () => {
   it.each([undefined, "onboarding", "new-agent"])(
     "does not replay an earlier passive %s welcome on reconnect",
     async (welcomeVariant) => {
-      const transcript: Array<{ role: "user" | "assistant"; text: string; at: number }> = [];
-      transcriptStoreMocks.appendTurn.mockImplementation(
-        (turn: { role: "user" | "assistant"; text: string; at: number }) => {
-          transcript.push(turn);
-        },
-      );
-      transcriptStoreMocks.readTranscriptTailAsync.mockImplementation(async () =>
-        transcript.slice(),
-      );
       const variant = welcomeVariant ? { welcomeVariant } : {};
 
       const first = await callChat({ sessionId: "first-welcome", ...variant });
@@ -256,7 +247,7 @@ describe("openclaw.chat caretaker welcome", () => {
       expect(
         expectDefined(createdEngines[1], "second welcome engine").seedHistory,
       ).toHaveBeenCalledWith([]);
-      expect(transcript).toEqual([]);
+      expect(transcriptStoreMocks.appendTurn).not.toHaveBeenCalled();
     },
   );
 
