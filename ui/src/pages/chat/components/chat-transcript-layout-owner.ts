@@ -1,4 +1,3 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
 import { i18n } from "../../../i18n/index.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
