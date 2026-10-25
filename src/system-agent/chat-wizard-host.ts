@@ -255,6 +255,8 @@ export class ChatWizardHost {
   private bridge: ActiveWizardBridge | null = null;
   private awaitingSetupChannel = false;
   private lastSensitiveChannel: string | undefined;
+  /** Live authority of the Gateway request whose turn is advancing the wizard, if any. */
+  answeringAuthority: (() => boolean) | undefined;
 
   constructor(
     private readonly options: {
@@ -499,6 +501,9 @@ export class ChatWizardHost {
         owner.assertPersistentEffectCurrent();
         if (this.bridge?.session !== owner) {
           throw new Error("Setup session is no longer active");
+        }
+        if (this.answeringAuthority?.() === false) {
+          throw new Error("Gateway caller authority is no longer active.");
         }
       };
       const result = await params.run(prompter, assertPersistentEffectCurrent);

@@ -413,6 +413,12 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
         command: "configure",
         mode: metadataMode,
       });
+      const { storeChannelSetupCredentials } =
+        await import("./channels/plugin-config-persistence.js");
+      nextConfig = await storeChannelSetupCredentials({
+        cfg: nextConfig,
+        previousConfig: mergeBaseConfig,
+      });
 
       const committed = await writeWizardConfigFile(nextConfig, {
         mergeBase: mergeBaseConfig,

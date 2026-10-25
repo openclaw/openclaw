@@ -4,7 +4,7 @@ import { gatewayCredentialScope } from "../../packages/gateway-client/src/gatewa
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
-import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
+import type { OnboardMode } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -47,13 +47,13 @@ import {
   createWizardInferenceConfigTarget,
   type WizardConfigWriteOptions,
 } from "./setup.shared.js";
-import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+import type { QuickstartGatewayDefaults, SetupWizardOptions, WizardFlow } from "./setup.types.js";
 import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model";
 
 export async function runSetupWizard(
-  opts: OnboardOptions,
+  opts: SetupWizardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
@@ -64,7 +64,7 @@ export async function runSetupWizard(
 }
 
 async function runSetupWizardOnce(
-  initialOpts: OnboardOptions,
+  initialOpts: SetupWizardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
@@ -610,18 +610,29 @@ async function runSetupWizardOnce(
             .filter((plugin) => plugin.meta.quickstartAllowFrom)
             .map((plugin) => plugin.id)
         : [];
-    nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-      allowIMessageInstall: true,
-      allowSignalInstall: true,
-      deferStatusUntilSelection: flow === "quickstart",
-      forceAllowFromChannels: quickstartAllowFromChannels,
-      skipDmPolicyPrompt: flow === "quickstart",
-      skipConfirm: flow === "quickstart",
-      quickstartDefaults: flow === "quickstart",
-      secretInputMode: opts.secretInputMode,
-      onPostWriteHook: channelSetup.onPostWriteHook,
+    const persistence = await import("../commands/channels/plugin-config-persistence.js");
+    // previousConfig is read before the channel step runs: only credentials it changed are stored.
+    nextConfig = await persistence.storeChannelSetupCredentials({
+      previousConfig: nextConfig,
+      cfg: await setupChannels(nextConfig, runtime, prompter, {
+        allowIMessageInstall: true,
+        allowSignalInstall: true,
+        deferStatusUntilSelection: flow === "quickstart",
+        forceAllowFromChannels: quickstartAllowFromChannels,
+        skipDmPolicyPrompt: flow === "quickstart",
+        skipConfirm: flow === "quickstart",
+        quickstartDefaults: flow === "quickstart",
+        secretInputMode: opts.secretInputMode,
+        onPostWriteHook: channelSetup.onPostWriteHook,
+      }),
+      beforePersistentEffect: opts.beforePersistentEffect,
+      assertCurrent: opts.assertPersistentEffectCurrent,
     });
-    const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
+    // The commit can wait on locks; the writer checks the requester right before publication.
+    const committed = await commitSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+      writeOptions: { assertBeforePublish: opts.assertPersistentEffectCurrent },
+    });
     await channelSetup.runPostWriteHooks(committed.path);
     nextConfig = committed.nextConfig;
   }

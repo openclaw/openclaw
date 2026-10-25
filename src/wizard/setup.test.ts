@@ -98,7 +98,12 @@ const ensureOnboardingConfig = vi.hoisted(() =>
   })),
 );
 const replaceConfigFile = vi.hoisted(() =>
-  vi.fn<(params: { nextConfig: OpenClawConfig }) => Promise<{ nextConfig: OpenClawConfig }>>(),
+  vi.fn<
+    (params: {
+      nextConfig: OpenClawConfig;
+      writeOptions?: { assertBeforePublish?: () => void };
+    }) => Promise<{ nextConfig: OpenClawConfig }>
+  >(),
 );
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
@@ -480,6 +485,8 @@ describe("runSetupWizard", () => {
         configSnapshot(authoredConfig ?? {}, authoredConfig !== undefined),
       );
     replaceConfigFile.mockReset().mockImplementation(async (params) => {
+      // Like the config writer, admit the requester synchronously before publication.
+      params.writeOptions?.assertBeforePublish?.();
       authoredConfig = structuredClone(params.nextConfig);
       return { nextConfig: params.nextConfig };
     });
@@ -860,6 +867,60 @@ describe("runSetupWizard", () => {
     expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
       finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("checks the hosted session before saving a classic channel credential", async () => {
+    const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    setupChannels.mockImplementationOnce(async () => ({
+      ...beforeConfig,
+      channels: { telegram: { botToken: "123:setup-token" } },
+    }));
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(beforeConfig));
+    const beforePersistentEffect = vi.fn(async () => {
+      throw new Error("Setup session is no longer active");
+    });
+
+    await expect(runWizard({ skipChannels: undefined, beforePersistentEffect })).rejects.toThrow(
+      "Setup session is no longer active",
+    );
+
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(
+      replaceConfigFile.mock.calls.some(([params]) => params.nextConfig.channels?.telegram),
+    ).toBe(false);
+  });
+
+  it("checks the hosted session when the channel step config publishes", async () => {
+    const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    setupChannels.mockImplementationOnce(async () => ({
+      ...beforeConfig,
+      channels: { telegram: { enabled: true } },
+    }));
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(beforeConfig));
+    // Authority ends after the channel commit starts, as when the commit waits on a lock.
+    let committingChannel = false;
+    const publish = replaceConfigFile.getMockImplementation()!;
+    replaceConfigFile.mockImplementation(async (params) => {
+      committingChannel ||= params.nextConfig.channels?.telegram !== undefined;
+      return await publish(params);
+    });
+    const assertPersistentEffectCurrent = vi.fn(() => {
+      if (committingChannel) {
+        throw new Error("Gateway caller authority is no longer active.");
+      }
+    });
+
+    await expect(
+      runWizard({ skipChannels: undefined, assertPersistentEffectCurrent }),
+    ).rejects.toThrow("Gateway caller authority is no longer active.");
+
+    expect(
+      replaceConfigFile.mock.settledResults.some(
+        (result, index) =>
+          result.type === "fulfilled" &&
+          replaceConfigFile.mock.calls[index]?.[0].nextConfig.channels?.telegram,
+      ),
+    ).toBe(false);
   });
 
   it("honors a provider-required picker while keeping existing model settings", async () => {

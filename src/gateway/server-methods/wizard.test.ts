@@ -5,6 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { storeChannelSetupCredentials } from "../../commands/channels/plugin-config-persistence.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -15,6 +18,7 @@ import {
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
@@ -25,8 +29,14 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 
 const setupTargetLock = vi.hoisted(() => ({
@@ -511,6 +521,104 @@ describe("wizard setup ownership", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ done: false, status: "running" });
 
     await cancelWizardSessions(context.wizardSessions);
+  });
+
+  it.each([
+    ["setup", "running"],
+    ["setup", "cancelled"],
+    ["setup", "revoked"],
+    ["channels", "revoked"],
+  ] as const)("gates a %s flow channel credential write on a %s session", async (flow, state) => {
+    await withOpenClawTestState({ label: `wizard-channel-credential-${state}` }, async () => {
+      const reachedCommit = createDeferred();
+      const continueCommit = createDeferred();
+      let committed: OpenClawConfig | undefined;
+      const tracker = createWizardSessionTracker();
+      // Both hosted flows hand the same session hooks to their runner.
+      const wizardRunner: SetupWizardRunner = async (opts, _runtime, prompter) => {
+        const token = await prompter.text({ message: "Bot token", sensitive: true });
+        reachedCommit.resolve();
+        await continueCommit.promise;
+        committed = await storeChannelSetupCredentials({
+          cfg: { channels: { telegram: { botToken: token } } },
+          previousConfig: {},
+          beforePersistentEffect: opts.beforePersistentEffect,
+          assertCurrent: opts.assertPersistentEffectCurrent,
+        });
+        await prompter.note("Saved");
+      };
+      const context = { ...tracker, wizardRunner, channelWizardRunner: wizardRunner };
+      // Each request runs under the answering device's real revocation capture.
+      const invokeAsDevice = async (
+        method: "wizard.start" | "wizard.next",
+        params: Record<string, unknown>,
+      ) => {
+        const authority = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "wizard-device", role: "operator" },
+          () => true,
+        );
+        try {
+          return await withPluginRuntimeGatewayRequestScope(
+            { isWebchatConnect: () => false, hasCurrentClientAuthority: authority.isCurrent },
+            () => invokeWizard(method, params, context),
+          );
+        } finally {
+          authority.release();
+        }
+      };
+      const start = await invokeAsDevice(
+        "wizard.start",
+        flow === "channels" ? { flow } : { mode: "local" },
+      );
+      const step = start.step as { id: string };
+      const next = invokeAsDevice("wizard.next", {
+        sessionId: start.sessionId,
+        answer: { stepId: step.id, value: "123:wizard-token" },
+      });
+      await reachedCommit.promise;
+      if (state === "revoked") {
+        invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
+      }
+      if (state === "cancelled") {
+        const cancelRespond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.cancel"],
+          "wizard.cancel test invariant",
+        )({
+          params: { sessionId: start.sessionId },
+          respond: cancelRespond,
+          context,
+        } as never);
+        expect(cancelRespond.mock.calls[0]?.[1]).toMatchObject({ status: "cancelled" });
+      }
+      continueCommit.resolve();
+      const result = await next;
+      const entries = await listSecretStoreEntries({ scope: { kind: "team" } });
+
+      if (state === "running") {
+        expect(result).toMatchObject({ done: false, step: { message: "Saved" } });
+        const ref = coerceSecretRef(committed?.channels?.telegram?.botToken);
+        expect(entries.map((entry) => entry.name)).toEqual([ref?.id]);
+        expect(await readSecretStoreValue({ scope: { kind: "team" }, name: ref!.id })).toEqual({
+          ok: true,
+          value: "123:wizard-token",
+        });
+      } else {
+        expect(result).toMatchObject(
+          state === "cancelled"
+            ? { done: true, status: "cancelled" }
+            : {
+                done: true,
+                status: "error",
+                error: "Gateway caller authority is no longer active.",
+              },
+        );
+        expect(committed).toBeUndefined();
+        expect(entries).toEqual([]);
+      }
+      await cancelWizardSessions(tracker.wizardSessions);
+    });
   });
 });
 
