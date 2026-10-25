@@ -375,7 +375,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         logGateway.info.mock.calls
           .filter(([message]) => message.startsWith("slow chat send"))
           .map(([message]) => message.match(/stage=(\w+)/)?.[1])
-          .toSorted(),
+          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
       ).toEqual(injection === "accepted" ? ["steer"] : ["queued", "startup"]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expectSingleUserInput(storePath, sessionKey, steerText);
