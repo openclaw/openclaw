@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -57,6 +57,29 @@ function admittedAttempt(...args: Parameters<typeof fixture.admittedAttempt>) {
   const config = args[1]?.config;
   setRuntimeConfigSnapshot(config ?? {}, config);
   return fixture.admittedAttempt(...args);
+}
+
+function workspaceRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-"));
+  onTestFinished(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
+async function rootedHost(
+  root: string,
+  overrides: Parameters<typeof fixture.admittedAttempt>[1] = {},
+  pluginId = "codex",
+) {
+  const { attempt } = await admittedAttempt("required-root", {
+    workspaceDir: root,
+    cwd: root,
+    sessionRoot: root,
+    requireWorkspaceOnly: true,
+    ...overrides,
+  });
+  const host = createAgentHarnessHostCapabilities({ attempt, pluginId });
+  onTestFinished(host.close);
+  return { attempt, surface: host.capabilities.createToolSurface! };
 }
 
 afterEach(() => {
@@ -224,27 +247,13 @@ describe("agent harness workspace readiness and boundaries", () => {
   });
 
   it("does not remove existing shell policy from a non-Codex required-root harness", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-other-"));
-    const { attempt } = await admittedAttempt("required-other", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "copilot" });
-    try {
-      const tools = host.capabilities.createToolSurface?.({}) ?? [];
-      expect(tools.map((tool) => tool.name)).toEqual(
-        expect.arrayContaining(["read", "exec", "process"]),
-      );
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const { surface } = await rootedHost(workspaceRoot(), {}, "copilot");
+    expect(surface({}).map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["read", "exec", "process"]),
+    );
   });
   it("retains callable prepared sandbox handles in a required-root surface", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-sandbox-"));
-    const bridge = createHostSandboxFsBridge(root);
+    const root = workspaceRoot();
     const runShellCommand = vi.fn(async () => ({
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
@@ -254,7 +263,7 @@ describe("agent harness workspace readiness and boundaries", () => {
       overrides: {
         workspaceDir: root,
         agentWorkspaceDir: root,
-        fsBridge: bridge,
+        fsBridge: createHostSandboxFsBridge(root),
         backend: {
           id: "test",
           runtimeId: "test",
@@ -268,131 +277,95 @@ describe("agent harness workspace readiness and boundaries", () => {
         },
       },
     });
-    const { attempt } = await admittedAttempt("required-sandbox", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-      sandbox,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    try {
-      const tools = host.capabilities.createToolSurface?.({ sandbox: undefined }) ?? [];
-      expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
-      await tools
-        .find((tool) => tool.name === "write")!
-        .execute("sandbox-write", { path: "inside.txt", content: "inside" });
-      await expect(
-        tools.find((tool) => tool.name === "read")!.execute("sandbox-read", { path: "inside.txt" }),
-      ).resolves.toBeDefined();
-      expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
-      expect(runShellCommand).not.toHaveBeenCalled();
-      const noCore = host.capabilities.createToolSurface?.({ includeCoreTools: false }) ?? [];
-      expect(
-        noCore.some((tool) => ["read", "write", "exec", "process", "message"].includes(tool.name)),
-      ).toBe(false);
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const { surface } = await rootedHost(root, { sandbox });
+    const tools = surface({ sandbox: undefined });
+    expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
+    await tools
+      .find((tool) => tool.name === "write")!
+      .execute("sandbox-write", { path: "inside.txt", content: "inside" });
+    await expect(
+      tools.find((tool) => tool.name === "read")!.execute("sandbox-read", { path: "inside.txt" }),
+    ).resolves.toBeDefined();
+    expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
+    expect(runShellCommand).not.toHaveBeenCalled();
+    const noCore = surface({ includeCoreTools: false });
+    expect(
+      noCore.some((tool) => ["read", "write", "exec", "process", "message"].includes(tool.name)),
+    ).toBe(false);
   });
 
   it("keeps required-root file tools and rejects shell and plugin root escapes", async () => {
-    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-host-"));
+    const parent = workspaceRoot();
     const root = path.join(parent, "workshop");
     fs.mkdirSync(root);
     fs.writeFileSync(path.join(parent, "outside.txt"), "outside");
     fs.symlinkSync(parent, path.join(root, "escape"), "dir");
-    const { attempt } = await admittedAttempt("required-root", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
-    });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const { attempt, surface } = await rootedHost(root);
     attempt.workspaceDir = parent;
     attempt.cwd = parent;
     attempt.sessionRoot = parent;
     attempt.requireWorkspaceOnly = undefined;
-    try {
-      for (const plan of [
-        undefined,
-        {
-          includeBaseCodingTools: true,
-          includeShellTools: true,
-          includeChannelTools: true,
-          includeOpenClawTools: true,
-          includePluginTools: true,
-        },
+    for (const plan of [
+      undefined,
+      {
+        includeBaseCodingTools: true,
+        includeShellTools: true,
+        includeChannelTools: true,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    ]) {
+      const tools = surface({
+        workspaceDir: parent,
+        cwd: parent,
+        requireWorkspaceOnly: undefined,
+        exec: { mode: "full" },
+        toolConstructionPlan: plan,
+      });
+      expect(tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["read", "write", "edit"]),
+      );
+      expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
+      const write = tools.find((tool) => tool.name === "write")!;
+      const read = tools.find((tool) => tool.name === "read")!;
+      await write.execute("inside", { path: "inside.txt", content: "inside" });
+      expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
+      for (const target of [
+        path.join(parent, "outside.txt"),
+        "../outside.txt",
+        "escape/outside.txt",
       ]) {
-        const tools =
-          host.capabilities.createToolSurface?.({
-            workspaceDir: parent,
-            cwd: parent,
-            requireWorkspaceOnly: undefined,
-            exec: { mode: "full" },
-            toolConstructionPlan: plan,
-          }) ?? [];
-        expect(tools.map((tool) => tool.name)).toEqual(
-          expect.arrayContaining(["read", "write", "edit"]),
-        );
-        expect(tools.some((tool) => tool.name === "exec" || tool.name === "process")).toBe(false);
-        const write = tools.find((tool) => tool.name === "write")!;
-        const read = tools.find((tool) => tool.name === "read")!;
-        await write.execute("inside", { path: "inside.txt", content: "inside" });
-        expect(fs.readFileSync(path.join(root, "inside.txt"), "utf8")).toBe("inside");
-        for (const target of [
-          path.join(parent, "outside.txt"),
-          "../outside.txt",
-          "escape/outside.txt",
-        ]) {
-          await expect(read.execute("escape-read", { path: target })).rejects.toThrow();
-          await expect(
-            write.execute("escape-write", { path: target, content: "bad" }),
-          ).rejects.toThrow();
-        }
+        await expect(read.execute("escape-read", { path: target })).rejects.toThrow();
+        await expect(
+          write.execute("escape-write", { path: target, content: "bad" }),
+        ).rejects.toThrow();
       }
-      expect(() =>
-        host.capabilities.createToolSurface?.({
-          sessionPermissionPolicy: { root: parent, mode: "full" },
-        }),
-      ).toThrow("escapes the captured required workspace");
-      expect(fs.readFileSync(path.join(parent, "outside.txt"), "utf8")).toBe("outside");
-    } finally {
-      host.close();
-      fs.rmSync(parent, { recursive: true, force: true });
     }
+    expect(() =>
+      surface({
+        sessionPermissionPolicy: { root: parent, mode: "full" },
+      }),
+    ).toThrow("escapes the captured required workspace");
+    expect(fs.readFileSync(path.join(parent, "outside.txt"), "utf8")).toBe("outside");
   });
 
   it("preserves a narrower read-only root inside the required workspace", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rooted-policy-"));
+    const root = workspaceRoot();
     const subset = path.join(root, "subset");
     fs.mkdirSync(subset);
     fs.writeFileSync(path.join(root, "sibling.txt"), "sibling");
     fs.writeFileSync(path.join(subset, "inside.txt"), "inside");
-    const { attempt } = await admittedAttempt("required-subset", {
-      workspaceDir: root,
-      cwd: root,
-      sessionRoot: root,
-      requireWorkspaceOnly: true,
+    const { surface } = await rootedHost(root);
+    const tools = surface({
+      sessionPermissionPolicy: { root: subset, mode: "read-only" },
     });
-    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    try {
-      const tools =
-        host.capabilities.createToolSurface?.({
-          sessionPermissionPolicy: { root: subset, mode: "read-only" },
-        }) ?? [];
-      const read = tools.find((tool) => tool.name === "read")!;
-      expect(tools.some((tool) => tool.name === "write" || tool.name === "exec")).toBe(false);
-      await expect(
-        read.execute("sibling", { path: path.join(root, "sibling.txt") }),
-      ).rejects.toThrow();
-      await expect(
-        read.execute("inside", { path: path.join(subset, "inside.txt") }),
-      ).resolves.toBeDefined();
-    } finally {
-      host.close();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const read = tools.find((tool) => tool.name === "read")!;
+    expect(tools.some((tool) => tool.name === "write" || tool.name === "exec")).toBe(false);
+    await expect(
+      read.execute("sibling", { path: path.join(root, "sibling.txt") }),
+    ).rejects.toThrow();
+    await expect(
+      read.execute("inside", { path: path.join(subset, "inside.txt") }),
+    ).resolves.toBeDefined();
   });
 });

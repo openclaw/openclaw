@@ -101,7 +101,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
   ] satisfies { content: PersistedUserTurnMessage["content"] | undefined; expected: string }[])(
     "preserves admitted content and identity through projected prompts: $content",
     async ({ content, expected }) => {
-      const handler = vi.fn(async (_event: unknown) => undefined);
+      const handler = vi.fn(async (_event: unknown, _ctx: PluginHookAgentContext) => undefined);
       const history = [{ role: "user", content: "Earlier request" }];
       const ctx = {
         trigger: "user",
@@ -131,19 +131,16 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         "Prior conversation: remember my preference\nCurrent message: hello",
       );
       expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
-      expect(handler).toHaveBeenCalledTimes(2);
-      for (const [event] of handler.mock.calls) {
+      expect(handler.mock.calls).toHaveLength(2);
+      for (const [event, context] of handler.mock.calls) {
         expect(event).toMatchObject({
           currentUserMessage: expected,
           currentUserMessageId: content === undefined ? "message-1" : "original:user",
           prompt: expect.stringContaining("Prior conversation:"),
           messages: history,
         });
+        expect(context).toMatchObject(expectedContext);
       }
-      expect(handler).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining(expectedContext),
-      );
     },
   );
 
@@ -171,11 +168,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
         { requiresToolAuthority: true },
       ),
     );
-    const build = () =>
-      buildPrompt({
-        messages,
-        toolAuthority: toolAuthority(() => ["read"]),
-      });
+    const build = () => buildPrompt({ messages, toolAuthority: toolAuthority(() => ["read"]) });
     expect((await build()).prompt).toBe("contribution\n\nhello");
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
     retained[0]![0]!.content[0]!.arguments.nested.value = "retained mutation";
@@ -198,13 +191,9 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       promptHook((event) => mutate(event, "original", "prepare"), {
         hookName: "agent_turn_prepare",
       }),
-      promptHook(
-        (event) => ({
-          ...mutate(event, "original", "first"),
-          toolsAllow: ["message"],
-        }),
-        { priority: 10 },
-      ),
+      promptHook((event) => ({ ...mutate(event, "original", "first"), toolsAllow: ["message"] }), {
+        priority: 10,
+      }),
       promptHook((event) => mutate(event, "first", "second"), { priority: 0 }),
       promptHook(
         (event, ctx) => {
@@ -213,9 +202,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
           );
           return mutate(event, "original", "authorized");
         },
-        {
-          requiresToolAuthority: true,
-        },
+        { requiresToolAuthority: true },
       ),
     );
     const result = await buildPrompt({
