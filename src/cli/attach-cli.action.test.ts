@@ -256,9 +256,51 @@ describe("openclaw attach (action)", () => {
       requiredStoredDeviceAuthScopes: ["operator.admin"],
       params: { sessionKey: "global", agentId: "ops" },
     });
-    const printed = JSON.parse(logs[0]!) as { configPath: string };
+    // Locate the JSON payload by content rather than assuming index 0: the
+    // stderr bearer-token warning only interleaves ahead of it when the test
+    // process's own stderr happens to be a TTY.
+    const jsonLine = logs.find((line) => line.includes('"configPath"'));
+    const printed = JSON.parse(jsonLine!) as { configPath: string };
     expect(existsSync(printed.configPath)).toBe(true);
     expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
+  });
+
+  it("--print-config: warns on stderr that the printed env carries a live bearer token (interactive TTY)", async () => {
+    const stderrTtyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+    try {
+      await runAttach("--print-config", "--session", "agent:main:cli");
+      const errLine = logs.find((line) => line.startsWith("ERR:"));
+      expect(errLine).toContain("OPENCLAW_MCP_TOKEN");
+      expect(errLine).toContain("secret");
+      // Warning must land before the JSON payload, not interleaved after it.
+      const warnIndex = logs.indexOf(errLine ?? "");
+      const jsonIndex = logs.findIndex((line) => line.includes('"sessionKey"'));
+      expect(warnIndex).toBeLessThan(jsonIndex);
+    } finally {
+      if (stderrTtyDescriptor) {
+        Object.defineProperty(process.stderr, "isTTY", stderrTtyDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stderr, "isTTY");
+      }
+    }
+  });
+
+  it("--print-config: skips the stderr warning when stderr is redirected (non-TTY)", async () => {
+    const stderrTtyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    Object.defineProperty(process.stderr, "isTTY", { value: false, configurable: true });
+    try {
+      await runAttach("--print-config", "--session", "agent:main:cli");
+      // Redirected/scripted callers keep the pre-existing exact-output contract: no new stderr line.
+      expect(logs.find((line) => line.startsWith("ERR:"))).toBeUndefined();
+      expect(logs.join("\n")).toContain('"sessionKey"');
+    } finally {
+      if (stderrTtyDescriptor) {
+        Object.defineProperty(process.stderr, "isTTY", stderrTtyDescriptor);
+      } else {
+        Reflect.deleteProperty(process.stderr, "isTTY");
+      }
+    }
   });
 
   it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
