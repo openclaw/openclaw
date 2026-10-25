@@ -1673,7 +1673,10 @@ describe("standalone image metadata", () => {
         "pluginToolsServe",
         pathToFileURL(path.join(acpx, "index.js")).href,
       ),
-    ).toEqual({ command: process.execPath, args: [bridge] });
+    ).toEqual({
+      command: process.execPath,
+      args: process.versions.bun ? ["--no-install", bridge] : [bridge],
+    });
 
     const external = path.join(runtime, "external");
     const externalPlugin = path.join(external, "extensions/acpx");
@@ -1690,7 +1693,9 @@ describe("standalone image metadata", () => {
       ),
     ).toEqual({
       command: process.execPath,
-      args: ["--import", import.meta.resolve("tsx"), externalBridge],
+      args: process.versions.bun
+        ? ["--no-install", externalBridge]
+        : ["--import", import.meta.resolve("tsx"), externalBridge],
     });
     const externalLauncher = path.join(external, "openclaw.mjs");
     fs.writeFileSync(externalLauncher, "external");
