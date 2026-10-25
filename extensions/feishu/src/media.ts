@@ -23,6 +23,10 @@ import { runBeforeFeishuMessageDispatch } from "./send-context.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
 import type { FeishuSendResult } from "./types.js";
+import {
+  FEISHU_VIDEO_PREVIEW_TIMEOUT_MS,
+  maybeUploadVideoPreviewImageKey,
+} from "./video-preview.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_MAX_FILE_UPLOAD_BYTES = 30 * 1024 * 1024;
@@ -61,13 +65,20 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
+function createConfiguredFeishuMediaClient(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string;
+  httpTimeoutMs?: number;
+}) {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  return createFeishuClient({ ...account, httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS });
+  return createFeishuClient({
+    ...account,
+    httpTimeoutMs: params.httpTimeoutMs ?? FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+  });
 }
 
 type FeishuUploadResponse =
@@ -227,6 +238,32 @@ export type SendMediaResult = FeishuSendResult & {
   voiceIntentDegradedToFile?: boolean;
 };
 
+async function uploadImageFeishu(params: {
+  cfg: ClawdbotConfig;
+  image: Buffer;
+  accountId?: string;
+  httpTimeoutMs?: number;
+}): Promise<string> {
+  const client = createConfiguredFeishuMediaClient(params);
+
+  const response = await requestFeishuApi(
+    () =>
+      client.im.image.create({
+        data: {
+          image_type: "message",
+          image: params.image,
+        },
+      }),
+    "Feishu image upload failed",
+    { includeNestedErrorLogId: true },
+  );
+
+  return extractFeishuUploadKey(response, {
+    key: "image_key",
+    errorPrefix: "Feishu image upload failed",
+  });
+}
+
 /**
  * Sanitize a filename for safe use in Feishu multipart/form-data uploads.
  * Strips control characters and multipart-injection vectors (CWE-93) while
@@ -252,7 +289,7 @@ type SendUploadedMediaParams = {
 
 async function sendUploadedMediaFeishu(
   params: SendUploadedMediaParams,
-  media: { image_key: string } | { file_key: string },
+  media: { image_key: string } | { file_key: string; image_key?: string },
   msgType: "image" | "file" | "audio" | "media" | "sticker",
 ): Promise<SendMediaResult> {
   const target = resolveFeishuSendTarget(params);
@@ -590,7 +627,26 @@ export async function sendMediaFeishu(
     }
     return isImage ? { image_key: key } : { file_key: key };
   });
-  const result = await sendUploadedMediaFeishu(params, media, routing.msgType);
+  const imageKey =
+    routing.msgType === "media"
+      ? await maybeUploadVideoPreviewImageKey({
+          ...prepared,
+          msgType: routing.msgType,
+          maxBytes: Math.min(mediaMaxBytes, FEISHU_MAX_IMAGE_UPLOAD_BYTES),
+          uploadImage: (image) =>
+            runBeforeFeishuMessageDispatch(() =>
+              uploadImageFeishu({
+                cfg,
+                image,
+                accountId,
+                httpTimeoutMs: FEISHU_VIDEO_PREVIEW_TIMEOUT_MS,
+              }),
+            ),
+        })
+      : undefined;
+  const mediaWithCover =
+    "file_key" in media && imageKey ? { ...media, image_key: imageKey } : media;
+  const result = await sendUploadedMediaFeishu(params, mediaWithCover, routing.msgType);
   return {
     ...result,
     ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
