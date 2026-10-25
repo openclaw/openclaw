@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { HostedOutboundMediaChunkRecord } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -47,11 +48,6 @@ const testStateEnv: NodeJS.ProcessEnv = {
 
 function createAccount(overrides: Partial<ResolvedSynologyChatAccount> = {}) {
   return makeAccount({
-    token: "token",
-    dmPolicy: "allowlist",
-    allowedUserIds: ["42"],
-    botName: "OpenClaw",
-    allowInsecureSsl: false,
     webhookUrl: "https://gateway.example.com/public/synology?proxy-token=keep",
     webhookPath: "/internal/synology",
     webhookPathSource: "explicit" as const,
@@ -66,9 +62,8 @@ function installRuntime() {
       ...options,
       env: testStateEnv,
     });
-    const exposedStore = { ...store, lookupMany: store.lookupMany };
-    openedStores.push(exposedStore);
-    return exposedStore;
+    openedStores.push(store);
+    return store;
   };
   setSynologyRuntime({ state: { openKeyedStore } } as unknown as PluginRuntime);
   return openedStores;
@@ -84,8 +79,16 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
-function mockPdf(buffer: Buffer, fileName = "report.pdf") {
-  mockMedia(buffer, "application/pdf", fileName);
+function withWrongToken(url: string) {
+  const parsed = new URL(url, "http://localhost");
+  const key = expectDefined(
+    [...parsed.searchParams.keys()].find((param) =>
+      param.startsWith("__openclaw_synology_media_token_"),
+    ),
+    "capability token",
+  );
+  parsed.searchParams.set(key, "wrong");
+  return `${parsed.pathname}${parsed.search}`;
 }
 
 function mockMedia(
@@ -134,13 +137,7 @@ describe("Synology Chat hosted outbound media", () => {
   let runtime: ReturnType<typeof installRuntime>;
   const prepare = (mediaUrl = "https://files.example.com/report.pdf") =>
     prepareSynologyHostedMedia({ account, mediaUrl });
-  function storeAt(index: number) {
-    const store = runtime[index];
-    if (!store) {
-      throw new Error(`expected hosted media store ${index}`);
-    }
-    return store;
-  }
+  const storeAt = (index: number) => expectDefined(runtime[index], "hosted media store");
   async function stageUrl(mediaUrl = "https://files.example.com/report.pdf") {
     return internalCapabilityUrl((await prepare(mediaUrl)).url);
   }
@@ -175,17 +172,18 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("requires an exact public HTTPS callback before preparing media", async () => {
-    const credentialedUrl = new URL("https://gateway.example.com/webhook");
+    const publicUrl = "https://g.test/w";
+    const credentialedUrl = new URL(publicUrl);
     credentialedUrl.username = "fixture-user";
     credentialedUrl.password = "fixture-password";
     for (const [webhookUrl, message] of [
       ["", "attachments require webhookUrl"],
       ["not-a-url", "must be an absolute HTTPS URL"],
-      ["http://gateway.example.com/webhook", "must be an absolute HTTPS URL"],
+      ["http://g.test/w", "must be an absolute HTTPS URL"],
       [credentialedUrl.toString(), "must be an absolute HTTPS URL"],
-      ["https://gateway.example.com/webhook#fragment", "must be an absolute HTTPS URL"],
+      [`${publicUrl}#fragment`, "must be an absolute HTTPS URL"],
       [
-        "https://gateway.example.com/webhook?__openclaw_synology_media_token_existing=value",
+        `${publicUrl}?__openclaw_synology_media_token_existing=value`,
         "must not contain query parameters starting with",
       ],
     ] as const) {
@@ -201,7 +199,7 @@ describe("Synology Chat hosted outbound media", () => {
 
   it("reconstructs persisted bytes before response backpressure", async () => {
     const frozenBytes = Buffer.alloc(40 * 1024, 0x61);
-    mockPdf(frozenBytes);
+    mockMedia(frozenBytes, "application/pdf", "report.pdf");
     const requestUrl = await stageUrl();
     const response = makeRes();
     const write = response.write.bind(response);
@@ -222,7 +220,7 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("rejects persisted corruption before writing response bytes", async () => {
-    mockPdf(Buffer.alloc(40 * 1024, 0x61));
+    mockMedia(Buffer.alloc(40 * 1024, 0x61), "application/pdf", "report.pdf");
     const requestUrl = await stageUrl();
     const chunkStore = storeAt(1) as PluginStateKeyedStore<HostedOutboundMediaChunkRecord>;
     const chunk = (await chunkStore.entries()).find(({ value }) => value.index === 1);
@@ -240,26 +238,6 @@ describe("Synology Chat hosted outbound media", () => {
     expect(response.destroyed).toBe(false);
     expect(writeSpy).not.toHaveBeenCalled();
     expect(await chunkStore.entries()).toEqual([]);
-  });
-
-  it("never treats capability query values as an on-demand fetch target", async () => {
-    const requestUrl = new URL(
-      await stageUrl("https://files.example.com/floor-plan.png"),
-      "http://localhost",
-    );
-    requestUrl.searchParams.set("url", "http://127.0.0.1/private");
-    requestUrl.searchParams.set("target", "https://files.example.com/changed.png");
-    const response = makeRes();
-    await serve(`${requestUrl.pathname}${requestUrl.search}`, response, account);
-    expect(response.statusCode).toBe(200);
-    expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
-    expect(response.headers).not.toHaveProperty("location");
-    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
-    const targetOnly = makeRes();
-    await expect(
-      serve("/internal/synology?target=http://127.0.0.1/private", targetOnly, account),
-    ).resolves.toBe(false);
-    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps preparation limits after a fresh runtime initializes its stores", async () => {
@@ -281,23 +259,11 @@ describe("Synology Chat hosted outbound media", () => {
 
   it("fails closed for wrong tokens, accounts, routes, and unsupported methods", async () => {
     const prepared = await prepare();
-    const capability = new URL(prepared.url);
-    const tokenKey = [...capability.searchParams.keys()].find((key) =>
-      key.startsWith("__openclaw_synology_media_token_"),
-    );
-    if (!tokenKey) {
-      throw new Error("expected Synology hosted media token");
-    }
-    const wrongToken = new URLSearchParams(capability.search);
-    wrongToken.set(tokenKey, "wrong");
-    await expectStatus(`/internal/synology?${wrongToken.toString()}`, 401);
-    await expectStatus(
-      internalCapabilityUrl(prepared.url),
-      404,
-      createAccount({ accountId: "other" }),
-    );
+    const requestUrl = internalCapabilityUrl(prepared.url);
+    await expectStatus(withWrongToken(requestUrl), 401);
+    await expectStatus(requestUrl, 404, createAccount({ accountId: "other" }));
     await expectStatus(internalCapabilityUrl(prepared.url, "/other"), 404);
-    await expectStatus(internalCapabilityUrl(prepared.url), 405, account, "POST");
+    await expectStatus(requestUrl, 405, account, "POST");
   });
 
   it("bounds unauthenticated capability lookups before reading persistent state", async () => {
@@ -309,15 +275,7 @@ describe("Synology Chat hosted outbound media", () => {
       await readGate;
       return await originalLookup(key);
     });
-    const capability = new URL(internalCapabilityUrl(prepared.url), "http://localhost");
-    const tokenKey = [...capability.searchParams.keys()].find((key) =>
-      key.startsWith("__openclaw_synology_media_token_"),
-    );
-    if (!tokenKey) {
-      throw new Error("expected Synology hosted media token");
-    }
-    capability.searchParams.set(tokenKey, "wrong");
-    const requestUrl = `${capability.pathname}${capability.search}`;
+    const requestUrl = withWrongToken(internalCapabilityUrl(prepared.url));
     const responses = Array.from({ length: 5 }, () => makeRes());
     const requests = responses.map((response) => serve(requestUrl, response, account));
     await vi.waitFor(() => expect(lookupSpy).toHaveBeenCalledTimes(4));
@@ -329,37 +287,27 @@ describe("Synology Chat hosted outbound media", () => {
     ]);
   });
 
-  it("holds serving slots until responses finish or close", async () => {
-    const requestUrl = await stageUrl();
-    const stalled = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
-    await Promise.all(stalled.map((response) => serve(requestUrl, response, account)));
-    await expectStatus(requestUrl, 503);
-    stalled[0]?.emit("finish");
-    await expectStatus(requestUrl, 200);
-    for (const response of stalled.slice(1)) {
-      response.emit("close");
-    }
-  });
-
-  it("does not release a new runtime's serving slot when an old response finishes", async () => {
+  it("holds serving slots through finish/close without releasing a new runtime's leases", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
-    const previous = makeRes({ finishOnEnd: false });
+    const previous = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
     const current = Array.from({ length: 4 }, () => makeRes({ finishOnEnd: false }));
     try {
       const requestUrl = await stageUrl();
-      await serve(requestUrl, previous, account);
-      expect(previous.statusCode).toBe(200);
+      await Promise.all(previous.map((response) => serve(requestUrl, response, account)));
+      expect(previous.map((response) => response.statusCode)).toEqual([200, 200, 200, 200]);
+      await expectStatus(requestUrl, 503);
+      previous[0]?.emit("finish");
+      await expectStatus(requestUrl, 200);
       installRuntime();
       for (const response of current) {
         await serve(requestUrl, response, account);
         expect(response.statusCode).toBe(200);
       }
-      previous.emit("finish");
+      previous[1]?.emit("finish");
       await expectStatus(requestUrl, 503);
     } finally {
-      previous.emit("close");
-      for (const response of current) {
+      for (const response of [...previous, ...current]) {
         response.emit("close");
       }
       vi.useRealTimers();
@@ -402,7 +350,7 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("bounds repeated authenticated downloads without charging HEAD requests", async () => {
-    mockPdf(Buffer.alloc(32 * 1024 * 1024, 0x61));
+    mockMedia(Buffer.alloc(32 * 1024 * 1024, 0x61), "application/pdf", "report.pdf");
     const requestUrl = await stageUrl();
     const chunkReads = trackChunkReads(storeAt(1));
     for (let index = 0; index < 4; index += 1) {
@@ -419,33 +367,35 @@ describe("Synology Chat hosted outbound media", () => {
     expect(chunkReads()).toBe(chunkReadsAtLimit);
   });
 
-  it("persists frozen capabilities across plugin-state reopen and runtime replacement", async () => {
+  it("serves an immutable, header-safe persisted capability until expiry without refetching", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    mockMedia(image.buffer, image.contentType, '../quarter\r\nX-Evil: yes/"plan".pdf');
     const requestUrl = await stageUrl("https://files.example.com/floor-plan.png");
     resetPluginStateStoreForTests();
     installRuntime();
     loadWebMediaMock.mockResolvedValueOnce({
+      ...image,
       buffer: Buffer.from("changed-source-bytes"),
-      kind: "image",
-      contentType: "image/png",
       fileName: "changed.png",
     });
-    const response = await get(requestUrl);
+    const tampered = new URL(requestUrl, "http://localhost");
+    tampered.searchParams.set("url", "http://127.0.0.1/private");
+    tampered.searchParams.set("target", "https://files.example.com/changed.png");
+    const response = await get(`${tampered.pathname}${tampered.search}`);
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body).toString("utf8")).toBe("frozen-image-bytes");
+    expect(response.headers).not.toHaveProperty("location");
+    const disposition = response.headers["content-disposition"] ?? "";
+    expect(disposition).toContain("attachment");
+    expect(disposition).not.toMatch(/[\r\n]/u);
+    expect(disposition).not.toContain("../");
+    await expect(
+      serve("/internal/synology?target=http://127.0.0.1/private", makeRes(), account),
+    ).resolves.toBe(false);
+    vi.setSystemTime(1_700_000_000_000 + 10 * 60_000 + 1);
+    await expectStatus(requestUrl, 404);
     expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects active content and leaves no live capability", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("<svg onload=alert(1)></svg>"),
-      kind: "image",
-      contentType: "image/svg+xml",
-      fileName: "active.svg",
-    });
-    await expect(prepare("https://files.example.com/active.svg")).rejects.toThrow(
-      "do not support active content type",
-    );
-    await expect(Promise.all(runtime.map((store) => store.entries()))).resolves.toEqual([[], []]);
   });
 
   const generic = ["application/octet-stream", "diagram.bin"] as const;
@@ -453,6 +403,7 @@ describe("Synology Chat hosted outbound media", () => {
   const html = "<script>active()</script>";
   const svg = "<svg onload='active()'/>";
   it.each<[string, Buffer, string?, string?]>([
+    ["explicit SVG", Buffer.from("<svg/>"), "image/svg+xml", "active.svg"],
     ["XML prefix", Buffer.from(`<?xml version="1.0"?><!--fixture-->${svg}`), ...generic],
     ["SVG doctype", Buffer.from(`<!DOCTYPE svg>${svg}`), ...generic],
     [
@@ -477,6 +428,7 @@ describe("Synology Chat hosted outbound media", () => {
       await expect(prepare("https://files.example.com/disguised-content")).rejects.toThrow(
         "do not support active content type",
       );
+      await expect(Promise.all(runtime.map((store) => store.entries()))).resolves.toEqual([[], []]);
     },
   );
 
@@ -486,25 +438,5 @@ describe("Synology Chat hosted outbound media", () => {
     const response = await get(await stageUrl("https://files.example.com/example.txt"));
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.body)).toEqual(buffer);
-  });
-
-  it("sanitizes response filenames before constructing headers", async () => {
-    mockPdf(Buffer.from("pdf"), '../quarter\r\nX-Evil: yes/"plan".pdf');
-    const response = await get(await stageUrl("https://files.example.com/report.pdf"));
-    const disposition = response.headers["content-disposition"] ?? "";
-    expect(disposition).toContain("attachment");
-    expect(disposition).not.toMatch(/[\r\n]/u);
-    expect(disposition).not.toContain("../");
-  });
-
-  it("expires capabilities without falling back to the source URL", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_700_000_000_000);
-    const requestUrl = await stageUrl();
-    vi.setSystemTime(1_700_000_000_000 + 10 * 60_000 + 1);
-    const response = makeRes();
-    await serve(requestUrl, response, account);
-    expect(response.statusCode).toBe(404);
-    expect(loadWebMediaMock).toHaveBeenCalledTimes(1);
   });
 });

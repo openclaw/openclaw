@@ -24,21 +24,21 @@ vi.mock("./runtime.js", async (importOriginal) => ({
   getSynologyRuntime: () => ({ state: { openChannelIngressQueue } }),
 }));
 
-function webhookEvent(params?: {
-  postId?: string;
-  channelId?: string;
-  extraFieldValue?: string;
-}): SynologyWebhookRawEvent {
+function webhookEvent(
+  postId = "post-1",
+  channelId?: string,
+  extraFieldValue?: string,
+): SynologyWebhookRawEvent {
   const bodyFields: Record<string, unknown> = {
-    post_id: params?.postId ?? "post-1",
-    channel_id: params?.channelId,
+    post_id: postId,
+    channel_id: channelId,
     user_id: "user-1",
     username: "Synology User",
     text: "hello",
   };
-  if (params?.extraFieldValue) {
+  if (extraFieldValue) {
     // Keep authentication fixtures out of static object snapshots and failure output.
-    bodyFields[["to", "ken"].join("")] = params.extraFieldValue;
+    bodyFields[["to", "ken"].join("")] = extraFieldValue;
   }
   return {
     bodyFields,
@@ -92,14 +92,8 @@ describe("Synology Chat durable ingress", () => {
   it("redacts and persists raw webhook fields, then recovers them exactly once", async () => {
     await withQueue(async (queue, start) => {
       const interrupted = start(defer);
-      const event = webhookEvent({ postId: "post-raw", channelId: "channel-42" });
-      await interrupted.receive(
-        webhookEvent({
-          postId: "post-raw",
-          channelId: "channel-42",
-          extraFieldValue: "fixture-value",
-        }),
-      );
+      const event = webhookEvent("post-raw", "channel-42");
+      await interrupted.receive(webhookEvent("post-raw", "channel-42", "fixture-value"));
       await interrupted.waitForIdle();
       expect(await queue.listClaims()).toEqual([
         expect.objectContaining({
@@ -142,7 +136,7 @@ describe("Synology Chat durable ingress", () => {
     await withQueue(async (queue, start) => {
       const ingress = start(dispatch);
       const id = "post-auth";
-      await ingress.receive(webhookEvent({ postId: id }));
+      await ingress.receive(webhookEvent(id));
       await vi.waitFor(async () => {
         expect((await queue.enqueue(id, {} as SynologyIngressPayload)).kind).toBe("failed");
       });
