@@ -16,17 +16,6 @@ import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 
 const tempDirs = createTempDirTracker();
 
-function makeHermeticDoctorEnv(stateDir: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    HOME: stateDir,
-    OPENCLAW_HOME: stateDir,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  };
-}
-
 function writeDoctorFixture(
   pluginRoot: string,
   pluginId: string,
@@ -179,16 +168,13 @@ function channelPackage(pluginId: string, legacy = false) {
   };
 }
 
-function writeModernBundledChannelMigrationPlugin(params: {
-  pluginRoot: string;
-  pluginId: string;
-}): void {
-  writeDoctorFixture(params.pluginRoot, params.pluginId, {
+function writeModernBundledChannelMigrationPlugin(pluginRoot: string, pluginId: string): void {
+  writeDoctorFixture(pluginRoot, pluginId, {
     "openclaw.plugin.json": {
-      channels: [params.pluginId],
+      channels: [pluginId],
       doctorContract: { stateMigrations: true },
     },
-    "package.json": channelPackage(params.pluginId),
+    "package.json": channelPackage(pluginId),
     "index.cjs": "throw new Error('shadowed bundled channel runtime loaded');\n",
     "setup-entry.cjs": `module.exports = {
   kind: 'bundled-channel-setup-entry',
@@ -206,20 +192,16 @@ function writeModernBundledChannelMigrationPlugin(params: {
 function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string, legacy = false): void {
   const owners = {
     sessionRouteStateOwners: [
-      legacy
-        ? {
-            id: "legacy-load-path-owner",
-            label: "Legacy Load Path Owner",
-            providerIds: ["legacy-provider"],
-          }
-        : {
-            id: "load-path-session-owner",
-            label: "Load Path Session Owner",
-            providerIds: ["load-path-provider"],
-            runtimeIds: ["load-path-runtime"],
-            cliSessionKeys: ["load-path-cli"],
-            authProfilePrefixes: ["load-path:"],
-          },
+      {
+        id: legacy ? "legacy-load-path-owner" : "load-path-session-owner",
+        label: legacy ? "Legacy Load Path Owner" : "Load Path Session Owner",
+        providerIds: [legacy ? "legacy-provider" : "load-path-provider"],
+        ...(!legacy && {
+          runtimeIds: ["load-path-runtime"],
+          cliSessionKeys: ["load-path-cli"],
+          authProfilePrefixes: ["load-path:"],
+        }),
+      },
     ],
   };
   writeDoctorFixture(
@@ -250,15 +232,6 @@ function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: str
   });
 }
 
-function createDoctorPluginConfig(pluginRoot: string, pluginId: string): OpenClawConfig {
-  return {
-    plugins: {
-      load: { paths: [pluginRoot] },
-      entries: { [pluginId]: { enabled: true, config: { summaryModel: "gpt-5.4-mini" } } },
-    },
-  };
-}
-
 function fixture(pluginId: string, write: (root: string, id: string) => void = () => {}) {
   const stateDir = tempDirs.make("openclaw-doctor-contract-load-paths-");
   const pluginRoot = tempDirs.make("openclaw-doctor-contract-load-paths-");
@@ -266,8 +239,20 @@ function fixture(pluginId: string, write: (root: string, id: string) => void = (
   return {
     stateDir,
     pluginRoot,
-    config: createDoctorPluginConfig(pluginRoot, pluginId),
-    env: makeHermeticDoctorEnv(stateDir),
+    config: {
+      plugins: {
+        load: { paths: [pluginRoot] },
+        entries: { [pluginId]: { enabled: true, config: { summaryModel: "gpt-5.4-mini" } } },
+      },
+    } satisfies OpenClawConfig,
+    env: {
+      ...process.env,
+      HOME: stateDir,
+      OPENCLAW_HOME: stateDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
     pluginIds: [pluginId],
   };
 }
@@ -330,11 +315,7 @@ describe("doctor contract registry load-path plugins", () => {
       );
       const { stateDir, config } = setup;
       const bundledPluginsDir = path.join(stateDir, "bundled");
-      const shadowedBundledRoot = path.join(bundledPluginsDir, pluginId);
-      writeModernBundledChannelMigrationPlugin({
-        pluginRoot: shadowedBundledRoot,
-        pluginId,
-      });
+      writeModernBundledChannelMigrationPlugin(path.join(bundledPluginsDir, pluginId), pluginId);
       const env = {
         ...setup.env,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",

@@ -77,10 +77,7 @@ function write(root: string, name: string, contents: string) {
   return writeArtifact(path.join(root, name), contents);
 }
 function loadApi(pluginRoot: string) {
-  return loadPluginPublicArtifactModuleSync<PublicApi>({
-    pluginRoot,
-    artifactBasename: "api.js",
-  });
+  return loadPluginPublicArtifactModuleSync<PublicApi>({ pluginRoot, artifactBasename: "api.js" });
 }
 function loadFacade(dirName: string, artifactBasename = "runtime-api.js") {
   return loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({ dirName, artifactBasename });
@@ -160,9 +157,8 @@ describe("managed plugin public surfaces", () => {
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
     // Secret refresh copies env while retaining the selected manifest and live source generation.
-    const env = { ...process.env };
     const providers = resolvePluginWebSearchProviders({
-      env,
+      env: { ...process.env },
       mode: "setup",
       onlyPluginIds: [pluginId],
       config: { plugins: { allow: [pluginId] } },
@@ -393,8 +389,7 @@ describe("managed plugin public surfaces", () => {
     "keeps public APIs on the registered %s graph when source and build coexist in %s (entry in %s)",
     (extension, buildDirectory, entryDirectory) => {
       const root = fs.realpathSync(temp.make("openclaw-public-mixed-source-"));
-      const buildRoot = path.join(root, buildDirectory);
-      writeSource(buildRoot, "stale-build", "js");
+      writeSource(path.join(root, buildDirectory), "stale-build", "js");
       writeSource(root, "source");
       if (extension === "mts") {
         fs.renameSync(path.join(root, "index.ts"), path.join(root, "index.mts"));
@@ -484,10 +479,7 @@ describe("managed plugin public surfaces", () => {
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", directory);
       const request = { dirName: pluginId, artifactBasename: "api.js" };
       expect(
-        withPluginRuntimeGatewayRequestScope(
-          { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
-          () => loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>(request).read(),
-        ),
+        inRequest(createEmptyPluginRegistry(), () => loadFacade(pluginId, "api.js").read()),
       ).toBe("library");
       const active = prepare(root, pluginId, "bundled", extension);
       active.publish("registered");
