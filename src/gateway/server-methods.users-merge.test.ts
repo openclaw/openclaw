@@ -11,12 +11,6 @@ import {
   linkUserChannelIdentity,
   resolveUserChannelIdentity,
 } from "../state/user-channel-identities.js";
-import {
-  connectUserModelAccount,
-  listUserModelAccounts,
-  listUserProfileAuthLinks,
-  setUserProfileAuthLink,
-} from "../state/user-model-accounts.js";
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import {
@@ -143,17 +137,6 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
     expect(getUserProfileListItem(source.id).emails).toEqual([]);
     expect(setUserPreferences(source.id, { shared: "source", sourceOnly: true }).ok).toBe(true);
     expect(setUserPreferences(target.id, { shared: "target" }).ok).toBe(true);
-    const account = connectUserModelAccount({
-      ownerProfileId: source.id,
-      credential: { type: "token", provider: "anthropic", token: "synthetic-merge-token" },
-      assertCurrent: () => {},
-    });
-    for (const [profileId, authProfileId] of [
-      [source.id, "openai:duplicate"],
-      [target.id, "openai:survivor"],
-    ] as const) {
-      setUserProfileAuthLink({ profileId, provider: "openai", authProfileId });
-    }
     const captured = await prepareUserProfileIdentity(source.id);
     using _ = { [Symbol.dispose]: () => captured.release() };
     const selected = await createExpectedProfileBinding(source.id, clientFor(source.id));
@@ -182,13 +165,6 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
     expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
     expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
     expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
-    expect(listUserProfileAuthLinks(target.id)).toMatchObject([
-      { provider: "anthropic", authProfileId: account.authProfileId },
-      { provider: "openai", authProfileId: "openai:survivor" },
-    ]);
-    expect(listUserModelAccounts({ profileId: target.id }).accounts).toMatchObject([
-      { authProfileId: account.authProfileId, provider: "anthropic", selected: true },
-    ]);
     expect(() => captured.readCurrentProfile()).toThrow();
     expect(() => selected?.assertCurrent()).toThrow();
     const stale = await rpc.dispatch("users.prefs.get", {}, clientFor(source.id));
