@@ -105,7 +105,7 @@ describe("lintMemoryWikiVault", () => {
             "Unsafe Local Import: alpha.md",
             "Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
           ],
-        ]) {
+        ] as const) {
           await write(file, `# ${title}\n\n## ${metadata}\n\n## Content\nalpha body\n\n${notes}`);
         }
       }

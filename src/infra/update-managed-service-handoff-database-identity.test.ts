@@ -263,7 +263,9 @@ describe("older writer contention", () => {
       const insert = db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, '{}', 1, NULL)");
       insert.run(root, "rolled-back");
     };
-    const failure = captureError(() => owner(true, (db) => owner.transact(db, () => write(db))));
+    const failure = captureError(() =>
+      owner(true, (db) => owner.transact(db, () => write(db), {})),
+    );
     expect([failure.message, failure.cause]).toEqual(["database is locked", undefined]);
     if (phase === "callback") {
       expect(failure).toBe(original);

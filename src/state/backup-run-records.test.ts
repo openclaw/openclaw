@@ -10,6 +10,8 @@ import { buildBackupScheduleJob } from "../cron/backup-command.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
 import type { CronJob } from "../cron/types.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { parseBackupRun } from "./backup-run-records.contract.js";
 import {
   readBackupArchiveDirectories,
@@ -17,6 +19,7 @@ import {
   readBackupRuns,
   summarizeBackupTargets,
   recordBackupRunOutcome,
+  type BackupRunRecord,
   type BackupRunFreshness,
 } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -45,10 +48,16 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 type Outcome = Parameters<typeof recordBackupRunOutcome>[0];
-async function fixture() {
+async function fixture(stubEnv = false, bootstrap = true) {
   const root = roots.make("openclaw-backup-runs-test-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-  runOpenClawStateWriteTransaction(() => undefined, { env });
+  // Recording never creates the ledger; ordinary fixtures model an existing host.
+  if (bootstrap) {
+    runOpenClawStateWriteTransaction(() => undefined, { env });
+  }
+  if (stubEnv) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  }
   return {
     env,
     record: (overrides: Partial<Omit<Outcome, "env">> = {}) =>
@@ -134,7 +143,7 @@ describe("backup run records", () => {
     await expect(fs.access(parent)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("reads legacy manifests and round trips offsite details", async () => {
+  it("reads legacy manifests and round trips offsite details and external command outcomes", async () => {
     expect(legacyRun({ kind: "archive" }, "/old.tar.gz")).toEqual({
       id: "legacy",
       createdAt: 1,
@@ -142,7 +151,7 @@ describe("backup run records", () => {
       status: "ok",
       kind: "archive",
     });
-    const { env, record } = await fixture();
+    const { env, record } = await fixture(true);
     const location = offsiteLocation();
     expect(legacyRun({ kind: "archive", target: "offsite", location })).toMatchObject({
       namespace: "host",
@@ -162,21 +171,46 @@ describe("backup run records", () => {
       createdAt: 30,
     } as const;
     await record(failed);
+    vi.spyOn(Date, "now").mockReturnValue(40);
+    await backupRecordCommand(createTestRuntime(), {
+      status: "ok",
+      target: "host-restic",
+      bytes: "321",
+    });
     const runs = await readBackupRuns(env);
     expect(runs).toEqual([
+      expect.objectContaining({
+        kind: "external",
+        target: "host-restic",
+        status: "ok",
+        bytes: 321,
+      }),
       expect.objectContaining(failed),
       expect.objectContaining({ location, retention: { kept: 7, deleted: 2 } }),
     ]);
     expect(summarizeBackupTargets(runs)).toEqual([
-      { kind: "archive", target: "offsite", namespace: "host", latest: runs[0], latestOk: runs[1] },
+      { kind: "external", target: "host-restic", latest: runs[0], latestOk: runs[0] },
+      { kind: "archive", target: "offsite", namespace: "host", latest: runs[1], latestOk: runs[2] },
     ]);
     expect((await readBackupRunFreshness(env)).latestOffsite?.createdAt).toBe(30);
+    vi.mocked(Date.now).mockReturnValue(50);
+    await backupRecordCommand(createTestRuntime(), {
+      status: "failed",
+      target: "host-restic",
+      error: "host timer failed",
+    });
+    expect((await readBackupRuns(env))[0]).toMatchObject({
+      kind: "external",
+      status: "failed",
+      error: "host timer failed",
+    });
   });
 
   it.each([
     { status: "invalid", target: "host", bytes: undefined },
     { status: "ok", target: "", bytes: undefined },
     { status: "ok", target: "host", bytes: "-1" },
+    { status: "ok", target: "host", bytes: "1.5" },
   ])("rejects invalid external outcome input %j", async (opts) => {
     await expect(backupRecordCommand(createTestRuntime(), opts)).rejects.toThrow();
   });
@@ -184,7 +218,7 @@ describe("backup run records", () => {
   it.each(["host-a", undefined])(
     "does not count namespace %s successes toward another namespace's schedule",
     async (namespace) => {
-      const { env, record, saveSchedule } = await fixture();
+      const { env, record, saveSchedule } = await fixture(true);
       vi.spyOn(Date, "now").mockReturnValue(1_100);
       const ok = {
         createdAt: 1_000,
@@ -224,7 +258,7 @@ describe("backup run records", () => {
   );
 
   it("hints on failed or stale offsite schedules independently of newer successes elsewhere", async () => {
-    const { env, record, saveSchedule } = await fixture();
+    const { env, record, saveSchedule } = await fixture(true);
     const cfg = {};
     const ok = { createdAt: 1_000, target: "archive", namespace: "host" };
     const job = schedule("host");
@@ -244,7 +278,7 @@ describe("backup run records", () => {
     await checkHint(env, undefined, 1_301, cfg);
   });
 
-  it("records in the captured state and retains the outcome after reopen", async () => {
+  it("records in the captured state without main-thread SQL and retains the outcome after reopen", async () => {
     const { env } = await fixture();
     const { env: otherEnv } = await fixture();
     const mutableEnv = { ...env };
@@ -255,11 +289,22 @@ describe("backup run records", () => {
       createdAt: 7,
     } as const;
     await closeOpenClawStateDatabaseAsync();
-    const pending = recordBackupRunOutcome({ env: mutableEnv, ...snapshot });
-    mutableEnv.OPENCLAW_STATE_DIR = otherEnv.OPENCLAW_STATE_DIR;
-    await pending;
-    expect(await readBackupRunFreshness(otherEnv)).toEqual({});
-    expect(await readBackupRunFreshness(env)).toMatchObject({ latest: snapshot });
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    try {
+      const pending = recordBackupRunOutcome({ env: mutableEnv, ...snapshot });
+      mutableEnv.OPENCLAW_STATE_DIR = otherEnv.OPENCLAW_STATE_DIR;
+      await pending;
+      const [first, second] = await Promise.all([
+        readBackupRunFreshness(env),
+        readBackupRunFreshness(otherEnv),
+      ]);
+      expect(second).toEqual({});
+      expect(first).toMatchObject({ latest: snapshot });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
     await closeOpenClawStateDatabaseAsync();
     expect(await readBackupRunFreshness(env)).toMatchObject({
       latest: snapshot,
@@ -337,18 +382,35 @@ describe("backup run records", () => {
     expect(await readBackupRunFreshness(env)).toEqual({});
   });
 
-  it("formats none, failed, fresh, and stale states", async () => {
-    const { env, record } = await fixture();
+  it("keeps absent status reads read-only and formats none, failed, fresh, and stale states", async () => {
+    const { env, record } = await fixture(false, false);
+    const realpath = vi.spyOn(fsSync.realpathSync, "native").mockImplementation(() => {
+      throw new Error("Scratch discovery must not canonicalize an absent ledger");
+    });
+    await expect(readBackupArchiveDirectories(env)).resolves.toEqual([]);
+    expect(realpath).not.toHaveBeenCalled();
+    realpath.mockRestore();
+    await record({ archivePath: "/backups/failed.tar.gz", status: "failed" });
+    expect(await readBackupRunFreshness(env)).toEqual({});
+    await expect(fs.access(resolveOpenClawStateSqlitePath(env))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     const formatTimeAgo = (ageMs: number) => `${ageMs / 3_600_000}h ago`;
     const statusValue = (freshness: BackupRunFreshness) =>
       buildBackupStatusValue({ freshness, formatTimeAgo });
     expect(statusValue({})).toBe("none recorded");
-    await record({ status: "failed", createdAt: 1 });
-    const failed = await readBackupRunFreshness(env);
+    const failed: BackupRunRecord = {
+      id: "failed",
+      createdAt: 1,
+      archivePath: "/backup",
+      status: "failed",
+      kind: "archive",
+    };
     vi.spyOn(Date, "now").mockReturnValueOnce(3 * 24 * 3_600_000 + 1);
-    expect(statusValue(failed)).toBe("last attempt failed 72h ago (archive)");
+    expect(statusValue({ latest: failed })).toBe("last attempt failed 72h ago (archive)");
     await checkHint(env, "No successful backup is recorded.");
 
+    runOpenClawStateWriteTransaction(() => undefined, { env });
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     await record({ archivePath: "/backup", kind: "git", createdAt: 1 });
     await checkHint(env);

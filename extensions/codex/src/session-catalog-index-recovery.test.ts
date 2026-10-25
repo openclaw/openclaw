@@ -8,21 +8,25 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { catalogIndex } from "./session-catalog-client.test-support.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
 } from "./session-catalog-events.js";
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
-import type { CodexCatalogIndex } from "./session-catalog-index.js";
+import { CodexCatalogIndex } from "./session-catalog-index.js";
+import { completeCatalogState } from "./session-catalog-index.test-support.js";
 import { CodexCatalogProjections } from "./session-catalog-projection.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
 import { idleThread } from "./session-catalog.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+const indexes: CodexCatalogIndex[] = [];
+afterEach(async () => {
+  for (const index of indexes.splice(0)) {
+    await index.close();
+  }
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -35,13 +39,17 @@ const ids = async (index: CodexCatalogIndex) =>
 function catalog(
   root: string,
   readNative: CodexCatalogIndexOptions["readNative"],
-  options: { homeId?: string; local?: boolean } = {},
+  options: { homeId?: string; local?: boolean; state?: CodexCatalogState } = {},
 ) {
-  return catalogIndex({
+  const index = new CodexCatalogIndex({
     homeId: options.homeId ?? root,
     ...(options.local === false ? {} : { localSessionsRoot: root }),
+    state: options.state,
     readNative,
+    assertCurrent: () => {},
   });
+  indexes.push(index);
+  return index;
 }
 
 async function rollout(id: string, fields: Partial<CodexThread> = {}) {
@@ -69,6 +77,31 @@ async function compress(file: string) {
   await fs.unlink(file);
   return compressed;
 }
+
+it("serves a remote restart snapshot immediately and reconciles offline changes in the background", async () => {
+  const original = idleThread({ id: "archived-while-offline", source: "cli" });
+  const replacement = idleThread({ id: "created-while-offline", source: "cli" });
+  const saved = await project([original]);
+  const state = completeCatalogState([saved.rows[0]!]);
+  const native = createDeferred<void>();
+  const readNative = vi.fn(async () => {
+    await native.promise;
+    return project([replacement]);
+  });
+  const index = catalog("remote-restart", readNative, { state, local: false });
+  try {
+    expect(await ids(index)).toEqual([original.id]);
+    expect(readNative).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(readNative).toHaveBeenCalledOnce());
+    native.resolve();
+    await vi.waitFor(async () => {
+      expect(await ids(index)).toEqual([replacement.id]);
+    });
+    expect(readNative).toHaveBeenCalledOnce();
+  } finally {
+    native.resolve();
+  }
+});
 
 it.each([false, true])(
   "removes compressed rollouts archived during hydration: %s",

@@ -46,6 +46,7 @@ vi.mock("./obsidian.js", async (importOriginal) => ({
   runObsidianAction: vi.fn(),
 }));
 
+// mock-isolation: Observe query dispatch independently of vault indexing and reads.
 vi.mock("./query.js", () => ({
   getMemoryWikiPage: vi.fn(),
   searchMemoryWiki: vi.fn(),
