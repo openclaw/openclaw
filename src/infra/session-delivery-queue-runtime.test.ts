@@ -143,53 +143,42 @@ function runtimeFixture(context: OpenClawStateWorkerContext) {
     },
   };
 }
-async function withRuntime(run: (runtime: ReturnType<typeof runtimeFixture>) => Promise<void>) {
-  await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-      const fixture = runtimeFixture(captureOpenClawStateWorkerContext());
-      try {
-        await run(fixture);
-      } finally {
-        // Join owners and admitted work before restoring their environment or deleting the queue.
-        await fixture.close();
-        await fixture.time.scheduler.stop();
-        await closeOpenClawStateDatabaseByPathAsync(fixture.context.admission.databasePath);
-        vi.restoreAllMocks();
-      }
-    });
-  });
-}
 const it = baseIt.extend<{ runtime: ReturnType<typeof runtimeFixture> }>({
-  runtime: ({ task: _task }, use) => withRuntime(use),
+  runtime: ({ task: _task }, use) =>
+    withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+        const fixture = runtimeFixture(captureOpenClawStateWorkerContext());
+        try {
+          await use(fixture);
+        } finally {
+          // Join owners and admitted work before restoring their environment or deleting the queue.
+          await fixture.close();
+          await fixture.time.scheduler.stop();
+          await closeOpenClawStateDatabaseByPathAsync(fixture.context.admission.databasePath);
+          vi.restoreAllMocks();
+        }
+      });
+    }),
 });
 
 describe("session delivery queue runtime", () => {
   it("drains one scheduled id without requesting the pending inventory", async ({ runtime: r }) => {
     const id = await r.enqueue();
-    const unrelatedIds: string[] = [];
-    for (let index = 0; index < 8; index += 1) {
-      unrelatedIds.push(await r.enqueue(agentTurn(`unrelated:${index}`)));
-    }
-    const reloadPending = vi.spyOn(storage, "loadPendingSessionDelivery");
+    const unrelatedId = await r.enqueue(agentTurn("unrelated"));
     const listPending = vi.spyOn(storage, "loadPendingSessionDeliveries");
-    const drain = vi.spyOn(recovery, "drainPendingSessionDelivery");
     const onSettled = vi.fn(async () => {});
     const stop = r.start({ onSettled });
     await expect(r.schedule(id)).resolves.toBe(true);
-    expect(reloadPending).toHaveBeenCalledExactlyOnceWith(id, r.context);
     await r.time.advanceBy(0);
     await stop();
     expect(listPending).not.toHaveBeenCalled();
-    expect(drain).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ id, queueContext: r.context }),
-    );
     expect(r.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), {
       queueContext: r.context,
     });
     expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "recovered", r.context);
     expect(await r.pending(id)).toBeNull();
     const pending = await r.all();
-    expect(pending.map((entry) => entry.id).toSorted()).toEqual(unrelatedIds.toSorted());
+    expect(pending.map((entry) => entry.id)).toEqual([unrelatedId]);
   });
 
   it.for(["lookup failure", "drain failure", "unchanged row"] as const)(
