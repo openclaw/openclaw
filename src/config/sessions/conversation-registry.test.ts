@@ -269,11 +269,24 @@ describe("conversation registry", () => {
         sessionId: "space-session",
         updatedAt: 100,
         chatType: "group",
-        deliveryContext: {
-          channel: delivery.channel,
-          accountId: delivery.accountId,
-          to: delivery.target,
-          threadId: delivery.threadId,
+        delivery: {
+          kind: "external",
+          route: {
+            channel: delivery.channel,
+            accountId: delivery.accountId,
+            target: { to: delivery.target, threadId: delivery.threadId },
+          },
+          context: {
+            channel: delivery.channel,
+            accountId: delivery.accountId,
+            to: delivery.target,
+            threadId: delivery.threadId,
+          },
+          origin: {
+            provider: delivery.channel,
+            accountId: delivery.accountId,
+            to: delivery.target,
+          },
         },
       },
     );
@@ -303,10 +316,23 @@ describe("conversation registry", () => {
           sessionId: `shared-session-${index}`,
           updatedAt: index * 100,
           chatType: "group",
-          deliveryContext: {
-            channel: delivery.channel,
-            accountId: delivery.accountId,
-            to: delivery.target,
+          delivery: {
+            kind: "external",
+            route: {
+              channel: delivery.channel,
+              accountId: delivery.accountId,
+              target: { to: delivery.target },
+            },
+            context: {
+              channel: delivery.channel,
+              accountId: delivery.accountId,
+              to: delivery.target,
+            },
+            origin: {
+              provider: delivery.channel,
+              accountId: delivery.accountId,
+              to: delivery.target,
+            },
           },
         },
       );
