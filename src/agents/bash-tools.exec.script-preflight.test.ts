@@ -304,12 +304,7 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
             databasePath,
             sqlitePath,
             markerPath,
-            tool: createExecTool({
-              host: "gateway",
-              security: "full",
-              ask: "on-miss",
-              allowBackground: false,
-            }),
+            tool: createPreflightTool(),
           }),
       );
     });
@@ -381,9 +376,14 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
       await check([
         `sqlite3 ${quote(`file:${databasePath}%ZZ`)}`,
         'sqlite3 "file:$OPENCLAW_STATE_DIR/state/%ZZ.sqlite"',
+        `sqlite3 ${quote(`file:${encodeURI(databasePath)}`)}`,
       ]);
       await check(
-        [`sqlite3 ${quote(`file:${root}/%2573tate%20with%20spaces/state/openclaw.sqlite`)}`],
+        [
+          `sqlite3 ${quote(`file:${root}/%2573tate%20with%20spaces/state/openclaw.sqlite`)}`,
+          'sqlite3 "file:"',
+          `sqlite3 ${quote(`file:${encodeURI(encodeURI(databasePath))}`)}`,
+        ],
         null,
       );
     });
@@ -408,17 +408,6 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
         [`cd ${quote(root)} && sqlite3 "file:$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro"`],
         "live-state-sqlite",
         path.join(stateDir, "workspace"),
-      );
-    });
-
-    it("keeps malformed URI fallbacks and decodes native file URLs only once", async () => {
-      await check([
-        'sqlite3 "file:$OPENCLAW_STATE_DIR/state/%ZZ.sqlite"',
-        `sqlite3 ${quote(`file:${encodeURI(databasePath)}`)}`,
-      ]);
-      await check(
-        ['sqlite3 "file:"', `sqlite3 ${quote(`file:${encodeURI(encodeURI(databasePath))}`)}`],
-        null,
       );
     });
   });

@@ -58,6 +58,12 @@ function acquireStatic(input: PreparedModelRuntimeInput) {
 
 const provider = "cold-auth-fixture";
 const modelId = "fixture-model";
+const apiKey = (providerId: string, key: string) =>
+  ({ type: "api_key", provider: providerId, key }) as const;
+
+function preparedAuth(snapshot: RuntimeLease["snapshot"]) {
+  return expectDefined(getPreparedModelRuntimeAuthStore(snapshot), "prepared auth store");
+}
 
 function coldInput(
   state: OpenClawTestState,
@@ -288,11 +294,10 @@ it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", as
     async (state) => {
       const providerId = envOnly ? "env-only-fixture" : provider;
       const profileId = `${providerId}:${envOnly ? "external" : "default"}`;
-      const profile = {
-        type: "api_key" as const,
-        provider: providerId,
-        key: envOnly ? "synthetic-external-credential" : "synthetic-cold-auth-key",
-      };
+      const profile = apiKey(
+        providerId,
+        envOnly ? "synthetic-external-credential" : "synthetic-cold-auth-key",
+      );
       const input = coldInput(state, "main", providerId);
       const { config, agentDir } = input;
       const publishedProfileIds = () =>
@@ -336,10 +341,7 @@ it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", as
           id: modelId,
           name: "Cold auth fixture model",
         });
-        const authStore = expectDefined(
-          getPreparedModelRuntimeAuthStore(snapshot),
-          "prepared auth store",
-        );
+        const authStore = preparedAuth(snapshot);
         if (envOnly) {
           expect(Object.keys(authStore.profiles)).toEqual([]);
           expect(snapshot.authModes[providerId]).toBeUndefined();
@@ -390,7 +392,7 @@ it.each(["explicit root", "ambient changes after capture"] as const)(
             [ambient, "synthetic-ambient-key"],
             [selected, "synthetic-selected-key"],
           ] as const) {
-            persistProfiles(state, { [profileId]: { type: "api_key", provider, key } });
+            persistProfiles(state, { [profileId]: apiKey(provider, key) });
             expect(resolveSharedAuthStoreOwnership(state.env)).toEqual({ location: "state-db" });
             const sharedPath = resolveSharedAuthStorePath(state.env);
             expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(sharedPath)).toBeUndefined();
@@ -451,16 +453,9 @@ it.each(["explicit root", "ambient changes after capture"] as const)(
                 provider,
                 id: modelId,
               });
-              const authStore = expectDefined(
-                getPreparedModelRuntimeAuthStore(lease.snapshot),
-                "selected environment auth store",
-              );
-              expect(authStore.profiles[profileId]).toEqual({
-                type: "api_key",
-                provider,
-                key: "synthetic-selected-key",
+              expect(preparedAuth(lease.snapshot).profiles).toEqual({
+                [profileId]: apiKey(provider, "synthetic-selected-key"),
               });
-              expect(Object.keys(authStore.profiles)).toEqual([profileId]);
               await lease[Symbol.asyncDispose]();
               lease = undefined;
               observation.expectIdle();
