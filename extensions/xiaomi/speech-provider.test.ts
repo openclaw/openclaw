@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
+import { createClosedChunkStream } from "../test-support/streaming-error-response.js";
 
 const transcodeMock = vi.hoisted(() => vi.fn());
 
@@ -11,13 +12,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({ transcodeAudioBufferToOpus
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
 
 function makeOversizedStreamResponse(): Response {
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(16 * 1024 * 1024));
-      controller.enqueue(new Uint8Array(1));
-      controller.close();
-    },
-  });
+  const body = createClosedChunkStream([new Uint8Array(16 * 1024 * 1024), new Uint8Array(1)]);
   return new Response(body);
 }
 

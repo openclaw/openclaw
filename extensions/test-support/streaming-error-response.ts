@@ -1,4 +1,15 @@
 // Test Support plugin module implements streaming response fixtures.
+export function createClosedChunkStream(chunks: readonly Uint8Array[]) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+}
+
 export type StreamingResponseFixture = {
   response: Response;
   getReadCount: () => number;
