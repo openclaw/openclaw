@@ -324,6 +324,65 @@ and optional provider-specific `confidence` values are estimates, not demonstrat
 accuracy guarantees. An answer does not grant permission to send a message or
 perform another effect.
 
+## Evaluate a task-specific threshold
+
+Do not assume 0.50 is suitable, or replace it with another global default.
+OpenClaw preserves provider estimates; the consumer owns the action threshold.
+A Boolean `probabilityTrue` is not a zero-based Score answer or proof of
+correctness. V2 explicit answers remain independent of that probability, and
+`answer: null` is abstention, even when a probability is also present.
+
+In a source checkout, evaluate saved Boolean scores without making model calls:
+
+```sh
+node scripts/decision-threshold.mts evaluate --data held-out.json --threshold 0.4 --beta 1
+```
+
+The imported JSON contains one provider/model/rubric/question identity and
+human-labeled examples. These values are synthetic, not recommended thresholds:
+
+```json
+{
+  "identity": {
+    "provider": "example",
+    "model": "fixed-checkpoint",
+    "rubricVersion": "support.failure.v1",
+    "questionId": "failure"
+  },
+  "samples": [
+    { "id": "trace-1", "label": true, "probabilityTrue": 0.4 },
+    { "id": "trace-2", "label": false, "probabilityTrue": 0.1 },
+    { "id": "trace-3", "label": true, "probabilityTrue": null }
+  ]
+}
+```
+
+`label: true` means the positive event described by the Boolean rubric.
+Save `null` for unavailable, abstained, or scoreless results; do not turn
+these into negative examples. For V2, check explicit abstention before extracting
+`probabilityTrue`. The report counts unscored rows separately; precision,
+recall, and F-beta cover scored rows only. Undefined metrics are `null`,
+not a perfect score. Review coverage and fallback outcomes alongside metrics.
+
+Predictions use `probabilityTrue >= threshold`, including equality. The report
+includes false-positive and false-negative counts. Choose costs and minimum
+precision/recall requirements for your task before tuning. F1 weights precision
+and recall equally; `--beta` below 1 favors precision and above 1 favors recall.
+F-beta is not a monetary cost model. Evaluate expected costs from error counts
+and task-specific costs when those are the actual objective.
+
+Freeze a threshold on representative labeled tuning data, then evaluate it on
+separate held-out examples. Never select it by repeatedly inspecting held-out
+results. Keep the same splits when comparing models; group related traces to
+avoid leakage. Retune after changes to the model checkpoint, rubric, evidence
+projection, or workload. Small samples do not establish reliable guarantees.
+
+[Hamel Husain and Antaripa Saha's decision-model evaluation article](https://hamel.dev/blog/posts/decision-model-evals/index.html)
+explains this distinction between threshold selection and probability calibration.
+Threshold tuning does not calibrate probabilities. Check calibration separately
+on held-out data before interpreting a score of 0.8 as an 80% observed risk.
+This offline tool neither changes configuration nor approves external effects.
+
 ## Limits and unavailable results
 
 For portable rubrics, use at most 16 questions, 2–64 Choice alternatives, 2–10
