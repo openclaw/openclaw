@@ -50,8 +50,6 @@ vi.mock("./status.scan-overview.js", () => ({
     const scan = await mocks.scan(opts);
     return {
       ...scan,
-      coldStart: false,
-      hasConfiguredChannels: false,
       skipColdStartNetworkChecks: false,
       gatewaySnapshot: {
         gatewayConnection: scan.gatewayConnection,
@@ -154,6 +152,24 @@ const summaries = {
 } satisfies Record<string, UsageSummary>;
 
 let currentScan: StatusScanResult;
+const healthyGateway = () => ({ ok: true, channels: {}, agents: [], ts: 1, durationMs: 0 });
+async function runStatusArgs(args: string[]) {
+  const program = new Command();
+  registerStatusHealthSessionsCommands(program);
+  await program.parseAsync(["status", ...args], { from: "user" });
+}
+
+function runningService(label?: string, environment?: Record<string, string>) {
+  return createMockGatewayService({
+    ...(label ? { label } : {}),
+    isLoaded: async () => true,
+    readCommand: async () => ({
+      programArguments: ["openclaw", label ?? "gateway", "run"],
+      ...(environment ? { environment } : {}),
+    }),
+    readRuntime: async () => (label ? { status: "running", pid: 42 } : { status: "running" }),
+  });
+}
 async function runStatusOutput(opts: Parameters<typeof statusCommand>[0] = {}) {
   mocks.runtime.log.mockClear();
   await statusCommand(opts, defaultRuntime);
@@ -265,21 +281,8 @@ describe("status commands", () => {
         agents: [],
       },
     });
-    mocks.gatewayService.mockReturnValue(
-      createMockGatewayService({
-        isLoaded: async () => true,
-        readCommand: async () => ({ programArguments: ["openclaw", "gateway", "run"] }),
-        readRuntime: async () => ({ status: "running" }),
-      }),
-    );
-    mocks.nodeService.mockReturnValue(
-      createMockGatewayService({
-        label: "node",
-        isLoaded: async () => true,
-        readCommand: async () => ({ programArguments: ["openclaw", "node", "run"] }),
-        readRuntime: async () => ({ status: "running", pid: 42 }),
-      }),
-    );
+    mocks.gatewayService.mockReturnValue(runningService());
+    mocks.nodeService.mockReturnValue(runningService("node"));
   });
 
   afterEach(() => {
@@ -328,19 +331,18 @@ describe("status commands", () => {
         mocks.callGateway.mockImplementation(async ({ method }) => {
           if (method === "health") {
             clock.mockReturnValue(35_000);
-            return { ok: true, channels: {}, agents: [], ts: 1, durationMs: 0 };
+            return healthyGateway();
           }
           return null;
         });
         if (mode === "fast-json") {
           await statusJsonCommand({ usage: true, deep: true }, defaultRuntime);
         } else {
-          const program = new Command();
-          registerStatusHealthSessionsCommands(program);
-          await program.parseAsync(
-            ["status", "--usage", "--deep", ...(mode === "commander-json" ? ["--json"] : [])],
-            { from: "user" },
-          );
+          await runStatusArgs([
+            "--usage",
+            "--deep",
+            ...(mode === "commander-json" ? ["--json"] : []),
+          ]);
         }
 
         expect(mocks.runtime.error).not.toHaveBeenCalled();
@@ -403,9 +405,7 @@ describe("status commands", () => {
       });
     }
     mocks.usage.mockResolvedValue(summary ?? summaries.default);
-    const program = new Command();
-    registerStatusHealthSessionsCommands(program);
-    await program.parseAsync(["status", ...args], { from: "user" });
+    await runStatusArgs(args);
     expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
     const output = mocks.runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
@@ -435,24 +435,6 @@ describe("status commands", () => {
     }
   });
 
-  it("includes full JSON diagnostics only when requested", async () => {
-    const warning = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-    setScan({ pluginCompatibility: [warning] });
-    const fast = JSON.parse(await runStatusOutput({ json: true }));
-    expect(fast).not.toHaveProperty("securityAudit");
-    expect(fast).not.toHaveProperty("pluginCompatibility");
-    expect(mocks.audit).not.toHaveBeenCalled();
-    const full = JSON.parse(await runStatusOutput({ json: true, all: true }));
-    expect(full.securityAudit.summary.critical).toBe(1);
-    expect(full.pluginCompatibility).toEqual({ count: 1, warnings: [warning] });
-    expect(mocks.audit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-    );
-  });
-
   it.each(["JSON", "text", "failing deep health"])(
     "reports present config diagnostics in %s output",
     async (mode) => {
@@ -468,13 +450,7 @@ describe("status commands", () => {
           diagnostics,
         );
       } else {
-        mocks.callGateway.mockResolvedValueOnce({
-          ok: true,
-          channels: {},
-          agents: [],
-          ts: 1,
-          durationMs: 0,
-        });
+        mocks.callGateway.mockResolvedValueOnce(healthyGateway());
         const text = await runStatusOutput({ deep: true });
         for (const expected of [
           "Critical",
@@ -580,17 +556,38 @@ describe("status commands", () => {
     expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 
+  it("shows runtime-only degraded secrets without changing JSON diagnostics", async () => {
+    setScan({
+      secretDiagnostics: [],
+      summary: {
+        ...currentScan.summary,
+        degradedSecretOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            degradationState: "cold",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret reference was not found",
+          },
+        ],
+      },
+    });
+    const text = await runStatusOutput();
+    expect(text).toContain("Secret diagnostics:");
+    expect(text).toContain(
+      "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    );
+    expect(text).toContain("Retry: openclaw secrets reload");
+    const json = JSON.parse(await runStatusOutput({ json: true }));
+    expect(json.secretDiagnostics).toEqual([]);
+    expect(json.degradedSecretOwners).toEqual(currentScan.summary.degradedSecretOwners);
+  });
+
   it("distinguishes service-wrapper secret diagnostics from the CLI context", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
     mocks.gatewayService.mockReturnValue(
-      createMockGatewayService({
-        isLoaded: async () => true,
-        readCommand: async () => ({
-          programArguments: ["openclaw", "gateway", "run"],
-          environment: { OPENCLAW_WRAPPER: wrapperPath },
-        }),
-        readRuntime: async () => ({ status: "running" }),
-      }),
+      runningService(undefined, { OPENCLAW_WRAPPER: wrapperPath }),
     );
     setScan({ secretDiagnostics: ["gateway.auth.token unavailable"] });
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);

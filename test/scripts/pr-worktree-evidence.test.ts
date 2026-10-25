@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -195,6 +196,27 @@ async function preserve(...readers: Array<() => unknown>) {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
+  it("collects an open PR's failed template clone without deleting its seed or template", async ({
+    f,
+  }) => {
+    const template = join(f.repo, ".worktrees/.templates/26a40edd-06f1-43d2-ad5a-a95722f4bd2d");
+    await f.git(["worktree", "add", "--detach", template, f.head]);
+    await f.git(["branch", "temp/pr-910001"]);
+    const clone = join(f.repo, ".worktrees/pr-910001");
+    cpSync(template, clone, { recursive: true });
+    const before = await f.branches();
+    const dry = await f.run(["gc_pr_worktrees true 910001"], "OPEN");
+    expect(dry.status, dry.output).toBe(0);
+    expect(dry.output).toContain("would remove .worktrees/pr-910001 (failed template clone)");
+    expect(existsSync(clone)).toBe(true);
+    const removed = await f.run(["gc_pr_worktrees false 910001"], "OPEN");
+    expect(removed.status, removed.output).toBe(0);
+    expect(existsSync(clone)).toBe(false);
+    expect(await f.git(["-C", template, "rev-parse", "HEAD"])).toBe(f.head);
+    expect(await f.branches()).toBe(before);
+    expect(existsSync(join(f.root, "gh-calls"))).toBe(false);
+  });
+
   it("scopes dry-run and removal without observing siblings", async ({ f }) => {
     const selected = await f.add(910001);
     const sibling = await f.add(910002);

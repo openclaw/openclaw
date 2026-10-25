@@ -75,8 +75,13 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.paths": "workspace.inventory",
   "workspace.inventory.staged-directories": "workspace.inventory",
   "workspace.manifest.capture": "workspace.manifest",
+  "workspace.manifest.base-refresh": "workspace.manifest",
+  "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.paths": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
@@ -308,9 +313,6 @@ async function executeOperation(
   const request = async (value: unknown, signal: AbortSignal): Promise<WorkerTaskResponse> => {
     try {
       signal.throwIfAborted();
-      if (!isRecord(value) || typeof value.type !== "string" || !isRecord(value.input)) {
-        throw new Error("Invalid Git worker host request");
-      }
       // SAFETY: Only the registered typed operation worker can send requests on this live channel.
       const effect = value as GitWorkerHostRequest;
       let result: unknown;

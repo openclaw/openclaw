@@ -228,10 +228,25 @@ function hasValidLifecycleTuple(params: {
   );
 }
 
-export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
-  const presentation = parseApprovalPresentation(row.presentation_json);
+/** Validate bounded audience and reviewer metadata before hydrating retained payloads. */
+export function decodeOperatorApprovalBindings(
+  row: Pick<OperatorApprovalRow, "reviewer_device_ids_json" | "audience_session_keys_json">,
+): Pick<OperatorApprovalRecord, "reviewerDeviceIds" | "audienceSessionKeys"> | null {
   const reviewerDeviceIds = parseStringArray(row.reviewer_device_ids_json);
   const audienceSessionKeys = parseStringArray(row.audience_session_keys_json);
+  if (
+    !reviewerDeviceIds ||
+    !audienceSessionKeys ||
+    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS
+  ) {
+    return null;
+  }
+  return { reviewerDeviceIds, audienceSessionKeys };
+}
+
+export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
+  const presentation = parseApprovalPresentation(row.presentation_json);
+  const bindings = decodeOperatorApprovalBindings(row);
   const kind = parseOperatorApprovalKind(row.kind);
   const status = row.status;
   const decision = row.decision;
@@ -241,9 +256,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
     !isApprovalResolutionRef(row.resolution_ref) ||
-    !reviewerDeviceIds ||
-    !audienceSessionKeys ||
-    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS ||
+    !bindings ||
     !kind ||
     (status !== "pending" &&
       status !== "allowed" &&
@@ -307,7 +320,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       clientId: row.requested_by_client_id,
       deviceTokenAuth: row.requested_by_device_token_auth === 1,
     },
-    reviewerDeviceIds,
+    reviewerDeviceIds: bindings.reviewerDeviceIds,
     source: {
       agentId: row.source_agent_id,
       sessionKey: row.source_session_key,
@@ -316,7 +329,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       toolCallId: row.source_tool_call_id,
       toolName: row.source_tool_name,
     },
-    audienceSessionKeys,
+    audienceSessionKeys: bindings.audienceSessionKeys,
     runtimeEpoch: row.runtime_epoch,
     createdAtMs: row.created_at_ms,
     expiresAtMs: row.expires_at_ms,

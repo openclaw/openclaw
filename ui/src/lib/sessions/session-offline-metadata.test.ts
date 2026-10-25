@@ -24,7 +24,7 @@ function setup() {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const client = store.current();
-  client.opts.offlineRecoveryScope = "metadata-owner";
+  client.testOptions.offlineRecoveryScope = "metadata-owner";
   Object.defineProperties(client, {
     recoveryScope: { value: "metadata-owner" },
     recoveryScopeReady: { value: true },
@@ -69,7 +69,7 @@ function setup() {
     }
     return {};
   });
-  client.opts.onHello?.(hello);
+  client.testOptions.onHello?.(hello);
   const sessions = createTestSessionCapability(store.gateway);
   const errors: Array<string | null> = [];
   sessions.subscribe((state) => errors.push(state.error));
@@ -87,8 +87,9 @@ function setup() {
     setServerRow: (patch: Partial<typeof row>) => {
       row = { ...row, ...patch };
     },
-    offline: () => client.opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
-    reconnect: () => store.current().opts.onHello?.(hello),
+    offline: () =>
+      client.testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
+    reconnect: () => store.current().testOptions.onHello?.(hello),
     replaceClient: () => {
       store.gateway.connect();
       Object.assign(store.current(), {
@@ -119,7 +120,10 @@ it.each([false, true])("retains offline metadata on replacement=%s", async (repl
   try {
     await h.sessions.refresh({ agentId: "main" });
     h.offline();
-    await expect(h.patch({ label: "First" })).resolves.toEqual({ queued: true });
+    const first = h.patch({ label: "First" });
+    expect(h.row()?.label).toBe("First");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+    await expect(first).resolves.toEqual({ queued: true });
     await expect(h.patch({ label: "Final" })).resolves.toEqual({ queued: true });
     await h.patch({ icon: "heart", color: "red", category: "Home" });
     expect(h.row()).toMatchObject({

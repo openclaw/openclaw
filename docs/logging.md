@@ -268,6 +268,14 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Expected shutdown cancellation
+
+During Gateway shutdown, automatic provider catalog discovery can be canceled,
+and cron startup or session recovery can be refused admission. These expected
+lifecycle outcomes do not emit failure warnings or errors. Provider, storage,
+and cleanup failures still use their existing error reporting, including failures
+that wrap a cancellation error.
+
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
@@ -472,6 +480,31 @@ must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
+
 ### Embedded attempt preparation
 
 The `model-dispatch` prep summary extends `stream-ready` through history
@@ -520,9 +553,7 @@ settlement and queue release. The Gateway's earlier operator-start queue is sepa
 
 `stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
 through actual settlement, including authority checks, factory work, and I/O
-waits. `continuationWaitMs` measures queue waiting after an incomplete step until
-resumption or cancellation; it excludes initial admission. These fields are not
-an exact disjoint partition and do not measure CPU time.
+waits. These fields are not an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
@@ -530,7 +561,6 @@ omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
 cause or prove that native work stopped. An active provider call or `next()` step
 keeps its slot until its actual promise settles, including after cancellation.
-An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -684,8 +714,12 @@ identity, and `identityCount`. For batches this names one scope, not every affec
 session. `holderSessionScopeHash` identifies that same scope for the current holder.
 No session titles, transcript content, repository names, or raw identities are logged.
 
-`slow session lifecycle operation` records operations taking at least one
-second through their actual owner release. It separates
+`slow session lifecycle operation` records serialized mutations and compactions
+taking at least one second through their actual owner release. Lifecycle effects
+can span an entire agent turn, so their elapsed time alone is not a warning:
+they are reported only after spending at least one second in a queue themselves
+or being observed as the holder by a queue-waiting diagnostic. This observation
+still counts if the warning budget suppresses the queue-waiting record. It separates
 `mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
 `phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
 `holderPhase` can also identify activation, admission or release work. A
@@ -708,8 +742,11 @@ unknown at capacity or after enablement. `omittedObservations` on a later record
 reports suppressed observations; missing records never prove no wait.
 
 Controller transition records use `session controller phase` on the `diagnostic`
-logger at `info` level, with the same process diagnostics gate. Session, source
-and priority-source identities are salted digests, and reasons are fixed labels.
+logger at `info` level in the structured file log only, with the same process
+diagnostics gate. They omit console output because the message alone does not
+identify the phase or status. Slow lifecycle warnings remain on the console.
+Session, source and priority-source identities are salted digests, and reasons
+are fixed labels.
 These records have a separate 60-record-per-minute budget so transition traffic
 cannot suppress the slow warnings above. Their `omittedObservations` count applies
 to phase records independently.
@@ -1152,6 +1189,21 @@ can explain delays across several sessions.
 For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower the
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
+
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
 
 ### Model call size and timing
 

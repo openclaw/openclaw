@@ -35,7 +35,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore as snapshot,
   registerRuntimeAuthProfileStoreMutationListener,
-  setRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot as setSnapshot,
 } from "./runtime-snapshots.js";
 import * as sqliteRead from "./sqlite-read.js";
 import {
@@ -44,9 +44,9 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
 import {
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntime as loadStore,
   saveAuthProfileStore,
-  updateAuthProfileStoreWithLock,
+  updateAuthProfileStoreWithLock as updateStore,
 } from "./store-runtime.js";
 import * as publication from "./store-update-publication.js";
 import { withEnvOnlyAuthProfileStore } from "./store.js";
@@ -75,7 +75,7 @@ function update(
   agentDir?: string,
   sharedStoreWrite = false,
 ) {
-  return updateAuthProfileStoreWithLock({
+  return updateStore({
     agentDir,
     sharedStoreWrite,
     saveOptions,
@@ -92,7 +92,7 @@ function update(
 }
 function seedSnapshot(current: AuthProfileStore, agentDir?: string, inherited?: AuthProfileStore) {
   save(current, agentDir);
-  setRuntimeAuthProfileStoreSnapshot(
+  setSnapshot(
     inherited ? mergeLocalAuthProfileStoreWithInheritedStore(current, inherited) : current,
     agentDir,
   );
@@ -262,7 +262,7 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     const explicit = makeStore({ added: "synthetic-explicit" });
     save(shared);
     save(local, localDir);
-    const updater = vi.fn<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>(
+    const updater = vi.fn<Parameters<typeof updateStore>[0]["updater"]>(
       (store, _owner, inherited) => {
         expect(store).toEqual(empty);
         expect(inherited).toBeNull();
@@ -272,7 +272,7 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     );
 
     const result = await withEnvOnlyAuthProfileStore(() =>
-      updateAuthProfileStoreWithLock({ agentDir: localDir, saveOptions, updater }),
+      updateStore({ agentDir: localDir, saveOptions, updater }),
     );
     expect(updater).toHaveBeenCalledOnce();
     expect(result).toEqual(explicit);
@@ -321,7 +321,7 @@ it.for(["local", "legacy-shared"] as const)(
         resolveOpenClawStateSqlitePath(state.env),
       ]);
       const updater = vi.fn(() => false);
-      const updating = updateAuthProfileStoreWithLock({
+      const updating = updateStore({
         agentDir: kind === "local" ? agentDir : undefined,
         saveOptions,
         updater,
@@ -366,10 +366,7 @@ it.each(["stale", "newer-write", "rebound-owner"])(
           if (scenario === "rebound-owner") {
             withEnv({ OPENCLAW_STATE_DIR: path.join(state.stateDir, "rebound") }, () => {
               noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
-              setRuntimeAuthProfileStoreSnapshot(
-                makeStore({ selected: "synthetic-rebound" }),
-                agentDir,
-              );
+              setSnapshot(makeStore({ selected: "synthetic-rebound" }), agentDir);
             });
           }
           if (!execution) {
@@ -387,9 +384,9 @@ it.each(["stale", "newer-write", "rebound-owner"])(
         credential(scenario === "newer-write" ? "synthetic-newer" : "synthetic-committed"),
       );
       if (scenario === "newer-write") {
-        expect(
-          loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false }).profiles.selected,
-        ).toEqual(credential("synthetic-newer"));
+        expect(loadStore(agentDir, { syncExternalCli: false }).profiles.selected).toEqual(
+          credential("synthetic-newer"),
+        );
       } else if (scenario === "rebound-owner") {
         expect(snapshot(agentDir)?.profiles.selected).toEqual(credential("synthetic-rebound"));
       } else {
@@ -457,9 +454,7 @@ it.each([
       }
       expect(readPersistedStore(agentDir)?.profiles).toEqual(expected);
       if (outcome === "interrupted") {
-        expect(
-          loadAuthProfileStoreForRuntime(derivedDir, { syncExternalCli: false }).profiles,
-        ).toEqual(expected);
+        expect(loadStore(derivedDir, { syncExternalCli: false }).profiles).toEqual(expected);
       } else {
         expect(snapshot(agentDir)?.profiles).toEqual(expected);
         if (target === "shared") {
@@ -499,7 +494,7 @@ it("does not retain inherited order when a native rotation overtakes state publi
     });
     await update({ order: ["selected", "third", "other"] }, undefined, true);
     expect(rotated).toBe(true);
-    const published = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
+    const published = loadStore(agentDir, { syncExternalCli: false });
     expect(published.order).toEqual({ fixture: ["selected", "third", "other"] });
     expect(published.profiles.selected).toEqual(local.profiles.selected);
   });
@@ -571,7 +566,7 @@ it.each(["before-callback", "in-callback", "commit"] as const)(
         return true;
       });
       await expect(
-        updateAuthProfileStoreWithLock({
+        updateStore({
           profileId: authProfileId,
           updater,
           assertCurrent() {

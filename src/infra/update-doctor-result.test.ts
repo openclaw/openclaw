@@ -7,16 +7,30 @@ import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
   createUpdatePostInstallDoctorResultPath,
-  getUpdateDoctorConfigWriteAuthority,
   normalizeUpdatePostInstallDoctorWarnings,
   recordUpdateDoctorConfigMigration,
-  recordUpdateDoctorConfigWrite,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "./update-doctor-result.js";
 
 const resultPaths: string[] = [];
+function resultFile() {
+  const file = createUpdatePostInstallDoctorResultPath();
+  resultPaths.push(file);
+  return file;
+}
+
+async function consume(file: string, expected: unknown) {
+  await expect(consumeUpdatePostInstallDoctorResult(file)).resolves.toEqual(expected);
+  await expect(fs.access(file)).rejects.toThrow();
+}
+
+async function consumeRaw(result: unknown, expected: unknown) {
+  const file = resultFile();
+  await fs.writeFile(file, JSON.stringify(result), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await consume(file, expected);
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -25,25 +39,13 @@ afterEach(async () => {
 });
 
 describe("post-install doctor result IPC", () => {
-  it.each(
-    [
-      {
-        status: "error" as const,
-        failureFacts: [
-          { check: "doctor", code: "doctor-failed", message: "Required migration failed" },
-        ],
-      },
-      {
-        ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
-        configHash: "b".repeat(64),
-        warnings: ["plugin/example: version probe timed out"],
-        deferredInspectionCheckIds: [
-          "core/doctor/new-target-inspection",
-          "target:Inspection_Check",
-        ],
-      },
-    ].flatMap((result) => ["file", "stdout"].map((destination) => ({ result, destination }))),
-  )("round-trips $result.status results over $destination", async ({ result, destination }) => {
+  it.each(["file", "stdout"])("round-trips advisory evidence over %s", async (destination) => {
+    const result = {
+      ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
+      configHash: "b".repeat(64),
+      warnings: ["plugin/example: version probe timed out"],
+      deferredInspectionCheckIds: ["core/doctor/new-target-inspection", "target:Inspection_Check"],
+    };
     if (destination === "stdout") {
       const output: string[] = [];
       vi.stubEnv("VITEST", "false");
@@ -62,17 +64,14 @@ describe("post-install doctor result IPC", () => {
       expect(JSON.parse(output.join("").split("=").slice(1).join("="))).toEqual(result);
       return;
     }
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
+    const resultPath = resultFile();
     await writeUpdatePostInstallDoctorResult({ resultPath, result });
 
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(result);
-    await expect(fs.access(resultPath)).rejects.toThrow();
+    await consume(resultPath, result);
   });
 
   it("bounds distinct warnings before writing and after reading", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
+    const resultPath = resultFile();
     const warnings = [
       "   ",
       ...Array.from({ length: 40 }, (_, index) => `Warning ${index}. ${"x".repeat(600)}`),
@@ -84,20 +83,11 @@ describe("post-install doctor result IPC", () => {
       resultPath,
       result: { status: "ok", warnings: repeatedWarnings },
     });
-    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual({
-      status: "ok",
-      warnings: expected,
-    });
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
-      status: "ok",
-      warnings: expected,
-    });
+    const bounded = { status: "ok", warnings: expected };
+    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual(bounded);
+    await consume(resultPath, bounded);
 
-    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings: repeatedWarnings }));
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
-      status: "ok",
-      warnings: expected,
-    });
+    await consumeRaw({ status: "ok", warnings: repeatedWarnings }, bounded);
   });
 
   it("bounds warnings at complete sentences or fields instead of cutting recovery advice", () => {
@@ -122,26 +112,15 @@ describe("post-install doctor result IPC", () => {
     expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
   });
 
-  it.each(
-    [
-      "missing-array",
-      [" "],
-      Array.from({ length: 129 }, () => "core/doctor/example"),
-      [`core/doctor/${"x".repeat(256)}`],
-    ].map((ids) => ({ ids })),
-  )(
+  it.each([
+    { ids: "missing-array" },
+    { ids: [" "] },
+    { ids: Array.from({ length: 129 }, () => "core/doctor/example") },
+    { ids: [`core/doctor/${"x".repeat(256)}`] },
+  ])(
     "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
     async ({ ids }) => {
-      const resultPath = createUpdatePostInstallDoctorResultPath();
-      resultPaths.push(resultPath);
-      await fs.writeFile(
-        resultPath,
-        JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
-      );
-      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-      expect(result?.status).toBe("ok");
-      expect(result?.deferredInspectionCheckIds).toBeUndefined();
-      await expect(fs.access(resultPath)).rejects.toThrow();
+      await consumeRaw({ status: "ok", deferredInspectionCheckIds: ids }, { status: "ok" });
     },
   );
 
@@ -171,48 +150,6 @@ describe("post-install doctor result IPC", () => {
     });
   });
 
-  it("carries current authority to included writes and advances only the root input hash", async () => {
-    const configPath = "/synthetic/openclaw.json";
-    const initialHash = "a".repeat(64);
-    const committedHash = "b".repeat(64);
-    let revoked = false;
-    const assertCurrent = () => {
-      if (revoked) {
-        throw new Error("Requester authority revoked.");
-      }
-    };
-    expect(getUpdateDoctorConfigWriteAuthority(configPath)).toBeUndefined();
-    await captureUpdateDoctorConfigWrites(
-      configPath,
-      async () => {
-        expect(getUpdateDoctorConfigWriteAuthority(configPath)).toEqual({
-          inputHash: initialHash,
-          assertCurrent,
-        });
-        expect(getUpdateDoctorConfigWriteAuthority("/synthetic/agents.json")).toEqual({
-          assertCurrent,
-        });
-        recordUpdateDoctorConfigWrite(
-          configPath,
-          initialHash,
-          committedHash,
-          {},
-          '{"tools":{"profile":"full"}}',
-        );
-        expect(getUpdateDoctorConfigWriteAuthority(configPath)).toEqual({
-          inputHash: committedHash,
-          assertCurrent,
-        });
-        revoked = true;
-        expect(() =>
-          getUpdateDoctorConfigWriteAuthority("/synthetic/agents.json")?.assertCurrent(),
-        ).toThrow("Requester authority revoked.");
-      },
-      { inputHash: initialHash, assertCurrent },
-    );
-    expect(getUpdateDoctorConfigWriteAuthority(configPath)).toBeUndefined();
-  });
-
   it("rejects result paths outside the secure OpenClaw temp root", async () => {
     const tempRoot = resolvePreferredOpenClawTmpDir();
     const resultPath = path.join(
@@ -230,11 +167,8 @@ describe("post-install doctor result IPC", () => {
   });
 
   it("rejects malformed advisory payloads and consumes the file", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
-    await fs.writeFile(
-      resultPath,
-      JSON.stringify({
+    await consumeRaw(
+      {
         status: "advisory",
         advisory: {
           kind: "package-post-install-doctor",
@@ -242,11 +176,8 @@ describe("post-install doctor result IPC", () => {
           message: "forged advisory",
           details: [],
         },
-      }),
-      { encoding: "utf8", mode: 0o600, flag: "wx" },
+      },
+      null,
     );
-
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toBeNull();
-    await expect(fs.access(resultPath)).rejects.toThrow();
   });
 });

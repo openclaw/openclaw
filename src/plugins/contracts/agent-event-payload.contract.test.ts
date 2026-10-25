@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -13,10 +14,30 @@ import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
-async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
+type Subscription = Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0];
+function subscribe(options: Omit<Subscription, "id" | "handle">) {
+  const handle = vi.fn<Subscription["handle"]>();
+  const { config, registry } = createPluginRegistryFixture();
+  registerTestPlugin({
+    registry,
+    config,
+    record: createPluginRecord({ id: "event-payload" }),
+    register(api) {
+      api.agent.events.registerAgentEventSubscription({ id: "events", handle, ...options });
+    },
   });
+  return {
+    handle,
+    send: (data: Record<string, unknown>, sessionKey?: string) => {
+      const event = { runId: "run-payload", seq: 1, ts: 0, stream: "tool", sessionKey, data };
+      dispatchPluginAgentEventSubscriptions({
+        registry: registry.registry,
+        event,
+        isLive: () => true,
+      });
+      return event;
+    },
+  };
 }
 
 afterEach(() => {
@@ -34,22 +55,7 @@ describe("agent event subscription payloads", () => {
   )(
     "filters event phases before cloning with phases=$phases and payload=$payload",
     async ({ phases, payload }) => {
-      const handle = vi.fn();
-      const { config, registry } = createPluginRegistryFixture();
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({ id: "phase-filter" }),
-        register(api) {
-          api.agent.events.registerAgentEventSubscription({
-            id: "events",
-            streams: ["tool"],
-            phases,
-            payload,
-            handle,
-          });
-        },
-      });
+      const { handle, send } = subscribe({ streams: ["tool"], phases, payload });
       const filtered = Boolean(phases?.length);
       for (const phase of ["start", "update", "result", undefined, 1, null]) {
         let payloadReads = 0;
@@ -61,37 +67,19 @@ describe("agent event subscription payloads", () => {
           },
         };
         handle.mockClear();
-        dispatchPluginAgentEventSubscriptions({
-          registry: registry.registry,
-          event: { runId: "run-phase-filter", seq: 1, ts: 0, stream: "tool", data },
-          isLive: () => true,
-        });
+        send(data);
         const delivered = !filtered || phase === "start";
         expect(handle).toHaveBeenCalledTimes(delivered ? 1 : 0);
         expect(payloadReads).toBe(delivered && payload !== "metadata" ? 1 : 0);
       }
-      await waitForPluginEventHandlers();
+      await setImmediate();
     },
   );
 
   it.each([undefined, "full", "metadata"] as const)(
     "delivers an isolated event snapshot with payload=%s",
     async (payload) => {
-      const handle =
-        vi.fn<Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]>();
-      const { config, registry } = createPluginRegistryFixture();
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({ id: "payload-mode" }),
-        register(api) {
-          api.agent.events.registerAgentEventSubscription({
-            id: "events",
-            payload,
-            handle,
-          });
-        },
-      });
+      const { handle, send } = subscribe({ payload });
       let payloadReads = 0;
       const primitives = {
         phase: "result",
@@ -101,12 +89,15 @@ describe("agent event subscription payloads", () => {
         enabled: false,
         missing: null,
       };
-      const data = {
-        ...primitives,
+      const full = () => ({
         long: "a".repeat(257),
         nested: { text: "tool output" },
         array: [1, 2],
         absent: undefined,
+      });
+      const data = {
+        ...primitives,
+        ...full(),
         ...(payload === "metadata" ? { callback: () => undefined, bigint: 1n } : {}),
         get result() {
           payloadReads++;
@@ -118,44 +109,23 @@ describe("agent event subscription payloads", () => {
       };
       Object.setPrototypeOf(data, { inherited: "not own" });
       Object.defineProperty(data, "hidden", { value: "not enumerable" });
-      const event = {
-        runId: "run-payload-mode",
-        seq: 1,
-        ts: 0,
-        stream: "tool",
-        sessionKey: "agent:main:main",
-        data,
-      };
-      dispatchPluginAgentEventSubscriptions({
-        registry: registry.registry,
-        event,
-        isLive: () => true,
-      });
+      const event = send(data, "agent:main:main");
       expect(handle).toHaveBeenCalledTimes(1);
       const delivered = handle.mock.calls[0]![0];
-      expect(delivered).toEqual({
-        ...event,
-        data:
-          payload === "metadata"
-            ? primitives
-            : {
-                ...primitives,
-                long: "a".repeat(257),
-                nested: { text: "tool output" },
-                array: [1, 2],
-                absent: undefined,
-                result: { text: "getter output" },
-              },
-      });
+      const expectedData =
+        payload === "metadata"
+          ? primitives
+          : { ...primitives, ...full(), result: { text: "getter output" } };
+      expect(delivered).toEqual({ ...event, data: expectedData });
       expect(payloadReads).toBe(payload === "metadata" ? 0 : 1);
       expect(delivered === event).toBe(false);
       expect(delivered.data === data).toBe(false);
       delivered.data.phase = "changed";
       expect(data.phase).toBe("result");
       if (payload !== "metadata") {
-        expect(delivered.data.nested === data.nested).toBe(false);
+        expect(delivered.data.nested).not.toBe(data.nested);
       }
-      await waitForPluginEventHandlers();
+      await setImmediate();
     },
   );
 });

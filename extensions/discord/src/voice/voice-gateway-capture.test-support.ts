@@ -29,6 +29,7 @@ const speakerId = "810000000000000003";
 const speakerLabel = "Synthetic speaker";
 export const capturedText = "Synthetic capture continues after the initiating turn settles.";
 export const lateText = "Synthetic late STT must not enter the stopped capture.";
+const source = { providerId: "discord-voice", ...captureTarget };
 
 /** Owns only external Discord/codec/STT edges; no routing, authorization or dispatch mocks. */
 export function createDiscordGatewayCaptureFixture(params: {
@@ -94,36 +95,32 @@ export function createDiscordGatewayCaptureFixture(params: {
     wavCleanups.push(released.promise);
     return {
       ...wav,
-      cleanup: async () => {
-        try {
-          await wav.cleanup();
-        } finally {
-          released.resolve();
-        }
-      },
+      cleanup: () => wav.cleanup().finally(released.resolve),
     };
   });
   const decoding = new Set<Promise<void>>();
   const receiving = new Set<Promise<void>>();
+  function track(pending: Promise<void>, active: Set<Promise<void>>) {
+    active.add(pending);
+    const settled = () => active.delete(pending);
+    void pending.then(settled, settled);
+    return pending;
+  }
   const receiveSpies: Array<{ mockRestore(): void }> = [];
   const codecSpy = testVi
     .spyOn(audio, "decodeOpusStreamChunks")
-    .mockImplementation((input, options) => {
-      const work = (async () => {
-        for await (const packet of input) {
-          // One synthetic packet is 20 ms of stereo PCM. Preserve packet identity for receipts.
-          const pcm = Buffer.alloc(960 * 2 * 2);
-          pcm.fill(packet[0]);
-          await options.onChunk(pcm, packet);
-        }
-      })();
-      decoding.add(work);
-      void work.then(
-        () => decoding.delete(work),
-        () => decoding.delete(work),
-      );
-      return work;
-    });
+    .mockImplementation((input, options) =>
+      track(
+        (async () => {
+          for await (const packet of input) {
+            // One synthetic packet is 20 ms of stereo PCM. Preserve packet identity for receipts.
+            const pcm = Buffer.alloc(960 * 2 * 2, packet[0]);
+            await options.onChunk(pcm, packet);
+          }
+        })(),
+        decoding,
+      ),
+    );
   const lateStt = createDeferred<void>();
   const wavPaths: string[] = [];
   const sttSpies = new Map<PluginRuntime["mediaUnderstanding"], { mockRestore(): void }>();
@@ -131,8 +128,7 @@ export function createDiscordGatewayCaptureFixture(params: {
     async ({ filePath, mime }) => {
       const wav = await fs.readFile(filePath);
       expect(mime).toBe("audio/wav");
-      expect(wav.subarray(0, 4).toString()).toBe("RIFF");
-      expect(wav.subarray(8, 12).toString()).toBe("WAVE");
+      expect(wav.toString("utf8", 0, 4) + wav.toString("utf8", 8, 12)).toBe("RIFFWAVE");
       expect(wav.readUInt32LE(24)).toBe(48_000);
       expect(wav.readUInt16LE(22)).toBe(2);
       expect(wav.readUInt32LE(40)).toBe(wav.length - 44);
@@ -175,16 +171,9 @@ export function createDiscordGatewayCaptureFixture(params: {
           : undefined,
   } as unknown as Client;
   function restore() {
-    for (const spy of sttSpies.values()) {
-      spy.mockRestore();
-    }
-    codecSpy.mockRestore();
-    wavSpy.mockRestore();
-    sdkSpy.mockRestore();
-    workerSpy.mockRestore();
-    for (const spy of receiveSpies) {
-      spy.mockRestore();
-    }
+    [...sttSpies.values(), codecSpy, wavSpy, sdkSpy, workerSpy, ...receiveSpies].forEach((spy) =>
+      spy.mockRestore(),
+    );
   }
   const createManager = (cfg: OpenClawConfig) => {
     const createdManager = new DiscordVoiceManager({
@@ -205,15 +194,9 @@ export function createDiscordGatewayCaptureFixture(params: {
     const receive = createdManager["receive"];
     const handleSpeakingStart = receive.handleSpeakingStart.bind(receive);
     receiveSpies.push(
-      testVi.spyOn(receive, "handleSpeakingStart").mockImplementation((...args) => {
-        const pending = handleSpeakingStart(...args);
-        receiving.add(pending);
-        void pending.then(
-          () => receiving.delete(pending),
-          () => receiving.delete(pending),
-        );
-        return pending;
-      }),
+      testVi
+        .spyOn(receive, "handleSpeakingStart")
+        .mockImplementation((...args) => track(handleSpeakingStart(...args), receiving)),
     );
     setDiscordTranscriptsVoiceManager({
       accountId: captureTarget.accountId,
@@ -237,9 +220,7 @@ export function createDiscordGatewayCaptureFixture(params: {
     await Promise.all(receiving);
     await expect
       .poll(() =>
-        transports.every((ownedTransport) =>
-          ownedTransport.streams.every((stream) => stream.listenerCount("data") === 0),
-        ),
+        transports.every(({ streams }) => streams.every((s) => s.listenerCount("data") === 0)),
       )
       .toBe(true);
     await Promise.all(
@@ -256,15 +237,11 @@ export function createDiscordGatewayCaptureFixture(params: {
       entries.add(currentEntry);
     }
     try {
-      const captures = await discordVoiceTranscriptsSourceProvider.status!({
-        providerId: "discord-voice",
-        ...captureTarget,
-      });
-      for (const capture of captures) {
+      for (const capture of await discordVoiceTranscriptsSourceProvider.status!(source)) {
         if (capture.sessionId) {
           await discordVoiceTranscriptsSourceProvider.stop!({
+            source,
             sessionId: capture.sessionId,
-            source: { providerId: "discord-voice", ...captureTarget },
           });
         }
       }
@@ -272,10 +249,8 @@ export function createDiscordGatewayCaptureFixture(params: {
       try {
         await closingManager.destroy();
       } finally {
-        for (const ownedTransport of transports) {
-          for (const stream of ownedTransport.streams) {
-            stream.destroy();
-          }
+        for (const stream of transports.flatMap(({ streams }) => streams)) {
+          stream.destroy();
         }
         lateStt.resolve();
         try {

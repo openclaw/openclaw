@@ -209,7 +209,6 @@ export function createResolvedFeishuLifecycleAccount(
 ): ResolvedFeishuAccount {
   return {
     accountId: params.accountId,
-    selectionSource: "config",
     enabled: true,
     configured: true,
     appId: params.appId,
@@ -281,7 +280,7 @@ async function expectReplayCallCounts(
   );
 }
 
-export async function runFeishuLifecycleSequence(
+async function runFeishuLifecycleSequence(
   deliveries: Array<() => Promise<void>>,
   waits: LifecycleAssertion[],
   timeoutMs = FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,

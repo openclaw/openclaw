@@ -1,11 +1,11 @@
 import "./test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiAccessory,
   ControlUiNavigationItem,
   ControlUiPage,
 } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import workboardPlugin from "./index.ts";
 import { createGatewaySession, createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
@@ -77,6 +77,31 @@ function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
 }
 
 const makeBoard = (id: string, extra: Partial<WorkboardBoardSummary> = {}) => ({ id, ...extra });
+
+it("refreshes catalog labels when a deferred locale loads and when the locale changes", async () => {
+  Object.assign(fixture.host, { locale: "sv" });
+  request.mockResolvedValue({ boards: [makeBoard("default")] });
+  await activate();
+  await vi.dynamicImportSettled();
+  await tick();
+  expect(fixture.registrations.get("navigation/board-default")).toMatchObject({
+    label: "Standardtavla",
+  });
+
+  Object.assign(fixture.host, { locale: "en" });
+  fixture.notify();
+  await tick();
+  expect(fixture.registrations.get("navigation/board-default")).toMatchObject({
+    label: "Default board",
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+
+  Object.assign(fixture.host, { locale: "sv" });
+  fixture.notify();
+  dispose();
+  await tick();
+  expect(fixture.registrations.has("navigation/board-default")).toBe(false);
+});
 function navigationItem(id: string, label: string, icon?: string) {
   return {
     id: `board-${id}`,
@@ -317,6 +342,31 @@ it("keeps a board and its pin when deletion is canceled, refused, or fails", asy
   clickDialog(true);
   await vi.advanceTimersByTimeAsync(0);
   expect(document.querySelector("[role=alert]")?.textContent).toContain("board still has cards");
+  const confirm = expectDefined(
+    document.querySelector<HTMLButtonElement>("[data-test-dialog] .danger"),
+    "delete confirmation",
+  );
+  const retry = createDeferred<unknown>();
+  request.mockImplementationOnce(() => retry.promise);
+  confirm.click();
+  confirm.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    request.mock.calls.filter(([method]) => method === "workboard.boards.delete"),
+  ).toHaveLength(2);
+  expect(document.querySelector("[role=alert]")).toBeNull();
+  expect(confirm.disabled).toBe(true);
+  expect(
+    document.querySelector<HTMLButtonElement>("[data-test-dialog] button:not(.danger)")?.disabled,
+  ).toBe(true);
+  const cancelEvent = new Event("cancel", { cancelable: true });
+  document.querySelector("[data-test-dialog]")?.dispatchEvent(cancelEvent);
+  expect(cancelEvent.defaultPrevented).toBe(true);
+  retry.reject(new Error("Retry deletion failed"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector("[role=alert]")?.textContent).toContain("Retry deletion failed");
+  expect(document.querySelector("[data-test-dialog] .danger")).toBe(confirm);
+  expect(confirm.disabled).toBe(false);
   expect(registrations.has("navigation/board-ops")).toBe(true);
   expect(host.ui.unpinNavigation).not.toHaveBeenCalled();
   expect(host.navigation.openPage).not.toHaveBeenCalled();

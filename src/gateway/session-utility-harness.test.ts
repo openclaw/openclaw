@@ -4,6 +4,7 @@ import * as execution from "../agents/simple-completion-execution.js";
 import * as runtime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -26,6 +27,7 @@ import {
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 import {
   createHarness,
   flushObserver,
@@ -95,6 +97,7 @@ describe("utility completion with an unavailable implicit harness", () => {
   };
 
   beforeEach(async () => {
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
     dispose = undefined;
     state = await createOpenClawTestState({ scenario: "minimal" });
     config = {
@@ -154,7 +157,6 @@ describe("utility completion with an unavailable implicit harness", () => {
       vi.useFakeTimers();
       const observer = createHarness({
         config,
-        utilityModelRef: "openai/gpt-5.4-mini",
         prepareModel: vi.fn(defaultPrepareModel),
         completeModel: vi.fn(defaultCompleteModel),
         readSession: vi.fn(() => ({
@@ -212,12 +214,11 @@ describe("utility completion with an unavailable implicit harness", () => {
       });
       // Warm the fixture's database before timing utility completion.
       await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: state.env });
-      const complete = vi.fn(defaultCompleteModel);
+      const complete = vi.spyOn(observerModel, "defaultCompleteModel");
       const recaps = createSessionActivitySummaries({
         scheduler: createTestGatewayScheduler(),
         getConfig: () => config,
         onChanged: vi.fn(),
-        completeModel: complete,
       });
       dispose = () => recaps.dispose();
       await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));

@@ -1,6 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it } from "vitest";
 import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
 import {
@@ -9,19 +8,22 @@ import {
 } from "./settled-turn-context.js";
 
 const { writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
+type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
+function custom(
+  customType: string,
+  content: CustomMessage["content"],
+  timestamp: number,
+  options: Partial<CustomMessage> = {},
+): CustomMessage {
+  return { role: "custom", customType, content, timestamp, display: false, ...options };
+}
 
 it.each(["file", "sqlite"] as const)(
   "captures settled evidence after durable control history from %s",
   async (storage) => {
     const yieldText = "Continue after the worker finishes.";
     const prior: AgentMessage[] = [
-      {
-        role: "custom",
-        customType: "plugin.durable-note",
-        content: [{ type: "text", text: "Keep the agreed task scope." }],
-        display: false,
-        timestamp: 1,
-      },
+      custom("plugin.durable-note", [{ type: "text", text: "Keep the agreed task scope." }], 1),
       {
         role: "bashExecution",
         command: "check",
@@ -31,33 +33,18 @@ it.each(["file", "sqlite"] as const)(
         truncated: false,
         timestamp: 2,
       },
-      {
-        role: "branchSummary",
-        summary: "Prior branch decision.",
-        fromId: "branch",
-        timestamp: 3,
-      },
+      { role: "branchSummary", summary: "Prior branch decision.", fromId: "branch", timestamp: 3 },
       {
         role: "compactionSummary",
         summary: "Prior task context.",
         tokensBefore: 100,
         timestamp: 4,
       },
-      {
-        role: "custom",
-        customType: "openclaw.context-compaction",
-        content: "excluded compaction notice",
+      custom("openclaw.context-compaction", "excluded compaction notice", 5, {
         display: true,
         excludeFromContext: true,
-        timestamp: 5,
-      },
-      {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "obsolete runtime instructions",
-        display: false,
-        timestamp: 6,
-      },
+      }),
+      custom("openclaw.runtime-context", "obsolete runtime instructions", 6),
     ];
     const { upstreamPrompt, settledMessages } = settledFixture();
     const records = [
@@ -84,15 +71,11 @@ it.each(["file", "sqlite"] as const)(
         message: yieldText,
       });
       for (const message of [...prior, ...settledMessages]) {
-        await appendSessionTranscriptMessageByIdentity({ ...fixture.sessionTarget, message });
+        await fixture.append(message);
       }
     }
     const target = fixture
-      ? {
-          ...fixture.sessionTarget,
-          sessionTarget: fixture.sessionTarget,
-          sessionFile: fixture.marker,
-        }
+      ? fixture.target
       : {
           sessionFile: await writeSession(records),
           sessionId: "codex-session",
@@ -106,19 +89,18 @@ it.each(["file", "sqlite"] as const)(
       turnId: "settled",
     });
     expect(captured).toBeInstanceOf(CodexSettledTurnContext);
-    for (const text of [
+    const expectedHistory = [
       yieldText,
       "Keep the agreed task scope.",
       "Ran `check`\n```\nEarlier check failed.\n```\n\nCommand exited with code 2",
       "The following is a summary of a branch that this conversation came back from:\n\n<summary>\nPrior branch decision.</summary>",
       "The conversation history before this point was compacted into the following summary:\n\n<summary>\nPrior task context.\n</summary>",
-    ]) {
-      expect(captured?.data).toContainEqual({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text }],
-      });
-    }
+    ].map((text) => ({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    }));
+    expect(captured?.data).toEqual(expect.arrayContaining(expectedHistory));
     expect(captured?.data.slice(-3)).toEqual([
       { type: "message", role: "user", content: [{ type: "input_text", text: upstreamPrompt }] },
       { type: "function_call", call_id: "sent", name: "message", arguments: "{}" },

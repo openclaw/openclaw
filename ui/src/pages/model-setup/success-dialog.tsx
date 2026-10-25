@@ -1,9 +1,8 @@
-import { createMemo } from "solid-js";
 import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
@@ -19,10 +18,9 @@ export function ModelSetupSuccessDialog(
   props: ModelSetupViewProps & { activation: SuccessActivation },
 ) {
   let openChatButton!: HTMLButtonElement;
-  const providerId = createMemo(() => providerIdFromModelRef(props.activation.modelRef));
-  const providerIconId = createMemo(() =>
-    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null,
-  );
+  const providerId = () => providerIdFromModelRef(props.activation.modelRef);
+  const providerIconId = () =>
+    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null;
   const utility = () => props.activation.modelTarget === "utility";
   const title = () => t(utility() ? "modelSetup.utility.ready" : "modelSetup.success.title");
   const description = () =>

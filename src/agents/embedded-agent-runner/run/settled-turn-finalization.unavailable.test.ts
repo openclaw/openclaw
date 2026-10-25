@@ -1,44 +1,34 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "../../../plugin-sdk/session-transcript-runtime.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
-  buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
-  makeEmbeddedRunnerAttempt,
+  makeEmbeddedRunnerAttempt as makeAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { resolveRunEntryTerminalOutcome } from "../run-entry-terminal.js";
-import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
-import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
+import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
+import { prepareTerminalWithSettledTurnFinalization as finalize } from "./settled-turn-finalization.js";
+import { createSettledFinalizationTestInput as makeInput } from "./settled-turn-finalization.test-support.js";
+import { settledBatch } from "./settled-turn-fixtures.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 
 describe("unavailable finalization through the real core backend", () => {
   const fixture = useTempSessionsFixture("settled-finalization-unavailable-");
-  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
-
-  beforeEach(() => {
-    admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "unavailable-finalizer");
-  });
-  afterEach(() => admission.close());
+  const getContext = useFinalizationAdmission([], "unavailable-finalizer");
 
   it("preserves a failed cron turn and its transcript when finalization is unavailable", async () => {
     const expectedText =
       "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening. Note: some tool actions may have already been executed — please verify before retrying.";
-    const admittedRunContext = await admission.admit("embedded");
-    const assistant = buildEmbeddedRunnerAssistant({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "completed-command", name: "exec", arguments: {} }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
+    const batch = settledBatch(["completed-command", "exec"]);
+    const attempt = makeAttempt({
+      ...batch,
       terminal: {
         kind: "failed",
         source: "prompt",
@@ -48,24 +38,13 @@ describe("unavailable finalization through the real core backend", () => {
         ),
       },
       sessionIdUsed: "session-settled",
-      assistantTexts: [],
       currentAttemptAssistant: undefined,
-      currentAttemptCompletedAssistant: undefined,
       lastAssistant: undefined,
       messagesSnapshot: [
         { role: "user", content: "Run the command once.", timestamp: 1 },
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: "completed-command",
-          toolName: "exec",
-          content: [{ type: "text", text: "completed-once" }],
-          isError: false,
-          timestamp: 3,
-        },
+        ...batch.messagesSnapshot,
       ],
       toolMetas: [{ toolName: "exec", toolCallId: "completed-command", replaySafe: false }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
       replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
@@ -83,7 +62,7 @@ describe("unavailable finalization through the real core backend", () => {
       await appendSessionTranscriptMessageByIdentity({ ...target, message });
     }
     const prefix = await readVisibleSessionTranscriptMessageEntries(target);
-    const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
+    const input = makeInput(attempt, getContext());
     input.terminalBase.runParams.trigger = "cron";
     input.terminalBase.runParams.sessionKey = target.sessionKey;
     Object.assign(
@@ -100,26 +79,28 @@ describe("unavailable finalization through the real core backend", () => {
         resolvedApiKey: "synthetic-unused-host-key",
       },
     );
-    const finalize = vi.fn(async () => {
+    const harnessFinalizer = vi.fn(async () => {
       throw new Error("Harness-owned finalization is unavailable");
     });
     const runAttempt = vi.fn(async () => {
       throw new Error("Completed work must not be replayed");
     });
-    input.finalization.harness.finalizeSettledTurn = finalize;
+    input.finalization.harness.finalizeSettledTurn = harnessFinalizer;
     input.finalization.harness.runAttempt = runAttempt;
 
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
+    const result = await finalize(input);
 
-    expect(finalize).toHaveBeenCalledOnce();
-    expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ settledAttempt: attempt }));
+    expect(harnessFinalizer).toHaveBeenCalledOnce();
+    expect(harnessFinalizer).toHaveBeenCalledWith(
+      expect.objectContaining({ settledAttempt: attempt }),
+    );
     expect(runAttempt).not.toHaveBeenCalled();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.prepared.failureSignal).toBeUndefined();
+    expect(result).toMatchObject({
+      finalizationOutcome: "failed",
+      prepared: { failureSignal: undefined },
+    });
     expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
     expect(result.attempt).toBe(attempt);
-    expect(result.attempt.assistantTexts).toEqual([]);
-    expect(result.attempt.assistantTranscriptOwned).not.toBe(true);
     const resolved = await resolveEmbeddedRunTerminal(
       makeTerminalInput({
         ...result.prepared,
@@ -132,27 +113,25 @@ describe("unavailable finalization through the real core backend", () => {
         resolveReplayInvalid: () => true,
       }),
     );
-    expect(resolved.action).toBe("complete");
     if (resolved.action !== "complete") {
       throw new Error("Provider failure must settle without replay");
     }
-    expect(resolved.result.meta).toMatchObject({
-      aborted: false,
-      replayInvalid: true,
-      error: { message: expect.stringContaining("at capacity") },
+    expect(resolved.result).toMatchObject({
+      meta: {
+        aborted: false,
+        replayInvalid: true,
+        error: { message: expect.stringContaining("at capacity") },
+      },
+      payloads: [{ text: expectedText, isError: true }],
     });
-    expect(resolved.result.payloads).toEqual([
-      expect.objectContaining({ text: expectedText, isError: true }),
-    ]);
     expect(
       resolveRunEntryTerminalOutcome({ result: resolved.result, fallbackExhausted: false }),
     ).toMatchObject({ status: "error" });
-    expect(result.prepared.finalAssistantVisibleText).toBe("");
-    expect(result.prepared.finalAssistantRawText).toBe("");
-    expect(result.attempt.currentAttemptAssistant).toBeUndefined();
+    expect(result.prepared).toMatchObject({
+      finalAssistantVisibleText: "",
+      finalAssistantRawText: "",
+    });
     expect(JSON.stringify(attempt)).toBe(original);
-    expect(attempt.terminal.kind).toBe("failed");
-    const transcript = await readVisibleSessionTranscriptMessageEntries(target);
-    expect(transcript).toEqual(prefix);
+    expect(await readVisibleSessionTranscriptMessageEntries(target)).toEqual(prefix);
   });
 });

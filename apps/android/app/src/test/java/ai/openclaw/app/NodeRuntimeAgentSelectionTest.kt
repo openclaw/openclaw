@@ -6,7 +6,6 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
-import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
@@ -39,6 +38,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -176,10 +176,12 @@ class NodeRuntimeAgentSelectionTest {
   fun publicationsRefreshOnlySelectedAgentCatalogsWithoutDiscovery() =
     runBlocking {
       val runtime = createConnectedRuntime()
-      val runtimeJob = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope").coroutineContext.job
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
       val catalogRequests = Channel<Pair<JsonObject, Job>>(Channel.UNLIMITED)
       val revision = AtomicInteger(0)
       try {
+        // Settle these synchronous request stubs inline without joining unrelated runtime work.
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
         runtime.gatewayDataRequestOverrideForTests = { _, method, paramsJson ->
           when (method) {
             "models.list" -> {
@@ -237,7 +239,6 @@ class NodeRuntimeAgentSelectionTest {
           )
         for ((event, payload, refreshes) in publications) {
           revision.incrementAndGet()
-          val previousJobs = runtimeJob.children.toSet()
           ReflectionHelpers.callInstanceMethod<Unit>(
             runtime,
             "handleGatewayEvent",
@@ -245,11 +246,6 @@ class NodeRuntimeAgentSelectionTest {
             ReflectionHelpers.ClassParameter.from(String::class.java, payload),
           )
           withTimeout(2_000) {
-            // The owner registers launched reads synchronously; drain them before checking omissions.
-            runtimeJob.children
-              .filterNot { it in previousJobs }
-              .toList()
-              .forEach { it.join() }
             if (refreshes) {
               publishedRevision = revision.get()
               repeat(2) {
@@ -272,6 +268,7 @@ class NodeRuntimeAgentSelectionTest {
           )
         }
       } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
         closeNodeRuntimeTestFixture(runtime)
         catalogRequests.close()
       }
@@ -595,6 +592,166 @@ class NodeRuntimeAgentSelectionTest {
         runtime.refreshAgents()
         awaitAgentRefresh(withScout)
         assertEquals("main", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun coldStartUsesAnAllowedAgentBeforePatchingTheGatewayDefault() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val history = CompletableDeferred<String?>()
+      val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        installChatGateway(runtime, requestGateway = { method, params ->
+          requests += method to params
+          when (method) {
+            "sessions.describe" -> {
+              """{"session":null}"""
+            }
+
+            "chat.history" -> {
+              history.complete(params)
+              """{"sessionId":"allowed-session","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        })
+        reconnectOperator(runtime, mainSessionKey = "agent:agent-a:main")
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        assertTrue("Chat must wait for the allowed roster", requests.isEmpty())
+
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+        synchronized(requests) {
+          assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        }
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun initialDiscoveryCompletesWithoutReplacingANewerConversationSelection() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val conversation = "agent:agent-b:notification"
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        runtime.switchChatSession(conversation, "agent-b")
+
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals(conversation, runtime.chat.sessionKey.value)
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun failedDiscoveryRetryInitializesChatEvenWhenTheMainKeyIsUnchanged() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val attempts = AtomicInteger()
+      val history = CompletableDeferred<String?>()
+      try {
+        val refreshes =
+          answerAgentList(runtime, "main", beforeAnswer = {
+            if (attempts.incrementAndGet() == 1) error("Synthetic discovery failure")
+          })
+        installChatGateway(runtime, requestGateway = { method, params ->
+          when (method) {
+            "sessions.describe" -> {
+              """{"session":null}"""
+            }
+
+            "chat.history" -> {
+              history.complete(params)
+              """{"sessionId":"recovered-session","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        })
+        val originalKey = runtime.mainSessionKey.value
+        reconnectOperator(runtime)
+        awaitAgentRefresh(refreshes)
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertTrue(
+          runtime.gatewayConnectionDisplay.value.statusText
+            .contains("Retry"),
+        )
+        assertFalse(history.isCompleted)
+
+        runtime.refreshAgents()
+        awaitAgentRefresh(refreshes)
+        assertEquals(originalKey, runtime.mainSessionKey.value)
+        assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains(originalKey))
+        assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals(2, attempts.get())
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun disconnectCancelsPendingAgentDiscoveryWithoutPublishingConnected() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+        ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertFalse(ReflectionHelpers.getField(runtime, "operatorConnected"))
+        assertTrue(runtime.gatewayAgents.value.isEmpty())
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun emptyAllowedRosterLeavesChatUnavailable() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        val refreshes = answerAgentList(runtime)
+        reconnectOperator(runtime, mainSessionKey = "agent:excluded:main")
+        awaitAgentRefresh(refreshes)
+
+        assertTrue(runtime.gatewayAgents.value.isEmpty())
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals("No agents available for this role", runtime.gatewayConnectionDisplay.value.statusText)
+        assertFalse(runtime.chat.healthOk.value)
+        assertFalse(
+          runtime.chat.sessionKey.value
+            .contains("excluded"),
+        )
       } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
@@ -1002,8 +1159,6 @@ class NodeRuntimeAgentSelectionTest {
                 emptyList()
               }
             val page = rows.take(limit)
-            // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
-            if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
             page.joinToString(
               prefix = """{"sessions":[""",
               postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
@@ -1087,7 +1242,12 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
+      installChatGateway(
+        runtime,
+        requestGateway,
+        requestLeaseGeneration = leaseGeneration::get,
+        onBoundSessionList = { lookupStarted.get()?.complete(currentCoroutineContext().job) },
+      )
 
       suspend fun selectAgentAndWait(
         agentId: String,
@@ -1469,7 +1629,6 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.list" -> {
-            if (request["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) lookupJobs.send(currentCoroutineContext().job)
             val rows = if (request["agentId"]?.jsonPrimitive?.content == "scout") sessions.get() else emptyList()
             rows.joinToString(prefix = """{"sessions":[""", postfix = "]}") { row ->
               """{"key":"${row.key}","sessionId":"session-${row.key}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
@@ -1493,7 +1652,7 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway)
+      installChatGateway(runtime, requestGateway, onBoundSessionList = { lookupJobs.send(currentCoroutineContext().job) })
 
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
@@ -1541,8 +1700,10 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     requestGateway: suspend (String, String?) -> String,
     requestLeaseGeneration: () -> Int = { 0 },
+    onBoundSessionList: suspend () -> Unit = {},
   ) {
     val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
+      if (method == "sessions.list") onBoundSessionList()
       requestGateway(method, params)
     }
     val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
@@ -1574,8 +1735,8 @@ class NodeRuntimeAgentSelectionTest {
       ReflectionHelpers.getField<suspend (String, String, String?) -> String>(chat, "requestGatewayForGateway")
     val request: suspend (String, String, String?) -> String = { gatewayId, method, paramsJson ->
       val params = if (method == "sessions.list") Json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject else null
-      // Hold the candidate lookup, not the smaller bootstrap list needed by session creation.
-      if (params != null && params["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) {
+      // Candidate lookups use this bound request path; drawer bootstrap uses requestGateway.
+      if (params != null) {
         onLookup((params["agentId"] as JsonPrimitive).content)
       } else {
         requestGatewayForGateway(gatewayId, method, paramsJson)
@@ -1625,6 +1786,7 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
     capabilities: Set<String>? = null,
+    mainSessionKey: String = "agent:main:main",
   ) {
     val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
@@ -1634,7 +1796,7 @@ class NodeRuntimeAgentSelectionTest {
         serverName = "Test gateway",
         remoteAddress = "127.0.0.1:18789",
         serverVersion = null,
-        mainSessionKey = "agent:main:main",
+        mainSessionKey = mainSessionKey,
         updateAvailable = null,
         authScopes = listOf("operator.read"),
         capabilities = capabilities,

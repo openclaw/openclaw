@@ -61,6 +61,12 @@ it.each([false, true])("preserves system authority with literal markers=%s", (ma
       : undefined,
   );
   expectMessage(first.messages[0], "system", coauthor, hookInstruction);
+  expectMessage(
+    first.messages[0],
+    "system",
+    "Empty or none reports no items for that snapshot's scope and time; it does not prove unqueried work is absent, establish global inactivity, or show whether earlier work ran.",
+  );
+  expect(JSON.stringify(first.messages[0])).not.toContain("none means no active work");
   expect(JSON.stringify(first.messages)).not.toMatch(
     /OPENCLAW_CACHE_BOUNDARY|OPENCLAW-RELOCATABLE-BOUNDARY/,
   );

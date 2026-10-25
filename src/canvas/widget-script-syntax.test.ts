@@ -211,4 +211,17 @@ describe("widget script syntax", () => {
     const widgetCode = `<script>const = ${"x".repeat(1_000)}</script>`;
     expect(findWidgetScriptSyntaxError(widgetCode)?.snippet).toBe(widgetCode.slice(0, 160));
   });
+
+  it("keeps an emoji whole when the offending line hits the snippet cap", () => {
+    const prefix = `<script>${"a".repeat(151)}`;
+    const widgetCode = `${prefix}😀 const =</script>`;
+    expect(findWidgetScriptSyntaxError(widgetCode)?.snippet).toBe(prefix);
+  });
+
+  it("keeps an astral identifier whole when the parser message hits its cap", () => {
+    const prefix = "a".repeat(187);
+    const identifier = `${prefix}\u{1D400}`;
+    const widgetCode = `<script>let ${identifier}=1;let ${identifier}=2;</script>`;
+    expect(findWidgetScriptSyntaxError(widgetCode)?.message).toBe(`Identifier '${prefix}`);
+  });
 });

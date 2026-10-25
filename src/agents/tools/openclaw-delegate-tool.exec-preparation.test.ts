@@ -45,50 +45,43 @@ function construct(assertCurrent?: () => void) {
   );
 }
 
-it("reads fresh delegation policy without caller-thread SQL and retains the captured store", async () => {
-  const root = tempDirs.make("openclaw-delegate-exec-");
-  const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  for (const security of ["full", "deny", "full"] as const) {
-    writeExecApprovalsConfigRow({ db: source.db, file: { version: 1, defaults: { security } } });
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const calls = observeMainThreadSql();
-    const pending = construct();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-delegate-exec-"));
-    const [tool] = await pending;
-    expect(tool?.description).toContain(
-      security === "full" ? "without asking for approval" : "Changes wait for the user to approve",
-    );
-    vi.mocked(callInProcessGatewayTool).mockImplementation(async () => {
-      expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(security === "full");
-      return { reply: "Done.", sessionId: "delegate" };
-    });
-    await tool!.execute("delegate-policy", { message: "Synthetic repair." });
-    calls.expectIdle();
-    calls.restore();
-  }
-});
-
-it("requires approval when the reader fails instead of falling back to host SQL", async () => {
-  const root = tempDirs.make("openclaw-delegate-exec-failure-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const source = openOpenClawStateDatabase();
-  writeExecApprovalsConfigRow({
-    db: source.db,
-    file: { version: 1, defaults: { security: "full" } },
-  });
-  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValue(
-    new Error("synthetic approval reader unavailable"),
+async function expectDelegation(pending: ReturnType<typeof construct>, fullPermission: boolean) {
+  const [tool] = await pending;
+  expect(tool?.description).toContain(
+    fullPermission ? "without asking for approval" : "Changes wait for the user to approve",
   );
-  const calls = observeMainThreadSql();
-  const [tool] = await construct();
-  expect(tool?.description).toContain("Changes wait for the user to approve");
   vi.mocked(callInProcessGatewayTool).mockImplementation(async () => {
-    expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(false);
-    return { reply: "Approval required.", sessionId: "delegate" };
+    expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(fullPermission);
+    return { reply: fullPermission ? "Done." : "Approval required.", sessionId: "delegate" };
   });
-  await tool!.execute("delegate-unavailable", { message: "Synthetic repair." });
-  calls.expectIdle();
-});
+  await tool!.execute("delegate-policy", { message: "Synthetic repair." });
+}
+
+it.each([false, true])(
+  "captures delegation policy without caller-thread SQL (reader failure=%s)",
+  async (failed) => {
+    const root = tempDirs.make("openclaw-delegate-exec-");
+    const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    if (failed) {
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValue(
+        new Error("synthetic approval reader unavailable"),
+      );
+    }
+    const policies = failed ? (["full"] as const) : (["full", "deny", "full"] as const);
+    for (const security of policies) {
+      writeExecApprovalsConfigRow({ db: source.db, file: { version: 1, defaults: { security } } });
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const calls = observeMainThreadSql();
+      const pending = construct();
+      if (!failed) {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-delegate-exec-"));
+      }
+      await expectDelegation(pending, !failed && security === "full");
+      calls.expectIdle();
+      calls.restore();
+    }
+  },
+);
 
 it("rejects a construction whose source authority ends during preparation", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-delegate-exec-revoked-"));

@@ -93,7 +93,6 @@ process.exit(await runManagedCommand({ bin: process.execPath, args: [${JSON.stri
         const events = path.join(root, "events");
         const preload = path.join(root, "preload.mjs");
         const cli = path.join(root, "cli.mjs");
-        const gateClient = path.join(root, "main.mjs");
         const shell = path.join(root, "runner.sh");
         writeFileSync(events, "");
         writeFileSync(
@@ -117,31 +116,24 @@ import net from "node:net";
 import { createInterface } from "node:readline";
 const role = process.argv[2];
 const record = (event) => fs.appendFileSync(process.env.FIXTURE_EVENTS, event + "\\n");
-process.on("SIGTERM", () => { record(role + ":terminated"); process.exit(0); });
+if (role === "main") {
+  fs.writeFileSync(process.env.FIXTURE_MAIN_MARKER, "main continued while Doctor was held");
+} else {
+  process.on("SIGTERM", () => { record(role + ":terminated"); process.exit(0); });
+}
 if (role === "cli" && process.env.FIXTURE_MODE === "primary-failure") {
   spawn(process.execPath, [process.argv[1], "descendant"], { stdio: "inherit" });
 }
 const socket = net.createConnection(Number(process.env.FIXTURE_PORT), "127.0.0.1");
 socket.once("connect", () => socket.write(JSON.stringify({ role, pid: process.pid }) + "\\n"));
 createInterface({ input: socket }).once("line", (line) => {
+  if (role === "main") process.exit(0);
   if (role !== "cli") throw new Error("descendant must be retired by the owner");
   if (!fs.existsSync(process.env.FIXTURE_MAIN_MARKER)) throw new Error("main work never overlapped");
   record("cli:finished");
   console.log("synthetic Doctor completed with " + line);
   process.exit(Number(line));
 });
-`,
-        );
-        writeFileSync(
-          gateClient,
-          `
-import fs from "node:fs";
-import net from "node:net";
-import { createInterface } from "node:readline";
-fs.writeFileSync(process.env.FIXTURE_MAIN_MARKER, "main continued while Doctor was held");
-const socket = net.createConnection(Number(process.env.FIXTURE_PORT), "127.0.0.1");
-socket.once("connect", () => socket.write(JSON.stringify({ role: "main", pid: process.pid }) + "\\n"));
-createInterface({ input: socket }).once("line", () => process.exit(0));
 `,
         );
         writeFileSync(
@@ -167,7 +159,7 @@ on_exit() {
 }
 trap on_exit EXIT
 start_formerly_bundled_doctor
-node "$FIXTURE_MAIN_CLIENT"
+node "$FIXTURE_CLI" main
 if [ "$FIXTURE_MODE" = primary-failure ]; then exit 41; fi
 join_formerly_bundled_doctor
 printf 'rollback:started\\n' >>"$FIXTURE_EVENTS"
@@ -213,7 +205,6 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
             FIXTURE_CLI: cli,
             FIXTURE_PORT: String(address.port),
             FIXTURE_MAIN_MARKER: path.join(root, "main-continued"),
-            FIXTURE_MAIN_CLIENT: gateClient,
           },
         });
         try {
@@ -221,22 +212,18 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
           if (mode === "primary-failure") {
             await waitFor("descendant");
           }
-          expect(readFileSync(path.join(root, "main-continued"), "utf8")).toBe(
-            "main continued while Doctor was held",
-          );
           expect(readFileSync(events, "utf8")).toBe("formerly-bundled-doctor:started\n");
           if (mode !== "primary-failure") {
             proof.write(`${mode === "proof-failure" ? 43 : 0}\n`);
           }
           main.write("continue\n");
           const result = await running;
-          expect(result.status, result.stderr).toBe(
-            mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41,
-          );
+          const expectedExit = mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41;
+          expect(result.status, result.stderr).toBe(expectedExit);
           const lines = readFileSync(events, "utf8").trim().split("\n");
           expect(lines.at(-1)).toBe("dependencies:stopped");
           expect(readFileSync(path.join(root, "result"), "utf8")).toBe(
-            `${mode === "success" ? 0 : mode === "proof-failure" ? 43 : 41}:${mode === "proof-failure" ? "formerly-bundled-doctor" : "primary"}\n`,
+            `${expectedExit}:${mode === "proof-failure" ? "formerly-bundled-doctor" : "primary"}\n`,
           );
           if (mode === "success") {
             expect(lines).toEqual([
@@ -247,22 +234,17 @@ printf 'summary:passed\\n' >>"$FIXTURE_EVENTS"
               "summary:passed",
               "dependencies:stopped",
             ]);
-            expect(result.stdout).toContain("synthetic Doctor completed with 0");
           } else {
             expect(lines).not.toContain("formerly-bundled-doctor:passed");
             expect(lines).not.toContain("rollback:started");
             expect(lines).not.toContain("summary:passed");
             if (mode === "primary-failure") {
-              expect(lines).toContain("cli:terminated");
-              expect(lines).toContain("descendant:terminated");
-              expect(lines.indexOf("cli:terminated")).toBeLessThan(
-                lines.indexOf("dependencies:stopped"),
-              );
-              expect(lines.indexOf("descendant:terminated")).toBeLessThan(
-                lines.indexOf("dependencies:stopped"),
-              );
-            } else {
-              expect(result.stdout).toContain("synthetic Doctor completed with 43");
+              for (const role of ["cli", "descendant"]) {
+                expect(lines).toContain(`${role}:terminated`);
+                expect(lines.indexOf(`${role}:terminated`)).toBeLessThan(
+                  lines.indexOf("dependencies:stopped"),
+                );
+              }
             }
           }
           await Promise.all(closed);

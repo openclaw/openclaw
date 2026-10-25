@@ -194,9 +194,6 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
   });
   const store = getHostedSmsMediaStore(params.account.accountId);
   const captionByteLength = params.captionByteLength ?? 0;
-  if (!Number.isSafeInteger(captionByteLength) || captionByteLength < 0) {
-    throw new Error("MMS caption byte length must be a non-negative integer.");
-  }
   const aggregateMediaBudget = TWILIO_MMS_IMAGE_MAX_BYTES - captionByteLength - 1;
   if (aggregateMediaBudget < 1) {
     throw new Error("Twilio MMS caption leaves no room for an attachment below 5,000,000 bytes.");
@@ -343,29 +340,20 @@ export async function materializeSmsInboundMedia(params: {
   const savedPaths: string[] = [];
   const cleanup = createInboundMediaCleanup(savedPaths);
   const declaredUnavailableCount = params.msg.unavailableMediaCount ?? 0;
+  const withoutMedia = (count: number) => ({
+    body: count > 0 ? inboundMediaUnavailableBody(params.msg.body, count) : params.msg.body,
+    media: [],
+    cleanup,
+  });
   if (params.msg.media.length === 0) {
-    return {
-      body:
-        declaredUnavailableCount > 0
-          ? inboundMediaUnavailableBody(params.msg.body, declaredUnavailableCount)
-          : params.msg.body,
-      media: [],
-      cleanup,
-    };
+    return withoutMedia(declaredUnavailableCount);
   }
   const callbackAccountSid = params.msg.accountSid;
   if (!callbackAccountSid || callbackAccountSid !== params.account.accountSid) {
     params.log?.warn?.(
       `Refused Twilio MMS attachments for ${params.msg.messageSid}: webhook account mismatch`,
     );
-    return {
-      body: inboundMediaUnavailableBody(
-        params.msg.body,
-        declaredUnavailableCount + params.msg.media.length,
-      ),
-      media: [],
-      cleanup,
-    };
+    return withoutMedia(declaredUnavailableCount + params.msg.media.length);
   }
   // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;

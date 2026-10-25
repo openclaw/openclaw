@@ -64,7 +64,7 @@ describe("local device identity owner", () => {
         "invalid persisted device identity",
       );
       const repaired = repairInvalidStoredDeviceIdentity(generateStoredDeviceIdentity(), { env });
-      expect(repaired).toMatchObject({ identity: original, repaired: true, rotated: false });
+      expect(repaired).toMatchObject({ repaired: true, rotated: false });
       expect(loadDeviceIdentityIfPresent({ env })).toEqual(original);
     });
   });

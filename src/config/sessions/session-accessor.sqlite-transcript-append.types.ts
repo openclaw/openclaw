@@ -1,15 +1,14 @@
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
-import type {
-  createTranscriptIdentityInserter,
-  TranscriptIdentityInsertRow,
-} from "./session-accessor.sqlite-transcript-identity.js";
+import type { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
+import type { readTranscriptAppendStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { createTranscriptIndexAppenderInTransaction } from "./session-transcript-index.js";
 import type {
   createTranscriptEventInserter,
   PreparedTranscriptPayload,
   TranscriptEventInsertRow,
+  TranscriptIdentityInsertRow,
 } from "./transcript-payload.js";
 
 export type TranscriptInsertRow = {
@@ -30,6 +29,10 @@ export type TranscriptAppendOptions = {
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
+  /** Message turns preserve the independent appender's assistant projection sentinel. */
+  independentMessageProjection?: boolean;
+  /** Keep logical actor snapshots while a later required append persists the watermark. */
+  persistActorMutation?: boolean;
 };
 
 export type TranscriptAppendCursor = {
@@ -37,6 +40,7 @@ export type TranscriptAppendCursor = {
   windowUpdatedAt?: number;
   rowTranscript?: SessionRowTranscriptProjection;
   initialized?: boolean;
+  initialState?: ReturnType<typeof readTranscriptAppendStateInTransaction>;
   readIdentity?: ReturnType<typeof createTranscriptIdentityReader>;
   nextSeq?: number;
   appendToIndex?: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;

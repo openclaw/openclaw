@@ -64,7 +64,6 @@ export async function resolveCopilotRuntimeAuth(params: {
   config?: OpenClawConfig;
 }): Promise<{
   apiKey: string;
-  source: string;
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
@@ -101,7 +100,6 @@ export async function resolveCopilotRuntimeAuth(params: {
     // exchange rejects supported fine-grained PATs before inference.
     return {
       apiKey: params.githubToken,
-      source: `validated:${userUrl}`,
       baseUrl,
     };
   } catch (error) {

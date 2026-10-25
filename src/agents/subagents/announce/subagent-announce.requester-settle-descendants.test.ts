@@ -8,6 +8,7 @@ import { clearSubagentRunsReadCacheForTest } from "../registry/subagent-registry
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
+import { makeSettledChild } from "./subagent-announce.requester-settle-wake.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,20 +17,21 @@ afterEach(() => {
 });
 
 function fixture() {
-  const entry: SubagentRunRecord = {
-    runId: "settled",
-    childSessionKey: "agent:main:subagent:settled",
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
-    task: "synthetic task",
-    cleanup: "keep",
-    createdAt: 1,
-    execution: { status: "terminal", startedAt: 2, endedAt: 3 },
-    completion: { required: false },
-    delivery: { status: "delivered" },
-    requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
-  };
+  const child = (runId: string, overrides: Partial<SubagentRunRecord> = {}) =>
+    makeSettledChild({
+      requesterAgentId: "main",
+      task: "synthetic task",
+      createdAt: 1,
+      expectsCompletionMessage: undefined,
+      execution: { status: "terminal", startedAt: 2, endedAt: 3 },
+      completion: { required: false },
+      delivery: { status: "delivered" },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+      ...overrides,
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+    });
+  const entry = child("settled");
   subagentRuns.set(entry.runId, entry);
   const params = {
     requesterSessionKey: entry.requesterSessionKey,
@@ -39,20 +41,20 @@ function fixture() {
     settledBefore: 4,
     isSourceCurrent: () => true,
   };
-  return { entry, params, read: createRequesterDescendantReader(params) };
+  return { entry, params, child, read: createRequesterDescendantReader(params) };
 }
 
 it("reads descendant facts without traversing unrelated retained runs", async () => {
-  const { entry, read } = fixture();
-  subagentRuns.set("unrelated", {
-    ...entry,
-    runId: "unrelated",
-    childSessionKey: "agent:main:subagent:unrelated",
-    requesterSessionKey: "agent:main:unrelated",
-  });
+  const { entry, read, child } = fixture();
+  subagentRuns.set(
+    "unrelated",
+    child("unrelated", {
+      requesterSessionKey: "agent:main:unrelated",
+    }),
+  );
   const values = vi.spyOn(subagentRuns, "values");
   expect(listSubagentRunsForRequester(entry.requesterSessionKey)).toEqual([entry]);
-  const sibling = { ...entry, runId: "sibling", childSessionKey: "agent:main:subagent:sibling" };
+  const sibling = child("sibling");
   subagentRuns.set(sibling.runId, sibling);
   const changed = { ...entry, task: "updated task" };
   subagentRuns.set(entry.runId, changed);
@@ -65,24 +67,19 @@ it("counts resident and durable descendants without restoring settled text", asy
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
-      const { entry, read } = fixture();
-      const completed: SubagentRunRecord = {
-        ...entry,
-        runId: "completed",
-        childSessionKey: "agent:main:subagent:completed",
+      const { entry, read, child } = fixture();
+      const completed = child("completed", {
         requesterSettleWake: undefined,
         cleanupCompletedAt: 5,
         task: "retained task ".repeat(100),
         completion: { required: false, resultText: "retained result" },
-      };
-      const pending: SubagentRunRecord = {
+      });
+      const pending = child("pending", {
         ...completed,
-        runId: "pending",
-        childSessionKey: "agent:main:subagent:pending",
         cleanupCompletedAt: undefined,
         execution: { status: "terminal", endedAt: 5 },
         delivery: { status: "failed", disposition: "retryable" },
-      };
+      });
       persistRegistryFixture(new Map([entry, completed, pending].map((row) => [row.runId, row])));
       subagentRuns.set(completed.runId, compactSubagentRunForMemory(completed));
       clearSubagentRunsReadCacheForTest();

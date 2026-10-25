@@ -38,7 +38,6 @@ export function assertTranscriptEventReadBudget(
         .as("events"),
       Math.floor(maxEventBytes),
       "Trajectory transcript store",
-      { hasExactUtf8Bytes: true },
     );
   }
 }

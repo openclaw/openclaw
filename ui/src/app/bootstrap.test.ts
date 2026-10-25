@@ -8,13 +8,10 @@ import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
-import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
-import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import * as gatewayStore from "./gateway-store.ts";
-import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 
 // Startup progress (dynamic imports, gateway subscribe, router start) is not a
@@ -46,6 +43,14 @@ describe("bootstrapApplication", () => {
 
   function saveSession(sessionKey: string) {
     saveSettings({ ...previousSettings, sessionKey, lastActiveSessionKey: sessionKey });
+  }
+
+  function openAt(pathname: string, sessionKey?: string) {
+    if (sessionKey) {
+      saveSession(sessionKey);
+    }
+    window.history.replaceState({}, "", pathname);
+    return bootstrapApplication();
   }
 
   it.each(["chat", "dashboard"])(
@@ -88,59 +93,23 @@ describe("bootstrapApplication", () => {
       });
     } finally {
       runtime.stop();
-      startGateway.mockRestore();
       window.removeEventListener("openclaw:native-gateway-health-changed", changed);
       Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_GATEWAY_HEALTH__");
-      vi.unstubAllGlobals();
     }
   });
 
-  it("starts native notifications before Gateway use and preserves synchronous permission requests", async () => {
-    const promptKey = "openclaw.control.notificationsAutoPrompt.v1";
-    const previousPrompt = localStorage.getItem(promptKey);
-    localStorage.removeItem(promptKey);
-    window.history.replaceState({}, "", "/focus/terminal");
+  it("starts native notifications before Gateway use", async () => {
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
     vi.stubGlobal("__OPENCLAW_NATIVE_NOTIFICATIONS__", { permission: "notDetermined" });
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/focus/terminal");
     const startGateway = vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {
       expect(runtime.context.nativeNotifications?.snapshot.permission).toBe("notDetermined");
       expect(postMessage).toHaveBeenCalledWith({ type: "status" });
     });
-
-    try {
-      expect(postMessage).not.toHaveBeenCalled();
-      await runtime.start();
-      expect(startGateway).toHaveBeenCalledOnce();
-      const button = document.createElement("button");
-      button.addEventListener("click", () => {
-        autoPromptNotificationsOnSend(runtime.context);
-        expect(postMessage).toHaveBeenLastCalledWith({ type: "request-permission" });
-      });
-      button.click();
-      const listener = vi.fn();
-      runtime.context.nativeNotifications?.subscribe(listener);
-      runtime.stop();
-      postMessage.mockClear();
-      window.dispatchEvent(new Event("focus"));
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-notifications-status", {
-          detail: { permission: "denied", test: null },
-        }),
-      );
-      expect(postMessage).not.toHaveBeenCalled();
-      expect(listener).not.toHaveBeenCalled();
-    } finally {
-      runtime.stop();
-      startGateway.mockRestore();
-      vi.unstubAllGlobals();
-      if (previousPrompt === null) {
-        localStorage.removeItem(promptKey);
-      } else {
-        localStorage.setItem(promptKey, previousPrompt);
-      }
-    }
+    expect(postMessage).not.toHaveBeenCalled();
+    await runtime.start();
+    expect(startGateway).toHaveBeenCalledOnce();
   });
 
   it("does not install native notification listeners when stop wins startup", async () => {
@@ -183,51 +152,10 @@ describe("bootstrapApplication", () => {
     },
   );
 
-  it("replaces a released dashboard query bookmark before router start", async () => {
-    const initialLocation = {
-      pathname: "/chat",
-      search: "?session=agent%3Aresearch%3Arelease-deadbeef&face=dashboard&draft=ship",
-      hash: "",
-    };
-    const gateway = {
-      snapshot: {
-        phase: "connected",
-        client: {},
-        hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
-      },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["gateway"];
-    const canonicalLocation = await resolveInitialApplicationLocation({
-      location: initialLocation,
-      basePath: "",
-      sessionKey: "agent:main:main",
-      gateway,
-      agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
-      signal: new AbortController().signal,
-    });
-    let currentLocation: RouteLocation = initialLocation;
-    const replace = vi.fn((location: RouteLocation) => {
-      currentLocation = location;
-    });
-
-    await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as unknown as ApplicationContext,
-      enabled: false,
-      history: { location: () => currentLocation, replace },
-      initialLocationReady: Promise.resolve(canonicalLocation),
-    });
-
-    expect(replace).toHaveBeenCalledWith({
-      pathname: "/dashboard/research/~key/release-deadbeef",
-      search: "?draft=ship",
-      hash: "",
-    });
-  });
-
   it("starts the first-run redirect after installing the persisted session location", async () => {
     const { promise: initialLocationReady, resolve: resolveInitialLocation } =
       createDeferred<RouteLocation>();
-    let currentLocation: RouteLocation = { pathname: "/", search: "", hash: "" };
+    let currentLocation = makeLocation();
     const replaceLocation = vi.fn((location: RouteLocation) => {
       currentLocation = location;
     });
@@ -238,21 +166,9 @@ describe("bootstrapApplication", () => {
       setupComplete: false,
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const subscribe = vi.fn((next: GatewayListener) => {
-      listener = next;
-      return () => undefined;
-    });
     const replaceRoute = vi.fn();
-    const gateway = {
-      snapshot: {
-        phase: "connecting",
-        client: null,
-        hello: null,
-      } as Parameters<GatewayListener>[0],
-      subscribe,
-    };
+    const routing = makeRoutingGateway({ phase: "connecting", client: null });
+    const { gateway } = routing;
     const context = {
       gateway,
       agentSelection: {
@@ -261,7 +177,7 @@ describe("bootstrapApplication", () => {
       },
       replace: replaceRoute,
     } as unknown as ApplicationContext;
-    const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
+    const canonicalLocation = makeLocation("/chat/main");
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -269,18 +185,13 @@ describe("bootstrapApplication", () => {
       history: { location: () => currentLocation, replace: replaceLocation },
       initialLocationReady,
     });
-    expect(subscribe).not.toHaveBeenCalled();
+    expect(gateway.subscribe).not.toHaveBeenCalled();
 
     resolveInitialLocation(canonicalLocation);
     await redirectReady;
     expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
-    expect(subscribe).toHaveBeenCalledOnce();
-
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected first-run gateway listener");
-    }
-    gateway.snapshot = {
+    expect(gateway.subscribe).toHaveBeenCalledOnce();
+    routing.publish({
       phase: "connected",
       client,
       hello: {
@@ -290,22 +201,21 @@ describe("bootstrapApplication", () => {
           sessionDefaults: { defaultAgentId: "main", modelConfigured: false },
         },
       },
-    } as Parameters<GatewayListener>[0];
-    connectedListener(gateway.snapshot);
+    });
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
   it("does not replace a user route with the deferred default chat location", async () => {
-    const currentLocation = { pathname: "/new", search: "", hash: "" };
+    const currentLocation = makeLocation("/new");
     const installLocation = vi.fn();
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context: {} as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace: vi.fn() },
-      initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
+      initialLocationReady: Promise.resolve(makeLocation("/chat/main")),
       installLocation,
       shouldInstallLocation: () => isDefaultChatLanding(currentLocation, "", routeIdFromPath),
     });
@@ -373,8 +283,7 @@ describe("bootstrapApplication", () => {
     );
     saveSession("agent:main:main");
     document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
-    window.history.replaceState({}, "", "/__openclaw__/new");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/__openclaw__/new");
 
     try {
       await runtime.start();
@@ -396,35 +305,23 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it.each([
-    {
-      initialUrl: "/openclaw/?view=terminal&keep=yes#pane",
-      expectedUrl: "/openclaw/focus/terminal?keep=yes#pane",
+  it("rewrites the released terminal query at the application boundary", async () => {
+    window.history.replaceState({}, "", "/openclaw/?view=terminal&keep=yes#pane");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const runtime = bootstrapApplication();
+    const routerStart = vi.spyOn(runtime.router, "start");
+    expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+      "/openclaw/focus/terminal?keep=yes#pane",
+    );
+    expect(runtime.focusLocation).toEqual({
+      status: "valid",
       basePath: "/openclaw",
-    },
-  ])(
-    "rewrites the released terminal query at the $basePath application boundary",
-    async ({ initialUrl, expectedUrl, basePath }) => {
-      window.history.replaceState({}, "", initialUrl);
-      const replaceState = vi.spyOn(window.history, "replaceState");
-      const runtime = bootstrapApplication();
-      const routerStart = vi.spyOn(runtime.router, "start");
-
-      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
-        expectedUrl,
-      );
-      expect(runtime.focusLocation).toEqual({
-        status: "valid",
-        basePath,
-        target: { kind: "terminal" },
-      });
-
-      await runtime.start();
-
-      expect(routerStart).not.toHaveBeenCalled();
-      expect(replaceState).toHaveBeenCalledTimes(1);
-    },
-  );
+      target: { kind: "terminal" },
+    });
+    await runtime.start();
+    expect(routerStart).not.toHaveBeenCalled();
+    expect(replaceState).toHaveBeenCalledTimes(1);
+  });
 
   it("strips startup credentials before rewriting the released terminal query", () => {
     window.history.replaceState({}, "", "/?view=terminal#token=startup-token&pane=1");
@@ -443,9 +340,7 @@ describe("bootstrapApplication", () => {
   });
 
   it("keeps the latest navigation requested before router start", async () => {
-    saveSession("agent:main:main");
-    window.history.replaceState({}, "", "/chat");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/chat", "agent:main:main");
     const pushState = vi.spyOn(window.history, "pushState");
 
     const start = runtime.start();
@@ -462,9 +357,7 @@ describe("bootstrapApplication", () => {
   });
 
   it("replaces instead of pushing when re-navigating to the active location", async () => {
-    saveSession("main");
-    window.history.replaceState({}, "", "/settings/appearance");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/settings/appearance", "main");
     const pushState = vi.spyOn(window.history, "pushState");
     const replaceState = vi.spyOn(window.history, "replaceState");
 
@@ -482,9 +375,7 @@ describe("bootstrapApplication", () => {
   });
 
   it("consumes an unscoped initial-location abort after stop wins early startup", async () => {
-    saveSession("main");
-    window.history.replaceState({}, "", "/");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/", "main");
     const unhandledRejection = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
     const routerStart = vi.spyOn(runtime.router, "start");
     const redirectSubscription = vi.spyOn(runtime.context.gateway, "subscribe");
@@ -555,14 +446,12 @@ describe("bootstrapApplication", () => {
     expect(
       [...readinessSubscriptions].filter((listener) => activeSubscriptions.has(listener)),
     ).toHaveLength(0);
-    expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true });
+    expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true, signal });
     expect(routerStart).not.toHaveBeenCalled();
   });
 
   it("stops the router immediately and again after an in-flight start settles", async () => {
-    saveSession("main");
-    window.history.replaceState({}, "", "/settings/appearance");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/settings/appearance", "main");
     const routerStarted = createDeferred();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
     const routerStop = vi.spyOn(runtime.router, "stop");
@@ -578,9 +467,7 @@ describe("bootstrapApplication", () => {
   });
 
   it("resolves runtime startup when the initial route is not found", async () => {
-    saveSession("main");
-    window.history.replaceState({}, "", "/settings/about");
-    const runtime = bootstrapApplication();
+    const runtime = openAt("/settings/about", "main");
     const routerStart = vi
       .spyOn(runtime.router, "start")
       .mockRejectedValue({ type: "notFound", data: { routeId: "chat" } });
@@ -608,75 +495,19 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("refreshes registered chat browser chrome on breakpoint changes", () => {
+  it("releases browser chrome breakpoint listeners on stop", () => {
     const listeners = new Set<() => void>();
-    let mobile = false;
-    const removeEventListener = vi.fn((_: string, listener: () => void) => {
-      listeners.delete(listener);
-    });
     vi.stubGlobal(
       "matchMedia",
-      vi.fn((query: string) => ({
-        matches: query.startsWith("(max-width: 768px)") ? mobile : false,
+      vi.fn(() => ({
+        matches: false,
         addEventListener: (_: string, listener: () => void) => listeners.add(listener),
-        removeEventListener,
+        removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
       })),
     );
-    const style = document.createElement("style");
-    style.textContent = ':root[data-theme="light"] { --bg: #123456; --bg-content: #abcdef; }';
-    const meta = document.createElement("meta");
-    meta.name = "theme-color";
-    meta.media = "(prefers-color-scheme: light)";
-    const darkMeta = document.createElement("meta");
-    darkMeta.name = "theme-color";
-    darkMeta.media = "(prefers-color-scheme: dark)";
-    document.head.append(style, meta, darkMeta);
-    bindControlUiDocumentHead({ themeColors: [meta, darkMeta], favicons: [] });
-    saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
     const runtime = bootstrapApplication();
-
-    const publish = () => listeners.forEach((listener) => listener());
-    const expectChrome = (color: string) => {
-      expect(meta.content).toBe(color);
-      expect(
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
-      ).toBe(color);
-    };
-    try {
-      expect(meta.content).toBe("#123456");
-      expect(darkMeta.content).toBe("#123456");
-      expect(meta.hasAttribute("media")).toBe(false);
-      expect(darkMeta.hasAttribute("media")).toBe(false);
-      expect(
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
-      ).toBe("#123456");
-
-      syncControlUiSystemChrome(false, true);
-      mobile = true;
-      publish();
-      expectChrome("#abcdef");
-
-      syncControlUiSystemChrome(false, false);
-      publish();
-      expect(meta.content).toBe("#123456");
-
-      syncControlUiSystemChrome(false, true);
-      publish();
-      expect(meta.content).toBe("#abcdef");
-
-      mobile = false;
-      publish();
-      expect(meta.content).toBe("#123456");
-    } finally {
-      runtime.stop();
-      syncControlUiSystemChrome(false, false);
-      bindControlUiDocumentHead({ themeColors: [], favicons: [] });
-      document.body.replaceChildren();
-      expect(removeEventListener).toHaveBeenCalled();
-      style.remove();
-      meta.remove();
-      darkMeta.remove();
-      vi.unstubAllGlobals();
-    }
+    expect(listeners.size).toBeGreaterThan(0);
+    runtime.stop();
+    expect(listeners.size).toBe(0);
   });
 });

@@ -1,24 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { computerCapabilities } from "../gateway/desktop/computer.test-support.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createAdmittedHostCapabilityTestFixture } from "./harness/host-capability.test-support.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withSessionPlacementComputer } from "./session-placement-computer.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import type { ComputerToolTransport } from "./tools/computer-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scope = {
+  agentId: "main",
+  runId: "run-computer",
+  sessionId: "session-computer",
+  sessionKey: "agent:main:session-computer",
+};
 const transport: ComputerToolTransport = {
-  computerUse: {
-    contractVersion: 2,
-    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-    actions: ["screenshot"],
-    targets: ["screen"],
-    deliveryModes: ["foreground"],
-    observations: ["image"],
-    features: { recording: false, agentCursor: false, multiDisplay: false },
-  },
+  computerUse: computerCapabilities(
+    { id: "fixture", label: "Fixture", generation: "generation-1" },
+    ["screenshot"],
+  ),
   resolveNode: async () => ({ nodeId: "session-desktop" }),
   invoke: async () => {
     throw new Error("Tool construction must not invoke the desktop");
@@ -28,50 +31,27 @@ const transport: ComputerToolTransport = {
 describe.each([false, true])(
   "session placement computer tool policy (prepared: %s)",
   (prepared) => {
-    it.each([
-      { name: "default", tools: {}, allowed: true },
-      {
-        name: "additive sandbox tools",
-        tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
-        allowed: true,
-      },
-      {
-        name: "explicit sandbox allow",
-        tools: { sandbox: { tools: { allow: ["read"] } } },
-        allowed: false,
-      },
-      {
-        name: "explicit sandbox deny",
-        tools: { sandbox: { tools: { deny: ["computer"] } } },
-        allowed: false,
-      },
-      {
-        name: "inactive sandbox allow",
-        tools: { sandbox: { tools: { allow: ["read"] } } },
-        sandboxed: false,
-        allowed: true,
-      },
-      { name: "global deny", tools: { deny: ["computer"] }, allowed: false },
-      { name: "coding profile", tools: { profile: "coding" as const }, allowed: false },
+    it.each<[string, OpenClawConfig["tools"], boolean, boolean?]>([
+      ["default", {}, true],
+      ["additive sandbox tools", { sandbox: { tools: { alsoAllow: ["web_fetch"] } } }, true],
+      ["explicit sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, false],
+      ["explicit sandbox deny", { sandbox: { tools: { deny: ["computer"] } } }, false],
+      ["inactive sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, true, false],
+      ["global deny", { deny: ["computer"] }, false],
+      ["coding profile", { profile: "coding" }, false],
     ])(
-      "applies $name policy to the real harness host tool surface",
-      async ({ tools, allowed, sandboxed = true }) => {
+      "applies %s policy to the real harness host tool surface",
+      async (_name, tools, allowed, sandboxed = true) => {
         const workspaceDir = tempDirs.make("placement-computer-");
         const config: OpenClawConfig = { plugins: { enabled: false }, tools };
         const host = await createAdmittedHostCapabilityTestFixture({
-          agentId: "main",
-          runId: "run-computer",
-          sessionId: "session-computer",
-          sessionKey: "agent:main:session-computer",
+          ...scope,
           cwd: workspaceDir,
           workspaceDir,
           config,
         });
         const options = {
-          agentId: "main",
-          runId: "run-computer",
-          sessionId: "session-computer",
-          sessionKey: "agent:main:session-computer",
+          ...scope,
           workspaceDir,
           config,
           modelHasVision: true,
@@ -81,13 +61,7 @@ describe.each([false, true])(
                 tools: resolveSandboxToolPolicyForAgent(config, "main"),
               })
             : undefined,
-          toolConstructionPlan: {
-            includeBaseCodingTools: false,
-            includeShellTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: true,
-            includePluginTools: false,
-          },
+          toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
         };
         try {
           const ordinary = host.hostCapabilities.createToolSurface?.(options) ?? [];
@@ -96,8 +70,7 @@ describe.each([false, true])(
           }
           await withSessionPlacementComputer(
             {
-              runId: "run-computer",
-              agentId: "main",
+              ...scope,
               isActive: () => true,
               sandboxToolPolicy: resolveSandboxToolPolicyForAgent(config, "main", {
                 containedToolNames: ["computer"],
@@ -134,7 +107,7 @@ describe.each([false, true])(
             },
           );
           await withSessionPlacementComputer(
-            { runId: "run-computer", agentId: "main", isActive: () => true, bind: () => null },
+            { ...scope, isActive: () => true, bind: () => null },
             async () => {
               expect(
                 host.hostCapabilities

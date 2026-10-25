@@ -13,14 +13,10 @@ import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
-type AnthropicThinkingRecovery = {
-  originalMessages: AgentMessage[];
-  cleanedMessages: AgentMessage[];
-};
 type RecoverySessionMeta = {
   id: string;
   recoveredAnthropicThinking?: boolean;
-  onRecoveredAnthropicThinking?: (recovery: AnthropicThinkingRecovery) => void | Promise<void>;
+  onRecoveredAnthropicThinking?: () => void | Promise<void>;
 };
 
 type ThinkingRecoveryRequest = {
@@ -270,12 +266,9 @@ function shouldRecoverAnthropicThinkingErrorMessage(
   return true;
 }
 
-async function notifyRecoveredAnthropicThinking(
-  sessionMeta: RecoverySessionMeta,
-  recovery: AnthropicThinkingRecovery,
-): Promise<void> {
+async function notifyRecoveredAnthropicThinking(sessionMeta: RecoverySessionMeta): Promise<void> {
   try {
-    await sessionMeta.onRecoveredAnthropicThinking?.(recovery);
+    await sessionMeta.onRecoveredAnthropicThinking?.();
   } catch (error: unknown) {
     log.warn(
       `[session-recovery] Anthropic thinking transcript repair hook failed: sessionId=${sessionMeta.id} error=${formatErrorMessage(error)}`,
@@ -427,12 +420,7 @@ export function wrapAnthropicStreamWithRecovery(
     const readNotification = () => notification;
     const notify = () => {
       notification ??= trackRecovery(() =>
-        Promise.resolve().then(() =>
-          notifyRecoveredAnthropicThinking(requestMeta, {
-            originalMessages,
-            cleanedMessages: stripAllThinkingBlocks(originalMessages),
-          }),
-        ),
+        Promise.resolve().then(() => notifyRecoveredAnthropicThinking(requestMeta)),
       );
       return notification;
     };

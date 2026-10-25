@@ -302,6 +302,11 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<script>
+  // Match the embedding frame before this document can paint an opaque UA canvas.
+  const initialTheme = new URLSearchParams(window.location.hash.slice(1)).get("theme");
+  if (initialTheme === "light" || initialTheme === "dark") document.documentElement.style.colorScheme = initialTheme;
+</script>
 <title>MCP App sandbox</title>
 <style>html,body{height:100%;margin:0;background:transparent}iframe{display:block;width:100%;height:100%;border:0;background:transparent}</style>
 <body>

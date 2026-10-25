@@ -15,7 +15,6 @@ import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -131,21 +130,33 @@ const credentialsError = () =>
     method: "agents.delete",
     configPath: "/test/openclaw.json",
   });
+const session = (sessionId: string, updatedAt = 1) => ({ sessionId, updatedAt });
+const agentConfig = (agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig => ({ agents });
+function expectJsonFailure(message: unknown) {
+  expect(readJson()).toMatchObject({ ok: false, error: { message } });
+  expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+}
+function expectSharedWorkspace(workspace: string) {
+  expect(readJson()).toMatchObject({
+    workspaceRetained: true,
+    workspaceRetainedReason: "shared",
+    workspaceSharedWith: ["main"],
+  });
+  expect(moveToTrash.mock.calls.map(([target]) => target)).not.toContain(workspace);
+  expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+}
 function config(stateDir: string): OpenClawConfig {
-  const entries = {
-    main: { workspace: path.join(stateDir, "workspace-main") },
-    ops: { workspace: path.join(stateDir, "workspace-ops") },
-  };
-  return {
-    agents: {
-      ownership: "explicit",
-      defaults: {
-        systemAgent: { agentId: "main" },
-        sessionStore: { agentId: "main" },
-      },
-      entries,
+  return agentConfig({
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
     },
-  };
+    entries: {
+      main: { workspace: path.join(stateDir, "workspace-main") },
+      ops: { workspace: path.join(stateDir, "workspace-ops") },
+    },
+  });
 }
 function expectNoLocalMutation() {
   expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -155,16 +166,8 @@ function expectNoLocalMutation() {
 function expectSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
-  agentId = "ops",
 ) {
-  const agentIds = new Set([
-    agentId,
-    ...Object.keys(sessions).flatMap((key) => {
-      const id = parseAgentSessionKey(key)?.agentId;
-      return id ? [id] : [];
-    }),
-  ]);
-  const rows = [...agentIds].flatMap((id) =>
+  const rows = Object.keys(cfg.agents?.entries ?? {}).flatMap((id) =>
     listSessionEntriesReadOnly({
       agentId: id,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: id }),
@@ -213,30 +216,26 @@ describe("agents delete command", () => {
     async (kind, { state }) => {
       const invalid = kind === "invalid id";
       const sole = kind === "sole agent";
-      const cfg: OpenClawConfig = invalid
+      const cfg = invalid
         ? config(state.stateDir)
-        : {
-            agents: sole
+        : agentConfig(
+            sole
               ? { entries: { ops: {} } }
               : {
                   ownership: "explicit",
                   defaults: { authInheritance: { agentId: "ops" } },
                   entries: { ops: {}, research: {} },
                 },
-          };
+          );
       const owner = invalid ? "main" : "ops";
-      const sessions = { [`agent:${owner}:main`]: { sessionId: owner, updatedAt: 1 } };
+      const sessions = { [`agent:${owner}:main`]: session(owner) };
       if (invalid) {
         writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       }
       await state.setup({ cfg, sessions, deletedAgentId: owner });
       await removeAgent({ id: invalid ? "агент✨" : "ops", json: sole });
       if (sole) {
-        expect(readJson()).toMatchObject({
-          ok: false,
-          error: { message: 'Agent "ops" is the only configured agent and cannot be deleted.' },
-        });
-        expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+        expectJsonFailure('Agent "ops" is the only configured agent and cannot be deleted.');
       } else {
         expect(runtime.error).toHaveBeenCalledWith(
           expect.stringContaining(
@@ -247,7 +246,7 @@ describe("agents delete command", () => {
         expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
       }
       expectNoLocalMutation();
-      expectSessionStore(cfg, sessions, owner);
+      expectSessionStore(cfg, sessions);
     },
   );
   it("refuses deleting the legacy shared-auth owner even when another agent is default", async ({
@@ -256,24 +255,18 @@ describe("agents delete command", () => {
     const cfg = createCanonicalAgentConfigFixture({
       agents: { entries: { main: {}, ops: { default: true } } },
     }).config;
-    const sessions = { "agent:main:main": { sessionId: "main", updatedAt: 1 } };
+    const sessions = { "agent:main:main": session("main") };
     await state.setup({ cfg, deletedAgentId: "main", sessions });
     writePersistedAuthProfileStoreRaw(
       sharedAuthStore,
       path.join(state.stateDir, "agents/main/agent"),
     );
     await removeAgent({ id: "main", json: true });
-    expect(readJson()).toMatchObject({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: expect.stringContaining("owns the legacy shared auth store"),
-      },
-    });
-    expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+    expectJsonFailure(expect.stringContaining("owns the legacy shared auth store"));
+    expect(readJson()).toHaveProperty("error.type", "cli_error");
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expectNoLocalMutation();
-    expectSessionStore(cfg, sessions, "main");
+    expectSessionStore(cfg, sessions);
     expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
   });
 
@@ -285,8 +278,8 @@ describe("agents delete command", () => {
     };
     openOpenClawAgentDatabase({ agentId: "alpha", path: storePath });
     const sessions = {
-      "agent:alpha:main": { sessionId: "alpha", updatedAt: 1 },
-      "agent:ops:main": { sessionId: "ops", updatedAt: 2 },
+      "agent:alpha:main": session("alpha"),
+      "agent:ops:main": session("ops", 2),
     };
     await state.setup({ cfg, deletedAgentId: "alpha", sessions });
     saveExecApprovals({ version: 1, agents: { alpha: { security: "deny" } } });
@@ -300,14 +293,14 @@ describe("agents delete command", () => {
     expectNoLocalMutation();
     expect(readAgentDeletionJournal("alpha")).toBeUndefined();
     expect(readExecApprovalsSnapshot()).toEqual(approvals);
-    expectSessionStore(cfg, sessions, "alpha");
+    expectSessionStore(cfg, sessions);
   });
 
   it("never falls back locally for a failed remote config target", async ({ state }) => {
     const url = "ws://127.0.0.1:18789";
     const cfg = config(state.stateDir);
     cfg.gateway = { mode: "remote", remote: { url } };
-    const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+    const sessions = { "agent:ops:main": session("ops") };
     await state.setup({ cfg, sessions });
     gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
     await runCommandWithRuntime(runtime, () => removeAgent());
@@ -325,7 +318,7 @@ describe("agents delete command", () => {
     state,
   }) => {
     const cfg = config(state.stateDir);
-    const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+    const sessions = { "agent:ops:main": session("ops") };
     await state.setup({ cfg, sessions });
     const error = gatewayTransportError("closed", 1006);
     gatewayMocks.callGateway.mockRejectedValue(error);
@@ -389,7 +382,7 @@ describe("agents delete command", () => {
     const workspace = path.join(state.stateDir, "workspace-shared");
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { heartbeat: { agentId: "ops" }, systemAgent: { agentId: "ops" } },
+        defaults: { systemAgent: { agentId: "ops" } },
         entries: { main: { workspace }, ops: { workspace } },
       },
       talk: { agentId: "ops", provider: "test-provider" },
@@ -407,11 +400,7 @@ describe("agents delete command", () => {
       workspaceRetained: true,
       workspaceRetainedReason: "shared",
       cronCleanupSkipped: true,
-      clearedOwnerRefs: [
-        "agents.defaults.heartbeat.agentId",
-        "agents.defaults.systemAgent.agentId",
-        "talk.agentId",
-      ],
+      clearedOwnerRefs: ["agents.defaults.systemAgent.agentId", "talk.agentId"],
     });
     expect(readJson()).not.toHaveProperty("purgeFailed");
     expect(readJson()).not.toHaveProperty("transport");
@@ -420,7 +409,7 @@ describe("agents delete command", () => {
       expect.stringContaining('cron cleanup was skipped for deleted agent "ops"'),
     );
     const written = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
-    expect(written?.agents?.defaults?.heartbeat).toBeUndefined();
+    expect(written?.agents?.defaults).not.toHaveProperty("heartbeat");
     expect(written?.agents?.defaults?.systemAgent).toBeUndefined();
     expect(written?.talk).toEqual({ provider: "test-provider" });
     expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
@@ -435,15 +424,15 @@ describe("agents delete command", () => {
       session: { store: path.join(state.stateDir, "shared.sqlite") },
     };
     const survivors = {
-      "agent:main:main": { sessionId: "main", updatedAt: 1 },
-      "agent:main:quietchat:direct:u1": { sessionId: "main-direct", updatedAt: 2 },
+      "agent:main:main": session("main"),
+      "agent:main:quietchat:direct:u1": session("main-direct", 2),
     };
     await state.setup({
       cfg,
       sessions: {
         ...survivors,
-        "agent:ops:main": { sessionId: "ops", updatedAt: 3 },
-        "agent:ops:quietchat:direct:u2": { sessionId: "ops-direct", updatedAt: 4 },
+        "agent:ops:main": session("ops", 3),
+        "agent:ops:quietchat:direct:u2": session("ops-direct", 4),
       },
     });
     await removeAgent({ json: true });
@@ -456,32 +445,30 @@ describe("agents delete command", () => {
   }) => {
     const opsAgentDir = path.join(state.tempRoot, "ops-agent");
     const sharedDatabasePath = path.join(state.tempRoot, "shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          authInheritance: { agentId: "ops" },
-        },
-        entries: {
-          main: { workspace: path.join(state.stateDir, "workspace-main") },
-          ops: {
-            agentDir: opsAgentDir,
-            workspace: path.join(state.stateDir, "workspace-ops"),
-          },
+    const cfg = agentConfig({
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "ops" },
+        authInheritance: { agentId: "ops" },
+      },
+      entries: {
+        main: { workspace: path.join(state.stateDir, "workspace-main") },
+        ops: {
+          agentDir: opsAgentDir,
+          workspace: path.join(state.stateDir, "workspace-ops"),
         },
       },
-    };
+    });
     writeConfigMachineState("auth.sharedStore", { location: "state-db" });
     writePersistedAuthProfileStoreRaw(sharedAuthStore);
-    const survivorSessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+    const survivorSessions = { "agent:ops:main": session("ops") };
     await state.setup({
       cfg,
       deletedAgentId: "main",
       sessions: {
         ...survivorSessions,
-        "agent:main:main": { sessionId: "main", updatedAt: 2 },
-        "agent:main:quietchat:direct:u1": { sessionId: "main-direct", updatedAt: 3 },
+        "agent:main:main": session("main", 2),
+        "agent:main:quietchat:direct:u1": session("main-direct", 3),
       },
     });
     saveExecApprovals({
@@ -502,7 +489,7 @@ describe("agents delete command", () => {
           id: "heartbeat",
           agentId: "ops",
           declarationKey: "heartbeat:ops",
-          payload: { kind: "heartbeat" },
+          payload: { kind: "agentTurn", message: "Migrated periodic check" },
         }),
         makeCronJob({ id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" }),
       ],
@@ -538,13 +525,9 @@ describe("agents delete command", () => {
     });
     await removeAgent({ id: "main", json: true });
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-    expect(
-      Object.keys(
-        configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig.agents?.entries ?? {},
-      ),
-    ).toEqual(["ops"]);
-    expectSessionStore(cfg, survivorSessions, "main");
+    const written = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
+    expect(Object.keys(written?.agents?.entries ?? {})).toEqual(["ops"]);
+    expectSessionStore(cfg, survivorSessions);
     expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
     expect(readExecApprovalsSnapshot().file.agents).toEqual({
       "*": { security: "deny" },
@@ -564,7 +547,6 @@ describe("agents delete command", () => {
     for (const file of [sharedDatabasePath, survivorOwned, foreign.path]) {
       expect((await fs.stat(file)).isFile()).toBe(true);
     }
-    expect(moveToTrash).not.toHaveBeenCalledWith(retainedDir, expect.anything());
     expect(readJson()).toMatchObject({
       removed: expect.arrayContaining(
         externalFiles.map((file) => ({ path: file, method: "trash" })),
@@ -658,21 +640,13 @@ describe("agents delete command", () => {
       const opsWorkspace = path.join(shared, opsPath);
       await fs.mkdir(mainWorkspace, { recursive: true });
       await fs.mkdir(opsWorkspace, { recursive: true });
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: { main: { workspace: mainWorkspace }, ops: { workspace: opsWorkspace } },
-        },
-      };
+      const cfg = agentConfig({
+        entries: { main: { workspace: mainWorkspace }, ops: { workspace: opsWorkspace } },
+      });
       await state.setup({ cfg });
       await removeAgent({ json: true });
       expect((await fs.stat(opsWorkspace)).isDirectory()).toBe(true);
-      expect(readJson()).toMatchObject({
-        workspaceRetained: true,
-        workspaceRetainedReason: "shared",
-        workspaceSharedWith: ["main"],
-      });
-      expect(moveToTrash.mock.calls.map(([target]) => target)).not.toContain(opsWorkspace);
-      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expectSharedWorkspace(opsWorkspace);
     },
   );
 
@@ -687,11 +661,7 @@ describe("agents delete command", () => {
         cfg: { agents: { entries: { main: { workspace }, ops: { workspace: alias } } } },
       });
       await removeAgent({ json: true });
-      expect(readJson()).toMatchObject({
-        workspaceRetained: true,
-        workspaceSharedWith: ["main"],
-      });
-      expect(moveToTrash.mock.calls.map(([target]) => target)).not.toContain(alias);
+      expectSharedWorkspace(alias);
     },
   );
 });

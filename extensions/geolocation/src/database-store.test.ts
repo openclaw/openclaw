@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +11,10 @@ import { createGeolocationDatabaseStore } from "./database-store.js";
 
 const now = new Date("2026-01-03T00:00:00Z");
 let stateDir: string;
-let currentTime: Date;
 
 beforeEach(async () => {
-  currentTime = now;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
   // Realpath first: macOS tmp is a symlink and the store compares resolved paths.
   stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "geolocation-store-")));
 });
@@ -154,12 +155,10 @@ function createStore(
     warn?: (message: string) => void;
   } = {},
 ) {
-  return createGeolocationDatabaseStore({
+  const databaseUrl = options.databaseUrl ?? "https://host.test/db.mmdb";
+  const store = createGeolocationDatabaseStore({
     stateDir,
-    settings: resolveGeolocationSettings({
-      databaseUrl: options.databaseUrl ?? "https://host.test/db.mmdb",
-    }),
-    now: () => currentTime,
+    settings: resolveGeolocationSettings({ databaseUrl }),
     logger: options.warn ? { info: () => {}, warn: options.warn } : undefined,
     fetchImpl:
       typeof body === "function"
@@ -169,6 +168,8 @@ function createStore(
             return jsonResponse(body);
           },
   });
+  const digest = createHash("sha256").update(databaseUrl).digest("hex").slice(0, 12);
+  return { ...store, databaseFile: path.join(stateDir, "geolocation", `ip-city-${digest}.mmdb`) };
 }
 
 type Store = ReturnType<typeof createStore>;
@@ -188,7 +189,7 @@ async function expectPublished(store: Store, body: Buffer) {
 
 describe("geolocation database publication", () => {
   it("releases an idle disk-backed reader and reopens it without downloading", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(cityDatabase("Vienna")));
     const store = createStore(fetchImpl);
     const readFile = vi.spyOn(fs, "readFile");
@@ -210,7 +211,7 @@ describe("geolocation database publication", () => {
   });
 
   it("retains an unpublished download when idle so a cache failure cannot lose it", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(cityDatabase("Vienna")))
@@ -225,7 +226,7 @@ describe("geolocation database publication", () => {
   });
 
   it("preserves failed-refresh backoff across idle reopens without extending it", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("source unavailable"));
     const settings = resolveGeolocationSettings({ databaseUrl: "https://host.test/db.mmdb" });
     const store = createStore(fetchImpl);
@@ -234,12 +235,12 @@ describe("geolocation database publication", () => {
     expect(cityOf(await store.load())).toBe("Vienna");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60_000);
-    currentTime = new Date(now.getTime() + 60_000);
+    vi.setSystemTime(now.getTime() + 60_000);
     expect(cityOf(await store.load())).toBe("Vienna");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(settings.refreshMs);
-    currentTime = new Date(now.getTime() + settings.refreshMs + 1);
+    vi.setSystemTime(now.getTime() + settings.refreshMs + 1);
     expect(cityOf(await store.load())).toBe("Vienna");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });

@@ -1,17 +1,12 @@
-import fs from "node:fs";
-import { hostname } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
-import {
-  assertStateDatabaseAccessAllowed,
-  resolveGatewayStateOwnerPath,
-} from "./gateway-state-owner.js";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -22,6 +17,7 @@ import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
+import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
   forkSqlitePrivateSnapshotInProcess,
   readSqlitePrivateSnapshotFamily,
@@ -59,32 +55,8 @@ import {
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
-import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
-
-// Only this database's recorded process identity can authorize native live reads.
-function hasVerifiedLiveSqliteOwner(databasePath: string): boolean {
-  let owner;
-  try {
-    owner = parseGatewayLockPayload(
-      fs.readFileSync(resolveGatewayStateOwnerPath(databasePath), "utf8"),
-    );
-  } catch {
-    return false;
-  }
-  if (!owner || (owner.role && owner.role !== "gateway" && owner.role !== "agent-embedded")) {
-    return false;
-  }
-  return (
-    readStateLeaseProcessOwnerStatus({
-      pid: owner.pid,
-      host: owner.processNamespace?.host ?? hostname(),
-      startedAt: owner.startTime ?? null,
-      processNamespace: owner.processNamespace,
-    }) === "live"
-  );
-}
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
 // async backups pin committed pages with a read transaction and may update SHM.
@@ -207,13 +179,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       if (!expectedSourceIdentity) {
         throw new Error("SQLite metadata snapshot requires a captured source identity");
       }
-      const liveOwner = hasVerifiedLiveSqliteOwner(pathname);
       assertExistingDatabaseIdentity(
         pathname,
         expectedSourceIdentity.key,
         expectedSourceIdentity.birthtime,
       );
       assertStateDatabaseAccessAllowed(pathname);
+      const liveOwner = hasVerifiedLiveSqliteOwner(pathname);
       prepared = liveOwner
         ? await createOnlineReadOnlyBackup(pathname, stagingRoot)
         : await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity);
@@ -495,6 +467,8 @@ function runSession(): void {
 }
 
 if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
+  // One-shot stdout is the JSON result, and sessions may inherit a JSON caller's stdout.
+  routeLogsToStderr();
   useConnectionScopedSqliteDatabaseAdmissionFacts();
   if (process.argv[3] === "session" && process.send) {
     runSession();

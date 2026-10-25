@@ -155,14 +155,32 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       } else if (active.prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
         fail("authRequired", "not logged in: run /login to add an API key");
-      } else if (active.prompt === "approval" || active.prompt === "approval-settle") {
+      } else if (
+        active.prompt === "approval" ||
+        active.prompt === "approval-settle" ||
+        active.prompt === "approval-deny-only"
+      ) {
         event("approval/requested", {
           // Real Muse mints one approval id per request; the SDK ignores repeats.
           approvalId: `approval-${active.turnId}`,
           currentRequirementId: { approvalId: `approval-${active.turnId}`, sourceIndex: 0 },
           availableChoices: [
-            { choiceId: "server-allow-id", decision: "approved", scope: "once", label: "Allow" },
-            { choiceId: "server-deny-id", decision: "denied", scope: "once", label: "Deny" },
+            ...(active.prompt === "approval-deny-only"
+              ? []
+              : [
+                  {
+                    choiceId: "server-allow-id",
+                    decision: "approved",
+                    scope: "once",
+                    label: "Allow",
+                  },
+                ]),
+            {
+              choiceId: active.prompt === "approval-deny-only" ? "server-only" : "server-deny-id",
+              decision: "denied",
+              scope: "once",
+              label: "Deny",
+            },
           ],
           itemId: `tool-${active.turnId}`,
           toolCallId: `call-${active.turnId}`,

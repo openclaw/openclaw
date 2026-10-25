@@ -1,6 +1,22 @@
 // Sessions table tests cover shared display-label formatting.
 import { describe, expect, it } from "vitest";
-import { formatSessionKeyCell } from "./sessions-table.js";
+import { formatSessionKeyCell, toSessionDisplayRow } from "./sessions-table.js";
+
+it("displays the causal creator without exposing the retained isolation actor", () => {
+  const row = toSessionDisplayRow("agent:main:delegated", {
+    sessionId: "delegated",
+    updatedAt: 1,
+    createdActor: {
+      type: "human",
+      source: "profile",
+      id: "isolation-owner",
+      delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+    },
+    owner: { actor: { type: "human", id: "assigned-owner" } },
+  });
+  expect(row.createdActor).toEqual({ type: "human", source: "profile", id: "causal-human" });
+  expect(row.owner?.actor.id).toBe("assigned-owner");
+});
 
 describe("formatSessionKeyCell", () => {
   it.each(["😀", "👩‍💻", "e\u0301"])(

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -58,11 +59,11 @@ function startBridge(params = {}) {
   return invokeNodeHostJson({ ...REALTIME_START, ...params });
 }
 
+const launchChrome = (params = {}) => startBridge({ mode: "transcribe", launch: true, ...params });
+
 function commandPair(ignoreSigterm = false) {
   const [output, input] = children;
-  if (!output || !input) {
-    throw new Error("expected Google Meet node host command-pair processes");
-  }
+  assert(output && input, "expected node host command-pair processes");
   output.ignoreSigterm = input.ignoreSigterm = ignoreSigterm;
   return [output, input] as const;
 }
@@ -143,11 +144,7 @@ describe("google-meet node host bridge sessions", () => {
   });
 
   it("passes the Meet URL before Chrome profile args when launching a profiled browser", async () => {
-    const start = await startBridge({
-      mode: "transcribe",
-      launch: true,
-      browserProfile: "Profile 2",
-    });
+    const start = await launchChrome({ browserProfile: "Profile 2" });
     expect(start.launched).toBe(true);
     expect(spawnSync).toHaveBeenCalledWith(
       "open",
@@ -174,7 +171,7 @@ describe("google-meet node host bridge sessions", () => {
           ? { error: Object.assign(new Error("spawnSync open ETIMEDOUT"), { code: "ETIMEDOUT" }) }
           : {}),
       }));
-      await expect(startBridge({ mode: "transcribe", launch: true })).rejects.toThrow(
+      await expect(launchChrome()).rejects.toThrow(
         `failed to launch Chrome for Meet: ${diagnostic}`,
       );
     },

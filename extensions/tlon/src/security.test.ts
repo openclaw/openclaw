@@ -21,36 +21,20 @@ const allowlistShipMatchingCases = [
   isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>;
 }>;
 
-async function expectAllowed(
-  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>,
-  ship: string,
-  allowlist: string[] | undefined,
-  expected: boolean,
-) {
-  await expect(Promise.resolve(isAllowed(ship, allowlist))).resolves.toBe(expected);
-}
-
-it.each(allowlistShipMatchingCases)(
-  "$label rejects partial ship matches",
-  async ({ isAllowed }) => {
-    const allowlist = ["~zod"];
-    await expectAllowed(isAllowed, "~zod-extra", allowlist, false);
-    await expectAllowed(isAllowed, "~extra-zod", allowlist, false);
-  },
-);
-
 describe.each(allowlistShipMatchingCases)("Security: $label", ({ isAllowed }) => {
-  it.each([{ allowlist: [] }, { allowlist: undefined }])(
-    "rejects absent/empty allowlist $allowlist",
-    async ({ allowlist }) => {
-      await expectAllowed(isAllowed, "~zod", allowlist, false);
-      await expectAllowed(isAllowed, "~sampel-palnet", allowlist, false);
+  it.each([
+    ["partial matches", ["~zod-extra", "~extra-zod"], ["~zod"], false],
+    ["empty allowlist", ["~zod", "~sampel-palnet"], [], false],
+    ["absent allowlist", ["~zod", "~sampel-palnet"], undefined, false],
+    ["normalized whitespace", ["~zod", " ~zod "], [" ~zod ", "~bus"], true],
+  ] satisfies Array<[string, string[], string[] | undefined, boolean]>)(
+    "checks %s",
+    async (_name, senders, allowlist, allowed) => {
+      for (const sender of senders) {
+        expect(await isAllowed(sender, allowlist)).toBe(allowed);
+      }
     },
   );
-  it("normalizes whitespace in allowlist entries and senders", async () => {
-    await expectAllowed(isAllowed, "~zod", [" ~zod ", "~bus"], true);
-    await expectAllowed(isAllowed, " ~zod ", [" ~zod ", "~bus"], true);
-  });
 });
 
 it.each([
@@ -92,11 +76,29 @@ describe("Security: Bot Mention Detection", () => {
 });
 
 describe("Security: Group Mention Policy", () => {
-  function groupAdmissionParams(
-    overrides: Partial<Parameters<typeof prepareTlonGroupAdmission>[0]> = {},
-  ): Parameters<typeof prepareTlonGroupAdmission>[0] {
-    return {
-      cfg: {},
+  it.each([
+    [
+      "participated-thread follow-up",
+      {},
+      "follow up",
+      {
+        shouldSkip: false,
+        matchedImplicitMentionKinds: ["bot_thread_participant"],
+      },
+    ],
+    [
+      "explicit mention with participation disabled",
+      {
+        channels: { tlon: { implicitMentions: { threadParticipation: false } } },
+      },
+      "~zod follow up",
+      { shouldSkip: false, effectiveWasMentioned: true },
+    ],
+  ] satisfies Array<
+    [string, Parameters<typeof prepareTlonGroupAdmission>[0]["cfg"], string, object]
+  >)("admits %s", async (_name, cfg, rawText, expected) => {
+    const { mentionDecision } = await prepareTlonGroupAdmission({
+      cfg,
       account: { accountId: "default" },
       api: { scry: async () => ({}) },
       channelNest: "chat/~host/general",
@@ -104,34 +106,14 @@ describe("Security: Group Mention Policy", () => {
       isOwner: () => false,
       botShipName: "~zod",
       botNickname: null,
-      rawText: "follow up",
+      rawText,
       messageSeal: { "parent-id": "1234" },
       isThreadReply: true,
       hasParticipatedInThread: (parentId) => parentId === "1234",
       getSettings: () => ({}),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      ...overrides,
-    };
-  }
-
-  it("allows participated-thread follow-ups by default", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(groupAdmissionParams());
-    expect(mentionDecision).toMatchObject({
-      shouldSkip: false,
-      matchedImplicitMentionKinds: ["bot_thread_participant"],
     });
-  });
-
-  it("keeps explicit mentions enabled when thread participation is disabled", async () => {
-    const { mentionDecision } = await prepareTlonGroupAdmission(
-      groupAdmissionParams({
-        rawText: "~zod follow up",
-        cfg: {
-          channels: { tlon: { implicitMentions: { threadParticipation: false } } },
-        },
-      }),
-    );
-    expect(mentionDecision).toMatchObject({ shouldSkip: false, effectiveWasMentioned: true });
+    expect(mentionDecision).toMatchObject(expected);
   });
 });
 
@@ -194,6 +176,6 @@ describe("Security: Channel Authorization Logic", () => {
 });
 
 it("empty strings are not valid ships", async () => {
-  await expectAllowed(isDmAllowedWithIngress, "", ["~zod"], false);
-  await expectAllowed(isDmAllowedWithIngress, "~zod", [""], false);
+  expect(await isDmAllowedWithIngress("", ["~zod"])).toBe(false);
+  expect(await isDmAllowedWithIngress("~zod", [""])).toBe(false);
 });

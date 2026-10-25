@@ -11,6 +11,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission,
   storageTargetForGateway,
@@ -20,6 +21,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import {
   input,
   makeChatPageHost,
@@ -33,12 +35,11 @@ import {
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { listStoredChatOutboxes, loadChatComposerState } from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
   admitChatSubmission,
   reduceChatSessionProjection,
@@ -105,17 +106,16 @@ afterEach(() => {
 
 describe("server-owned pending input display", () => {
   it("publishes custody changes through the run projection while retaining the pending view", () => {
-    const host = makeChatHost(pendingScope);
     const rendered: (readonly string[])[] = [];
-    const dispose = createRoot((stop) => {
-      projectChatRun(host);
+    const { host, dispose } = createRoot((stop) => {
+      const createdHost = createTestPageState(makeChatHost(pendingScope));
       createEffect(
-        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        () => getChatPendingInputs(createdHost)?.page.items.map((item) => item.id) ?? [],
         (items) => {
           rendered.push(items);
         },
       );
-      return stop;
+      return { host: createdHost, dispose: stop };
     });
     onTestFinished(dispose);
     flush();
@@ -775,7 +775,7 @@ describe("server-owned pending input display", () => {
   );
 
   it.each(["text", "blob"])(
-    "retains accepted %s input and attachment bytes until consumption, without duplicating display",
+    "transfers accepted %s input to server custody without duplicating display",
     async (kind) => {
       if (kind === "blob") {
         installOutboxBrowserStorage();
@@ -859,17 +859,19 @@ describe("server-owned pending input display", () => {
         loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
       await loadChatHistory(host);
-      expect(readChatQueueForScope(host, sessionKey)).toHaveLength(1);
-      expect(listStoredChatOutboxes(host)[0]?.queue).toHaveLength(1);
+      expect(readChatQueueForScope(host, sessionKey)).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
       expect(host.chatMessages).toEqual(history);
       expect(getChatPendingInputs(host)?.page).toEqual(acceptedPage);
-      expect(cleanup).not.toHaveBeenCalled();
       if (reference && payloadOwner) {
-        const retained = await outboxPayloadStore.readOutboxPayload(payloadOwner, reference);
-        expect(retained.status).toBe("ready");
-        if (retained.status === "ready") {
-          expect(Buffer.from(await retained.value[0]!.blob.arrayBuffer())).toEqual(imageBytes);
-        }
+        await vi.waitFor(async () => {
+          expect(await outboxPayloadStore.readOutboxPayload(payloadOwner, reference)).toEqual({
+            status: "failed",
+            reason: "missing",
+          });
+        });
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledWith([reference]);
       }
       const items = threadItems({
         messages: host.chatMessages,

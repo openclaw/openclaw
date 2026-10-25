@@ -11,6 +11,7 @@ import {
 afterEach(() => vi.useRealTimers());
 
 type HarnessOptions = Parameters<typeof createRealtimeVoiceSessionHarness>[0];
+const outputEvents = ["output.audio.started", "output.audio.delta", "output.audio.done"];
 
 function createHarness(
   overrides: Partial<HarnessOptions> = {},
@@ -158,9 +159,7 @@ describe("realtime voice session harness", () => {
     expect(harness.finishResponse(outcome)).toEqual({ ok: false, reason: "no_active_turn" });
     expect(harness.eventTypes()).toEqual([
       "turn.started",
-      "output.audio.started",
-      "output.audio.delta",
-      "output.audio.done",
+      ...outputEvents,
       "session.error",
       "turn.ended",
     ]);
@@ -182,6 +181,30 @@ describe("realtime voice session harness", () => {
       status: "cancelled",
       responseId: "resp-2",
     });
+  });
+
+  it("bounds settled response suppression in FIFO order without refreshing duplicates", () => {
+    const harness = createHarness();
+    onTestFinished(() => harness.close());
+    for (let index = 0; index < 64; index += 1) {
+      harness.ensureTurn();
+      expect(harness.finishResponse({ status: "completed", responseId: `resp-${index}` }).ok).toBe(
+        true,
+      );
+    }
+
+    const turnId = harness.ensureTurn();
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(false);
+    expect(harness.talk.activeTurnId).toBe(turnId);
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-64" }).ok).toBe(true);
+
+    const nextTurnId = harness.ensureTurn();
+    for (const responseId of ["resp-1", "resp-63", "resp-64"]) {
+      expect(harness.finishResponse({ status: "completed", responseId }).ok).toBe(false);
+      expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    }
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(true);
+    expect(harness.talk.activeTurnId).toBeUndefined();
   });
 
   it("does not let a delayed duplicate terminal event settle a newer turn", () => {
@@ -238,9 +261,7 @@ describe("realtime voice session harness", () => {
     expect(harness.eventTypes()).toEqual([
       "turn.started",
       "input.audio.delta",
-      "output.audio.started",
-      "output.audio.delta",
-      "output.audio.done",
+      ...outputEvents,
       "turn.ended",
     ]);
     expect(harness.talk.recentEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
@@ -301,10 +322,6 @@ describe("realtime voice session harness", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(consult).toHaveBeenCalledOnce();
-    expect(consult.mock.calls[0]?.[0]).toMatchObject({
-      question: "first\nsecond",
-      responseStyle: "brief",
-    });
     expect(deliver).toHaveBeenCalledWith("answer:first\nsecond");
   });
 

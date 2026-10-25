@@ -1,4 +1,3 @@
-// Slack tests cover preview finalize plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,15 +11,38 @@ vi.mock("../../actions.js", () => ({
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
+type FinalizeParams = Parameters<typeof finalizeSlackPreviewEdit>[0];
+const nativeBlocks = [
+  {
+    type: "data_visualization",
+    title: "Revenue mix",
+    chart: {
+      type: "pie",
+      segments: [
+        { label: "Product", value: 60 },
+        { label: "Services", value: 40 },
+      ],
+    },
+  },
+] as unknown as FinalizeParams["blocks"];
+const fallbackText = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
 
-function createClient(overrides?: {
-  historyMessages?: Array<Record<string, unknown>>;
-  replyMessages?: Array<Record<string, unknown>>;
-}) {
+function finalize(client: WebClient, overrides: Partial<FinalizeParams> = {}) {
+  return finalizeSlackPreviewEdit({
+    client,
+    token: "xoxb-test",
+    channelId: "C123",
+    messageId: "171234.567",
+    text: "final answer",
+    ...overrides,
+  });
+}
+
+function createClient(historyMessages: Array<Record<string, unknown>> = []) {
   return {
     conversations: {
-      history: vi.fn(async () => ({ messages: overrides?.historyMessages ?? [] })),
-      replies: vi.fn(async () => ({ messages: overrides?.replyMessages ?? [] })),
+      history: vi.fn(async () => ({ messages: historyMessages })),
+      replies: vi.fn(async () => ({ messages: [] })),
     },
   } as unknown as WebClient;
 }
@@ -31,11 +53,11 @@ describe("finalizeSlackPreviewEdit", () => {
   });
 
   beforeEach(() => {
-    editSlackMessageMock.mockReset();
+    editSlackMessageMock.mockReset().mockRejectedValueOnce(new Error("socket closed"));
   });
 
   it("recovers an applied edit beyond the first busy-thread readback page", async () => {
-    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed after commit"));
+    editSlackMessageMock.mockReset().mockRejectedValueOnce(new Error("socket closed after commit"));
     const messageId = "171234.000101";
     const threadMessages = Array.from({ length: 102 }, (_, index) => ({
       ts: `171234.${String(index).padStart(6, "0")}`,
@@ -48,12 +70,7 @@ describe("finalizeSlackPreviewEdit", () => {
         latest,
         inclusive,
         limit,
-      }: {
-        oldest?: string;
-        latest?: string;
-        inclusive?: boolean;
-        limit?: number;
-      }) => ({
+      }: Parameters<WebClient["conversations"]["replies"]>[0]) => ({
         messages: threadMessages
           .filter(
             (message) =>
@@ -65,101 +82,30 @@ describe("finalizeSlackPreviewEdit", () => {
     );
 
     await expect(
-      finalizeSlackPreviewEdit({
-        client,
-        token: "xoxb-test",
-        channelId: "C123",
-        messageId,
-        threadTs: "171234.000000",
-        text: "final answer",
-      }),
+      finalize(client, { messageId, threadTs: "171234.000000" }),
     ).resolves.toBeUndefined();
   });
 
   it("rethrows when readback does not match the expected final text", async () => {
-    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
-    const client = createClient({
-      historyMessages: [{ ts: "171234.567", text: "partial draft" }],
-    });
+    const client = createClient([{ ts: "171234.567", text: "partial draft" }]);
 
-    await expect(
-      finalizeSlackPreviewEdit({
-        client,
-        token: "xoxb-test",
-        channelId: "C123",
-        messageId: "171234.567",
-        text: "final answer",
-      }),
-    ).rejects.toThrow("socket closed");
+    await expect(finalize(client)).rejects.toThrow("socket closed");
   });
 
-  it("accepts native-data fallback blocks after an ambiguous retry response", async () => {
-    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
-    const blocks = [
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
+  it.each([true, false])(
+    "accepts native-data fallback after an ambiguous response (blocks=%s)",
+    async (withBlocks) => {
+      const fallbackBlocks = [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: fallbackText, verbatim: true },
         },
-      },
-    ] as const;
-    const text = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
-    const fallbackBlocks = [
-      {
-        type: "section",
-        text: { type: "mrkdwn", text, verbatim: true },
-      },
-    ];
-    const client = createClient({
-      historyMessages: [{ ts: "171234.567", text, blocks: fallbackBlocks }],
-    });
+      ];
+      const client = createClient([
+        { ts: "171234.567", text: fallbackText, ...(withBlocks ? { blocks: fallbackBlocks } : {}) },
+      ]);
 
-    await expect(
-      finalizeSlackPreviewEdit({
-        client,
-        token: "xoxb-test",
-        channelId: "C123",
-        messageId: "171234.567",
-        text: "",
-        blocks: blocks as unknown as Parameters<typeof finalizeSlackPreviewEdit>[0]["blocks"],
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("accepts native-data text fallback without blocks after an ambiguous retry response", async () => {
-    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
-    const blocks = [
-      {
-        type: "data_visualization",
-        title: "Revenue mix",
-        chart: {
-          type: "pie",
-          segments: [
-            { label: "Product", value: 60 },
-            { label: "Services", value: 40 },
-          ],
-        },
-      },
-    ] as const;
-    const text = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
-    const client = createClient({
-      historyMessages: [{ ts: "171234.567", text }],
-    });
-
-    await expect(
-      finalizeSlackPreviewEdit({
-        client,
-        token: "xoxb-test",
-        channelId: "C123",
-        messageId: "171234.567",
-        text: "",
-        blocks: blocks as unknown as Parameters<typeof finalizeSlackPreviewEdit>[0]["blocks"],
-      }),
-    ).resolves.toBeUndefined();
-  });
+      await expect(finalize(client, { text: "", blocks: nativeBlocks })).resolves.toBeUndefined();
+    },
+  );
 });

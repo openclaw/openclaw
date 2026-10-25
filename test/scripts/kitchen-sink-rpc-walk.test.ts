@@ -115,6 +115,7 @@ it.each(["valid", "wrong session", "wrong tool"])(
         mainThread: { user: step * 50, system: step * 5 },
         cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
         memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        heapSpaces: [],
         activeResources: {},
         runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
       };

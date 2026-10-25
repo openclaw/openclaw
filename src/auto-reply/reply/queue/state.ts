@@ -19,7 +19,6 @@ import {
   captureSessionTarget,
   type SessionTarget,
 } from "../../../sessions/session-controller.target.js";
-import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import { normalizeThinkLevel } from "../../thinking.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
@@ -27,6 +26,12 @@ import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
+
+// Retries and compacted sources retain their input and its original dispatch scope.
+export const followupSourceRunners = new WeakMap<
+  NonNullable<FollowupRun["controllerInput"]>,
+  (run: FollowupRun) => Promise<void>
+>();
 
 export function* followupQueueSources(
   queue: Pick<SessionControllerMailbox, "items" | "summarySources" | "summaryElisions">,
@@ -137,7 +142,12 @@ export function getFollowupQueue(
   target?: SessionTarget,
 ): SessionControllerMailbox {
   const mailbox = getSessionControllerMailbox(key, target);
-  applyQueueRuntimeSettings({ target: mailbox, settings });
+  mailbox.mode = settings.mode;
+  mailbox.debounceMs =
+    typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : mailbox.debounceMs;
+  mailbox.cap =
+    typeof settings.cap === "number" && settings.cap > 0 ? Math.floor(settings.cap) : mailbox.cap;
+  mailbox.dropPolicy = settings.dropPolicy ?? mailbox.dropPolicy;
   trimSummaryElisionsToCap(mailbox);
   return mailbox;
 }
@@ -191,6 +201,7 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextCyberAccessProgram?: FollowupRun["run"]["cyberAccessProgram"] | null;
   nextThinking?: {
     level?: string;
     catalog?: ModelCatalogEntry[];
@@ -212,6 +223,7 @@ export function refreshQueuedFollowupSession(params: {
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextCyberAccessProgram !== undefined ||
     params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
@@ -243,12 +255,28 @@ export function refreshQueuedFollowupSession(params: {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+        const scheduledAutomation = run.scheduledAutomation;
+        if (scheduledAutomation?.modelFallbackPolicy) {
+          // Queued scheduled work now runs the retargeted session selection, not the admitted one.
+          run.scheduledAutomation = {
+            ...scheduledAutomation,
+            modelFallbackPolicy: {
+              ...scheduledAutomation.modelFallbackPolicy,
+              sessionModelOverrideSource: run.hasSessionModelOverride
+                ? params.nextModelOverrideSource
+                : undefined,
+            },
+          };
+        }
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+      if (params.nextCyberAccessProgram !== undefined) {
+        run.cyberAccessProgram = params.nextCyberAccessProgram ?? undefined;
       }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;

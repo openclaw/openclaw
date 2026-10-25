@@ -31,11 +31,9 @@ export function getPluginCommandExecutionCount(registryView: PluginRegistry): nu
   return executionStates.get(registry)?.count ?? 0;
 }
 
-export function isPluginCommandExecutionActiveHere(registryView: PluginRegistry): boolean {
-  const registry = getPluginRegistryResourceOwner(registryView);
-  return [...(executionContext.getStore() ?? [])].some(
-    (token) => token.registry === registry && token.active,
-  );
+/** Commands cannot join process-wide cleanup from inside themselves. */
+export function isPluginCommandExecutionActiveHere(): boolean {
+  return [...(executionContext.getStore() ?? [])].some((token) => token.active);
 }
 
 export async function withPluginCommandExecution<T>(

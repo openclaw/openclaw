@@ -17,6 +17,7 @@ describe("irc protocol", () => {
       user: "u",
       host: "host",
     });
+    expect(parseIrcPrefix("irc.example.test").nick).toBeUndefined();
   });
 
   it("validates targets and rejects control characters", () => {

@@ -1,4 +1,9 @@
-import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
+import {
+  omitNullRequestHeaders,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+} from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "../providers/openai-prompt-cache.js";
 import {
@@ -64,7 +69,9 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
         "generated-affinity",
         cacheRetention,
       );
-      expect(new Headers(headers).get("session_id")).toBe("caller-affinity");
+      expect(new Headers(omitNullRequestHeaders(headers)).get("session_id")).toBe(
+        "caller-affinity",
+      );
       expect(
         Object.keys(headers).filter((name) => name.toLowerCase() === "session_id"),
       ).toHaveLength(1);

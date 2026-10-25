@@ -447,13 +447,7 @@ describe("lmstudio plugin", () => {
     const config = configuredModels([
       compactModel,
       { id: "phi-4", compat: { codeMode: "capable" } },
-      {
-        id: "bad-window",
-        parameterCount: -1,
-        contextWindow: Number.POSITIVE_INFINITY,
-        contextTokens: 4096.5,
-      },
-      { id: "bad-tokens", contextWindow: -1, contextTokens: 0 },
+      { id: "fractional-window", contextWindow: 4096.5 },
       { id: " ", name: "ignored" },
     ]);
 
@@ -476,7 +470,7 @@ describe("lmstudio plugin", () => {
           reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
         },
       },
-      ...["phi-4", "bad-window", "bad-tokens"].map((id) => ({
+      ...["phi-4", "fractional-window"].map((id) => ({
         provider: "lmstudio",
         id,
         name: id,

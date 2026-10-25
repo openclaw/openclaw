@@ -1,6 +1,3 @@
-/**
- * Tests channel message helper behavior and mocked runtime interactions.
- */
 import { describe, expect, it, vi } from "vitest";
 import * as channelInbound from "./channel-inbound.js";
 import {
@@ -8,47 +5,41 @@ import {
   type ChannelMessageDurableFinalAdapter,
 } from "./channel-outbound.js";
 
+function dispatch(result: Parameters<typeof channelInbound.resolveInboundReplyDispatchCounts>[0]) {
+  return {
+    counts: channelInbound.resolveInboundReplyDispatchCounts(result),
+    visible: channelInbound.hasVisibleInboundReplyDispatch(result),
+    final: channelInbound.hasFinalInboundReplyDispatch(result),
+  };
+}
+
 describe("defineChannelMessageAdapter", () => {
   it("preserves legacy count-shaped dispatch projections", () => {
     const legacyResult = {
       queuedFinal: false,
       counts: { tool: 1, block: 2, final: 1 },
     };
-    expect(channelInbound.resolveInboundReplyDispatchCounts(legacyResult)).toEqual({
-      tool: 1,
-      block: 2,
-      final: 1,
+    expect(dispatch(legacyResult)).toEqual({
+      counts: { tool: 1, block: 2, final: 1 },
+      visible: true,
+      final: true,
     });
-    expect(channelInbound.hasVisibleInboundReplyDispatch(legacyResult)).toBe(true);
-    expect(channelInbound.hasFinalInboundReplyDispatch(legacyResult)).toBe(true);
     const receiptResult = {
       ...legacyResult,
       queuedFinal: true,
       settledReceipt: { anyVisibleDelivered: false, counts: {} },
     };
-    expect(channelInbound.resolveInboundReplyDispatchCounts(receiptResult)).toEqual({
-      tool: 0,
-      block: 0,
-      final: 0,
+    expect(dispatch(receiptResult)).toEqual({
+      counts: { tool: 0, block: 0, final: 0 },
+      visible: false,
+      final: false,
     });
-    expect(channelInbound.hasVisibleInboundReplyDispatch(receiptResult)).toBe(false);
-    expect(channelInbound.hasFinalInboundReplyDispatch(receiptResult)).toBe(false);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {
     const adapter = defineChannelMessageAdapter({
       id: "demo",
       durableFinal: { capabilities: { text: true } },
-      send: {
-        text: vi.fn(async () => ({
-          receipt: {
-            primaryPlatformMessageId: "msg-1",
-            platformMessageIds: ["msg-1"],
-            parts: [],
-            sentAt: 123,
-          },
-        })),
-      },
     });
 
     expect(adapter.receive).toEqual({
@@ -65,7 +56,6 @@ describe("defineChannelMessageAdapter", () => {
         supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
       },
     });
-
     expect(adapter.receive).toEqual({
       defaultAckPolicy: "after_agent_dispatch",
       supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],

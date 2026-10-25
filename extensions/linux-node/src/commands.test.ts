@@ -1,5 +1,6 @@
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { createLinuxNodeCommands } from "./commands.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
 
@@ -54,15 +55,7 @@ const enabledConfig: ResolvedLinuxNodePluginConfig = {
 };
 
 function success(stdout = ""): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    noOutputTimedOut: false,
-  };
+  return commandResult({ stdout, noOutputTimedOut: false });
 }
 
 const jpeg640x480 = Buffer.from("ffd8ffc0000b0801e0028001011100ffd9", "hex");
@@ -204,6 +197,19 @@ describe("linux-node commands", () => {
       ["/usr/bin/notify-send", "--urgency", "critical", "--", title, body],
       { timeoutMs: 10_000 },
     );
+  });
+
+  it("keeps truncated notification errors within the limit without splitting surrogate pairs", async () => {
+    const { command } = createHarness({
+      runCommand: async () => ({
+        ...success(),
+        code: 1,
+        stderr: `${"x".repeat(299)}\u{1f600}tail`,
+      }),
+    });
+    await expect(
+      command("system.notify").handle(JSON.stringify({ title: "Test" })),
+    ).rejects.toThrow(new Error(`NOTIFICATIONS_UNAVAILABLE: ${"x".repeat(299)}`));
   });
 
   it("accepts either notification field but rejects an empty notification", async () => {

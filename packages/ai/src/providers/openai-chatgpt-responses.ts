@@ -1,4 +1,3 @@
-import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
@@ -55,7 +54,13 @@ import {
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseRetryAfterSeconds,
 } from "../transports/transport-utils.js";
-import type { AssistantMessage, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type {
+  AssistantMessage,
+  Model,
+  ModelRequestHeaders,
+  SimpleStreamOptions,
+  StreamFunction,
+} from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
@@ -73,6 +78,7 @@ import {
   getFirstStreamEventTimeoutMs,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
+import { buildBaseCodexHeaders } from "./openai-chatgpt-request-headers.js";
 import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
@@ -117,20 +123,6 @@ import { buildBaseOptions } from "./simple-options.js";
 type DynamicImport = (specifier: string) => Promise<unknown>;
 
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
-
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
 
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
@@ -1403,29 +1395,9 @@ function createCodexRequestId(): string {
   throw new Error("Secure random request id generation is unavailable");
 }
 
-function buildBaseCodexHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-): Headers {
-  const headers = new Headers(initHeaders);
-  for (const [key, value] of Object.entries(additionalHeaders || {})) {
-    headers.set(key, value);
-  }
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
-  headers.set("originator", "openclaw");
-  const userAgent = os
-    ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
-    : "openclaw (browser)";
-  headers.set("User-Agent", userAgent);
-  return headers;
-}
-
 function buildSSEHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
+  initHeaders: ModelRequestHeaders | undefined,
+  additionalHeaders: ModelRequestHeaders | undefined,
   accountId: string,
   token: string,
   sessionId?: string,

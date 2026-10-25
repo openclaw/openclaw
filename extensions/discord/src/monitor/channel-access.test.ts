@@ -44,6 +44,21 @@ describe("channel parent aliases", () => {
 });
 
 describe("resolveDiscordChannelInfoSafe", () => {
+  it("preserves array-backed fields and empty aliases without trimming", () => {
+    const channel = Object.assign([], {
+      name: " ",
+      topic: "",
+      ownerId: "",
+      owner_id: "fallback",
+    });
+
+    expect(resolveDiscordChannelInfoSafe(channel)).toMatchObject({
+      name: " ",
+      topic: "",
+      ownerId: "",
+    });
+  });
+
   it("populates ownerId and parentId from Discord API-style snake_case fields", () => {
     expect(
       resolveDiscordChannelInfoSafe({

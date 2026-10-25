@@ -37,7 +37,10 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   for (;;) {
     let fd: number;
     try {
-      fd = fs.openSync(file, "r");
+      // These diagnostics seek through retained records; opening a FIFO must not wait for a writer.
+      const flags =
+        process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+      fd = fs.openSync(file, flags);
     } catch (error) {
       if (initial || pollMs === undefined || !isRecord(error) || error.code !== "ENOENT") {
         throw error;
@@ -48,6 +51,9 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
     }
     try {
       const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        throw new Error("Voice-call log must be a regular file.");
+      }
       if (
         previous &&
         (stat.ino !== previous.ino || stat.dev !== previous.dev || stat.size < previous.size)
@@ -104,14 +110,7 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
   }
 }
 
-function summarizeSeries(values: number[]): {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-} {
+function summarizeSeries(values: number[]) {
   if (values.length === 0) {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }

@@ -205,11 +205,7 @@ export function repairPublishedTranscriptArchive(params: {
   params.signal?.throwIfAborted();
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
-    beforeRename: ({ tempPath }) => {
-      const stagedHash = sha256Hex(fs.readFileSync(tempPath));
-      if (stagedHash !== params.planned.nextSha256) {
-        throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
-      }
+    beforeRename: () => {
       params.signal?.throwIfAborted();
       // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
       // at the atomic publication boundary so an expired owner cannot rename.
@@ -223,9 +219,6 @@ export function repairPublishedTranscriptArchive(params: {
     tempPrefix: `${path.basename(archivePath)}.directive-migration`,
   });
   const published = fingerprint();
-  if (sha256Hex(fs.readFileSync(archivePath)) !== params.planned.nextSha256) {
-    throw new Error(`Transcript archive verification failed for ${archivePath}`);
-  }
   params.planned.fingerprint = fingerprint() === published ? published : undefined;
   params.signal?.throwIfAborted();
   return true;

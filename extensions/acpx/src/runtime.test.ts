@@ -18,10 +18,10 @@ import {
   makeLeasedRuntime,
   makeLeaseStore,
   makeRuntime,
+  makeSessionStore as sessionStore,
   makeTurn,
   observeLaunch,
   runtimeCommand,
-  type TestSessionStore,
 } from "./runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -78,16 +78,6 @@ function persistentSession(agentCommand = CODEX_ACP_WRAPPER_COMMAND) {
   });
 }
 
-function sessionStore(initial: Record<string, unknown> | undefined): TestSessionStore {
-  let record = initial;
-  return {
-    load: vi.fn(async () => record),
-    save: vi.fn(async (next) => {
-      record = next;
-    }),
-  };
-}
-
 function leasedRuntime(
   record?: Record<string, unknown>,
   cleanup?: Parameters<typeof makeRuntime>[2],
@@ -96,21 +86,13 @@ function leasedRuntime(
   const baseStore = sessionStore(record);
   const leaseStore = makeLeaseStore();
   return {
-    ...(cleanup || wrapperRoot !== WRAPPER_ROOT
-      ? makeRuntime(
-          baseStore,
-          {
-            ...gatewayOptions,
-            openclawProcessLeaseStore: leaseStore.store,
-            openclawWrapperRoot: wrapperRoot,
-            agentRegistry: {
-              resolve: () => `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`,
-              list: () => ["codex"],
-            },
-          },
-          cleanup,
-        )
-      : makeLeasedRuntime(baseStore, leaseStore)),
+    ...makeLeasedRuntime(
+      baseStore,
+      leaseStore,
+      cleanup?.openclawProcessCleanup,
+      `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`,
+      wrapperRoot,
+    ),
     baseStore,
     leaseStore,
   };

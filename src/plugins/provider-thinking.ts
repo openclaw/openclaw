@@ -32,7 +32,8 @@ export function prepareModelCatalogThinkingPolicies(params: {
         return existing;
       }
       const provider = normalizeProviderId(entry.thinkingPolicyProvider ?? entry.provider);
-      if (!policies.has(provider)) {
+      let policy = policies.get(provider);
+      if (policy === undefined) {
         const runtimeProvider = params.pluginRegistry?.providers.find(({ provider: candidate }) =>
           matchesProviderPluginRef(candidate, provider),
         )?.provider;
@@ -41,11 +42,12 @@ export function prepareModelCatalogThinkingPolicies(params: {
           resolveProviderPolicySurface(provider, {
             manifestRegistry: params.metadataSnapshot.manifestRegistry,
           })?.resolveThinkingProfile;
-        policies.set(provider, resolve ? { resolve } : null);
+        policy = resolve ? { resolve } : null;
+        policies.set(provider, policy);
       }
       // Configured rows can be shared across generations. Bind a private copy so
       // publishing another owner cannot replace the policy behind retained rows.
-      const owned = { ...entry, [PREPARED_THINKING_POLICY]: policies.get(provider) ?? null };
+      const owned = { ...entry, [PREPARED_THINKING_POLICY]: policy };
       ownedEntries.set(entry, owned);
       return owned;
     };
@@ -67,15 +69,13 @@ function resolveProviderPublicPolicySurface(providerId: string) {
   });
 }
 
-type ThinkingHookParams<TContext> = {
-  provider: string;
-  context: TContext;
-  catalogEntry?: ThinkingCatalogPolicyCarrier;
-};
-
 /** Resolves a provider thinking profile from active plugins or bundled policy surface. */
 export function resolveEffectiveThinkingProfile(
-  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+  params: {
+    provider: string;
+    context: ProviderDefaultThinkingPolicyContext;
+    catalogEntry?: ThinkingCatalogPolicyCarrier;
+  },
   options?: { allowPublicArtifactFallback?: boolean; registry?: ProviderThinkingRegistry },
 ) {
   // The catalog's exact provider owner outranks ambient runtime registration.

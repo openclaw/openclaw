@@ -1,6 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -9,16 +11,16 @@ import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").for([
   ["SIGTERM", 143],
   ["SIGINT", 130],
-] as const)("settles %s during archive preparation before entering maintenance", (signal, code) => {
-  const home = directories.make("doctor-pre-admission-interruption-");
-  // Keep command and signal owners real; interrupt the synthetic database inspection.
-  const overrides = [
-    [
-      "/commands/doctor-database-preflight.js",
-      `import { once } from "node:events";
+] as const)(
+  "settles %s during archive preparation before entering maintenance",
+  async ([signal, code], { signal: testSignal }) => {
+    const home = directories.make("doctor-pre-admission-interruption-");
+    // Keep command and signal owners real; interrupt the synthetic database inspection.
+    const overrides = {
+      "/commands/doctor-database-preflight.js": `import { once } from "node:events";
       import { MessageChannel } from "node:worker_threads";
       export async function prepareDoctorDatabasePreflight() {
         // Signal listeners alone do not keep Node alive until OS signal delivery.
@@ -26,6 +28,10 @@ it.skipIf(process.platform === "win32").each([
         port1.on("message", () => {});
         try {
           const interrupted = once(process, ${JSON.stringify(signal)});
+          const proceed = once(process, "message");
+          process.send("preflight");
+          await proceed;
+          process.disconnect();
           process.kill(process.pid, ${JSON.stringify(signal)});
           await interrupted;
         } finally {
@@ -35,19 +41,15 @@ it.skipIf(process.platform === "win32").each([
         console.log("preflight settled");
         return { incompatible: [], indeterminate: [] };
       }`,
-    ],
-    [
-      "/commands/doctor-maintenance.js",
-      `export async function beginDoctorMaintenance() {
+      "/commands/doctor-maintenance.js": `export async function beginDoctorMaintenance() {
         throw new Error("maintenance must not start after interruption");
       }`,
-    ],
-  ];
-  const result = spawnSync(
-    resolveTestNodeExecPath(),
-    createNodeEvalArgs(`
+    };
+    const child = spawn(
+      resolveTestNodeExecPath(),
+      createNodeEvalArgs(`
       import { registerHooks } from "node:module";
-      const overrides = new Map(${JSON.stringify(overrides)});
+      const overrides = new Map(Object.entries(${JSON.stringify(overrides)}));
       registerHooks({ resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context);
         if (specifier.includes("?original")) return resolved;
@@ -76,28 +78,59 @@ it.skipIf(process.platform === "win32").each([
         onError: error => { console.error(String(error)); process.exitCode = 1; },
       });
     `),
-    {
-      env: {
-        ...process.env,
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_HOME: home,
-        OPENCLAW_STATE_DIR: path.join(home, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
-        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
-        OPENCLAW_UPDATE_RUN_ID: undefined,
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
+      {
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          OPENCLAW_HOME: home,
+          OPENCLAW_STATE_DIR: path.join(home, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+          OPENCLAW_UPDATE_RUN_ID: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+        },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
-      encoding: "utf8",
-      timeout: 10_000,
-    },
-  );
-  expect(result.error, result.stderr).toBeUndefined();
-  expect(result.signal, result.stderr).toBeNull();
-  expect(result.status, result.stderr).toBe(code);
-  expect(result.stdout, result.stderr).toContain("preflight settled");
-  expect(result.stderr).not.toContain("maintenance must not start");
-  expect(result.stderr).not.toContain("unsettled top-level await");
-});
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr!.setEncoding("utf8").on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const closed = once(child, "close");
+    try {
+      const ready = await withinTest(
+        awaitGateBeforeSettlement(
+          once(child, "message"),
+          closed,
+          "Doctor exited before archive preparation",
+        ),
+        testSignal,
+      );
+      expect(ready[0], stderr).toBe("preflight");
+      // Bound interruption settlement, without charging cold CLI imports to that deadline.
+      const settlement = withinTest(
+        closed,
+        AbortSignal.any([testSignal, AbortSignal.timeout(10_000)]),
+      );
+      child.send("continue");
+      const [exitCode, exitSignal] = await settlement;
+      expect(exitSignal, stderr).toBeNull();
+      expect(exitCode, stderr).toBe(code);
+      expect(stdout, stderr).toContain("preflight settled");
+      expect(stderr).not.toContain("maintenance must not start");
+      expect(stderr).not.toContain("unsettled top-level await");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
+    }
+  },
+);

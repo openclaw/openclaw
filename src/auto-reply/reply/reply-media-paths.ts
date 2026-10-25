@@ -149,6 +149,8 @@ type ReplyMediaSourcePreparationParams = {
   sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   workspaceMediaAccess?: OutboundMediaAccess;
+  /** Supplied only by the explicit current-source send owner, never by reply text. */
+  htmlPublication?: "explicit";
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
@@ -292,7 +294,10 @@ export function createReplyMediaSourcePreparer(
           return { path: saved.path, contentType: saved.contentType };
         }
       }
-      return await resolveOutboundAttachmentFromUrl(media, maxBytes, { mediaAccess });
+      return await resolveOutboundAttachmentFromUrl(media, maxBytes, {
+        mediaAccess,
+        htmlPublication: params.htmlPublication,
+      });
     })()
       .then((saved) => ({
         ...saved,

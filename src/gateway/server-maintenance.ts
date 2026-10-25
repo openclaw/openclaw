@@ -1,7 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
-import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -121,9 +120,7 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
-  runWorktreeGc?: () => Promise<ManagedWorktreeGcResult | void>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
-  runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
   stopPeriodicTasks: () => Promise<void>;
   startMediaCleanup: () => void;
@@ -323,7 +320,7 @@ export function startGatewayMaintenanceTimers(params: {
       delayMs,
       run: async () => {
         try {
-          await checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" });
+          await checkTelemetryUpdate(params.getRuntimeConfig);
         } catch {
           // Telemetry retries on its next jittered maintenance deadline.
         } finally {
@@ -377,7 +374,6 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeMaintenance = startWorktreeMaintenance({
     scheduler: params.scheduler,
     getRuntimeConfig: params.getRuntimeConfig,
-    runGc: params.runWorktreeGc,
     onComplete: (result) => {
       const message = formatWorktreeGcResult(result);
       if (result.outcome === "partial") {
@@ -525,29 +521,27 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   });
 
-  const runManagedOutgoingMediaGc =
-    params.runManagedOutgoingMediaGc ??
-    (async () => {
-      const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
-      return await cleanupManagedOutgoingMediaRecords({
-        hasActiveSessionRun: (sessionKey, agentId) => {
-          const cfg = params.getRuntimeConfig();
-          const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
-          if (!agentId && !defaultAgentId) {
-            return false;
-          }
-          return hasRegisteredChatRunForSessionKey({
-            storePath: resolveSessionStorePathCore(cfg.session?.store, {
-              agentId: agentId ?? defaultAgentId,
-            }),
-            resolveGatewayContext: params.resolveGatewayContext,
-            sessionKey,
-            agentId,
-            defaultAgentId,
-          });
-        },
-      });
+  const runManagedOutgoingMediaGc = async () => {
+    const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
+    return await cleanupManagedOutgoingMediaRecords({
+      hasActiveSessionRun: (sessionKey, agentId) => {
+        const cfg = params.getRuntimeConfig();
+        const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+        if (!agentId && !defaultAgentId) {
+          return false;
+        }
+        return hasRegisteredChatRunForSessionKey({
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: agentId ?? defaultAgentId,
+          }),
+          resolveGatewayContext: params.resolveGatewayContext,
+          sessionKey,
+          agentId,
+          defaultAgentId,
+        });
+      },
     });
+  };
   let mediaCleanupStarted = false;
   const startMediaCleanup = () => {
     if (mediaScheduler.signal.aborted || mediaCleanupStarted) {

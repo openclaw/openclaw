@@ -1,9 +1,11 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -15,6 +17,7 @@ import { withSessionActorStorage } from "../config/sessions/session-actor-storag
 import * as sessionMetadataWrites from "../config/sessions/session-metadata-write.async.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -23,6 +26,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { chatRpc } from "./server-methods/chat-rpc-fixture.test-support.js";
 import * as chatSend from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
@@ -41,14 +45,29 @@ import type {
 } from "./server-methods/types.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
+import {
+  companionRuntimeConfig,
+  observeCompanionCleanup,
+  publishCompanionRuntime,
+  readCompanionSeed,
+} from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
+const runLoop = vi.hoisted(() =>
+  vi.fn<
+    (typeof import("../agents/embedded-agent-runner/run-loop.js"))["runPreparedEmbeddedLoop"]
+  >(),
+);
+// mock-isolation: Retain native companion/session preparation; stop before provider I/O.
+vi.mock("../agents/embedded-agent-runner/run-loop.js", () => ({
+  runPreparedEmbeddedLoop: runLoop,
+}));
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const cfg = { agents: { entries: { main: {} } } };
+let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
 const result = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
   expect(response).toHaveBeenCalledWith(...args);
 const calls = (response: Awaited<ReturnType<typeof invoke>>, ...args: unknown[]) =>
@@ -261,31 +280,35 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
   let pause = false;
   const entered = createDeferredCore();
   const resume = createDeferredCore();
-  const run = vi.fn(
-    async (
-      request: Parameters<NonNullable<Parameters<typeof createSessionCompanion>[0]["run"]>>[0],
-    ) => {
-      expect(JSON.stringify(request.messages)).toContain("Original private context");
-      if (pause) {
-        entered.resolve();
-        await resume.promise;
-      }
-      request.assertSourceCurrent?.();
-      await patchSessionEntryCore(
-        destination,
-        () => ({ label: pause ? "Unexpected write" : "After" }),
-        { workerGuard: { source: request.assertSourceCurrent } },
-      );
-      return "Answer";
-    },
-  );
+  const originalConfig = cfg;
+  const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  cfg = companionRuntimeConfig(cfg, path.join(env.OPENCLAW_STATE_DIR!, "workspace"));
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json"));
+  await publishCompanionRuntime(cfg, process.env.OPENCLAW_CONFIG_PATH);
+  const settleCleanup = observeCompanionCleanup();
+  runLoop.mockReset().mockImplementation(async (_refresh, { runParams }) => {
+    expect(JSON.stringify(await readCompanionSeed(runParams.sessionTarget))).toContain(
+      "Original private context",
+    );
+    const assertSourceCurrent = runParams.preparedRunAdmission?.assertSourceCurrent;
+    assert(assertSourceCurrent, "Expected the real prepared source assertion");
+    if (pause) {
+      entered.resolve();
+      await resume.promise;
+    }
+    assertSourceCurrent();
+    await patchSessionEntryCore(
+      destination,
+      () => ({ label: pause ? "Unexpected write" : "After" }),
+      { workerGuard: { source: assertSourceCurrent } },
+    );
+    return { meta: { durationMs: 1, finalAssistantVisibleText: "Answer" } };
+  });
   const companion = createSessionCompanion({
     scheduler: createTestGatewayScheduler(createGatewaySchedulerClock(10).clock),
     getConfig: () => cfg,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
-    resolveUtilityModelRef: () => "test/model",
-    run,
   });
   context.sessionCompanion = companion;
   try {
@@ -310,6 +333,11 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
   } finally {
     resume.resolve();
     companion.dispose();
+    await settleCleanup();
+    runLoop.mockReset();
+    await resetPreparedModelRuntimeSnapshotsForTest();
+    cfg = originalConfig;
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", originalConfigPath);
     context.sessionCompanion = undefined;
     client.invalidated = false;
   }
@@ -427,6 +455,31 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
     }
     memorySessionActorOwners.closeSession(location, sessionKey);
     expect(() => acceptedAuthority!.assertCurrent()).toThrow();
+    expect(host.queries).toEqual([]);
+  } finally {
+    host.restore();
+  }
+});
+
+it("refuses retained-input dismissal for an unbound memory session at the registered RPC", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-dismiss";
+  await seed(sessionKey, { sessionId: "dismiss" });
+  await initializeSessionReadContext(context);
+  const host = observeHostDataSql();
+  try {
+    expect(
+      await chatRpc(context, client, "chat.pendingInputs.dismiss", {
+        sessionKey,
+        agentId: "main",
+        sessionId: "dismiss",
+        inputIds: ["retained-input"],
+      }),
+    ).toEqual(
+      refused({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("non-incognito sessionKey"),
+      }),
+    );
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();

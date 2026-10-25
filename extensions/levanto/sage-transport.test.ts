@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import {
+  validateDecisionBatchV2,
+  type DecisionBatchV2,
+  type DecisionProviderContextV2,
+} from "openclaw/plugin-sdk/decisions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerLevantoTestProvider } from "./registration.test-support.js";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn<LookupFn>() }));
 vi.mock("node:dns/promises", async (importOriginal) => ({
@@ -45,18 +47,7 @@ const answer = {
 };
 function fixture(fetchFn: typeof fetch, overrides: Partial<DecisionProviderContextV2> = {}) {
   vi.stubGlobal("fetch", fetchFn);
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  const api = createTestPluginApi({ id: "levanto", registerDecisionProvider });
-  api.runtime.media = {
-    getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
-    loadWebMedia: vi.fn(),
-    detectMime: vi.fn(),
-    mediaKindFromMime: vi.fn(),
-    isVoiceCompatibleAudio: vi.fn(),
-    resizeToJpeg: vi.fn(),
-  };
-  plugin.register(api);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
+  const provider = registerLevantoTestProvider(vi.fn(async () => ({ width: 1, height: 1 })));
   assert(provider?.contractVersion === 2);
   const context: DecisionProviderContextV2 = {
     model: {
@@ -76,6 +67,9 @@ function fixture(fetchFn: typeof fetch, overrides: Partial<DecisionProviderConte
   };
   return { context, evaluate: (input = batch) => provider.evaluate(input, context) };
 }
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -84,8 +78,45 @@ afterEach(() => {
 });
 
 describe("Sage through the real guarded provider HTTP helper", () => {
+  it.each([0, 1])("rejects a vendor-unsupported list of %s items before HTTP", async (count) => {
+    const input: DecisionBatchV2 = {
+      ...batch,
+      state: {
+        type: "list",
+        items: Array.from({ length: count }, (_, id) => ({ id: String(id), content: "item" })),
+      },
+    };
+    expect(validateDecisionBatchV2(input)).toBe(true);
+    const fetchFn = vi.fn<typeof fetch>();
+    expect(await fixture(fetchFn).evaluate(input)).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+  it("rejects 21 image choices accepted by the shared Decision contract before HTTP", async () => {
+    const input: DecisionBatchV2 = {
+      state: {
+        type: "image",
+        dataUri:
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOZkAAAAASUVORK5CYII=",
+      },
+      questions: {
+        q: {
+          type: "choice",
+          criteria: Object.fromEntries(Array.from({ length: 21 }, (_, id) => [String(id), null])),
+        },
+      },
+    };
+    expect(validateDecisionBatchV2(input)).toBe(true);
+    const fetchFn = vi.fn<typeof fetch>();
+    expect(await fixture(fetchFn).evaluate(input)).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
   it("posts once beneath the configured prefix, preserving prepared headers and abstention", async () => {
-    vi.useFakeTimers();
     lookup.mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }]);
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(Response.json(answer));
     // Plain stub exercises dispatcher construction; vi.fn uses the hermetic mock shortcut.
@@ -110,7 +141,9 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(init?.redirect).toBe("manual");
     expect(init).toHaveProperty("dispatcher");
-    expect(new Headers(context.model.headers).has("content-type")).toBe(false);
+    expect(new Headers(omitNullRequestHeaders(context.model.headers)).has("content-type")).toBe(
+      false,
+    );
     expect(vi.getTimerCount()).toBe(0);
   });
   it("uses a single native batch call and retains the envelope", async () => {
@@ -184,7 +217,6 @@ describe("Sage through the real guarded provider HTTP helper", () => {
   it.each([400, 401, 402, 429, 500, 503])(
     "does not retry HTTP %s and redacts reflected auth",
     async (status) => {
-      vi.useFakeTimers();
       const fetchFn = vi
         .fn<typeof fetch>()
         .mockResolvedValue(Response.json({ detail: "synthetic-sage-fixture" }, { status }));
@@ -257,7 +289,6 @@ describe("Sage through the real guarded provider HTTP helper", () => {
   it.each(["{broken", JSON.stringify({ ...answer, id: "wrong" })])(
     "releases transport after malformed response %#",
     async (body) => {
-      vi.useFakeTimers();
       const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(body));
       expect(await fixture(fetchFn).evaluate()).toEqual({
         status: "unavailable",
@@ -288,7 +319,6 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(cancel).toHaveBeenCalled();
   });
   it.each([200, 503])("bounds the whole body read for HTTP %s and cleans up", async (status) => {
-    vi.useFakeTimers();
     const cancel = vi.fn();
     const readStarted = createDeferred<void>();
     const stream = new ReadableStream(
@@ -346,3 +376,4 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

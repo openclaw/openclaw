@@ -142,6 +142,11 @@ function requestHost(
     } satisfies GenerationWorkerCallback,
     [],
   );
+  const progressSignal = context?.progressSignal;
+  if (progressSignal) {
+    Atomics.add(progressSignal, 0, 1);
+    Atomics.notify(progressSignal, 0);
+  }
   const deadline = performance.now() + 15_000;
   for (;;) {
     // SAFETY: This private port is transferred only to the matching host callback protocol.
@@ -244,11 +249,10 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
             "files",
             "namespaces",
           ] as const) {
-            // Assign the cloned owner snapshot before acquisition; maps never cross back by reference.
+            // Import into the owner, then release entries retained by the capture command.
             const target: Map<string, unknown> = state[key];
-            for (const [name, value] of command.admission[key]) {
-              target.set(name, value);
-            }
+            command.admission[key].forEach((value, name) => target.set(name, value));
+            command.admission[key].clear();
           }
           for (const [key, receipt] of state.receipts) {
             sentReceipts.set(key, receipt);

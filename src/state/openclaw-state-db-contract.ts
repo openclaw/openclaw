@@ -14,9 +14,11 @@ export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "sandbox_persistent_execs",
   "user_profile_identities",
   "user_background_images",
   "local_workspace_projections",
+  "local_workspace_manifest_nodes",
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
@@ -47,6 +49,9 @@ export const FIRST_USE_STATE_TABLES = [
   "outbound_message_progress",
 ] as const;
 export const FIRST_USE_STATE_INDEXES = [
+  "idx_sandbox_persistent_execs_container",
+  "idx_sandbox_persistent_execs_container_name",
+  "idx_sandbox_persistent_execs_source",
   "idx_user_profile_identities_profile_id",
   "idx_user_profile_identities_authorization",
   "idx_update_runs_created",
@@ -156,6 +161,10 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
   "local-client-credentials-v29": "client credentials and native socket material → local owner",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
+  "automation-policy-fence-v30":
+    "Heartbeat monitors → ordinary automation timing and delivery policy fence",
+  "local-workspace-manifests-v31":
+    "local workspace baselines → per-path manifests and recoverable checkpoint deltas",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

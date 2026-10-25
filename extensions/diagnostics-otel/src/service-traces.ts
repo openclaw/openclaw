@@ -309,17 +309,11 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       trigger?: string;
     },
   ) => {
-    if (evt.provider) {
-      spanAttrs["openclaw.provider"] = evt.provider;
-    }
-    if (evt.model) {
-      spanAttrs["openclaw.model"] = evt.model;
-    }
-    if (evt.channel) {
-      spanAttrs["openclaw.channel"] = evt.channel;
-    }
-    if (evt.trigger) {
-      spanAttrs["openclaw.trigger"] = evt.trigger;
+    for (const key of ["provider", "model", "channel", "trigger"] as const) {
+      const value = evt[key];
+      if (value) {
+        spanAttrs[`openclaw.${key}`] = value;
+      }
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);

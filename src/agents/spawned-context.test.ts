@@ -2,16 +2,16 @@
 // child runs launched from agent tools.
 import { describe, expect, it } from "vitest";
 import {
-  mapToolContextToSpawnedRunMetadata,
-  normalizeSpawnedRunMetadata,
-  resolveIngressWorkspaceOverrideForSessionRun,
+  mapToolContextToSpawnedRunMetadata as mapContext,
+  normalizeSpawnedRunMetadata as normalize,
+  resolveIngressWorkspaceOverrideForSessionRun as ingressWorkspace,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 
 describe("normalizeSpawnedRunMetadata", () => {
   it("trims text fields and drops empties", () => {
     expect(
-      normalizeSpawnedRunMetadata({
+      normalize({
         spawnedBy: "  agent:main:subagent:1 ",
         groupId: "  group-1 ",
         groupChannel: "  slack ",
@@ -30,7 +30,7 @@ describe("normalizeSpawnedRunMetadata", () => {
 describe("mapToolContextToSpawnedRunMetadata", () => {
   it("maps agent group fields to run metadata shape", () => {
     expect(
-      mapToolContextToSpawnedRunMetadata({
+      mapContext({
         agentGroupId: "g-1",
         agentGroupChannel: "telegram",
         agentGroupSpace: "topic:123",
@@ -95,20 +95,14 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
 
 describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
   it("uses inherited workspaces for spawned runs and managed cwd for dashboard worktrees", () => {
-    expect(
-      resolveIngressWorkspaceOverrideForSessionRun({
+    expect([
+      ingressWorkspace({
         spawnedBy: "agent:main:subagent:parent",
         workspaceDir: "/tmp/ws",
         cwd: "/tmp/task",
       }),
-    ).toBe("/tmp/ws");
-    expect(
-      resolveIngressWorkspaceOverrideForSessionRun({
-        spawnedBy: "",
-        workspaceDir: "/tmp/ws",
-        cwd: "/tmp/worktree",
-      }),
-    ).toBe("/tmp/worktree");
-    expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
+      ingressWorkspace({ spawnedBy: "", workspaceDir: "/tmp/ws", cwd: "/tmp/worktree" }),
+      ingressWorkspace(),
+    ]).toEqual(["/tmp/ws", "/tmp/worktree", undefined]);
   });
 });

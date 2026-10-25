@@ -51,11 +51,12 @@ import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { invalidSessionRequest } from "./session-request-error.js";
+import { invalidSessionRequest, nonGitWorktreeSourceMessage } from "./session-request-error.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
+import { createSessionWorktreeBinding } from "./session-worktree-binding.js";
 
 /** Resolve registered sources identically for dashboard and native child sessions. */
 export async function resolveSessionProjectRoot(
@@ -258,7 +259,11 @@ async function prepareSpawnParentWorktreeSource(
     };
   }
   const context = captureWorktreeRunEndContext(process.env);
-  const accept = captureWorktreeRegistryReadGuard(context, "source-owner");
+  const accept = captureWorktreeRegistryReadGuard(context, "source-owner", {
+    id: parent.entry.worktree.id,
+    ownerKind: "session",
+    ownerId: parent.canonicalKey,
+  });
   const worktree = await readLiveRegistryWorktreeByOwner(context, "session", parent.canonicalKey);
   const assertWorktreeCurrent = accept(worktree);
   options.signal?.throwIfAborted();
@@ -516,12 +521,7 @@ export async function prepareSessionWorktree(params: {
               await params.onPromptReady!({
                 spawnedCwd: worktree.path,
                 sessionRoot: worktree.path,
-                worktree: {
-                  id: worktree.id,
-                  branch: worktree.branch,
-                  repoRoot: worktree.repoRoot,
-                  canonicalWorkspaceDir: workspace,
-                },
+                worktree: createSessionWorktreeBinding(worktree, workspace),
               });
               commitGuard?.();
             },
@@ -560,12 +560,11 @@ export async function prepareSessionWorktree(params: {
       return ok({
         spawnedCwd,
         sessionRoot: fs.realpathSync(worktree.path),
-        worktree: {
-          id: worktree.id,
-          branch: worktree.branch,
-          repoRoot: worktree.repoRoot,
-          canonicalWorkspaceDir: workspace ?? worktree.repoRoot,
-        },
+        worktree: createSessionWorktreeBinding(
+          worktree,
+          workspace ?? worktree.repoRoot,
+          target.entry?.worktree,
+        ),
         ...(rollback ? { rollback } : {}),
         ...(withSource
           ? {
@@ -682,7 +681,7 @@ export async function prepareSessionWorktreeCreation(params: {
   }
   // Git discovery permits subdirectory workspaces with an ancestor .git entry.
   if (typeof workspace === "string" && !params.projectGitUrl && !insideGitCheckout(workspace)) {
-    return invalidSessionRequest("agent workspace is not a git checkout");
+    return invalidSessionRequest(nonGitWorktreeSourceMessage(params.workspace));
   }
   // Reuse validates the binding, not a selected ref that may have since disappeared.
   const resolvedBase =

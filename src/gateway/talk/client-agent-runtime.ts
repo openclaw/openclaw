@@ -54,7 +54,10 @@ export function createTalkClientAgentRuntime(params: {
         runParams.abortSignal?.throwIfAborted();
         const config = runParams.config ?? params.config;
         params.assertCurrent?.();
-        const retained = await params.runAuthority?.retainRun(runParams.runId);
+        const retained = await params.runAuthority?.retainRun(
+          runParams.runId,
+          runParams.spawnedBy ?? undefined,
+        );
         try {
           runParams.abortSignal?.throwIfAborted();
           const execution = await loadTalkAgentExecution();
@@ -106,6 +109,7 @@ export function createTalkClientAgentRuntime(params: {
               // Speech is mirrored separately. Keep generated input in current-turn custody,
               // but never display it or replay it as a later user request.
               userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: {
                   text: runParams.prompt,
                   display: false,

@@ -6,12 +6,14 @@ import {
   resolveAgentRunFailureText,
 } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { assertCurrentSessionTranscriptHeader } from "../../../config/sessions/session-entry-codec.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
@@ -92,6 +94,37 @@ function makeParams(overrides: FixtureOptions = {}): Params {
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("keeps a stale session Access choice out of shared credential health", async () => {
+    // The same guard runs again before a request, after initial preparation.
+    const attempt = {
+      provider: "openai",
+      modelId: "gpt-5",
+      cyberAccessProgram: "daybreak_blue",
+    } as Parameters<typeof prepareEmbeddedAccessProgramGuard>[0];
+    const promptError = await prepareEmbeddedAccessProgramGuard(attempt).catch(
+      (error: unknown) => error,
+    );
+    expect(promptError).toMatchObject({ code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE" });
+    const params = makeParams({
+      promptError,
+      failover: {
+        resolveAuthProfileFailureReason: (reason, opts) =>
+          resolveAuthProfileFailureReason({
+            failoverReason: reason,
+            providerStarted: opts?.providerStarted,
+            policy: "shared",
+          }),
+        advanceAuthProfile: vi.fn(async () => false),
+      },
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE",
+    });
+    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+  });
+
   it("explains retry exhaustion without changing structured provider facts", async () => {
     const providerError = "429 rate limit exceeded. Please try again in 221ms.";
     const original = new FailoverError(providerError, {
@@ -415,10 +448,7 @@ describe("handleEmbeddedPromptFailure", () => {
 
   it("returns the profile-rotation retry before failure marking finishes", async () => {
     const events: string[] = [];
-    let releaseMark: (() => void) | undefined;
-    const markCanFinish = new Promise<void>((resolve) => {
-      releaseMark = resolve;
-    });
+    const { promise: markCanFinish, resolve: releaseMark } = createDeferredCore();
     const maybeMarkAuthProfileFailure = vi.fn(async () => {
       events.push("mark-start");
       await markCanFinish;

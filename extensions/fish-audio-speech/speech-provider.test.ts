@@ -1,5 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -31,6 +33,31 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllEnvs();
 });
+
+it.each(["synthesize", "stream", "voices"] as const)(
+  "redacts the active credential from %s provider diagnostics",
+  async (operation) => {
+    const credential = "opaque-fish-secret42";
+    respond(() => Response.json({ message: `provider diagnostic ${credential}` }, { status: 401 }));
+    const params = {
+      ...request,
+      providerConfig: { apiKey: credential },
+      target: "audio-file" as const,
+    };
+    const pending =
+      operation === "synthesize"
+        ? provider.synthesize(params)
+        : operation === "stream"
+          ? provider.streamSynthesize?.(params)
+          : provider.listVoices?.(params);
+    assert(pending);
+    const error: unknown = await pending.catch((cause: unknown) => cause);
+    assert(error instanceof Error);
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.message).toContain("provider diagnostic");
+    expect(error).toMatchObject({ status: 401, statusCode: 401 });
+  },
+);
 
 it("preserves Talk setting precedence and explicit blank-key clearing", () => {
   const params = {
@@ -194,16 +221,7 @@ it.each([
   { key: "topp", value: "1", overrides: { topP: 1 } },
   { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
 ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
-  const policy = {
-    enabled: true,
-    allowText: true,
-    allowProvider: true,
-    allowVoice: true,
-    allowModelId: true,
-    allowVoiceSettings: true,
-    allowNormalization: true,
-    allowSeed: true,
-  };
+  const policy = createSpeechDirectivePolicy();
   expect(provider.parseDirectiveToken?.({ key, value, policy })).toEqual({
     handled: true,
     overrides,

@@ -239,6 +239,37 @@ it.each(["web", "llm-context"] as const)("caps %s results and separates caches",
   await expectCached(() => tool.execute({ ...args, count: 2 }), larger, 2);
 });
 
+it.each(["web", "llm-context"] as const)(
+  "keeps %s results scoped to the request credential",
+  async (mode) => {
+    mockFetch.mockImplementation(async (_url, init) => {
+      const credential = new Headers(init?.headers).get("X-Subscription-Token");
+      const account =
+        credential === "brave-account-a"
+          ? "account-a"
+          : credential === "brave-account-b"
+            ? "account-b"
+            : undefined;
+      if (!account) {
+        throw new Error("Unexpected synthetic Brave credential");
+      }
+      return Response.json(
+        resultPayload(mode, [{ url: `https://example.com/${account}`, title: account }]),
+      );
+    });
+    const accountA = createBraveTool({ apiKey: "brave-account-a", mode });
+    const accountB = createBraveTool({ apiKey: "brave-account-b", mode });
+    const args = { query: `Brave credential-scoped results ${mode}` };
+
+    expectResults(await accountA.execute(args), ["https://example.com/account-a"]);
+    expectResults(await accountB.execute(args), ["https://example.com/account-b"]);
+    const repeated = await accountA.execute(args);
+    expectResults(repeated, ["https://example.com/account-a"]);
+    expect(repeated.cached).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  },
+);
+
 it.each([
   { mode: "web", cacheTtlMinutes: 0 },
   { mode: "llm-context", cacheTtlMinutes: 1 },

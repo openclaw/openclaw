@@ -6,7 +6,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { registerExternalHandoffShutdownTests } from "./run-loop-external-handoff.test-support.js";
-import { registerHostedUpdateStopTests } from "./run-loop-hosted-stop.test-support.js";
 import { registerGatewayLogSettlementTests } from "./run-loop-log-settlement.test-support.js";
 import { gatewayWorkAdmissionActual, runLoopFixture } from "./run-loop-mocks.test-support.js";
 import { registerNaturalExitTests } from "./run-loop-natural-exit.test-support.js";
@@ -18,6 +17,7 @@ import {
   registerShutdownCompletionTests,
 } from "./run-loop-shutdown-completion.test-support.js";
 import { registerGatewayStartupFailureTests } from "./run-loop-startup.test-support.js";
+import { registerHostedUpdateStopTests } from "./run-loop-stop.test-support.js";
 import { registerUpdateRespawnTests } from "./run-loop-update-respawn.test-support.js";
 import * as testLoop from "./run-loop.test-support.js";
 
@@ -449,6 +449,7 @@ describe("runGatewayLoop", () => {
     mocks.markUpdateRestartSentinelFailure.mockClear();
     const firstCronDrain = createDeferredCore<{ drained: boolean; active: number }>();
     mocks.waitForActiveCronTaskRuns.mockImplementationOnce(() => firstCronDrain.promise);
+    mocks.waitForActiveCronJobs.mockResolvedValueOnce({ drained: false, active: 1 });
 
     await testLoop
       .withIsolatedSignals(async ({ captureSignal }) => {
@@ -544,40 +545,18 @@ describe("runGatewayLoop", () => {
         expectBefore(mocks.abortActiveCronTaskRuns, closeFirst);
         expectBefore(mocks.waitForActiveCronJobs, mocks.retireActiveCronTaskRunTracking);
         expectBefore(mocks.retireActiveCronTaskRunTracking, mocks.resetCronActiveJobs);
+        expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
+        expect(mocks.waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
+        expect(mocks.waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
+        expect(mocks.gatewayLog.warn).toHaveBeenCalledWith(
+          "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
+        );
 
         sigterm();
         await expect(exited).resolves.toBe(0);
         testLoop.expectStopCloseCall(closeThird);
       })
       .finally(() => clock.mockRestore());
-  });
-
-  it("advances stale cron active markers after bounded restart cron-run drain", async () => {
-    mocks.waitForActiveCronJobs.mockResolvedValueOnce({ drained: false, active: 1 });
-
-    await mocks.withRunningGateway(async ({ captureSignal, start, exited }) => {
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigint = captureSignal("SIGINT");
-
-      restartSignal();
-      await testLoop.waitForLoopCondition(
-        () => start.mock.calls.length >= 2,
-        "expected SIGUSR2 to trigger restart",
-      );
-
-      expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
-      expect(mocks.waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
-      expect(mocks.waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
-      expect(mocks.advanceCronActiveJobGeneration).toHaveBeenCalledOnce();
-      expect(mocks.retireActiveCronTaskRunTracking).toHaveBeenCalledOnce();
-      expect(mocks.resetCronActiveJobs).toHaveBeenCalledOnce();
-      expect(mocks.gatewayLog.warn).toHaveBeenCalledWith(
-        "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
-      );
-
-      sigint();
-      await expect(exited).resolves.toBe(0);
-    });
   });
 
   it.each([false, true])(

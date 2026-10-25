@@ -18,7 +18,6 @@ type Gateway = Pick<
 type SessionsBoardServiceParams = {
   store: WorkboardBoardStore;
   gateway: Gateway;
-  now?: () => number;
 };
 type CallerAuthority = { assertCurrent: () => void };
 type Operations = {
@@ -122,7 +121,6 @@ function createOwner(
   const projections = new Map<string, PreparedProjection>();
   const boards = new Map<string, Promise<WorkboardSessionsBoard>>();
   let revision = params.store.sessionsRevision;
-  const now = params.now ?? Date.now;
   let stopped = false;
   let hasRead = false;
   let factsFailureLogged = false;
@@ -210,7 +208,7 @@ function createOwner(
     const prWarnings = new Map<string, number>();
     for (const [key, cached] of resolved) {
       const { facts, source: row } = cached;
-      if (!inScope(facts, board, now())) {
+      if (!inScope(facts, board, Date.now())) {
         continue;
       }
       if (facts.pullRequestsUnavailable || facts.pullRequestsRateLimited) {
@@ -308,7 +306,7 @@ function createOwner(
     return params.gateway.withSessionFacts(sessionSelection(board, view), async (source) => {
       assertReadCurrent();
       const key = JSON.stringify([id, view, source.scope ?? source.revision]);
-      const admittedAt = now();
+      const admittedAt = Date.now();
       const previous = projections.get(key);
       let projection = previous;
       if (
@@ -416,7 +414,7 @@ function createOwner(
         (entry) =>
           entry.key === sessionKey &&
           entry.sessionId === visible.sessionId &&
-          inScope(entry, board, now()),
+          inScope(entry, board, Date.now()),
       );
       if (!facts) {
         throw new Error("Session is not available in this board's scope.");
@@ -433,7 +431,7 @@ function createOwner(
             source: "operator",
             reason: "Moved by operator",
             factsHash: "",
-            updatedAt: now(),
+            updatedAt: Date.now(),
             expectedUpdatedAt: previous?.updatedAt,
           },
           { expectedSpec: board.sessions, assertCurrent: assertWriteCurrent },

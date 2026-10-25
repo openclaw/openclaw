@@ -62,11 +62,6 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { VERSION } from "../version.js";
-import {
-  readTuiGatewayModelCatalog,
-  refreshTuiGatewayModelCatalog,
-  type GatewayModelCatalogEntry,
-} from "./gateway-chat-models.js";
 import { GatewayChatRequests, isLegacyParameterError } from "./gateway-chat-requests.js";
 import type {
   ChatSendOptions,
@@ -130,6 +125,29 @@ async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boole
 type HandoffSessionResolveParams = Required<
   Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
 >;
+
+type GatewayModelCatalogEntry = {
+  scope: TuiModelCatalogScope;
+  models?: TuiModelChoice[];
+  pending?: Promise<TuiModelChoice[]>;
+};
+
+function tuiGatewayModelCatalogKey(scope: TuiModelCatalogScope): string {
+  return `${scope.agentId ?? ""}\0${scope.sessionKey ?? ""}`;
+}
+
+function effectiveCatalogScope(
+  scope: TuiModelCatalogScope,
+  capabilities: readonly string[] | undefined,
+): TuiModelCatalogScope {
+  return {
+    ...(scope.agentId ? { agentId: scope.agentId } : {}),
+    ...(capabilities?.includes(GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG) === true &&
+    scope.sessionKey
+      ? { sessionKey: scope.sessionKey }
+      : {}),
+  };
+}
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -284,8 +302,8 @@ export class GatewayChatClient implements TuiBackend {
     await this.ready.promise;
   }
 
-  cancelPendingRequests(scope: TuiRequestScope): boolean {
-    return this.requests.cancelPending(scope);
+  cancelPendingRequests(scope: TuiRequestScope): void {
+    this.requests.cancelPending(scope);
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -462,21 +480,58 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   getKnownModels(opts: TuiModelCatalogScope = {}): TuiModelChoice[] | undefined {
-    return readTuiGatewayModelCatalog(this.modelCatalogs, opts, this.hello?.features.capabilities);
+    const scope = effectiveCatalogScope(opts, this.hello?.features.capabilities);
+    return this.modelCatalogs.get(tuiGatewayModelCatalogKey(scope))?.models;
   }
 
   listModels(opts: TuiModelCatalogScope = {}): Promise<TuiModelChoice[]> {
-    return refreshTuiGatewayModelCatalog({
-      catalogs: this.modelCatalogs,
-      client: this.client,
-      agentId: opts.agentId,
-      sessionKey: opts.sessionKey,
-      capabilities: this.hello?.features.capabilities,
-      published:
-        this.hello?.features.capabilities?.includes(GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG) ===
-        true,
-      onChanged: this.onModelsChanged,
-    });
+    const scope = effectiveCatalogScope(opts, this.hello?.features.capabilities);
+    const published =
+      this.hello?.features.capabilities?.includes(GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG) ===
+      true;
+    const onChanged = this.onModelsChanged;
+    const key = tuiGatewayModelCatalogKey(scope);
+    let entry = this.modelCatalogs.get(key);
+    if (!entry) {
+      entry = { scope };
+      this.modelCatalogs.set(key, entry);
+    }
+    if (entry.pending) {
+      return entry.pending;
+    }
+    const owner = entry;
+    const current = () => this.modelCatalogs.get(key) === owner && owner.pending === pending;
+    const pending = this.client
+      .request("models.list", {
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+        ...(published ? { includeDetails: true } : {}),
+      })
+      .then((res) => {
+        if (!current()) {
+          return this.modelCatalogs.get(key)?.models ?? [];
+        }
+        const models: TuiModelChoice[] = Array.isArray(res?.models) ? res.models : [];
+        // Released Gateways reject includeDetails and collapse unknown availability to false.
+        owner.models = published
+          ? models
+          : models.map(({ available: _available, unavailableReason: _reason, ...model }) => model);
+        onChanged?.(scope);
+        return owner.models;
+      })
+      .catch((error: unknown) => {
+        if (!current()) {
+          return this.modelCatalogs.get(key)?.models ?? [];
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (current()) {
+          owner.pending = undefined;
+        }
+      });
+    owner.pending = pending;
+    return pending;
   }
 
   private refreshModelsForEvent(event: TuiEvent) {

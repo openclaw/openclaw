@@ -253,32 +253,6 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
-type FollowupRuntimeMetadata = Pick<
-  FollowupRun,
-  | "sourceTurnId"
-  | "createChannelCronAuthority"
-  | "readAdmissionConfig"
-  | "operatorAuthority"
-  | "personalBootstrapEligible"
-  | "currentInboundEventKind"
-  | "currentInboundAudio"
-  | "currentInboundContext"
-  | "explicitSkillSelections"
-  | "channelAdmissionEvidence"
-  | "gatewayLocalUserIngress"
-  | "toolsAllow"
-  | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
-  | "abortSignal"
-  | "queueAbortSignal"
-  | "deliveryCorrelations"
-  | "turnAdoptionLifecycle"
-  | "replyOperationRunStates"
-  | "queuedFollowupReplyDisposition"
-  | "runObservers"
->;
-
 function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
@@ -351,10 +325,7 @@ function collectReplyDisposition(
   };
 }
 
-export function collectRuntimeMetadata(
-  items: FollowupRun[],
-  abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata {
+export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: AbortSignal) {
   const currentTurnSource = items.find(
     (item) =>
       item.currentInboundEventKind === "room_event" ||
@@ -412,7 +383,9 @@ export function collectRuntimeMetadata(
         ? authoritySource?.runObservers
         : {
             ...authoritySource?.runObservers,
-            onAgentRunTerminalOutcome: (outcome) => {
+            onAgentRunTerminalOutcome: (
+              outcome: Parameters<(typeof terminalObservers)[number]>[0],
+            ) => {
               const failures: unknown[] = [];
               for (const observer of terminalObservers) {
                 try {
@@ -429,7 +402,7 @@ export function collectRuntimeMetadata(
   };
 }
 
-function getFollowupOriginRouting(source: FollowupRun) {
+export function getFollowupOriginRouting(source: FollowupRun) {
   return {
     originatingChannel: source.originatingChannel,
     originatingTo: source.originatingTo,

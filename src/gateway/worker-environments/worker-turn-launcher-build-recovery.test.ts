@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
-import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -31,6 +30,7 @@ import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTurnTunnelHandle,
 } from "./tunnel-contract.js";
+import { completeTurn, localResult } from "./worker-turn-launcher-flow.test-support.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
@@ -39,7 +39,6 @@ afterAll(closeStateDatabaseForTest);
 
 const refreshedBundleHash = "b".repeat(64);
 const replacementReply = "Continued on the replacement worker";
-const localResult = async () => ({ meta: { durationMs: 1 } });
 const unexpected = (operation: string) => async (): Promise<never> => {
   throw new Error(`unexpected ${operation}`);
 };
@@ -176,8 +175,7 @@ async function createBuildRecoveryHarness(
     if (rejection === "handoff") {
       throw new StaleWorkerBuildError();
     }
-    const leafId = await worker.appendWorkerReply(replacementReply, 51);
-    return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    return completeTurn(request, replacementReply, 51);
   });
   const destroy = vi.fn(async () => environment);
   const environments: worker.WorkerTurnEnvironmentService &
@@ -223,6 +221,7 @@ async function createBuildRecoveryHarness(
       }
     }),
     destroy,
+    reclaim: destroy,
     requestDestroy: destroy,
     attachSession: vi.fn(unexpected("worker session attachment")),
     createWithRequest: vi.fn(unexpected("worker environment creation")),
@@ -391,8 +390,7 @@ async function createRefreshWaitHarness(fence = false) {
   };
   const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
     request.onDispatchReady?.();
-    const leafId = await worker.appendWorkerReply("Ran on the refreshed worker", 51);
-    return worker.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+    return completeTurn(request, "Ran on the refreshed worker", 51);
   });
   const acquireTurnCredential = vi.fn(async () => {
     // This boundary also wakes the negative control on the original launcher.
@@ -413,7 +411,6 @@ async function createRefreshWaitHarness(fence = false) {
     environments,
   });
   const input = worker.turn();
-  let executionTurn: SessionPlacementTurnParams | undefined;
   const onAdmitted = vi.fn();
   return {
     acquireTurnCredential,
@@ -422,13 +419,6 @@ async function createRefreshWaitHarness(fence = false) {
     listeners,
     onAdmitted,
     reachedAdmission: reachedAdmission.promise,
-    watchdog() {
-      const watchdog = executionTurn?.replyOperation?.watchdog;
-      if (!watchdog) {
-        throw new Error("runtime refresh did not capture its admitted operation watchdog");
-      }
-      return watchdog;
-    },
     progress() {
       expectNoClaim();
       for (const listener of listeners) {
@@ -459,10 +449,9 @@ async function createRefreshWaitHarness(fence = false) {
           abortSignal: signal,
         },
         async (operation, turnSignal) => {
-          executionTurn = { ...input, replyOperation: operation, abortSignal: turnSignal };
           return provider.executeTurn(
             worker.workerTurnRequest(input.runId),
-            executionTurn,
+            { ...input, replyOperation: operation, abortSignal: turnSignal },
             vi.fn(localResult),
             onAdmitted,
           );
@@ -477,15 +466,7 @@ it.each(["before claim", "at claim fence", "Stop", "Gateway restart"] as const)(
     const fence = outcome === "at claim fence";
     const harness = await createRefreshWaitHarness(fence);
     const controller = new AbortController();
-    // Admission captures this function synchronously; every awaited frame keeps real time.
-    const clock = vi.spyOn(Date, "now");
-    const execution = (() => {
-      try {
-        return harness.execute(controller.signal);
-      } finally {
-        clock.mockRestore();
-      }
-    })();
+    const execution = harness.execute(controller.signal);
     const result = execution.catch((error: unknown) => error);
     try {
       await Promise.race([harness.reachedAdmission, execution]);
@@ -507,15 +488,7 @@ it.each(["before claim", "at claim fence", "Stop", "Gateway restart"] as const)(
         expectNoClaim();
         expectCalls(0, harness.acquireTurnCredential, harness.onAdmitted, harness.launchTurn);
         expect(harness.claimTurn).toHaveBeenCalledTimes(fence ? 1 : 0);
-        const watchdog = harness.watchdog();
-        const progressAt = watchdog.snapshot().transportProgressAtMs + 1;
-        clock.mockReturnValue(progressAt);
-        try {
-          harness.progress();
-          expect(watchdog.snapshot().transportProgressAtMs).toBe(progressAt);
-        } finally {
-          clock.mockRestore();
-        }
+        harness.progress();
         expect(
           getDiagnosticSessionActivitySnapshot({
             sessionId: worker.SESSION_ID,

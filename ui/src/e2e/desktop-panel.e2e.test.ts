@@ -1,12 +1,31 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type {
+  DesktopClient,
+  DesktopConnectionHandle,
+} from "../components/desktop/desktop-client.ts";
+import type { DesktopSizingMode } from "../components/desktop/desktop-panel-state.ts";
 import {
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
-} from "../test-helpers/control-ui-e2e.ts";
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { openDesktopPanel, openPalette, sessionsList } from "./desktop-panel.test-support.ts";
+import {
+  credentialsRequired,
+  desktopGateway,
+  observationCases,
+  observe,
+  openDesktopPanel,
+  openPalette,
+  sessionsList,
+  unavailable,
+  workerDesktopEnvironment,
+  workerEnvironment,
+} from "./desktop-panel.test-support.ts";
 import {
   createRfbClipboardProvide,
   createRfbRawFrame,
@@ -24,64 +43,6 @@ const suite = createControlUiE2eSuite({
 const button = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 const text = (root: Page | Locator, name: string) => root.getByText(name, { exact: true });
-const observe = (token: string, control = false, extra: object = {}) => ({
-  transport: "rfb",
-  wsPath: `/desktop/observe?token=${token}`,
-  expiresAtMs: 60_000,
-  control,
-  ...extra,
-});
-const observationCases = () => ({
-  cases: [false, true].map((control) => ({
-    match: { source: { kind: "environment", environmentId: "worker-desktop-1" }, control },
-    response: observe(control ? "control" : "view", control),
-  })),
-});
-const credentialsRequired = (target: string) => ({
-  __mockError: {
-    code: "INVALID_REQUEST",
-    message: `VNC password is required to observe this ${target}`,
-    details: { code: "DESKTOP_CREDENTIALS_REQUIRED", auth: "vnc-password" },
-  },
-});
-const unavailable = (message: string) => ({ __mockError: { code: "UNAVAILABLE", message } });
-
-const workerDesktopEnvironment = {
-  id: "worker-desktop-1",
-  type: "worker",
-  status: "available",
-  desktop: true,
-  worker: {
-    providerId: "crabbox",
-    state: "attached",
-    ageMs: 1_000,
-    attachedSessionIds: ["main"],
-    tunnelStatus: "connected",
-    desktopApps: ["browser", "terminal"],
-  },
-} as const;
-
-const workerEnvironment = (worker: object = {}, id = "worker-desktop-1") => ({
-  ...workerDesktopEnvironment,
-  id,
-  worker: { ...workerDesktopEnvironment.worker, ...worker },
-});
-const desktopGateway = (
-  page: Page,
-  environments: readonly unknown[] | null = [],
-  observation?: object,
-  scenario: ControlUiMockGatewayScenario = {},
-) =>
-  installMockGateway(page, {
-    featureMethods: ["desktop.observe", "environments.list"],
-    ...scenario,
-    methodResponses: {
-      "sessions.list": sessionsList("local"),
-      ...(environments && { "environments.list": { environments } }),
-      ...(observation && { "desktop.observe": observation }),
-      ...scenario.methodResponses,
-    },
-  });
 const withDesktopPage = (run: (page: Page) => Promise<void>) =>
   suite.withPage({ serviceWorkers: "block" }, ({ page }) => run(page));
 const environmentSource = { kind: "environment", environmentId: "worker-desktop-1" };
@@ -124,6 +85,272 @@ async function openScriptedDesktop(
   await expect.poll(rfb.events).toEqual(["authenticated:1"]);
   return { gateway, rfb, panel };
 }
+
+// Only this scenario needs both overlay and space-consuming scrollbars.
+const sizingSuite = createControlUiE2eSuite({
+  name: "desktop axis sizing",
+  startServerBeforeBrowser: true,
+  browserLaunchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
+});
+sizingSuite.define(() => {
+  it("fits either axis with real noVNC scaling, scroll and pointer coordinates", () =>
+    sizingSuite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await page.setViewportSize({ width: 1000, height: 900 });
+      const gateway = await desktopGateway(
+        page,
+        [hostEnvironment],
+        observe("sizing", true, { canResize: true }),
+        {
+          deferredMethods: ["desktop.observe"],
+        },
+      );
+      await page.goto(`${sizingSuite.server.baseUrl}focus/desktop/control/source/gateway`);
+      const overlayScrollbars = await page.addStyleTag({
+        content: ".desktop-surface * { scrollbar-width: none; }",
+      });
+      await gateway.waitForRequest("desktop.observe");
+      const peer = await installScriptedRfbServer(page);
+      const panel = page.locator("openclaw-desktop-panel");
+      type SizingPanel = HTMLElement & {
+        desktopClientFactory: () => Pick<DesktopClient, "connect">;
+        sizingConnection: DesktopConnectionHandle;
+        sizingPackets: number[][];
+      };
+      await panel.evaluate((element) => {
+        const host = element as SizingPanel;
+        host.sizingPackets = [];
+        // Observe the existing wire fixture; neither transport nor noVNC is replaced here.
+        window.WebSocket = new Proxy(window.WebSocket, {
+          construct(Socket, args) {
+            const socket = Reflect.construct(Socket, args) as WebSocket;
+            const send = socket.send.bind(socket);
+            socket.send = (data) => {
+              if (ArrayBuffer.isView(data)) {
+                host.sizingPackets.push(
+                  Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)),
+                );
+              }
+              send(data);
+            };
+            return socket;
+          },
+        });
+        const factory = host.desktopClientFactory;
+        host.desktopClientFactory = () => {
+          const client = factory.call(host);
+          const connect = client.connect.bind(client);
+          client.connect = async (options) => {
+            host.sizingConnection = await connect(options);
+            return host.sizingConnection;
+          };
+          return client;
+        };
+      });
+      await gateway.resolveDeferred("desktop.observe");
+      await expect.poll(peer.events).toEqual(["authenticated:1"]);
+      await panel
+        .getByRole("status", { name: "Connecting to desktop…" })
+        .waitFor({ state: "hidden" });
+      const surface = panel.locator(".desktop-surface");
+      const canvas = surface.locator("canvas");
+      const bounds = await surface.boundingBox();
+      if (!bounds) {
+        throw new Error("Desktop surface must be visible");
+      }
+      const dimensions = () =>
+        canvas.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return [Math.round(rect.width), Math.round(rect.height)];
+        });
+      // The focus document keeps its native selector; axis geometry uses the shared connection API.
+      const selectAxis = (mode: DesktopSizingMode) =>
+        panel.evaluate((element, next) => {
+          (element as SizingPanel).sizingConnection.setSizingMode(next);
+        }, mode);
+      const sizing = panel.getByRole("combobox", { name: "Desktop size", exact: true });
+      const scroll = (axis: "left" | "top", amount: number) =>
+        canvas.evaluate(
+          (element, value) => {
+            for (let owner = element.parentElement; owner; owner = owner.parentElement) {
+              if (
+                value.axis === "left"
+                  ? owner.scrollWidth > owner.clientWidth
+                  : owner.scrollHeight > owner.clientHeight
+              ) {
+                if (value.axis === "left") {
+                  owner.scrollLeft = value.amount;
+                } else {
+                  owner.scrollTop = value.amount;
+                }
+                return value.axis === "left" ? owner.scrollLeft : owner.scrollTop;
+              }
+            }
+            return 0;
+          },
+          { axis, amount },
+        );
+      const pointer = () =>
+        panel.evaluate((element) => {
+          const packet = (element as SizingPanel).sizingPackets.findLast(
+            (bytes) => bytes[0] === 5 && bytes[1] === 1,
+          );
+          return packet ? [packet[2]! * 256 + packet[3]!, packet[4]! * 256 + packet[5]!] : null;
+        });
+      const capture = async (name: string) => {
+        const frame = await takeControlUiScreenshotFrame(page, surface, [canvas], {
+          elements: [surface],
+          animations: "disabled",
+        });
+        await writeFile(path.join(sizingSuite.artifactDir, `${name}.png`), frame.png);
+        await writeFile(
+          path.join(sizingSuite.artifactDir, `${name}-surface.png`),
+          frame.elements[0]!.png,
+        );
+      };
+      const marker = createRfbRawFrame();
+      // A second wire-rendered landmark stays visible after scrolling either axis.
+      marker[5] = 240;
+      marker[6] = 1;
+      marker[7] = 44;
+      await peer.send([createRfbRawFrame(), marker]);
+      await expect.poll(dimensions).toEqual([1000, 750]);
+      await capture("fit-before-axis");
+      await selectAxis("fit-height");
+      await expect.poll(dimensions).toEqual([Math.round((bounds.height * 4) / 3), bounds.height]);
+      expect(await scroll("top", 100)).toBe(0);
+      expect(await scroll("left", 100)).toBe(100);
+      await page.mouse.click(bounds.x + 100, bounds.y + 100);
+      await expect
+        .poll(pointer)
+        .toEqual([
+          Math.floor((200 * 600) / bounds.height),
+          Math.floor((100 * 600) / bounds.height),
+        ]);
+      await capture("fit-height-scrolled");
+      // Real DesktopSize changes the framebuffer; the current axis must react before switching modes.
+      await peer.send([[0, 0, 0, 1, 0, 0, 0, 0, 2, 88, 4, 176, 255, 255, 255, 33]]);
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+      await peer.send([marker]);
+      await selectAxis("fit-width");
+      await expect.poll(dimensions).toEqual([1000, 2000]);
+      expect(await scroll("left", 100)).toBe(0);
+      expect(await scroll("top", 200)).toBe(200);
+      await page.mouse.click(bounds.x + 100, bounds.y + 100);
+      await expect.poll(pointer).toEqual([60, 180]);
+      await capture("fit-width-scrolled");
+      await page.setViewportSize({ width: 500, height: 900 });
+      await expect.poll(dimensions).toEqual([500, 1000]);
+      await sizing.selectOption("actual");
+      await expect.poll(dimensions).toEqual([600, 1200]);
+      expect(await scroll("left", 100)).toBe(100);
+      expect(await scroll("top", 100)).toBe(100);
+      await sizing.selectOption("fit");
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+      await sizing.selectOption("match");
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+
+      // The launch flag must also be absent; CSS alone cannot override --hide-scrollbars.
+      await overlayScrollbars.evaluate((element) => element.parentNode?.removeChild(element));
+      // Custom Chromium scrollbars consume real layout space even on overlay-scrollbar hosts.
+      await page.addStyleTag({
+        content:
+          ".desktop-surface * { scrollbar-width: auto; scrollbar-color: auto; } .desktop-surface *::-webkit-scrollbar { width: 16px; height: 16px; }",
+      });
+      await page.setViewportSize({ width: 800, height: 600 });
+      const feedback = [];
+      for (const [mode, width, height] of [
+        ["fit-height", 804, 600],
+        ["fit-width", 800, 604],
+      ] as const) {
+        await peer.send([
+          [
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            width >> 8,
+            width & 255,
+            height >> 8,
+            height & 255,
+            255,
+            255,
+            255,
+            33,
+          ],
+        ]);
+        await expect
+          .poll(() =>
+            canvas.evaluate((element: HTMLCanvasElement) => [element.width, element.height]),
+          )
+          .toEqual([width, height]);
+        await selectAxis(mode);
+        const samples = await canvas.evaluate(async (element, axis) => {
+          const viewport = [...element.closest(".desktop-surface")!.querySelectorAll("div")].find(
+            (owner) =>
+              ["auto", "scroll"].includes(
+                axis === "fit-height"
+                  ? getComputedStyle(owner).overflowX
+                  : getComputedStyle(owner).overflowY,
+              ),
+          )!;
+          const frames = [];
+          // Observe consecutive rendered frames; a single settled-looking sample misses feedback.
+          for (let frame = 0; frame < 32; frame++) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            const rect = element.getBoundingClientRect();
+            frames.push({
+              width: rect.width,
+              height: rect.height,
+              clientWidth: viewport.clientWidth,
+              clientHeight: viewport.clientHeight,
+              gutterX: viewport.offsetHeight - viewport.clientHeight,
+              gutterY: viewport.offsetWidth - viewport.clientWidth,
+            });
+          }
+          return frames;
+        }, mode);
+        feedback.push({ mode, framebuffer: [width, height], samples });
+        await writeFile(
+          path.join(sizingSuite.artifactDir, `classic-${mode}.png`),
+          await takeControlUiViewportScreenshot(page, surface, [canvas]),
+        );
+      }
+      await writeFile(
+        path.join(sizingSuite.artifactDir, "scrollbar-feedback.json"),
+        JSON.stringify(feedback, null, 2),
+      );
+      for (const { mode, samples } of feedback) {
+        expect(
+          samples.some(
+            (sample) => (mode === "fit-height" ? sample.gutterX : sample.gutterY) === 16,
+          ),
+          `${mode} must exercise a measured classic gutter`,
+        ).toBe(true);
+        expect(
+          new Set(samples.slice(-16).map((sample) => JSON.stringify(sample))).size,
+          `${mode} must stop resizing once the viewport and framebuffer stop changing`,
+        ).toBe(1);
+      }
+      expect(await peer.connectionCount()).toBe(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      // Provider permission alone cannot negotiate remote resizing with this wire peer.
+      expect(
+        await panel.evaluate((element) =>
+          (element as SizingPanel).sizingPackets.some((bytes) => bytes[0] === 251),
+        ),
+      ).toBe(false);
+      const mountedSurface = await surface.elementHandle();
+      await panel.evaluate((element) => (element as SizingPanel).sizingConnection.disconnect());
+      await expect.poll(peer.events).toContain("closed:1");
+      expect(await mountedSurface?.evaluate((element) => element.childElementCount)).toBe(0);
+    }));
+});
 
 suite.define(() => {
   it("hides the desktop command without the method or operator.admin", async () => {
@@ -205,7 +432,7 @@ suite.define(() => {
         expect(await password.inputValue()).toBe("synthetic-unsent-password");
         expect(await gateway.getRequests("environments.status")).toEqual(inventoryReads);
 
-        await activateChatHeaderPanelAction(page, "Desktop");
+        await button(page, "Close Desktop").click();
         await panel.waitFor({ state: "detached" });
         await openPalette(page);
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
@@ -217,7 +444,8 @@ suite.define(() => {
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
         expect(await text(panel, "Desktop sources").count()).toBe(0);
 
-        await activateChatHeaderPanelAction(page, "Desktop");
+        await button(page, "Close Desktop").click();
+        await panel.waitFor({ state: "detached" });
         await activateChatHeaderPanelAction(page, "Desktop");
         await panel.getByLabel("VNC password", { exact: true }).waitFor();
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(3);
@@ -301,8 +529,10 @@ suite.define(() => {
           )
           .map((request) => request.method),
       ).toEqual(["environments.status", "desktop.observe"]);
-      await button(panel, "Browser").waitFor();
-      await button(panel, "Terminal").waitFor();
+      await button(panel, "Desktop actions").click();
+      await panel.getByRole("menuitem", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("menuitem", { name: "Terminal", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
       expect(await panel.getAttribute("data-connect-count")).toBe("1");
       expect(await text(panel, "Desktop sources").count()).toBe(0);
     }));
@@ -320,14 +550,12 @@ suite.define(() => {
         .toBe(inventoryCount + 1);
       await page
         .locator("openclaw-desktop-panel")
-        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .getByRole("status")
+        .filter({ hasText: "Connecting to desktop…" })
         .waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-      await page.evaluate(() => {
-        window.dispatchEvent(
-          new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
-        );
-      });
+      await button(page, "Close Desktop").click();
+      await page.locator("openclaw-desktop-panel").waitFor({ state: "detached" });
       await gateway.resolveDeferred("environments.status", workerDesktopEnvironment);
       await page.evaluate(
         () =>
@@ -340,6 +568,80 @@ suite.define(() => {
         await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
       ).toBe(0);
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    }));
+
+  it("keeps the current desktop target and control mode in the mobile overflow link", () =>
+    withDesktopPage(async (page) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const gateway = await desktopGateway(page, [workerDesktopEnvironment], observationCases(), {
+        deferredMethods: ["desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("active"),
+          "sessions.describe": { session: sessionsList("active").sessions[0] },
+          "environments.status": workerDesktopEnvironment,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      await activateChatHeaderPanelAction(page, "Desktop");
+      const panel = page.locator("openclaw-desktop-panel").filter({ visible: true });
+      await gateway.waitForRequest("desktop.observe");
+      const rfb = await installScriptedRfbServer(page);
+      await gateway.resolveDeferred("desktop.observe");
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await button(panel, "Desktop actions").click();
+      const menu = panel.locator(".desktop-rail__menu:visible");
+      await menu.waitFor();
+      const link = menu.locator("a").filter({ hasText: "Open desktop in new window" });
+      expect(await link.count()).toBe(1);
+      expect(await link.getAttribute("href")).toBe("/focus/desktop/session/agent%3Amain%3Amain");
+      expect(await link.getAttribute("target")).toBe("_blank");
+      expect(await link.getAttribute("rel")).toContain("noopener");
+      const icon = link.locator(".oc-menu-item__icon > svg");
+      expect(
+        await icon.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return [style.width, style.height];
+        }),
+      ).toEqual(["18px", "18px"]);
+      expect(await icon.isVisible()).toBe(true);
+      for (const item of [link, menu.getByRole("menuitem", { name: "Disconnect", exact: true })]) {
+        const alignment = await item.evaluate((element) => {
+          const reference = element
+            .closest(".desktop-rail__menu")!
+            .querySelector(".desktop-toolbar-action")!;
+          const iconLeft = (row: Element) => row.querySelector("svg")!.getBoundingClientRect().left;
+          const labelLeft = (row: Element) =>
+            row.querySelector(".oc-menu-item__label,.desktop-audio-label")!.getBoundingClientRect()
+              .left;
+          return [
+            Math.abs(iconLeft(element) - iconLeft(reference)),
+            Math.abs(labelLeft(element) - labelLeft(reference)),
+          ];
+        });
+        expect(alignment[0]).toBeLessThan(0.5);
+        expect(alignment[1]).toBeLessThan(0.5);
+      }
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await writeFile(
+          path.join(suite.artifactDir, "desktop-mobile-window.png"),
+          await takeControlUiViewportScreenshot(page, menu, [link]),
+        );
+      }
+      expectObservation((await gateway.getRequests("desktop.observe"))[0]?.params, false);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      await page.keyboard.press("Escape");
+      await panel.locator(".desktop-rail__control").click();
+      await expect.poll(() => requestCount(gateway, "desktop.observe")).toBe(2);
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+      expectObservation((await gateway.getRequests("desktop.observe"))[1]?.params, true);
+      await button(panel, "View only").waitFor();
+      await button(panel, "Desktop actions").click();
+      await menu.waitFor();
+      expect(await link.getAttribute("href")).toBe(
+        "/focus/desktop/control/session/agent%3Amain%3Amain",
+      );
+      expect(await link.getAttribute("target")).toBe("_blank");
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
     }));
 
   it("opens the standalone desktop picker in a focused window", () =>

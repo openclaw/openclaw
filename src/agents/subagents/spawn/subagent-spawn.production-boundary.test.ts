@@ -72,7 +72,6 @@ import { resolveSubagentSessionStatus } from "../registry/subagent-session-metri
 import {
   activateSwarmRun,
   closeSwarmScheduler,
-  enqueueSwarmRun,
   holdQueuedSwarmRun,
   releaseSwarmRun,
   reserveSwarmRun,
@@ -80,6 +79,8 @@ import {
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
+import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
@@ -90,11 +91,13 @@ import {
   createEmbeddedRunWaiter,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   prepareIsolatedChildAdmissionProof,
   recordSpawnBoundaryFinal,
-  registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
+import { registerRecoverySpawnCases } from "./subagent-spawn.recovery.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
+import { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { createSpawnBoundaryConfig, throwBoundFailures } from "./subagent-spawn.test-helpers.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
@@ -224,6 +227,11 @@ async function createBoundParent(
     parentSessionKey,
     parentRunId,
     operatorAuthority,
+    // These guest scenarios start with an authenticated human request, not just
+    // an execution grant. Keep its causal facts separate from selected authority.
+    requesterOrigin: guestProfileId
+      ? { sessionKey: parentSessionKey, operatorProfileId: guestProfileId }
+      : undefined,
   });
 }
 
@@ -330,7 +338,7 @@ async function createGuestParent(audit = true) {
   const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
     modelPolicy,
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
-    readCurrentRoleAssignment: () => "guest",
+    readCurrentRoleFacts: () => ({ assignedRole: "guest" }),
   });
   const bound = await createBoundParent(source.authority, {
     guestProfileId: source.authority.profileId,
@@ -352,7 +360,18 @@ describe("recursive spawn production boundary", () => {
     throwBoundFailures,
     runEmbeddedAgent,
   };
+  registerRecoverySpawnCases({
+    ...boundSpawnFixture,
+    stateDir: () => stateDir,
+    waitForEmbeddedRun,
+    settleRootWork: (keepObserving) => settleRootWork(keepObserving),
+  });
   registerNativePluginSpawnCases({
+    ...boundSpawnFixture,
+    settleRootWork: (keepObserving) => settleRootWork(keepObserving),
+    waitForEmbeddedRun,
+  });
+  registerCollectorResultSpawnCases({
     ...boundSpawnFixture,
     settleRootWork: (keepObserving) => settleRootWork(keepObserving),
     waitForEmbeddedRun,
@@ -548,13 +567,7 @@ describe("recursive spawn production boundary", () => {
       failures.push(error);
     } finally {
       childProof.restore();
-      modelRun.resolve({
-        payloads: [{ text: "descendant complete" }],
-        meta: {
-          durationMs: 1,
-          terminalReply: { disposition: "visible", text: "descendant complete" },
-        },
-      });
+      modelRun.resolve(visibleResult("descendant complete"));
       failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
       throwBoundFailures(failures);
     }
@@ -580,18 +593,10 @@ describe("recursive spawn production boundary", () => {
       const bound = await createBoundParent(operatorAuthority);
       const { context, runtime, identities } = await createBoundGateway(bound);
       const groupId = "production-boundary-queued";
-      const capacityStarted = createDeferred();
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "production-boundary-capacity",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          capacityStarted.resolve();
-        },
-        onStartFailure: () => true,
-      });
-      await capacityStarted.promise;
+      await holdSpawnCapacity(
+        JSON.stringify(["main", parentSessionKey, groupId]),
+        "production-boundary-capacity",
+      );
       const releaserInstance = createOperationalRunInstanceRef("capacity-releasing-run");
       const releaserAuthority = claimAgentRunDelegatedAuthority(releaserInstance);
       const modelRun = createDeferred<EmbeddedAgentRunResult>();
@@ -787,13 +792,7 @@ describe("recursive spawn production boundary", () => {
         } catch (error) {
           failures.push(error);
         }
-        modelRun.resolve({
-          payloads: [{ text: "collector complete" }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "collector complete" },
-          },
-        });
+        modelRun.resolve(visibleResult("collector complete"));
         failures.push(
           ...(await closeBoundGateway(bound, runtime, childRunId, () =>
             releaseAgentRunDelegatedAuthority(releaserAuthority),

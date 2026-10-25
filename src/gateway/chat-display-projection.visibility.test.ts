@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
@@ -8,235 +8,152 @@ import { assistantTextMessage } from "./session-history-fixtures.test-support.js
 
 const internalContext = (text: string) =>
   ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", text, "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"].join("\n");
-const userTextMessage = (text: string) => ({
+const userTextMessage = (text: string, seq = 1) => ({
   role: "user",
   content: [{ type: "text", text }],
-  __openclaw: { seq: 1 },
+  __openclaw: { seq },
+});
+const internalMessage = (text: string, sourceTool: string) => ({
+  ...userTextMessage(text),
+  provenance: { kind: "internal_system", sourceTool },
+});
+const mediaMessage = (text: string, seq: number, url: string) => ({
+  ...assistantTextMessage(text, seq),
+  content: [
+    { type: "text", text },
+    { type: "image", source: { type: "url", url } },
+  ],
+});
+const expectProjection = (
+  messages: unknown[],
+  expected: unknown[],
+  options?: Parameters<typeof projectChatDisplayMessages>[1],
+) => expect(projectChatDisplayMessages(messages, options)).toEqual(expected);
+
+it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (pluginId) => {
+  const legacy = pluginId === "legacy-plugin";
+  const metadata = { pluginId, ...(legacy ? {} : { pluginName: "Review Helper" }) };
+  const displayText = "Use the smaller change.";
+  const steering = {
+    ...internalMessage(`Private prefix.\n\n${displayText}`, `plugin:${pluginId}`),
+    display: false,
+    __openclaw: {
+      seq: 2,
+      ...(legacy ? {} : { pluginSteering: { ...metadata, displayText } }),
+    },
+  };
+  const original = structuredClone(steering);
+  const rows = [
+    steering,
+    { ...steering, provenance: { kind: "internal_system", sourceTool: "exec" } },
+    { ...steering, provenance: { kind: "internal_system", sourceTool: "plugin:" } },
+    { ...steering, provenance: { kind: "external_user", sourceTool: `plugin:${pluginId}` } },
+    { ...steering, role: "assistant" },
+  ];
+  expectProjection(rows, []);
+  expectProjection(rows, [], { includePluginSteering: false });
+  expect(projectChatDisplayMessages(rows, { includePluginSteering: true })).toMatchObject([
+    {
+      role: "user",
+      display: true,
+      content: legacy ? steering.content : [{ type: "text", text: displayText }],
+      __openclaw: { pluginSteering: metadata },
+    },
+  ]);
+  expect(steering).toEqual(original);
+  const [capped] = projectChatDisplayMessages([steering], {
+    includePluginSteering: true,
+    maxChars: 8,
+  });
+  expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
 });
 
-describe("internal history display projection", () => {
-  it("projects plugin steering only when requested without changing canonical input", () => {
-    const steering = {
-      ...userTextMessage("Private model-facing steering prefix.\n\nUse the smaller change."),
-      display: false,
-      provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
-      __openclaw: {
-        seq: 2,
-        pluginSteering: {
-          pluginId: "reviewer",
-          pluginName: "Review Helper",
-          displayText: "Use the smaller change.",
-        },
-      },
-    };
-    const original = structuredClone(steering);
-    const unrelated = [
-      { ...steering, provenance: { kind: "internal_system", sourceTool: "exec" } },
-      { ...steering, provenance: { kind: "internal_system", sourceTool: "plugin:" } },
-      { ...steering, provenance: { kind: "external_user", sourceTool: "plugin:reviewer" } },
-      { ...steering, role: "assistant" },
-    ];
-    expect(projectChatDisplayMessages([steering, ...unrelated])).toEqual([]);
-    expect(
-      projectChatDisplayMessages([steering, ...unrelated], { includePluginSteering: true }),
-    ).toMatchObject([
-      {
-        role: "user",
-        display: true,
-        content: [{ type: "text", text: "Use the smaller change." }],
-        __openclaw: {
-          pluginSteering: {
-            pluginId: "reviewer",
-            pluginName: "Review Helper",
-          },
-        },
-      },
-    ]);
-    expect(steering).toEqual(original);
-    const [capped] = projectChatDisplayMessages([steering], {
-      includePluginSteering: true,
-      maxChars: 8,
-    });
-    expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
-  });
-
-  it("derives metadata for older plugin steering rows without guessing plugin-specific prose", () => {
-    const raw = {
-      ...userTextMessage("Legacy plugin prefix\n\nOriginal note"),
-      display: false,
-      provenance: { kind: "internal_system", sourceTool: "plugin:legacy-plugin" },
-    };
-    expect(projectChatDisplayMessages([raw], { includePluginSteering: true })).toMatchObject([
-      {
-        display: true,
-        content: raw.content,
-        __openclaw: { pluginSteering: { pluginId: "legacy-plugin" } },
-      },
-    ]);
-    expect(projectChatDisplayMessages([raw], { includePluginSteering: false })).toEqual([]);
-  });
-
-  it("hides attributed child coordination without hiding peer messages or parent answers", () => {
-    const child = {
-      role: "user",
-      content: "Root accepted the unchanged child report.",
-      provenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:visible-worker",
-        sourceTool: "  sessions_send\t",
-        sourceRole: "subagent",
-      },
-    };
-    const peer = {
-      ...child,
-      content: "Independent peer result.",
-      provenance: { ...child.provenance, sourceRole: undefined },
-    };
-    const answer = assistantTextMessage("The regression is fixed; release checks remain.", 4);
-    expect(
-      projectChatDisplayMessages([
-        child,
-        { ...assistantTextMessage("No state changed.", 2), display: false },
-        peer,
-        answer,
-      ]),
-    ).toEqual([expect.objectContaining({ role: "assistant", content: peer.content }), answer]);
-    expect(child.content).toBe("Root accepted the unchanged child report.");
-  });
-
-  it("strips legacy internal envelopes before exposing history", () => {
-    const projected = projectChatDisplayMessages([
-      userTextMessage(`${internalContext("secret runtime context")}\n\nvisible ask`),
-    ]);
-
-    expect(projected).toMatchObject([{ content: [{ text: "visible ask" }] }]);
-  });
-
-  it("drops internal-only user messages after envelope stripping", () => {
-    const projected = projectChatDisplayMessages([
-      userTextMessage(internalContext("subagent completion payload")),
-      assistantTextMessage("visible answer", 2),
-    ]);
-
-    expect(projected).toEqual([assistantTextMessage("visible answer", 2)]);
-  });
-
-  it.each([
-    "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT",
-    "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT",
-  ])("hides internal exec notifications without suppressing user text: %s", (text) => {
-    const completion = {
-      ...userTextMessage(text),
-      provenance: { kind: "internal_system", sourceTool: " exec " },
-    };
-    const original = structuredClone(completion);
-    const user = { ...userTextMessage(text), provenance: { kind: "external_user" } };
-    const restart = {
-      ...userTextMessage("Gateway restarted during update."),
-      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
-    };
-    const answer = assistantTextMessage("The checks finished. Continuing the task.", 2);
-
-    expect(projectChatDisplayMessages([completion, user, restart, answer])).toEqual([
-      user,
-      restart,
-      answer,
-    ]);
-    expect(completion).toEqual(original);
-  });
-
-  it.each(["subagent_announce", "subagent_settle"])(
-    "drops %s inter-session user messages from projected history",
-    (sourceTool) => {
-      const projected = projectChatDisplayMessages([
-        {
-          ...userTextMessage(
-            [
-              `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
-              "This content was routed by OpenClaw from another session or internal tool.",
-              internalContext("subagent completion payload"),
-            ].join("\n"),
-          ),
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool,
-          },
-        },
-        assistantTextMessage("clean child result", 2),
-      ]);
-
-      expect(projected).toEqual([assistantTextMessage("clean child result", 2)]);
+it("hides attributed child coordination without hiding peer messages or parent answers", () => {
+  const child = {
+    role: "user",
+    content: "Root accepted the unchanged child report.",
+    provenance: {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:visible-worker",
+      sourceTool: "  sessions_send\t",
+      sourceRole: "subagent",
     },
+  };
+  const peer = {
+    ...child,
+    content: "Independent peer result.",
+    provenance: { ...child.provenance, sourceRole: undefined },
+  };
+  const answer = assistantTextMessage("The regression is fixed; release checks remain.", 4);
+  expectProjection(
+    [child, { ...assistantTextMessage("No state changed.", 2), display: false }, peer, answer],
+    [expect.objectContaining({ role: "assistant", content: peer.content }), answer],
   );
+  expect(child.content).toBe("Root accepted the unchanged child report.");
+});
 
-  it("drops generated media completion wakes while retaining final media", () => {
-    const assistantReply = {
-      role: "assistant" as const,
-      content: [
-        { type: "text" as const, text: "Created." },
-        {
-          type: "image" as const,
-          source: { type: "url" as const, url: "/api/chat/media/outgoing/generated.png" },
-        },
-      ],
-      __openclaw: { seq: 2 },
-    };
-    const projected = projectChatDisplayMessages([
-      {
-        ...userTextMessage(
-          [
-            "A background task completed. Use this result to reply normally.",
-            "session_key: image_generate:task-123",
-            'path="/root/.openclaw/media/tool-image-generation/private.png"',
-          ].join("\n"),
-        ),
-        provenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceSessionKey: "image_generate:task-123",
-          sourceTool: "image_generate",
-        },
-      },
-      assistantReply,
-    ]);
+it.each(["visible ask", ""])("strips legacy internal envelopes: %s", (visible) => {
+  const answer = assistantTextMessage("visible answer", 2);
+  expectProjection(
+    [userTextMessage(`${internalContext("private payload")}\n\n${visible}`), answer],
+    [...(visible ? [userTextMessage(visible)] : []), answer],
+  );
+});
 
-    expect(projected).toEqual([assistantReply]);
-    expect(JSON.stringify(projected)).not.toContain("image_generate:task-123");
-    expect(JSON.stringify(projected)).not.toContain("/root/.openclaw/media");
-  });
-
-  it.each(["no_r", "NO_R", "No_Repl"])(
-    "keeps ordinary %s replies visible, including explicit display rows",
-    (text) => {
-      const messages = [
-        assistantTextMessage(text, 1),
-        { role: "assistant", display: true, content: text },
-      ];
-      expect(projectChatDisplayMessages(messages)).toEqual(messages);
+it.each([
+  [" exec ", "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT"],
+  ["subagent_announce", "private child announcement"],
+  ["subagent_settle", "private child settlement"],
+  ["image_generate", 'session_key: image_generate:task-123\npath="/private.png"'],
+])("hides internal %s inputs without hiding authored outcomes", (sourceTool, text) => {
+  const exec = sourceTool.trim() === "exec";
+  const completion = {
+    ...userTextMessage(text),
+    provenance: {
+      kind: exec ? "internal_system" : "inter_session",
+      sourceTool,
     },
-  );
+  };
+  const original = structuredClone(completion);
+  const controls = exec
+    ? [
+        { ...userTextMessage(text), provenance: { kind: "external_user" } },
+        internalMessage("Gateway restarted during update.", "restart-sentinel"),
+      ]
+    : [];
+  const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
+  expectProjection([completion, ...controls, answer], [...controls, answer]);
+  expect(completion).toEqual(original);
+});
 
-  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
-    "requires heartbeat context to hide a truncated reply after %s",
-    (kind, marker) => {
-      for (const prompt of [marker, `${MESSAGE_TOOL_DELIVERY_HINTS[0]} ${marker}`]) {
-        const answer = { role: "assistant", display: true, content: "no_r" };
-        const projected = projectChatDisplayMessages([{ role: "user", content: prompt }, answer]);
-        expect(projected).toEqual(
-          kind === "heartbeat" ? [] : [{ ...answer, __openclaw: { turnBoundary: true } }],
-        );
-      }
-    },
-  );
+it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {
+  const messages = [
+    assistantTextMessage(text, 1),
+    { role: "assistant", display: true, content: text },
+  ];
+  expectProjection(messages, messages);
+});
 
-  it("hides heartbeat prompt and ok acknowledgements from visible history", () => {
-    const projected = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
-        __openclaw: { seq: 1 },
-      },
+it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+  "requires heartbeat context to hide a truncated reply after %s",
+  (kind, marker) => {
+    for (const prompt of [marker, `${MESSAGE_TOOL_DELIVERY_HINTS[0]} ${marker}`]) {
+      const answer = { role: "assistant", display: true, content: "no_r" };
+      expectProjection(
+        [{ role: "user", content: prompt }, answer],
+        kind === "heartbeat" ? [] : [{ ...answer, __openclaw: { turnBoundary: true } }],
+      );
+    }
+  },
+);
+
+it("hides heartbeat prompt and ok acknowledgements from visible history", () => {
+  const answer = assistantTextMessage("Disk usage crossed 95 percent.", 4);
+  expectProjection(
+    [
+      userTextMessage(
+        `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
+      ),
       {
         role: "assistant",
         content: [
@@ -245,39 +162,20 @@ describe("internal history display projection", () => {
         ],
         __openclaw: { seq: 2 },
       },
-      {
-        role: "user",
-        content: HEARTBEAT_PROMPT,
-        __openclaw: { seq: 3 },
-      },
-      assistantTextMessage("Disk usage crossed 95 percent.", 4),
-    ]);
-
-    expect(projected).toEqual([
-      {
-        ...assistantTextMessage("Disk usage crossed 95 percent.", 4),
-        __openclaw: { seq: 4, turnBoundary: true },
-      },
-    ]);
-  });
+      userTextMessage(HEARTBEAT_PROMPT, 3),
+      answer,
+    ],
+    [{ ...answer, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
 });
 
 it.each([
-  [
-    "agent:main:main",
-    {
-      senderLabel: "Forwarded from main",
-      senderSession: { sessionKey: "agent:main:main", agentId: "main" },
-    },
-  ],
-  [
-    "legacy-session",
-    { senderLabel: "Forwarded agent message", senderSession: { sessionKey: "legacy-session" } },
-  ],
-  [undefined, { senderLabel: "Forwarded agent message" }],
+  ["agent:main:main", "main"],
+  ["legacy-session", undefined],
+  [undefined, undefined],
 ] as const)(
   "uses structured forwarding provenance and preserves indentation: %s",
-  (sourceSessionKey, sender) => {
+  (sourceSessionKey, agentId) => {
     const provenance = {
       kind: "inter_session" as const,
       sourceTool: "sessions_send",
@@ -293,7 +191,15 @@ it.each([
       }),
     };
     expect(projectChatDisplayMessages([message])).toStrictEqual([
-      { ...message, role: "assistant", content: body, ...sender },
+      {
+        ...message,
+        role: "assistant",
+        content: body,
+        senderLabel: agentId ? `Forwarded from ${agentId}` : "Forwarded agent message",
+        ...(sourceSessionKey
+          ? { senderSession: { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) } }
+          : {}),
+      },
     ]);
   },
 );
@@ -309,6 +215,37 @@ const provenance = {
   sourceSessionKey: sessionKey,
   sourcePromptPrefix: `[cron:${jobId} Old report]`,
 };
+
+it("keeps scheduled inputs quiet without hiding historical announcements, lookalikes, or delivered media", () => {
+  const input = {
+    ...userTextMessage("[cron:daily Daily check] Check the queue."),
+    provenance: { ...provenance, sourceTool: "cron_execution" },
+  };
+  const announcement = {
+    ...userTextMessage("The historical scheduled result is ready.", 2),
+    provenance,
+  };
+  const human = {
+    ...userTextMessage("[cron:daily Daily check] This is my example.", 3),
+    provenance: { kind: "external_user", sourceTool: "cron_execution" },
+  };
+  const delivered = {
+    ...mediaMessage("The new scheduled result is ready.", 4, "/api/chat/media/outgoing/report.png"),
+    provenance: input.provenance,
+  };
+  const original = structuredClone(input);
+  expectProjection(
+    [input, announcement, human, delivered],
+    [
+      expect.objectContaining({ role: "assistant", content: announcement.content, provenance }),
+      human,
+      delivered,
+    ],
+    { resolveCronJobName: () => "Daily check" },
+  );
+  expectProjection([input], [], { resolveCronJobName: () => "Daily check" });
+  expect(input).toEqual(original);
+});
 
 it("projects only recorded cron envelopes and current labels without changing model input", () => {
   const body = "Check the queue.\n    Keep indentation.";

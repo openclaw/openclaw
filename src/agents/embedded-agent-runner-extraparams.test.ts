@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
 } from "./embedded-agent-runner/extra-params.test-support.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
@@ -20,6 +22,21 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
+function createAuthenticatedNativeSearchConfig(openaiCodex: {
+  enabled: boolean;
+  mode: "live" | "cached";
+  allowedDomains?: string[];
+}) {
+  return {
+    auth: {
+      profiles: {
+        "openai:default": { provider: "openai", mode: "oauth" },
+      },
+    },
+    tools: { web: { search: { enabled: true, openaiCodex } } },
+  };
+}
+
 function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   const call = mock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object" || Array.isArray(call)) {
@@ -30,17 +47,7 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
 
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
-import {
-  createCodexNativeWebSearchWrapper,
-  createOpenAIAttributionHeadersWrapper,
-  createOpenAICompletionsStrictMessageKeysWrapper,
-  createOpenAIReasoningCompatibilityWrapper,
-  createOpenAIResponsesContextManagementWrapper,
-  createOpenAIStringContentWrapper,
-  createOpenAITextVerbosityWrapper,
-  createOpenAIThinkingLevelWrapper,
-  resolveOpenAITextVerbosity,
-} from "../llm/providers/stream-wrappers/openai.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
   applyExtraParamsToAgent,
@@ -69,11 +76,14 @@ function installFullProviderRuntimeDepsForTest() {
     },
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
-      if (params.provider === "openai") {
-        return createTestOpenAIProviderWrapper(params);
-      }
-      if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
-        return createTestOpenAIProviderWrapper(params);
+      if (
+        params.provider === "openai" ||
+        params.provider === "azure-openai" ||
+        params.provider === "azure-openai-responses"
+      ) {
+        return buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn?.(
+          params.context,
+        );
       }
       if (params.provider === "amazon-bedrock") {
         return isAnthropicFamilyCacheTtlEligible({
@@ -125,31 +135,6 @@ function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   }
 }
 
-function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): StreamFn {
-  let streamFn = params.context.streamFn;
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
-
-  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
-  if (textVerbosity) {
-    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
-  }
-
-  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
-    config: params.context.config,
-    agentDir: params.context.agentDir,
-    agentId: params.context.agentId,
-    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
-  });
-  streamFn = createOpenAIStringContentWrapper(streamFn);
-  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
-  return createOpenAIResponsesContextManagementWrapper(
-    createOpenAIReasoningCompatibilityWrapper(
-      createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
-    ),
-    params.context.extraParams,
-  );
-}
-
 beforeEach(() => {
   installFullProviderRuntimeDepsForTest();
 });
@@ -195,24 +180,16 @@ describe("applyExtraParamsToAgent", () => {
     id: string;
     baseUrl: string;
     compat?: OpenAIResponsesWrapperCompat;
-  }): Model<"openai-responses"> => ({
-    api: "openai-responses",
-    provider: params.provider,
-    id: params.id,
-    name: params.id,
-    baseUrl: params.baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 4096,
-    ...(params.compat ? { compat: params.compat } : {}),
-  });
+  }): Model<"openai-responses"> =>
+    makeProviderModelFixture<"openai-responses">({
+      api: "openai-responses",
+      provider: params.provider,
+      id: params.id,
+      baseUrl: params.baseUrl,
+      reasoning: true,
+      contextWindow: 128_000,
+      ...(params.compat ? { compat: params.compat } : {}),
+    });
 
   const captureOpenAIResponsesWrapperReplay = (params: {
     model: Model<"openai-responses">;
@@ -950,28 +927,11 @@ describe("applyExtraParamsToAgent", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "live",
-                allowedDomains: ["example.com"],
-              },
-            },
-          },
-        },
-      },
+      cfg: createAuthenticatedNativeSearchConfig({
+        enabled: true,
+        mode: "live",
+        allowedDomains: ["example.com"],
+      }),
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",
@@ -994,27 +954,10 @@ describe("applyExtraParamsToAgent", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "cached",
-              },
-            },
-          },
-        },
-      },
+      cfg: createAuthenticatedNativeSearchConfig({
+        enabled: true,
+        mode: "cached",
+      }),
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",
@@ -1120,7 +1063,6 @@ describe("applyExtraParamsToAgent", () => {
     const resolvedTransport = resolveExplicitSettingsTransport({
       settingsManager: {
         getGlobalSettings: () => ({ transport: "websocket" }),
-        getProjectSettings: () => ({}),
       },
       sessionTransport: "websocket",
     });
@@ -1174,7 +1116,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveAgentTransportOverride({
         settingsManager: {
           getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
         },
         effectiveExtraParams,
       }),
@@ -1192,7 +1133,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveAgentTransportOverride({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
         },
         effectiveExtraParams,
       }),
@@ -1204,7 +1144,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),
@@ -1213,7 +1152,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),

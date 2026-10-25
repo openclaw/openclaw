@@ -59,6 +59,7 @@ function prepare(overrides: Partial<Parameters<typeof prepareGatewaySubagentRun>
     request: { message: "Continue the child" },
     isOneShotModelRun: false,
     runId,
+    lifecycleStorePath: "/fixture/agents/main/sessions/sessions.json",
     getAdmittedSessionId: () => "child-session",
     assertResumeAdmissionCurrent: vi.fn(),
     context: { logGateway: { warn: vi.fn() } },
@@ -106,16 +107,16 @@ it.each([true, false])(
       }
       return sessionEntry;
     };
-    const preparation = prepare({
+    const prepared = await prepare({
       client: pluginClient(),
       assertResumeAdmissionCurrent: assertCurrent,
     });
+    expect(mocks.registerSubagentRun).not.toHaveBeenCalled();
+    expect(prepared.registerPluginSubagent).toBeTypeOf("function");
+    const preparation = prepared.registerPluginSubagent!();
     admitted = current;
     if (current) {
-      await expect(preparation).resolves.toEqual({
-        pluginSubagent: true,
-        reactivateSubagent: false,
-      });
+      await expect(preparation).resolves.toBeUndefined();
       expect(mocks.registerSubagentRun).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           runId,

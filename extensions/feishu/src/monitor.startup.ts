@@ -18,7 +18,6 @@ type FetchBotOpenIdOptions = {
 
 export type FeishuMonitorBotIdentity = {
   botOpenId?: string;
-  botName?: string;
   source?: "provider" | "cache";
 };
 
@@ -62,13 +61,12 @@ export async function fetchBotIdentityForMonitor(
         botName: result.botName,
       });
     } catch {
-      options.runtime?.log?.(
+      options.runtime?.log(
         `feishu[${account.accountId}]: bot identity cache write failed; continuing startup`,
       );
     }
     return {
       botOpenId: normalizeOptionalString(result.botOpenId),
-      botName: normalizeOptionalString(result.botName),
       source: "provider",
     };
   }
@@ -102,12 +100,12 @@ export async function fetchBotIdentityForMonitor(
     if (!cached) {
       return {};
     }
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh check is unavailable`,
     );
-    return { botOpenId: cached.botOpenId, botName: cached.botName, source: "cache" };
+    return { botOpenId: cached.botOpenId, source: "cache" };
   } catch {
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: bot identity cache read failed; continuing without cached identity`,
     );
     return {};

@@ -1,3 +1,5 @@
+import { isOwnedTranscriptPayload } from "../config/sessions/transcript-json.js";
+import { projectModelContextMessages } from "../shared/model-context-message.js";
 import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
@@ -18,7 +20,7 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
       Reflect.get(prototype, "buffer", value) instanceof SharedArrayBuffer
     );
   }
-  if (value instanceof ArrayBuffer) {
+  if (value instanceof ArrayBuffer || isOwnedTranscriptPayload(value)) {
     return false;
   }
   const webAssemblyMemory = (
@@ -29,11 +31,10 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
   if (
     webAssemblyMemory &&
     value instanceof webAssemblyMemory &&
-    typeof SharedArrayBuffer !== "undefined"
+    typeof SharedArrayBuffer !== "undefined" &&
+    Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer
   ) {
-    if (Reflect.get(webAssemblyMemory.prototype, "buffer", value) instanceof SharedArrayBuffer) {
-      return true;
-    }
+    return true;
   }
   if (seen.has(value)) {
     return false;
@@ -89,8 +90,8 @@ function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = fa
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
-    // The pinned Bun clone omits Error.cause. Validate source data edges too;
-    // accessors are evaluated only once, by the native clone below.
+    // Bun omits Error.cause, so scan unowned source edges too; owned transcript JSON is frozen.
+    // Accessors run only in the native clone; its unowned result is fully scanned below.
     if (containsSharedMemory(value, new Set<object>(), true)) {
       throw new TypeError("shared memory cannot be isolated");
     }
@@ -101,6 +102,86 @@ export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): 
     }
     return cloned;
   } catch (cause) {
+    throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
+  }
+}
+
+/** Copy dispatch envelopes while retaining only payloads sealed by the transcript owner. */
+export function clonePromptHookEvent<T extends { messages: unknown[] }>(
+  hookName: PluginHookName,
+  event: T,
+): T {
+  try {
+    const unowned: unknown[] = [];
+    const positions: Array<{ target: object; key: string }> = [];
+    const isolate = (target: object, key: string, value: unknown, owned = false) => {
+      const kind = typeof value;
+      if (
+        value === null ||
+        (kind !== "object" && kind !== "function" && kind !== "symbol") ||
+        owned
+      ) {
+        return;
+      }
+      unowned.push(value);
+      positions.push({ target, key });
+    };
+    const messages = projectModelContextMessages(event.messages);
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
+      if (message && typeof message === "object") {
+        const prototype = Object.getPrototypeOf(message);
+        if (prototype === Object.prototype || prototype === null) {
+          const original = event.messages[index];
+          const ownedMessage =
+            original && typeof original === "object" && isOwnedTranscriptPayload(original)
+              ? original
+              : undefined;
+          const entries: [string, unknown][] = Object.entries(message);
+          const envelope = Object.fromEntries(entries);
+          for (const [key, value] of entries) {
+            // Projection may replace metadata; only unchanged fields inherit ownership.
+            isolate(
+              envelope,
+              key,
+              value,
+              value !== null &&
+                typeof value === "object" &&
+                ((ownedMessage !== undefined && Reflect.get(ownedMessage, key) === value) ||
+                  isOwnedTranscriptPayload(value)),
+            );
+          }
+          messages[index] = envelope;
+          continue;
+        }
+      }
+      isolate(messages, String(index), message);
+    }
+    const snapshot = { ...event, messages };
+    for (const key of Reflect.ownKeys(snapshot)) {
+      if (typeof key === "symbol") {
+        Reflect.deleteProperty(snapshot, key);
+      } else if (key !== "messages") {
+        isolate(snapshot, key, Reflect.get(snapshot, key));
+      }
+    }
+    if (unowned.length) {
+      // One graph clone preserves aliases among unowned values and native-value checks.
+      const cloned = cloneHookIsolationValue(hookName, unowned);
+      for (const [index, { target, key }] of positions.entries()) {
+        Object.defineProperty(target, key, {
+          value: cloned[index],
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+    return snapshot;
+  } catch (cause) {
+    if (cause instanceof HookIsolationError) {
+      throw cause;
+    }
     throw new HookIsolationError(`[hooks] ${hookName} mutable input isolation failed`, { cause });
   }
 }

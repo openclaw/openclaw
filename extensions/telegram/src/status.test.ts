@@ -9,11 +9,10 @@ import {
   resolveTelegramReactionVariant,
 } from "./status-reaction-variants.js";
 
-function expectIssueMessageContains(
-  issues: ReturnType<typeof collectTelegramStatusIssues>,
-  text: string,
-): void {
-  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
+function expectMessage(message: string | undefined, ...texts: string[]) {
+  for (const text of texts) {
+    expect(message).toContain(text);
+  }
 }
 
 function collectIssues(overrides: Partial<ChannelAccountSnapshot>) {
@@ -42,9 +41,12 @@ describe("collectTelegramStatusIssues", () => {
         expect.objectContaining({ channel: "telegram", accountId: "main", kind: "config" }),
       ]),
     );
-    expectIssueMessageContains(issues, "privacy mode");
-    expectIssueMessageContains(issues, 'uses "*"');
-    expectIssueMessageContains(issues, "unresolvedGroups=2");
+    expectMessage(
+      issues.map((issue) => issue.message).join("\n"),
+      "privacy mode",
+      'uses "*"',
+      "unresolvedGroups=2",
+    );
   });
 
   it("reports unreachable groups with match metadata", () => {
@@ -64,9 +66,12 @@ describe("collectTelegramStatusIssues", () => {
     });
 
     expectRuntimeIssue(issues);
-    expect(issues[0]?.message).toContain("Group -100123 not reachable");
-    expect(issues[0]?.message).toContain("alerts");
-    expect(issues[0]?.message).toContain("channels.telegram.groups");
+    expectMessage(
+      issues[0]?.message,
+      "Group -100123 not reachable",
+      "alerts",
+      "channels.telegram.groups",
+    );
   });
 
   it.each([
@@ -92,8 +97,7 @@ describe("collectTelegramStatusIssues", () => {
       lastError: error,
     });
     expectRuntimeIssue(issues);
-    expect(issues[0]?.message).toContain(message);
-    expect(issues[0]?.message).toContain(error);
+    expectMessage(issues[0]?.message, message, error);
     if (fix) {
       expect(issues[0]?.fix).toContain(fix);
     }
@@ -130,70 +134,41 @@ describe("collectTelegramStatusIssues", () => {
 describe("resolveTelegramAllowedReactions", () => {
   const allowed = (chat: TelegramChatDetails, getChat?: TelegramGetChat) =>
     resolveTelegramAllowedReactions({ chat, chatId: 1, getChat });
-  it("assumes no restriction when chat does not include available_reactions", async () => {
-    expect(await allowed({ id: 1 })).toBeNull();
+  const emoji = (value: "👍" | "🔥" | "❤") => ({ type: "emoji" as const, emoji: value });
+  const custom = (value: string) => ({ type: "custom_emoji" as const, custom_emoji_id: value });
+  const reactions = (available_reactions: TelegramChatDetails["available_reactions"]) => ({
+    available_reactions,
   });
-
-  it("preserves standard and custom reactions while omitting paid reactions", async () => {
-    const result = await allowed({
-      available_reactions: [
-        { type: "emoji", emoji: "👍" },
-        { type: "custom_emoji", custom_emoji_id: "abc" },
-        { type: "emoji", emoji: "🔥" },
-        { type: "paid" },
-      ],
-    });
-    expect(result).toEqual([
-      { type: "emoji", emoji: "👍" },
-      { type: "custom_emoji", custom_emoji_id: "abc" },
-      { type: "emoji", emoji: "🔥" },
-    ]);
-  });
-
-  it("normalizes emoji presentation selectors while retaining custom reactions", async () => {
-    const result = await allowed({
-      available_reactions: [
-        { type: "emoji", emoji: "❤️" },
-        { type: "custom_emoji", custom_emoji_id: "❤️" },
-      ],
-    } as never);
-
-    expect(result).toEqual([
-      { type: "emoji", emoji: "❤" },
-      { type: "custom_emoji", custom_emoji_id: "❤️" },
-    ]);
-  });
-
-  it("treats malformed available_reactions payloads as an empty allowlist instead of throwing", async () => {
-    await expect(
-      allowed({ available_reactions: { type: "emoji", emoji: "👍" } } as never),
-    ).resolves.toEqual([]);
-  });
-
-  it("uses getChat lookup when message chat does not include available_reactions", async () => {
-    const getChat: TelegramGetChat = async () => ({
-      available_reactions: [{ type: "emoji", emoji: "👍" }],
-    });
-
-    const result = await allowed({ id: 1 }, getChat);
-
-    expect(result).toEqual([{ type: "emoji", emoji: "👍" }]);
+  it.each<[string, TelegramChatDetails, unknown, TelegramGetChat?]>([
+    ["missing metadata", { id: 1 }, null],
+    [
+      "standard/custom but not paid",
+      reactions([emoji("👍"), custom("abc"), emoji("🔥"), { type: "paid" }]),
+      [emoji("👍"), custom("abc"), emoji("🔥")],
+    ],
+    [
+      "presentation selectors",
+      reactions([{ type: "emoji", emoji: "❤️" } as never, custom("❤️")]),
+      [emoji("❤"), custom("❤️")],
+    ],
+    ["malformed payload", { available_reactions: emoji("👍") } as never, []],
+    ["getChat fallback", { id: 1 }, [emoji("👍")], async () => reactions([emoji("👍")])],
+  ])("resolves allowed reactions from %s", async (_name, chat, expected, getChat) => {
+    await expect(allowed(chat, getChat)).resolves.toEqual(expected);
   });
 });
 
 describe("resolveTelegramReactionVariant", () => {
   it("returns undefined when no candidate is chat-allowed", () => {
-    const variantsByEmoji = buildTelegramStatusReactionVariants({
-      ...DEFAULT_EMOJIS,
-      coding: "👨‍💻",
-    });
-
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "👨‍💻",
-      variantsByRequestedEmoji: variantsByEmoji,
-      allowedEmojiReactions: new Set(["🎉"]),
-    });
-
-    expect(result).toBeUndefined();
+    expect(
+      resolveTelegramReactionVariant({
+        requestedEmoji: "👨‍💻",
+        variantsByRequestedEmoji: buildTelegramStatusReactionVariants({
+          ...DEFAULT_EMOJIS,
+          coding: "👨‍💻",
+        }),
+        allowedEmojiReactions: new Set(["🎉"]),
+      }),
+    ).toBeUndefined();
   });
 });

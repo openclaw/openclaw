@@ -4,6 +4,7 @@ import { describe, expect } from "vitest";
 import { createCommandTest, type CommandFixture } from "./helpers/command-fixture.js";
 
 const it = createCommandTest();
+const nodePath = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
 
 function fixture(command: CommandFixture) {
   const root = command.createTempDir("docker-activation-");
@@ -36,7 +37,7 @@ if (args.includes('doctor')) {
     command.run(process.execPath, [path.join(root, "docker-entrypoint.mjs"), ...argv], {
       cwd: root,
       env: {
-        PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        PATH: nodePath,
         HOME: root,
         TMPDIR: root,
         RECORD: record,
@@ -71,27 +72,22 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { args: ["openclaw.mjs", "--dev", "gateway"], rootOptions: ["--dev"] },
     { args: ["openclaw.mjs", "gateway", "--dev"], rootOptions: [] },
     { args: ["openclaw.mjs", "gateway", "--token", "--reset"], rootOptions: [] },
-  ])(
-    "settles Doctor then execs the original command: $args",
-    async ({ args, rootOptions, installed }, { command }) => {
-      const f = fixture(command);
-      if (installed) {
-        fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
-      }
-      const result = installed
-        ? await f.runCommand(args, {
-            PATH: `${f.root}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
-          })
-        : await f.run(args);
-      expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
-      const rows = f.read();
-      expect(rows.map((row) => row.args)).toEqual([
-        [...rootOptions, "doctor", "--fix", "--non-interactive"],
-        args.slice(1),
-      ]);
-      expect(rows[1].pid).toBe(rows[0].parentPid);
-    },
-  );
+  ])("execs after Doctor: $args", async ({ args, rootOptions, installed }, { command }) => {
+    const f = fixture(command);
+    if (installed) {
+      fs.symlinkSync("openclaw.mjs", path.join(f.root, "openclaw"));
+    }
+    const result = installed
+      ? await f.runCommand(args, { PATH: `${f.root}:${nodePath}` })
+      : await f.run(args);
+    expect(result, result.stderr).toMatchObject({ status: 0, signal: null, error: undefined });
+    const rows = f.read();
+    expect(rows.map((row) => row.args)).toEqual([
+      [...rootOptions, "doctor", "--fix", "--non-interactive"],
+      args.slice(1),
+    ]);
+    expect(rows[1].pid).toBe(rows[0].parentPid);
+  });
 
   it.for(
     [
@@ -102,23 +98,22 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
       ["gateway", "--dev", "--reset"],
       ["gateway", "--", "--profile", "literal"],
     ].map((args) => ({ args })),
-  )("passes through without an activation repair: $args", async ({ args }, { command }) => {
+  )("skips Doctor: $args", async ({ args }, { command }) => {
     const f = fixture(command);
     expect((await f.run(["openclaw.mjs", ...args])).status).toBe(0);
     expect(f.read().map((row) => row.args)).toEqual([args]);
   });
 
   it.for(["-0", "NAME=value"])(
-    "does not interpret an arbitrary command as env syntax: %s",
+    "treats %s as a command, not env syntax",
     async (name, { command }) => {
       const f = fixture(command);
       const result = await f.runCommand([name]);
-      expect(result.status).toBe(127);
-      expect(result.stdout).toBe("");
+      expect(result).toMatchObject({ status: 127, stdout: "" });
     },
   );
 
-  it("skips a PATH directory and executes the original arbitrary command", async ({ command }) => {
+  it("skips directories in PATH", async ({ command }) => {
     const f = fixture(command);
     const first = path.join(f.root, "first");
     const second = path.join(f.root, "second");
@@ -126,12 +121,8 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     fs.mkdirSync(second);
     fs.mkdirSync(path.join(first, "activation-command"));
     fs.symlinkSync(process.execPath, path.join(second, "activation-command"));
-    const result = await f.runCommand(
-      ["activation-command", "-e", "process.stdout.write('unchanged')"],
-      {
-        PATH: `${first}:${second}`,
-      },
-    );
+    const args = ["activation-command", "-e", "process.stdout.write('unchanged')"];
+    const result = await f.runCommand(args, { PATH: `${first}:${second}` });
     expect(result).toMatchObject({ status: 0, stdout: "unchanged", error: undefined });
   });
 
@@ -141,29 +132,24 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
     { signal: "SIGINT", forwarded: "SIGINT", status: 130 },
     { signal: "SIGHUP", forwarded: "SIGTERM", status: 129 },
     { signal: "SIGQUIT", forwarded: "SIGTERM", status: 131 },
-  ])(
-    "settles Doctor's non-success status $status without starting Gateway",
-    async ({ signal, forwarded, status }, { command }) => {
-      const f = fixture(command);
-      const env: Record<string, string> = signal
-        ? { INTERRUPT_DOCTOR: signal }
-        : { DOCTOR_EXIT: "78" };
-      expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
-      expect(f.read()).toEqual([
-        {
-          args: ["doctor", "--fix", "--non-interactive"],
-          pid: expect.any(Number),
-          parentPid: expect.any(Number),
-          marker: expect.any(String),
-        },
-        ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
-      ]);
-    },
-  );
+  ])("stops after Doctor exits $status", async ({ signal, forwarded, status }, { command }) => {
+    const f = fixture(command);
+    const env: Record<string, string> = signal
+      ? { INTERRUPT_DOCTOR: signal }
+      : { DOCTOR_EXIT: "78" };
+    expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
+    expect(f.read()).toEqual([
+      {
+        args: ["doctor", "--fix", "--non-interactive"],
+        pid: expect.any(Number),
+        parentPid: expect.any(Number),
+        marker: expect.any(String),
+      },
+      ...(forwarded ? [{ stopped: true, signal: forwarded }] : []),
+    ]);
+  });
 
-  it("gives Doctor one container-local capture marker per activation selection", async ({
-    command,
-  }) => {
+  it("scopes Doctor capture markers to the activation", async ({ command }) => {
     const f = fixture(command);
     // An inherited path never replaces the marker this container's activation owns.
     const inherited = { OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/elsewhere/marker" };

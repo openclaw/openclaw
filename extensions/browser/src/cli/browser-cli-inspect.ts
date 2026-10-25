@@ -7,7 +7,7 @@ import {
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SnapshotResult } from "../browser/client.js";
@@ -31,9 +31,7 @@ function parseOptionalIntegerOption(
   const parsed =
     opts.min === 0 ? parseStrictNonNegativeInteger(value) : parseStrictPositiveInteger(value);
   if (parsed === undefined || parsed < opts.min) {
-    defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`Invalid ${label}: must be an integer >= ${opts.min}`);
   }
   return parsed;
 }
@@ -42,14 +40,12 @@ function parseBrowserChoiceOption<const T extends string>(
   value: string,
   label: string,
   choices: readonly T[],
-): T | undefined {
+): T {
   const choice = choices.find((candidate) => candidate === value);
   if (choice !== undefined) {
     return choice;
   }
-  defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
-  defaultRuntime.exit(1);
-  return undefined;
+  throw new Error(`Invalid ${label}: expected ${choices.join(" or ")}`);
 }
 
 function resolveBrowserInspectTimeout(
@@ -90,9 +86,6 @@ export function registerBrowserInspectCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const type = parseBrowserChoiceOption(opts.type, "--type", ["png", "jpeg"]);
-      if (type === undefined) {
-        return;
-      }
       await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const result = await callBrowserRequest<{ path: string }>(request.parent, {
@@ -138,16 +131,10 @@ export function registerBrowserInspectCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = parseBrowserChoiceOption(opts.format, "--format", ["aria", "ai"]);
-      if (format === undefined) {
-        return;
-      }
       const explicitMode =
         opts.mode === undefined
           ? undefined
           : parseBrowserChoiceOption(opts.mode, "--mode", ["efficient"]);
-      if (opts.mode !== undefined && explicitMode === undefined) {
-        return;
-      }
       const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
         !formatWasExplicit &&
@@ -159,12 +146,6 @@ export function registerBrowserInspectCommands(
         opts.efficient === true || explicitMode === "efficient" ? "efficient" : configMode;
       const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
       const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
-      if (
-        (opts.limit !== undefined && limit === undefined) ||
-        (opts.depth !== undefined && depth === undefined)
-      ) {
-        return;
-      }
       await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {

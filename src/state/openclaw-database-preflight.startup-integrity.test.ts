@@ -100,7 +100,15 @@ it.each(["legacy", "malformed", "unknown-policy"])(
               .update(OPENCLAW_AGENT_SCHEMA_SQL)
               .digest("hex")
           : "unknown-policy";
-      expect(writeSqliteCleanCloseSeal(agentPath, identity, file, seal)).toBe(true);
+      expect(
+        writeSqliteCleanCloseSeal(agentPath, identity, file, {
+          ...seal,
+          identity:
+            kind === "legacy"
+              ? undefined
+              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
+        }),
+      ).toBe(true);
     }
     retireSqliteDatabaseAdmissionForPath(agentPath);
     expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
@@ -356,4 +364,17 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
   expect(readAgentDatabaseAdmissionRefusal("worker", { env: fixture.env })).toMatchObject({
     embeddedOwnerId: "foreign",
   });
+});
+
+it("names the failing state database when startup admission hits a corrupted store", async () => {
+  const fixture = databaseFixture(tempDirs.make("startup-state-corruption-"));
+  fixture.state();
+  closeDatabases();
+  fs.writeFileSync(fixture.statePath, "corrupted store bytes");
+  const admission = fixture.ready({}, "gateway-startup");
+  await expect(admission).rejects.toMatchObject({
+    code: "ERR_SQLITE_ERROR",
+    message: expect.stringContaining(fixture.statePath),
+  });
+  await expect(admission).rejects.toThrow(/not a database|disk image is malformed/iu);
 });

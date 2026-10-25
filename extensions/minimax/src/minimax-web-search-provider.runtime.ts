@@ -35,24 +35,8 @@ const MINIMAX_TOKEN_PLAN_ENV_VARS = [
   "MINIMAX_OAUTH_TOKEN",
 ] as const;
 
-type MiniMaxSearchResult = {
-  title?: string;
-  link?: string;
-  snippet?: string;
-  date?: string;
-};
-
 type MiniMaxRelatedSearch = {
   query?: string;
-};
-
-type MiniMaxSearchResponse = {
-  organic?: MiniMaxSearchResult[];
-  related_searches?: MiniMaxRelatedSearch[];
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
 };
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
@@ -99,78 +83,6 @@ function resolveMiniMaxEndpoint(
     : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
 }
 
-async function runMiniMaxSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  endpoint: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}): Promise<{
-  results: Array<Record<string, unknown>>;
-  relatedSearches?: string[];
-}> {
-  return withTrustedWebSearchEndpoint(
-    {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${params.apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ q: params.query }),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        throw await createProviderHttpError(res, "MiniMax Search API error");
-      }
-
-      const data = await readProviderJsonResponse<MiniMaxSearchResponse>(
-        res,
-        "MiniMax Search API error",
-      );
-
-      if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
-        throw new Error(
-          formatProviderHttpErrorMessage({
-            label: "MiniMax Search API error",
-            status: data.base_resp.status_code,
-            detail: data.base_resp.status_msg || "unknown error",
-          }),
-        );
-      }
-
-      const organic = Array.isArray(data.organic) ? data.organic : [];
-      const results = organic.slice(0, params.count).map((entry) => {
-        const title = entry.title ?? "";
-        const url = entry.link ?? "";
-        const snippet = entry.snippet ?? "";
-        return {
-          title: title ? wrapWebContent(title, "web_search") : "",
-          url,
-          description: snippet ? wrapWebContent(snippet, "web_search") : "",
-          published: entry.date || undefined,
-          siteName: resolveSiteName(url) || undefined,
-        };
-      });
-
-      const relatedSearches = Array.isArray(data.related_searches)
-        ? data.related_searches
-            .map((r) => r.query)
-            .filter((q): q is string => typeof q === "string" && q.length > 0)
-            .map((q) => wrapWebContent(q, "web_search"))
-        : undefined;
-
-      return { results, relatedSearches };
-    },
-  );
-}
-
 function missingMiniMaxKeyPayload() {
   return {
     error: "missing_minimax_api_key",
@@ -214,14 +126,74 @@ export async function executeMiniMaxWebSearchProviderTool(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
 
-  const { results, relatedSearches } = await runMiniMaxSearch({
-    query,
-    count: resolvedCount,
-    apiKey,
-    endpoint,
-    timeoutSeconds,
-    signal,
-  });
+  const { results, relatedSearches } = await withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds,
+      signal,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ q: query }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        throw await createProviderHttpError(res, "MiniMax Search API error");
+      }
+
+      const data = await readProviderJsonResponse<{
+        organic?: {
+          title?: string;
+          link?: string;
+          snippet?: string;
+          date?: string;
+        }[];
+        related_searches?: MiniMaxRelatedSearch[];
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>(res, "MiniMax Search API error");
+
+      if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
+        throw new Error(
+          formatProviderHttpErrorMessage({
+            label: "MiniMax Search API error",
+            status: data.base_resp.status_code,
+            detail: data.base_resp.status_msg || "unknown error",
+          }),
+        );
+      }
+
+      const organic = Array.isArray(data.organic) ? data.organic : [];
+      const searchResults = organic.slice(0, resolvedCount).map((entry) => {
+        const title = entry.title ?? "";
+        const url = entry.link ?? "";
+        const snippet = entry.snippet ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: snippet ? wrapWebContent(snippet, "web_search") : "",
+          published: entry.date || undefined,
+          siteName: resolveSiteName(url) || undefined,
+        };
+      });
+
+      const relatedQueries = Array.isArray(data.related_searches)
+        ? data.related_searches
+            .map((r) => r.query)
+            .filter((q): q is string => typeof q === "string" && q.length > 0)
+            .map((q) => wrapWebContent(q, "web_search"))
+        : undefined;
+
+      return { results: searchResults, relatedSearches: relatedQueries };
+    },
+  );
 
   signal?.throwIfAborted();
   const payload: Record<string, unknown> = {

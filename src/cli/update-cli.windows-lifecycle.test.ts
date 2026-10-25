@@ -58,10 +58,7 @@ import {
   updateFinalizeCommand,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
-import {
-  recoveryVerificationStep,
-  registerFailureSelectorTests,
-} from "./update-cli/update-cli-failure-recovery.test-support.js";
+import { registerFailureSelectorTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
   writeNpmPackageInstall,
@@ -108,6 +105,20 @@ beforeAll(async () => {
   resetNativeLoader = resetLoader;
 });
 afterAll(() => resetNativeLoader?.());
+
+// Queries still use schtasks; enabled-state mutations use the native COM adapter.
+function scheduledTaskAction(argv: readonly string[]): string | undefined {
+  if (argv[0] === "schtasks") {
+    return argv.at(-1);
+  }
+  const encodedIndex = argv.indexOf("-EncodedCommand");
+  if (path.win32.basename(argv[0] ?? "").toLowerCase() !== "powershell.exe" || encodedIndex < 0) {
+    return undefined;
+  }
+  const script = Buffer.from(argv[encodedIndex + 1] ?? "", "base64").toString("utf16le");
+  const enabled = /^\$task\.Enabled=\$(true|false)$/mu.exec(script)?.[1];
+  return enabled === undefined ? undefined : enabled === "true" ? "/ENABLE" : "/DISABLE";
+}
 
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
@@ -295,23 +306,24 @@ describe("update-cli", () => {
         if (argv[0] === "git" && argv[argv.indexOf("-C") + 2] === "rev-parse") {
           return commandResult({ stdout: `${root}\n` });
         }
-        if (argv[0] !== "schtasks") {
+        const action = scheduledTaskAction(argv);
+        if (action === undefined) {
           return await configuredRunCommand(argv, options);
         }
         nativeCommands.push([...argv]);
-        if (argv[1] === "/Query") {
+        if (action === "/XML") {
           return commandResult({
             stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
           });
         }
-        if (argv.at(-1) === "/DISABLE") {
+        if (action === "/DISABLE") {
           taskEnabled = false;
           return !stopFailure
             ? commandResult({ code: 1, stderr: "disable timed out after commit" })
             : commandResult();
         }
         if (fault === "suspension-spawn") {
-          throw new Error("spawn schtasks EACCES: enable denied");
+          throw new Error("spawn PowerShell EACCES: enable denied");
         }
         if (fault === "stop-enable-committed") {
           taskEnabled = true;
@@ -345,7 +357,7 @@ describe("update-cli", () => {
       ).catch((error: unknown) => error);
 
       expect(
-        nativeCommands.map((argv) => argv.at(-1)),
+        nativeCommands.map(scheduledTaskAction),
         `${String(reportedError)}\n${getErrorOutput()}`,
       ).toEqual([
         "/XML",
@@ -359,7 +371,7 @@ describe("update-cli", () => {
         const nativeOrder = (action: string) => {
           const index = vi
             .mocked(runCommandWithTimeout)
-            .mock.calls.findIndex(([argv]) => argv[0] === "schtasks" && argv.at(-1) === action);
+            .mock.calls.findIndex(([argv]) => scheduledTaskAction(argv) === action);
           return requireValue(
             vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[index],
             `${action} order`,
@@ -377,25 +389,31 @@ describe("update-cli", () => {
         version: "1.0.0",
       });
       expect(serviceRestart).not.toHaveBeenCalled();
+      expect(freshRestartCalls()).toEqual([]);
       expect(triageCommand).toHaveBeenCalledOnce();
       expect(reportedError).toEqual(new ExitError(1));
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(triageCommand.mock.calls[0]?.[1]?.recovery).toMatchObject({
+      const recovery = triageCommand.mock.calls[0]?.[1]?.recovery;
+      // Native preparation failed before a service stop or package activation;
+      // triage retains the autostart error without claiming verified readiness.
+      expect(recovery).toHaveProperty("updateFailure.result.verification", {});
+      expect(recovery).toMatchObject({
         target,
         updateFailure: {
           result: {
             status: "error",
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-            verification: {
-              runningVersion: "1.0.0",
-              versionMatch: true,
-              readyz: true,
-              settled: true,
-            },
             steps: [
               expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
               expect.objectContaining({ stderrTail: expect.stringContaining("enable denied") }),
-              recoveryVerificationStep(undefined, root),
+              {
+                name: "gateway recovery observation",
+                command: "gateway verification",
+                cwd: root,
+                durationMs: 0,
+                exitCode: 0,
+                diagnostics: [expect.stringContaining("No service was stopped or started.")],
+              },
             ],
           },
         },
@@ -458,19 +476,19 @@ describe("update-cli", () => {
         activateTask();
       });
       vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-        if (argv[0] !== "schtasks") {
+        const action = scheduledTaskAction(argv);
+        if (action === undefined) {
           if (argv[2] === "gateway" && ["install", "start", "restart"].includes(argv[3] ?? "")) {
             activateTask();
           }
           return configuredRunCommand(argv, options);
         }
-        const action = argv.at(-1);
-        if (argv[1] === "/Query") {
+        if (action === "/XML") {
           return commandResult({
             stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
           });
         }
-        nativeActions.push(action ?? "");
+        nativeActions.push(action);
         if (action === "/DISABLE") {
           disables += 1;
           taskEnabled = false;
@@ -638,7 +656,7 @@ describe("update-cli", () => {
     expect(
       vi
         .mocked(runCommandWithTimeout)
-        .mock.calls.some(([argv]) => argv[0] === "schtasks" && argv.includes("/ENABLE")),
+        .mock.calls.some(([argv]) => scheduledTaskAction(argv) === "/ENABLE"),
     ).toBe(false);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
@@ -694,7 +712,7 @@ describe("update-cli", () => {
         async (
           _env,
           options: Parameters<
-            typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+            typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate
           >[1],
         ) => {
           await options?.beforeMutation?.();

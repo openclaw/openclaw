@@ -3,10 +3,12 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 
@@ -22,14 +24,18 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-it.each([
+const snapshotCases = [
   { current: true, runtimeReady: true, noOp: true, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: false },
   { current: true, runtimeReady: false, noOp: false, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: true },
+];
+it.each([
+  ...snapshotCases.map((entry) => Object.assign({ backupShortfall: false }, entry)),
+  { current: false, runtimeReady: true, noOp: false, reportingFails: false, backupShortfall: true },
 ])(
-  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails)",
-  async ({ current, runtimeReady, noOp, reportingFails }) => {
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails, backupShortfall=$backupShortfall)",
+  async ({ current, runtimeReady, noOp, reportingFails, backupShortfall }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -44,7 +50,7 @@ it.each([
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
       await fs.writeFile(
         path.join(root, "package.json"),
-        '{"name":"openclaw","version":"2026.9.1"}',
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
       );
       await fs.writeFile(path.join(root, "openclaw.mjs"), "export {};\n");
       await fs.writeFile(path.join(root, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
@@ -65,21 +71,26 @@ it.each([
         target = await git(root, "rev-parse", "HEAD");
         await git(root, "checkout", "--detach", before);
       }
+      if (backupShortfall) {
+        const file = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        using db = openNodeSqliteDatabase(file);
+        db.exec(
+          "CREATE TABLE evidence(value BLOB); INSERT INTO evidence VALUES(zeroblob(16777216))",
+        );
+      }
       const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
         targetPath,
         checkedPath: targetPath,
-        availableBytes: 0,
+        availableBytes: backupShortfall
+          ? (targetPath === path.join(root, ".artifacts") ? 100 : 160) * 1024 ** 2
+          : 0,
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
-      const candidateCommand = vi.fn(() => ({
-        stdout: "",
-        stderr: "synthetic stop before candidate package commands",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      }));
+      const candidateCommand = vi.fn(() =>
+        createCommandResult({ stderr: "unexpected candidate command", code: 1 }),
+      );
       vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
         argv[0] === "git" ? runCommand(argv, options) : Promise.resolve(candidateCommand()),
       );
@@ -96,10 +107,11 @@ it.each([
         },
       );
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const capacityStep = { name: "snapshot-space-preflight", exitCode: 1 };
       const originalArgv = process.argv;
       process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
       try {
-        const outcome = await updateGitInstall({
+        const update = updateGitInstall({
           root,
           switchToGit: false,
           installKind: "git",
@@ -114,27 +126,11 @@ it.each([
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-        }).then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
-        const headCommandOptions = vi
-          .mocked(processRunner.runCommandWithTimeout)
-          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
-        expect(
-          typeof headCommandOptions === "number"
-            ? headCommandOptions
-            : headCommandOptions?.timeoutMs,
-        ).toBe(20 * 60_000);
+        });
         if (reportingFails) {
-          expect("error" in outcome).toBe(true);
-          const errors = collectNestedErrorCandidates(
-            "error" in outcome ? outcome.error : undefined,
-          );
+          const errors = await update.then(() => [], collectNestedErrorCandidates);
           expect(errors).toContain(reportingError);
-          expect(onStepComplete).toHaveBeenCalledWith(
-            expect.objectContaining({ name: "snapshot-space-preflight", exitCode: 1 }),
-          );
+          expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(capacityStep));
           expect(errors).toContainEqual(
             expect.objectContaining({
               exitCode: 1,
@@ -152,24 +148,24 @@ it.each([
             }),
           );
         } else {
-          if ("error" in outcome) {
-            throw outcome.error;
-          }
-          const { result } = outcome;
+          const result = await update;
           expect(result).toMatchObject(
             noOp
               ? { status: "skipped", reason: "already-current" }
               : { status: "error", reason: "snapshot-capacity-insufficient" },
           );
           if (!noOp) {
-            expect(result.steps).toContainEqual(
-              expect.objectContaining({
-                name: "snapshot-space-preflight",
-                exitCode: 1,
-              }),
-            );
+            expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
           }
         }
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
         expect(capacity.mock.calls.length === 0).toBe(noOp);
         expect(getSnapshotSource).toHaveBeenCalledTimes(noOp ? 0 : 1);
         expect(
@@ -177,11 +173,13 @@ it.each([
             ([prefix]) => prefix.includes("update-preflight-") || prefix.includes("ocu-pf-"),
           ),
         ).toBe(false);
-        expect(candidateCommand).not.toHaveBeenCalled();
-        expect(beforeGitMutation).not.toHaveBeenCalled();
-        expect(validateCandidate).not.toHaveBeenCalled();
+        expect(
+          [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
+        ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
-        expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(
+          backupShortfall ? ["agents", "openclaw.json"] : ["openclaw.json"],
+        );
       } finally {
         process.argv = originalArgv;
       }

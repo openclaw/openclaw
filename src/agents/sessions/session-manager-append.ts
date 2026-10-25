@@ -22,6 +22,7 @@ import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transc
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import type { PreparedModelPromptProjection } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -75,6 +76,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     entry: T,
     options?: AppendPersistenceOptions,
     preserveParent = false,
+    modelPromptProjection?: PreparedModelPromptProjection,
   ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
@@ -149,6 +151,8 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
             canonical.message.role === "user" ||
             message?.validateTurn === true,
           assertNavigation,
+          undefined,
+          modelPromptProjection?.intent,
         );
         try {
           this.assertTranscriptWriteActive();
@@ -162,7 +166,15 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
             assertNavigation();
           }
-          return await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+          const adopted = await this.adoptWorkerCommittedEntry(
+            canonical,
+            committed,
+            admittedUserId,
+          );
+          if (committed.modelPromptProjection) {
+            await modelPromptProjection?.onCommitted(committed.modelPromptProjection);
+          }
+          return adopted;
         } catch (cause) {
           if (committed.result?.appended === false) {
             // A replay refusal has no newly committed transcript row to recover.
@@ -392,6 +404,17 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (initialModel && !needsReload) {
       this.adoptPersistedEntry(initialModel, undefined, admittedUserId, adoptReload);
     }
+    const projection = committed.modelPromptProjection;
+    if (projection && !needsReload) {
+      const previous = this.byId.get(projection.messageId);
+      if (previous?.type === "message") {
+        const rewritten = { ...previous, message: projection.message };
+        this.byId.set(previous.id, rewritten);
+        this.fileEntries = this.fileEntries.map((candidate) =>
+          candidate === previous ? rewritten : candidate,
+        );
+      }
+    }
     return this.adoptPersistedEntry(entry, committed.result, admittedUserId, adoptReload);
   }
 
@@ -544,7 +567,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         entries: this.byId,
         parentId: this.appendParentId,
         remainingAncestors: includeOmitted
-          ? (this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size)
+          ? this.boundedContextLimits && "maxEvents" in this.boundedContextLimits
+            ? this.boundedContextLimits.maxEvents
+            : this.byId.size + this.opaqueParentsById.size
           : this.byId.size,
         isInterruptedTail,
       },
@@ -566,7 +591,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           entries: this.byId,
           parentId: this.appendParentId,
           remainingAncestors:
-            this.boundedContextLimits?.maxEvents ?? this.byId.size + this.opaqueParentsById.size,
+            this.boundedContextLimits && "maxEvents" in this.boundedContextLimits
+              ? this.boundedContextLimits.maxEvents
+              : this.byId.size + this.opaqueParentsById.size,
           isInterruptedTail,
           pendingDeliberateAppend: this.pendingDeliberateAppend,
         };

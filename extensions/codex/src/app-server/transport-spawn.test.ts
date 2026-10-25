@@ -55,12 +55,9 @@ describe("Codex app-server OS launch failure", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32").each([
-    ["initialize", true],
-    ["registration", true],
-  ] as const)(
-    "retains native EACCES ahead of large spawn arguments during %s (stderr after exit: %s)",
-    async (phase, holdStderrUntilExit) => {
+  it.runIf(process.platform !== "win32").each(["initialize", "registration"])(
+    "retains native EACCES ahead of large spawn arguments during %s with stderr after exit",
+    async (phase) => {
       const root = tempDirs.make("codex-launcher-failure-");
       const installedLauncher = createRequire(import.meta.url).resolve(
         "@openai/codex/bin/codex.js",
@@ -93,7 +90,7 @@ describe("Codex app-server OS launch failure", () => {
       const spawn = vi.spyOn(childProcess, "spawn");
       try {
         registration.rejectOnExit = phase === "registration";
-        registration.holdStderrUntilExit = holdStderrUntilExit;
+        registration.holdStderrUntilExit = true;
         const failure = await (async () => {
           if (phase === "registration") {
             await createStdioTransport(options);

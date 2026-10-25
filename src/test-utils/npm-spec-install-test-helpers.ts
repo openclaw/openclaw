@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
 import { npmCommandArgs } from "./npm-command.js";
 
 function failure(label: string, overrides: Partial<SpawnResult>, expectedDetail: string) {
@@ -51,8 +48,6 @@ type NpmViewMetadata = {
   integrity?: string;
   shasum?: string;
 };
-type NpmPackMetadata = Required<NpmViewMetadata> & { id: string; filename: string };
-
 type CommandMock = {
   mockImplementation: (
     implementation: (
@@ -75,36 +70,16 @@ export function createCommandResult(overrides: Partial<SpawnResult> = {}): Spawn
   };
 }
 
-function mockNpmMetadata(
-  run: CommandMock,
-  command: "view" | "pack",
-  metadata: (options: number | CommandOptions) => unknown,
-) {
-  run.mockImplementation(async (argv, options) => {
-    if (npmCommandArgs(argv)?.[0] !== command) {
+export function mockNpmViewMetadataResult(run: CommandMock, metadata: NpmViewMetadata) {
+  // Preserve the command callback's arity even though view does not inspect options.
+  run.mockImplementation(async (argv, _options) => {
+    if (npmCommandArgs(argv)?.[0] !== "view") {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     }
-    return createCommandResult({ stdout: JSON.stringify(metadata(options)) });
-  });
-}
-export function mockNpmViewMetadataResult(run: CommandMock, metadata: NpmViewMetadata) {
-  mockNpmMetadata(run, "view", () => {
     const { name, version, integrity, shasum } = metadata;
-    return { name, version, dist: { integrity, shasum } };
-  });
-}
-
-export function mockNpmPackMetadataResult(run: CommandMock, metadata: NpmPackMetadata) {
-  mockNpmMetadata(run, "pack", (optionsOrTimeout) => {
-    const cwd =
-      typeof optionsOrTimeout === "object" && optionsOrTimeout !== null
-        ? optionsOrTimeout.cwd
-        : undefined;
-    if (cwd) {
-      fs.writeFileSync(path.join(cwd, metadata.filename), "");
-    }
-
-    return [metadata];
+    return createCommandResult({
+      stdout: JSON.stringify({ name, version, dist: { integrity, shasum } }),
+    });
   });
 }
 
@@ -123,24 +98,5 @@ export function expectIntegrityDriftRejected(params: {
   expect(params.result).toMatchObject({
     ok: false,
     error: expect.stringContaining("integrity drift"),
-  });
-}
-
-export async function expectInstallUsesIgnoreScripts(params: {
-  run: {
-    mockResolvedValue: (value: SpawnResult) => unknown;
-    mock: { calls: unknown[][] };
-  };
-  install: () => Promise<{ ok: true; targetDir: string } | { ok: false; error?: string }>;
-}) {
-  params.run.mockResolvedValue(createCommandResult());
-  const result = await params.install();
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    return;
-  }
-  expectSingleNpmInstallIgnoreScriptsCall({
-    calls: params.run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-    expectedTargetDir: result.targetDir,
   });
 }

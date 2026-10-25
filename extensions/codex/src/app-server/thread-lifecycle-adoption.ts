@@ -206,9 +206,6 @@ async function preparePendingCodexThreadResume(
   ) {
     throw fail("configuration adoption requires an OpenClaw-owned local Codex home");
   }
-  if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-    throw fail("the thread is claimed by active work; stop that run before resuming");
-  }
   const assertCurrent = captureCodexThreadResumeAuthority(params, binding, "native-process");
   assertCurrent();
   const { thread } = await params.client.request(

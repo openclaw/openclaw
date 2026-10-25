@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   buildInterSessionPromptContext,
   type InputProvenance,

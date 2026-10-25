@@ -22,6 +22,7 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciDispatcherStreamTimeouts,
@@ -34,7 +35,6 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -78,6 +78,7 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
 export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.initialize");
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
@@ -114,7 +115,9 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     );
   };
 
+  phases.mark("attempt.setup.workspace");
   const workspace = await resolveAttemptWorkspaceSandbox(params);
+  phases.mark("attempt.setup.finalize");
   const { effectiveWorkspace } = workspace;
 
   const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
@@ -288,6 +291,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       tokenBudget: attempt.contextTokenBudget,
       reserveTokens: () => settingsManager.getCompactionReserveTokens(),
       getSystemPrompt: input.getSystemPrompt,
+      getTools: () => activeSession.agent.state.tools,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -328,7 +332,6 @@ export function installEmbeddedAttemptContextGuards(input: {
             }),
         }),
       runtimeSettings,
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
   const removeToolResultGuard = installToolResultContextGuard({

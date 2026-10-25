@@ -1,4 +1,4 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -10,7 +10,8 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
-import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
+import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
@@ -39,10 +40,12 @@ defineSolidBridge<AgentSelectProps>(
         : undefined);
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
+    const gateway = useAvatarGatewayContext();
     const loader = createIdentityAvatars();
-    onCleanup(loader.connect());
+    onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
+      gateway();
       const current = triggerOption();
       const candidates = [...props.options, ...(current ? [current] : [])];
       const identities = props.identityById;
@@ -55,7 +58,7 @@ defineSolidBridge<AgentSelectProps>(
               return [
                 option.value,
                 {
-                  identity,
+                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
                   image: url ? loader.resolve(url) : null,
                   onError: url ? loader.imageErrorHandler(url) : undefined,
                 },
@@ -66,30 +69,7 @@ defineSolidBridge<AgentSelectProps>(
     });
     function Avatar(avatarProps: { option: AgentSelectOption }) {
       const resolved = () => avatars().get(avatarProps.option.value);
-      return (
-        <Show
-          when={resolved()?.image ? undefined : avatarProps.option.icon}
-          fallback={
-            <AgentIdentityAvatar
-              class="agent-select__avatar"
-              agent={{
-                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-                avatar: resolved()?.image ?? null,
-                textAvatar: avatarProps.option.agent
-                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                  : null,
-              }}
-              onImageError={resolved()?.onError}
-            />
-          }
-        >
-          {(icon) => (
-            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
-              <Icon name={icon()} />
-            </span>
-          )}
-        </Show>
-      );
+      return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
     const items = createMemo<readonly MenuItem[]>(() =>
       props.options.map((option) => ({

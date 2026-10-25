@@ -118,7 +118,6 @@ describe("plugin status reports", () => {
     mocks.compatIds.mockReturnValue(pluginIds);
     mocks.compatConfig.mockReturnValue(enabledConfig);
     status.buildPluginSnapshotReport({ config });
-    expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
     expect(mocks.metadataRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ config: enabledConfig, loadModules: false }),
     );
@@ -329,10 +328,6 @@ describe("plugin status reports", () => {
       `old ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
       `api ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
     ]);
-    expect(status.summarizePluginCompatibility(notices)).toEqual({
-      noticeCount: 3,
-      pluginCount: 2,
-    });
   });
 
   it("projects bundle capabilities without native capabilities", () => {

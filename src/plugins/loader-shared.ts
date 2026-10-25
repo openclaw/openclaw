@@ -169,7 +169,6 @@ export function createPluginCandidatesFromManifestRegistry(
 }
 
 export class PluginLoadFailureError extends Error {
-  readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 
   constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
@@ -178,7 +177,6 @@ export class PluginLoadFailureError extends Error {
       .join("; ");
     super(`plugin load failed: ${summary}`);
     this.name = "PluginLoadFailureError";
-    this.pluginIds = failedPlugins.map((entry) => entry.id);
     this.registry = registry;
   }
 }
@@ -282,6 +280,7 @@ function createManifestPluginRecord(params: {
     activationState: params.activationState,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
+    declaredContextEngineIds: manifestRecord.contextEngineIds,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

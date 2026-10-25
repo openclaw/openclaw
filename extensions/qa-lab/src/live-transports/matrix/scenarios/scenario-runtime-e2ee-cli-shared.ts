@@ -225,7 +225,7 @@ export async function runMatrixQaSetupCliJson(
 ) {
   const result = await cli.run(...args);
   const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
-  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+  return { artifacts, payload: parseMatrixQaCliJson(result) };
 }
 
 export function assertMatrixQaCliSasMatches(params: {
@@ -243,7 +243,6 @@ export function assertMatrixQaCliSasMatches(params: {
   if (params.cliSas.value !== ownerSas) {
     throw new Error(`Matrix CLI SAS ${kind} did not match the owner client`);
   }
-  return emoji ? ownerSas.split(" | ") : [ownerSas];
 }
 
 export function isMatrixQaCliOwnerSelfVerification(params: {

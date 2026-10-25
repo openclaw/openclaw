@@ -42,22 +42,16 @@ async function startHookAccountFixture() {
         if (!qaChannel) {
           throw new Error("qa-channel transport config missing");
         }
-        return {
-          ...config,
-          hooks: { enabled: true, token: HOOK_TOKEN, path: "/hooks" },
-          channels: {
-            ...config.channels,
-            "qa-channel": {
-              ...qaChannel,
-              defaultAccount: "default",
-              accounts: {
-                default: { name: "Default" },
-                work: { name: "Work" },
-                disabled: { name: "Disabled", enabled: false },
-              },
-            },
+        config.hooks = { enabled: true, token: HOOK_TOKEN, path: "/hooks" };
+        Object.assign(qaChannel, {
+          defaultAccount: "default",
+          accounts: {
+            default: { name: "Default" },
+            work: { name: "Work" },
+            disabled: { name: "Disabled", enabled: false },
           },
-        };
+        });
+        return config;
       },
     });
     return {

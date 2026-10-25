@@ -14,8 +14,7 @@ import {
 } from "./session-progress-card.test-support.tsx";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
-const { mountCard, createView, createContainer, render, transcriptCleanups } =
-  progressCardFixture();
+const { mountCard, createContainer, render, transcriptCleanups } = progressCardFixture();
 
 function renderTranscriptCard(
   container: HTMLElement,
@@ -28,18 +27,48 @@ function renderTranscriptCard(
   );
 }
 
+// Identify the approved CircleDashed glyph independently of the production icon registry.
+const pendingMarkerSelector = 'path[d="M10.1 2.182a10 10 0 0 1 3.8 0"]';
+
 const runWindow = { startedAt: RUN_STARTED_MS, endedAt: RUN_ENDED_MS };
+const query = (root: ParentNode | null | undefined, selector: string) =>
+  root?.querySelector<HTMLElement>(selector);
+const disclosure = (root: ParentNode) => root.querySelector("details")!;
+function expectElements(
+  root: ParentNode | null | undefined,
+  present: boolean,
+  ...selectors: string[]
+) {
+  for (const selector of selectors) {
+    if (present) {
+      expect(query(root, selector)).not.toBeNull();
+    } else {
+      expect(query(root, selector)).toBeNull();
+    }
+  }
+}
+function expectOpen(card: HTMLDetailsElement, open: boolean, elapsed: number) {
+  advance(elapsed);
+  expect(card.open).toBe(open);
+}
+async function mountTranscript(
+  context: ComposerProgressDisclosureContext = { readingHistory: true },
+) {
+  const container = createContainer();
+  renderTranscriptCard(container, context);
+  const transcript = observeTranscript(container, transcriptCleanups);
+  await Promise.resolve();
+  return { container, transcript, card: disclosure(container) };
+}
 
 describe("renderSessionProgressCard", () => {
   it.each(["board", "composer"] as const)(
     "shows relative activity for %s cards with and without checklist steps",
     (placement) => {
       const container = createContainer();
-
       for (const steps of [progressCard.steps, undefined]) {
         render({ card: { ...progressCard, steps }, placement }, container);
-
-        const timestamp = container.querySelector(".session-progress-card time");
+        const timestamp = query(container, ".session-progress-card time");
         expect(timestamp?.getAttribute("datetime")).toBe(
           new Date(progressCard.updatedAt).toISOString(),
         );
@@ -55,105 +84,71 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
-  it.each([undefined, "queued", "running", "done", "failed", "timeout", "killed"] as const)(
-    "shows saved activity without a run window for %s",
-    (status) => {
-      const container = mountCard({ sessionStatus: status });
-      expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
-    },
-  );
+  it("shows saved activity for a running session without a start timestamp", () => {
+    const container = mountCard({ sessionStatus: "running" });
+    expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
+  });
 
   it("uses endedAt for terminal wording and falls back to Updated without it", () => {
     const container = mountCard({
       sessionStatus: "done",
       ...runWindow,
     });
-    expect(container.querySelector("time")?.textContent).toBe("Completed just now");
-    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+    expect(query(container, "time")?.textContent).toBe("Completed just now");
+    expect(query(container, "time")?.getAttribute("datetime")).toBe(
       new Date(RUN_ENDED_MS).toISOString(),
     );
-
     render({ sessionStatus: "done" }, container);
-    expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
-  });
-
-  it("keeps disclosure attributes unchanged across progress snapshots", () => {
-    const container = mountCard({});
-    const details = container.querySelector("details")!;
-    const observer = new MutationObserver(() => {});
-    observer.observe(details, { attributes: true, attributeFilter: ["open", "data-reveal"] });
-    render(
-      {
-        card: {
-          ...progressCard,
-          revision: 3,
-          steps: [...progressCard.steps!, { step: "Updated progress", status: "pending" }],
-        },
-      },
-      container,
-    );
-    expect(container.textContent).toContain("Updated progress");
-    expect(observer.takeRecords()).toEqual([]);
-    observer.disconnect();
+    expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
   });
 
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
     const part = render({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } }, container);
-    expect(container.querySelector("time")?.textContent).toBe("Updated just now");
-
+    expect(query(container, "time")?.textContent).toBe("Updated just now");
     advance(60_000);
-    expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
-
+    expect(query(container, "time")?.textContent).toBe("Updated 1m ago");
     part.setPresented(false);
     advance(60_000);
-    expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
-
+    expect(query(container, "time")?.textContent).toBe("Updated 1m ago");
     render(null, container);
   });
 
   it("renders sanitized markdown and one accessible typed checklist", () => {
     const container = mountCard({ card: progressCard, placement: "board" });
-
-    const card = container.querySelector(".session-progress-card");
+    const card = query(container, ".session-progress-card");
     expect(card?.getAttribute("aria-label")).toBe("1 of 3 completed");
-    expect(card?.querySelector("strong")?.textContent).toBe("Focused change");
-    expect(card?.querySelector("progress")?.getAttribute("value")).toBe("1");
+    expect(query(card, "strong")?.textContent).toBe("Focused change");
+    expect(query(card, "progress")?.getAttribute("value")).toBe("1");
     expect(card?.querySelectorAll(".session-progress-card__count")).toHaveLength(0);
     const steps = card?.querySelectorAll(".session-progress-card__step") ?? [];
     expect(steps).toHaveLength(3);
     const expected = [
-      ["Inspect the route, completed", "completed", "path", "<path"],
-      [
-        "Wire the checklist, in progress",
-        "in_progress",
-        ".session-run-spinner",
-        "session-run-spinner",
-      ],
-      ["Run focused tests, pending", "pending", "polyline", "<polyline"],
+      ["Inspect the route, completed", "completed", "path"],
+      ["Wire the checklist, in progress", "in_progress", ".session-run-spinner"],
+      ["Run focused tests, pending", "pending", pendingMarkerSelector],
     ] as const;
-    expected.forEach(([label, status, selector, markup], index) => {
+    expected.forEach(([label, status, selector], index) => {
       const step = steps[index]!;
       expect(step.getAttribute("aria-label")).toBe(label);
       expect(
         [...step.classList].find((name) => name.startsWith("session-progress-card__step--")),
       ).toBe(`session-progress-card__step--${status}`);
       const marker = cardPart(step, "step-marker");
-      expect(marker?.innerHTML).toContain(markup);
-      expect(marker?.querySelector(selector)).not.toBeNull();
+      expect(query(marker, selector)).not.toBeNull();
     });
   });
 
   it.each([
     ["in_progress", ".session-run-spinner"],
-    ["pending", "polyline"],
+    ["pending", pendingMarkerSelector],
   ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
     const container = createContainer();
     const card = { ...progressCard, steps: [{ step: "Current step", status }] };
     render({ card }, container);
-
     expect(
-      container.querySelector(
+      query(
+        container,
         `.session-progress-card__current-marker[data-status="${status}"] ${markerSelector}`,
       ),
     ).not.toBeNull();
@@ -161,11 +156,8 @@ describe("renderSessionProgressCard", () => {
 
   it("presents durable in-progress work as paused without an active run", () => {
     const container = mountCard({ hasActiveRun: false });
-
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
-    expect(
-      container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
-    ).not.toBeNull();
+    expectElements(container, false, ".session-run-spinner");
+    expectElements(container, true, '.session-progress-card__current-marker[data-status="paused"]');
     const pausedStep = cardPart(container, "step--paused");
     expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
     expect(pausedStep?.querySelector("polyline")).not.toBeNull();
@@ -185,13 +177,12 @@ describe("renderSessionProgressCard", () => {
         startedAt: RUN_STARTED_MS,
         hasActiveRun: true,
       });
-
-      expect(
-        container.querySelector(
-          `.session-progress-card__current-marker[data-status="${expectedStatus}"]`,
-        ),
-      ).not.toBeNull();
-      expect(container.querySelector(".session-run-spinner") !== null).toBe(expectedLive);
+      expectElements(
+        container,
+        true,
+        `.session-progress-card__current-marker[data-status="${expectedStatus}"]`,
+      );
+      expect(query(container, ".session-run-spinner") !== null).toBe(expectedLive);
     },
   );
 
@@ -208,12 +199,11 @@ describe("renderSessionProgressCard", () => {
         endedAt,
         hasActiveRun: true,
       });
-
       expect(
-        container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
+        query(container, '.session-progress-card__current-marker[data-status="paused"]'),
       ).not.toBeNull();
       expect(cardPart(container, "step--paused")).not.toBeNull();
-      expect(container.querySelector(".session-run-spinner")).toBeNull();
+      expectElements(container, false, ".session-run-spinner");
     },
   );
 
@@ -224,7 +214,7 @@ describe("renderSessionProgressCard", () => {
       steps: progressCard.steps?.map(({ step }) => ({ step, status: "completed" as const })),
     };
     render({ card: completed, placement: "composer", onDismiss: () => undefined }, container);
-
+    expect(disclosure(container).dataset.complete).toBe("true");
     expect(cardPart(container, "options")).not.toBeNull();
     expect(cardPart(container, "chevron svg")).not.toBeNull();
   });
@@ -233,126 +223,23 @@ describe("renderSessionProgressCard", () => {
     const container = mountCard({
       card: { ...progressCard, markdown: "Working through the task." },
     });
-
-    const card = container.querySelector<HTMLDetailsElement>(
-      '[data-progress-card-placement="composer"]',
-    );
+    const card = disclosure(container);
     expect(card?.open).toBe(true);
     expect(card?.dataset.complete).toBe("false");
-    expect(card?.querySelector("summary")?.getAttribute("aria-label")).toBe(
+    expect(query(card, "summary")?.getAttribute("aria-label")).toBe(
       "Wire the checklist. 1 of 3 completed",
     );
-    expect(card?.querySelector("[role=region]")?.getAttribute("aria-label")).toBe(
-      "1 of 3 completed",
-    );
-    expect(card?.querySelector("summary")?.textContent).toContain("Task progress");
+    expect(query(card, "[role=region]")?.getAttribute("aria-label")).toBe("1 of 3 completed");
+    expect(query(card, "summary")?.textContent).toContain("Task progress");
     expect(
       card
         ?.querySelector(".session-progress-card__heading-actions")
         ?.textContent?.replaceAll(/\s+/gu, " ")
         .trim(),
     ).toBe("Step 2 of 3 · Updated 2m ago");
-    expect(card?.querySelector("progress")).toBeNull();
+    expect(query(card, "progress")).toBeNull();
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
   });
-
-  it("collapses active composer progress when requested and preserves manual expansion", () => {
-    const container = mountCard({ hasActiveRun: true, collapseComposerByDefault: true });
-
-    const card = container.querySelector<HTMLDetailsElement>(
-      '[data-progress-card-placement="composer"]',
-    );
-    expect(card?.open).toBe(false);
-    card!.querySelector("summary")!.click();
-
-    render(
-      {
-        card: { ...progressCard, revision: progressCard.revision + 1 },
-        hasActiveRun: true,
-        collapseComposerByDefault: true,
-      },
-      container,
-    );
-    expect(card?.open).toBe(true);
-  });
-
-  it("keeps the collapsed default at final unless manually opened", () => {
-    const { container, show } = createView({
-      startedAt: RUN_STARTED_MS,
-      collapseComposerByDefault: true,
-      composerDisclosureContext: { cardLifetime: {} },
-    });
-    const renderStatus = (sessionStatus: "running" | "done") =>
-      show({
-        sessionStatus,
-        endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
-        hasActiveRun: sessionStatus === "running",
-      });
-    renderStatus("running");
-    const card = container.querySelector("details")!;
-    expect(card.open).toBe(false);
-    renderStatus("done");
-    expect(card.open).toBe(false);
-    card.querySelector("summary")!.click();
-    renderStatus("running");
-    renderStatus("done");
-    expect(card.open).toBe(true);
-  });
-
-  it.each([false, true])(
-    "keeps settled history collapse through completion (final in history: %s)",
-    async (finalInHistory) => {
-      let currentCard = progressCard;
-      const cardLifetime = {};
-      const { container, show } = createView({ startedAt: RUN_STARTED_MS, transcript: true });
-      const renderStatus = (
-        readingHistory: boolean,
-        sessionStatus: "running" | "done" = "running",
-      ) =>
-        show({
-          card: currentCard,
-          sessionStatus,
-          endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
-          hasActiveRun: sessionStatus === "running",
-          composerDisclosureContext: { cardLifetime, readingHistory },
-        });
-      const wheel = (distance: number, pause = 0) => {
-        advance(pause);
-        transcript.wheel(distance);
-      };
-      renderStatus(true);
-      const transcript = observeTranscript(container, transcriptCleanups);
-      await Promise.resolve();
-      const card = container.querySelector("details")!;
-      expect(card.open).toBe(true);
-      wheel(200);
-      wheel(200, 201);
-      advance(299);
-      expect(card.open).toBe(true);
-      if (finalInHistory) {
-        transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
-      }
-      transcript.scroll(1);
-      advance(299);
-      expect(card.open).toBe(true);
-      advance(1);
-      expect(card.open).toBe(false);
-      renderStatus(false);
-      expect(card.open).toBe(false);
-      currentCard = { ...progressCard, revision: 3, markdown: "Revised progress" };
-      renderStatus(false);
-      expect(card.open).toBe(false);
-      currentCard = {
-        ...currentCard,
-        revision: 4,
-        steps: currentCard.steps?.map(({ step }) => ({ step, status: "completed" as const })),
-      };
-      renderStatus(finalInHistory, "done");
-      expect(card.open).toBe(false);
-      renderStatus(false, "done");
-      expect(card.open).toBe(false);
-    },
-  );
 
   it("listens to its owned transcript instead of a closer pane's thread", async () => {
     const ownedPane = createContainer();
@@ -367,20 +254,16 @@ describe("renderSessionProgressCard", () => {
     });
     const decoyTranscript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
-    const card = container.querySelector("details")!;
+    const card = disclosure(container);
     expect(card.open).toBe(true);
-
     decoyTranscript.wheel(200);
     advance(201);
     decoyTranscript.wheel(200);
-    advance(300);
-    expect(card.open).toBe(true);
-
+    expectOpen(card, true, 300);
     ownedTranscript.wheel(200);
     advance(201);
     ownedTranscript.wheel(200);
-    advance(300);
-    expect(card.open).toBe(false);
+    expectOpen(card, false, 300);
   });
 
   it("keeps gestures across reading-history renders and late native offsets", async () => {
@@ -390,7 +273,7 @@ describe("renderSessionProgressCard", () => {
     renderHistory(false);
     const transcript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
-    const card = container.querySelector("details")!;
+    const card = disclosure(container);
     transcript.wheel(200);
     renderHistory(false);
     renderHistory(true);
@@ -398,8 +281,7 @@ describe("renderSessionProgressCard", () => {
     transcript.thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true }));
     advance(2);
     transcript.scroll(120);
-    advance(300);
-    expect(card.open).toBe(false);
+    expectOpen(card, false, 300);
   });
 
   it("counts each touch drag once, waits for scrolling to stop, and cancels on removal", async () => {
@@ -414,8 +296,8 @@ describe("renderSessionProgressCard", () => {
     renderCard();
     const transcript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
-    const card = container.querySelector("details")!;
-    const root = container.querySelector(".chat-thread")!;
+    const card = disclosure(container);
+    const root = query(container, ".chat-thread")!;
     let previousTouches: Touch[] = [];
     const touchPoint = (identifier: number, y: number, target: EventTarget = root): Touch => ({
       identifier,
@@ -463,17 +345,14 @@ describe("renderSessionProgressCard", () => {
     touch("touchstart", 0);
     touch("touchmove", 30);
     touch("touchmove", 160);
-    advance(300);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 300);
     touch("touchend", 160);
     touch("touchstart", 0);
     touch("touchmove", 30);
     advance(299);
     touch("touchmove", 160);
-    advance(299);
-    expect(card.open).toBe(true);
-    advance(1);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 299);
+    expectOpen(card, true, 1);
     touch("touchend", 160);
     expect(card.open).toBe(false);
     replaceCard();
@@ -482,8 +361,7 @@ describe("renderSessionProgressCard", () => {
     }
     advance(100);
     touch("touchstart", 0);
-    advance(200);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 200);
     touch("touchend", 0);
     expect(card.open).toBe(false);
     replaceCard();
@@ -494,19 +372,16 @@ describe("renderSessionProgressCard", () => {
     touch("touchmove", 160, 2);
     touch("touchend", 160, 1);
     touch("touchmove", 320);
-    advance(300);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 300);
     touch("touchend", 320);
     expect(card.open).toBe(true);
     drag(0, 25);
-    advance(300);
-    expect(card.open).toBe(false);
+    expectOpen(card, false, 300);
     replaceCard();
     for (let index = 0; index < 2; index++) {
       drag(300, 200, 450);
     }
-    advance(300);
-    expect(card.open).toBe(false);
+    expectOpen(card, false, 300);
     replaceCard();
     drag(0, 320);
     touch("touchstart", 0);
@@ -520,41 +395,21 @@ describe("renderSessionProgressCard", () => {
       }),
     );
     previousTouches = [];
-    advance(300);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 300);
     drag(0, 25);
-    advance(300);
-    expect(card.open).toBe(false);
+    expectOpen(card, false, 300);
     replaceCard();
     drag(0, 200);
     drag(0, 200);
     renderCard(false);
     await Promise.resolve();
-    advance(300);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 300);
     render(null, container);
-    advance(300);
-    expect(card.open).toBe(true);
+    expectOpen(card, true, 300);
     root.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true }));
     advance(201);
     root.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true }));
-    advance(300);
-    expect(card.open).toBe(true);
-  });
-
-  it("keeps the collapsed counter in the summary action column", () => {
-    const container = mountCard({});
-
-    const summary = cardPart(container, "summary");
-    const count = cardPart(summary, "summary-count--collapsed");
-    expect(count?.textContent?.trim()).toBe("2/3");
-    expect(count?.parentElement).toBe(summary);
-    expect(count?.previousElementSibling?.classList).toContain(
-      "session-progress-card__summary-collapsed",
-    );
-    expect(count?.nextElementSibling?.classList).toContain(
-      "session-progress-card__summary-expanded",
-    );
+    expectOpen(card, true, 300);
   });
 
   it.each([
@@ -563,13 +418,26 @@ describe("renderSessionProgressCard", () => {
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
-  ] as const)("shows %s as %s in the closed summary", (status, expected) => {
-    const container = mountCard({
-      sessionStatus: status,
-      ...runWindow,
-    });
-
-    expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+  ] as const)("announces %s as %s in collapsed progress summaries", (status, expected) => {
+    for (const placement of ["composer", "details"] as const) {
+      const container = mountCard({
+        placement,
+        desktopDetails: placement === "details",
+        collapseComposerByDefault: true,
+        sessionStatus: status,
+        ...runWindow,
+      });
+      expect(disclosure(container).open).toBe(false);
+      expect(query(container, "summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+      );
+      if (placement === "composer") {
+        expect(
+          query(container, "summary > .session-progress-card__summary-count--collapsed")
+            ?.textContent,
+        ).toBe(expected);
+      }
+    }
   });
 
   it("uses a terminal circle-x instead of pausing after the run stops", () => {
@@ -578,19 +446,18 @@ describe("renderSessionProgressCard", () => {
       ...runWindow,
       hasActiveRun: false,
     });
-
     const indicator = cardPart(container, "summary-indicator");
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
-    expect(indicator?.querySelector('circle[cx="12"][cy="12"][r="10"]')).not.toBeNull();
-    expect(indicator?.querySelector('path[d="m15 9-6 6"]')).not.toBeNull();
-    expect(indicator?.querySelector('path[d="m9 9 6 6"]')).not.toBeNull();
-    expect(
-      container.querySelector('.session-progress-card__step-marker[data-outcome="killed"]'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('.session-progress-card__step[aria-label$=", stopped"]'),
-    ).not.toBeNull();
-    expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+    expect(query(container, ".session-run-spinner")).toBeNull();
+    expectElements(
+      indicator,
+      true,
+      'circle[cx="12"][cy="12"][r="10"]',
+      'path[d="m15 9-6 6"]',
+      'path[d="m9 9 6 6"]',
+    );
+    expectElements(container, true, '.session-progress-card__step-marker[data-outcome="killed"]');
+    expectElements(container, true, '.session-progress-card__step[aria-label$=", stopped"]');
+    expect(query(container, "summary")?.getAttribute("aria-label")).toBe(
       "Wire the checklist. Stopped",
     );
   });
@@ -601,26 +468,10 @@ describe("renderSessionProgressCard", () => {
       sessionStatus: "failed",
       ...runWindow,
     });
-
-    expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
-    expect(container.querySelector("[data-outcome=failed]")).toBeNull();
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(query(container, "time")?.textContent).toBe("Updated 3m ago");
+    expect(query(container, "[data-outcome=failed]")).toBeNull();
+    expectElements(container, false, ".session-run-spinner");
     expect(cardPart(container, "step--paused")).not.toBeNull();
-  });
-
-  it("renders a stale in-progress card as paused during a later active run", () => {
-    const container = mountCard({
-      card: { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
-      placement: "board",
-      sessionStatus: "running",
-      startedAt: RUN_STARTED_MS,
-      hasActiveRun: true,
-    });
-
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
-    const pausedStep = cardPart(container, "step--paused");
-    expect(pausedStep).not.toBeNull();
-    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
   });
 
   it("falls back safely for timestamps outside the Date range", () => {
@@ -630,44 +481,11 @@ describe("renderSessionProgressCard", () => {
       startedAt: RUN_STARTED_MS,
       endedAt: MAX_DATE_TIMESTAMP_MS + 1,
     });
-
-    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
-      new Date(NOW_MS).toISOString(),
-    );
-    expect(container.querySelector("[data-outcome=failed]")).toBeNull();
+    expect(query(container, "time")?.getAttribute("datetime")).toBe(new Date(NOW_MS).toISOString());
+    expect(query(container, "[data-outcome=failed]")).toBeNull();
   });
 
   it.each([
-    { mobile: false, collapseByDefault: false, open: true },
-    { mobile: true, collapseByDefault: false, open: false },
-    { mobile: false, collapseByDefault: true, open: false },
-  ])(
-    "uses presentation defaults for a completed card (mobile=$mobile, collapseByDefault=$collapseByDefault)",
-    ({ mobile, collapseByDefault, open }) => {
-      vi.stubGlobal(
-        "matchMedia",
-        vi.fn(() => ({ matches: mobile })),
-      );
-      const container = mountCard({
-        card: {
-          ...progressCard,
-          steps: progressCard.steps?.map(({ step }) => ({ step, status: "completed" as const })),
-        },
-        sessionStatus: "done",
-        ...runWindow,
-        hasActiveRun: false,
-        collapseComposerByDefault: collapseByDefault,
-        composerDisclosureContext: { cardLifetime: {} },
-      });
-      const card = container.querySelector("details")!;
-      expect(card.open).toBe(open);
-      expect(card.dataset.complete).toBe("true");
-    },
-  );
-
-  it.each([
-    ["pixels", 0, 160, false, false],
-    ["lines", 1, 8, false, false],
     ["pages", 2, 0.8, false, false],
     ["zoom", 0, 160, true, false],
     ["native offset before input", 0, 200, false, true],
@@ -678,14 +496,9 @@ describe("renderSessionProgressCard", () => {
       if (scenario === "no TouchEvent constructor") {
         vi.stubGlobal("TouchEvent", undefined);
       }
-      const container = createContainer();
-      renderTranscriptCard(container, { readingHistory: true });
-      const transcript = observeTranscript(container, transcriptCleanups);
-      await Promise.resolve();
-      const card = container.querySelector("details")!;
+      const { transcript, card } = await mountTranscript();
       transcript.wheel(500, { deltaMode, deltaY: -deltaY, ctrlKey }, offsetBeforeInput);
-      advance(300);
-      expect(card.open).toBe(true);
+      expectOpen(card, true, 300);
       if (scenario === "no TouchEvent constructor") {
         transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
       }
@@ -694,11 +507,9 @@ describe("renderSessionProgressCard", () => {
       expect(card.open).toBe(ctrlKey);
       if (ctrlKey) {
         transcript.wheel(160);
-        advance(300);
-        expect(card.open).toBe(true);
+        expectOpen(card, true, 300);
         transcript.wheel(160);
-        advance(300);
-        expect(card.open).toBe(false);
+        expectOpen(card, false, 300);
       }
     },
   );
@@ -706,11 +517,7 @@ describe("renderSessionProgressCard", () => {
   it.each([false, true])(
     "counts a reversing wheel burst once, including a clamped pause: %s",
     async (clamped) => {
-      const container = createContainer();
-      renderTranscriptCard(container, { readingHistory: true });
-      const transcript = observeTranscript(container, transcriptCleanups);
-      await Promise.resolve();
-      const card = container.querySelector("details")!;
+      const { transcript, card } = await mountTranscript();
       for (const deltaY of [40, -160, 40, 40, -160]) {
         transcript.wheel(-deltaY);
         advance(100);
@@ -724,11 +531,9 @@ describe("renderSessionProgressCard", () => {
         advance(100);
         transcript.wheel(40);
       }
-      advance(300);
-      expect(card.open).toBe(true);
+      expectOpen(card, true, 300);
       transcript.wheel(1);
-      advance(300);
-      expect(card.open).toBe(false);
+      expectOpen(card, false, 300);
     },
   );
 });

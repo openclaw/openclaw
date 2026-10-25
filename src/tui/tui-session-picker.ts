@@ -47,9 +47,7 @@ export function buildSessionChoices(sessions: readonly TuiSessionEntry[]): Sessi
     const title = session.derivedTitle ?? session.displayName;
     const formattedKey = parseAgentSessionKey(session.key)?.rest ?? session.key;
     const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-    const timePart = session.updatedAt
-      ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-      : "";
+    const timePart = session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : "";
     const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
     const description = timePart && preview ? `${timePart} · ${preview}` : preview || timePart;
     const searchableNames = [

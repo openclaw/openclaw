@@ -1,5 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import type { SourceRuntime } from "./types.js";
 
 export const fixtureDay = "2026-09-25";
 const sinceMs = Date.parse(`${fixtureDay}T00:00:00Z`);
@@ -14,11 +13,17 @@ export const fixtureChannels = Array.from({ length: 12 }, (_, index) => ({
 }));
 const atMs = (index: number) => sinceMs + 1000 + index * 30_000;
 const repoName = (index: number) => `fixture/repo-${index % 93}`;
-const login = (index: number) => fixturePeople[index % fixturePeople.length].github[0];
+const login = (index: number) => fixturePeople[index % fixturePeople.length]!.github[0];
 const snowflake = (index: number) => ((BigInt(atMs(index)) - epochMs) << 22n).toString();
+const emptyRepoActivity =
+  /^\/repos\/fixture\/repo-\d+\/(?:issues\/comments|pulls\/comments|security-advisories)$/;
+const searchRange = /(?:created|updated|closed|merged|committer-date):([^ ]+)\.\.([^ ]+)/;
 
 /** Synthetic wire responses are generated per page, never retained as an input corpus. */
-export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchImpl"]> {
+function createReportRunFixtureFetch(): (
+  input: string | URL,
+  init?: RequestInit,
+) => Promise<Response> {
   return async (input) => {
     // Every response arrives on a fresh event-loop turn, as real network I/O does.
     await setImmediate();
@@ -43,17 +48,15 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
     }
     if (path === "/search/issues" || path === "/search/commits") {
       const query = url.searchParams.get("q") ?? "";
-      const range = /(?:created|updated|closed|merged|committer-date):([^ ]+)\.\.([^ ]+)/.exec(
-        query,
-      );
-      if (!range) {
+      const bounds = searchRange.exec(query);
+      if (!bounds) {
         throw new Error(`Missing fixture search range: ${query}`);
       }
       const commits = path.endsWith("commits");
       const eligible =
         commits || (query.includes("is:issue ") && / (?:created|updated):/.test(query));
-      const firstMs = Date.parse(range[1]);
-      const lastMs = Date.parse(range[2]);
+      const firstMs = Date.parse(bounds[1]!);
+      const lastMs = Date.parse(bounds[2]!);
       const indexes = eligible
         ? Array.from({ length: commits ? 1000 : 2000 }, (_, index) => index).filter(
             (index) => atMs(index) >= firstMs && atMs(index) <= lastMs,
@@ -87,11 +90,7 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
         page * 100 < indexes.length,
       );
     }
-    if (
-      /^\/repos\/fixture\/repo-\d+\/(?:issues\/comments|pulls\/comments|security-advisories)$/.test(
-        path,
-      )
-    ) {
+    if (emptyRepoActivity.test(path)) {
       return response([]);
     }
     if (path === "/guilds/1000/channels") {
@@ -103,7 +102,7 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
       return response({
         threads: Array.from({ length: 692 }, (_, index) => ({
           id: String(4000 + index),
-          parent_id: fixtureChannels[index % fixtureChannels.length].id,
+          parent_id: fixtureChannels[index % fixtureChannels.length]!.id,
           name: `thread-${index}`,
           type: 11,
         })),
@@ -126,7 +125,7 @@ export function createReportRunFixtureFetch(): NonNullable<SourceRuntime["fetchI
       return response(
         selected.map((index) => ({
           id: snowflake(index),
-          author: { id: fixturePeople[index % fixturePeople.length].discordUserId, bot: false },
+          author: { id: fixturePeople[index % fixturePeople.length]!.discordUserId, bot: false },
           content: `Fixture discussion ${index}. ${"Review the change and preserve expected behavior. ".repeat(20)}`,
         })),
       );

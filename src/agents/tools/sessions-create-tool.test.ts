@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -38,7 +37,7 @@ const created = {
 };
 function withTool(check: (tool: AnyAgentTool) => Promise<void>) {
   return withSessionToolTestCaller(
-    () => check(expectDefined(createSessionsCreateTool(), "creation tool")),
+    () => check(createSessionsCreateTool()),
     issueAuthority().authority,
   );
 }
@@ -49,18 +48,29 @@ beforeEach(() => {
 });
 
 describe("sessions_create", () => {
-  it("requires issued session-write authority and rejects a retained revoked source", async () => {
-    expect(createSessionsCreateTool()).toBeNull();
-    expect(
+  it("keeps the definition stable while refusing calls without session-write authority", async () => {
+    const denied = [
+      createSessionsCreateTool(),
       createSessionsCreateTool({
         sessionControlAuthority: issueAuthority(["operator.read"]).authority,
       }),
-    ).toBeNull();
+    ];
+    await withTool(async (authorized) => {
+      for (const tool of denied) {
+        expect(tool.name).toBe(authorized.name);
+        expect(tool.description).toBe(authorized.description);
+        expect(tool.parameters).toEqual(authorized.parameters);
+        const result = await tool.execute("denied", {});
+        expect(result.details).toMatchObject({ gated: true });
+        expect(JSON.stringify(result.content)).toContain("session write authority");
+      }
+    });
+    expect(gateway.request).not.toHaveBeenCalled();
+  });
+
+  it("requires issued authority and rejects a retained revoked source", async () => {
     const { authority, revoke } = issueAuthority();
-    const tool = expectDefined(
-      createSessionsCreateTool({ sessionControlAuthority: authority }),
-      "creation tool",
-    );
+    const tool = createSessionsCreateTool({ sessionControlAuthority: authority });
     expect(tool.parameters).not.toHaveProperty("properties.action");
     expect(tool.parameters).toHaveProperty("additionalProperties", false);
     expect(() => createSessionsCreateTool({ sessionControlAuthority: { ...authority } })).toThrow(
@@ -189,9 +199,10 @@ describe("sessions_create", () => {
           source: "profile",
           id: selected.profileId,
         });
-        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual(
-          requesterOrigin,
-        );
+        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual({
+          ...requesterOrigin,
+          delegatedCreatorProfileId: null,
+        });
         expect(gateway.request.mock.calls[1]?.[0].params).not.toHaveProperty("user");
       });
     } finally {

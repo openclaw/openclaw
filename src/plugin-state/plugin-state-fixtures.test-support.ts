@@ -4,8 +4,36 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resetPluginStateStoreForTests } from "./plugin-state-store.js";
+import {
+  createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
+  resetPluginStateStoreForTests,
+  type OpenKeyedStoreOptions,
+} from "./plugin-state-store.js";
 import { clearPluginStateStoreForTests } from "./plugin-state-store.test-helpers.js";
+
+export function keyedStores<T>(pluginId: string, options: OpenKeyedStoreOptions) {
+  return {
+    store: createPluginStateKeyedStore<T>(pluginId, options),
+    sync: createPluginStateSyncKeyedStore<T>(pluginId, options),
+  };
+}
+
+export function keyedStore<T>(
+  pluginId: string,
+  namespace: string,
+  options: Partial<OpenKeyedStoreOptions> = {},
+) {
+  return createPluginStateKeyedStore<T>(pluginId, { maxEntries: 10, ...options, namespace });
+}
+
+export function syncKeyedStore<T>(
+  pluginId: string,
+  namespace: string,
+  options: Partial<OpenKeyedStoreOptions> = {},
+) {
+  return createPluginStateSyncKeyedStore<T>(pluginId, { maxEntries: 10, ...options, namespace });
+}
 
 export function stateTest(label: string, applyEnv = true) {
   return it.extend<{ state: OpenClawTestState }>({

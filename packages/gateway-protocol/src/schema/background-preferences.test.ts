@@ -4,8 +4,6 @@ import {
   DEFAULT_BACKGROUND_PREFERENCE,
   normalizeBackgroundPreference,
   selectBackgroundSource,
-  type BackgroundPreference,
-  type BackgroundSource,
 } from "./background-preferences.js";
 import { normalizeUiAppearancePreference } from "./ui-appearance-preferences.js";
 import {
@@ -15,88 +13,62 @@ import {
   UsersBackgroundUploadParamsSchema,
 } from "./users-background.js";
 
+const presentations = [undefined, "faded", "full-bleed"] as const;
+
+function expectWirePreference(preference: unknown, valid: boolean) {
+  const expected = { expectedAssetId: null, expectedPreference: preference };
+  const results = [
+    Value.Check(BackgroundPreferenceSchema, preference),
+    Value.Check(UsersBackgroundRemoveParamsSchema, expected),
+    Value.Check(UsersBackgroundUploadParamsSchema, { ...expected, imageBase64: "aW1n" }),
+    Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference }),
+  ];
+  expect(results).toEqual([valid, valid, valid, valid]);
+}
+
 describe("background presentation preferences", () => {
-  it.each(["faded", "full-bleed"] as const)(
-    "preserves explicit %s through appearance normalization and wire snapshots",
+  it.each(presentations)("round-trips presentation %s", (presentation) => {
+    const preference = {
+      ...DEFAULT_BACKGROUND_PREFERENCE,
+      ...(presentation ? { presentation } : {}),
+    };
+    expect([
+      normalizeBackgroundPreference(preference),
+      normalizeUiAppearancePreference("ui.background", preference),
+      Value.Decode(BackgroundPreferenceSchema, preference),
+    ]).toStrictEqual([preference, preference, preference]);
+    expectWirePreference(preference, true);
+  });
+  it.each([null, "", "fullBleed", "READABLE", true, 1, {}, []])(
+    "rejects invalid presentation %j",
     (presentation) => {
       const preference = { ...DEFAULT_BACKGROUND_PREFERENCE, presentation };
-      expect(normalizeBackgroundPreference(preference)).toStrictEqual(preference);
-      expect(normalizeUiAppearancePreference("ui.background", preference)).toStrictEqual(
-        preference,
-      );
-      expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(true);
-      expect(Value.Decode(BackgroundPreferenceSchema, preference)).toStrictEqual(preference);
-      const expected = { expectedAssetId: null, expectedPreference: preference };
-      expect(Value.Check(UsersBackgroundRemoveParamsSchema, expected)).toBe(true);
-      expect(
-        Value.Check(UsersBackgroundUploadParamsSchema, { ...expected, imageBase64: "aW1n" }),
-      ).toBe(true);
-      expect(
-        Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference }),
-      ).toBe(true);
+      expect([
+        normalizeBackgroundPreference(preference),
+        normalizeUiAppearancePreference("ui.background", preference),
+      ]).toStrictEqual([undefined, undefined]);
+      expectWirePreference(preference, false);
     },
   );
-
-  it("keeps omitted presentation absent instead of materializing the faded default", () => {
-    const preference = normalizeBackgroundPreference(DEFAULT_BACKGROUND_PREFERENCE);
-    expect(preference).toStrictEqual(DEFAULT_BACKGROUND_PREFERENCE);
-    expect(preference).not.toHaveProperty("presentation");
-    expect(preference?.presentation ?? "faded").toBe("faded");
-    expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(true);
-    expect(Value.Decode(BackgroundPreferenceSchema, preference)).toStrictEqual(preference);
-    expect(normalizeUiAppearancePreference("ui.background", preference)).toStrictEqual(preference);
-  });
-
-  it.each(
-    [null, "", "fullBleed", "READABLE", true, 1, {}, []].map((presentation) => ({ presentation })),
-  )("rejects an invalid specified presentation: $presentation", ({ presentation }) => {
-    const preference = { ...DEFAULT_BACKGROUND_PREFERENCE, presentation };
-    expect(normalizeBackgroundPreference(preference)).toBeUndefined();
-    expect(normalizeUiAppearancePreference("ui.background", preference)).toBeUndefined();
-    expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundRemoveParamsSchema, {
-        expectedAssetId: null,
-        expectedPreference: preference,
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundUploadParamsSchema, {
-        expectedAssetId: null,
-        expectedPreference: preference,
-        imageBase64: "aW1n",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference }),
-    ).toBe(false);
-  });
-
-  it("does not silently normalize a specified undefined mode into an omitted mode", () => {
+  it("rejects specified undefined rather than treating it as omitted", () => {
     expect(
       normalizeBackgroundPreference({ ...DEFAULT_BACKGROUND_PREFERENCE, presentation: undefined }),
     ).toBeUndefined();
   });
-
-  it.each([undefined, "faded", "full-bleed"] as const)(
-    "preserves presentation %s across source changes",
-    (presentation) => {
-      let preference: BackgroundPreference = {
-        ...DEFAULT_BACKGROUND_PREFERENCE,
-        ...(presentation ? { presentation } : {}),
-      };
-      const sources: BackgroundSource[] = [
-        { kind: "custom", assetId: "first-image" },
-        { kind: "theme" },
-        { kind: "none" },
-        { kind: "custom", assetId: "replacement-image" },
-      ];
-      for (const source of sources) {
-        const previous = preference;
-        preference = selectBackgroundSource(source, previous);
-        expect(preference).toStrictEqual({ ...previous, source });
-        expect(Object.hasOwn(preference, "presentation")).toBe(presentation !== undefined);
-      }
-    },
-  );
+  it.each(presentations)("preserves presentation %s across source changes", (presentation) => {
+    let preference = {
+      ...DEFAULT_BACKGROUND_PREFERENCE,
+      ...(presentation ? { presentation } : {}),
+    };
+    for (const source of [
+      { kind: "custom", assetId: "first-image" },
+      { kind: "theme" },
+      { kind: "none" },
+      { kind: "custom", assetId: "replacement-image" },
+    ] as const) {
+      const previous = preference;
+      preference = selectBackgroundSource(source, previous);
+      expect(preference).toStrictEqual({ ...previous, source });
+    }
+  });
 });

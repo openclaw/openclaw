@@ -31,7 +31,6 @@ export type IncompleteTurnAttempt = Pick<
   | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -109,14 +108,11 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
-/** Excludes only plain progress text; structured or tool-owned payloads remain delivery evidence. */
+/** Excludes pre-tool progress and generated failures; structured delivery remains evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
   attempt: IncompleteTurnAttempt;
 }): number {
-  const hasNoAssistantText = params.attempt.assistantTexts.every(
-    (text) => !parseReplyDirectives(text).text.trim(),
-  );
   // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
   // though it precedes the tool results that settled after it.
   const hasComposedVisibleAnswer =
@@ -129,7 +125,7 @@ export function countSettledTurnDeliveryPayloads(params: {
     const syntheticFallback =
       payload.isError === true &&
       Object.keys(payload).every((key) => key === "text" || key === "isError") &&
-      ((hasNoAssistantText && metadata?.toolErrorWarning) ||
+      ((!hasComposedVisibleAnswer && metadata?.toolErrorWarning) ||
         (canFinalizeProviderError && metadata?.terminalProviderError));
     if (syntheticFallback) {
       return false;

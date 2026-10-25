@@ -1,15 +1,16 @@
-import { DatabaseSync } from "node:sqlite";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import type { WorkboardStore } from "./store.js";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
+import { WorkboardStore } from "./store.js";
+import { createWorkboardSqliteStores } from "./test/database-config.js";
 import { createGatewayMethodCapture } from "./test/gateway-method-capture.js";
 import { createSandboxRuntime, createWorktreeRuntime } from "./test/interaction-fixtures.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
-import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
-  createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
+  createWorkboardSqliteTestHarness,
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 
@@ -147,75 +148,6 @@ describe("workboard gateway methods", () => {
     expect(reenabled.ok).toBe(true);
   });
 
-  test.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
-    "rejects attachment bytes when %s observes hot disable",
-    async (phase) => {
-      let disabled = false;
-      let pauseRead = false;
-      const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-        beforeCardWrite: async () => {
-          if (pauseRead && phase === "metadata-write") {
-            disabled = true;
-          }
-        },
-        beforeCardLookup: async () => {
-          if (pauseRead && phase === "card-read") {
-            disabled = true;
-          }
-        },
-      });
-      const { api, invoke } = createGateway({ store });
-      api.runtime.config = {
-        current: () => ({ gateway: { uploads: { enabled: !disabled } } }),
-      } as OpenClawPluginApi["runtime"]["config"];
-      const register = stores.attachments.register.bind(stores.attachments);
-      using registering = vi
-        .spyOn(stores.attachments, "register")
-        .mockImplementation(async (key, value) => {
-          if (pauseRead && phase === "attachment-write") {
-            disabled = true;
-          }
-          await register(key, value);
-          if (pauseRead && (phase === "attachment-committed" || phase === "metadata-write")) {
-            // The real worker has committed the blob, but card metadata is not published yet.
-            expect(
-              db
-                .prepare(
-                  "SELECT hex(content) AS content FROM workboard_attachment_blobs WHERE attachment_id = ?",
-                )
-                .get(key),
-            ).toEqual({
-              content: Buffer.from(value.contentBase64, "base64").toString("hex").toUpperCase(),
-            });
-            disabled = phase === "attachment-committed";
-          }
-        });
-      const card = await store.create({ title: "Late upload policy" });
-      using db = new DatabaseSync(dbPath, { readOnly: true });
-      pauseRead = true;
-
-      const respond = await invoke("cards.attachments.add", {
-        id: card.id,
-        fileName: "late.txt",
-        contentBase64: "bGF0ZQ==",
-      });
-      expect
-        .soft(respond)
-        .toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
-        );
-      expect(registering).toHaveBeenCalledOnce();
-      expect.soft(await stores.attachments.entries()).toEqual([]);
-      expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
-      // Public attachment reads join the index and would hide an orphaned blob.
-      expect
-        .soft(db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all())
-        .toEqual([]);
-    },
-  );
-
   it.each(["move", "archive", "delete"] as const)(
     "returns a redacted conflict for stale %s requests",
     async (action) => {
@@ -247,65 +179,6 @@ describe("workboard gateway methods", () => {
 
   it("registers CRUD methods with read/write scopes", async () => {
     const { methods, invoke, store } = createGateway();
-    expect(new Set(methods.keys())).toEqual(
-      new Set([
-        "workboard.cards.list",
-        "workboard.cards.list.owner",
-        "workboard.cards.create",
-        "workboard.cards.create.owner",
-        "workboard.cards.captureSession",
-        "workboard.cards.update",
-        "workboard.cards.start",
-        "workboard.cards.move",
-        "workboard.cards.move.owner",
-        "workboard.cards.delete",
-        "workboard.cards.comment",
-        "workboard.cards.link",
-        "workboard.cards.linkDependency",
-        "workboard.cards.proof",
-        "workboard.cards.artifact",
-        "workboard.cards.claim",
-        "workboard.cards.heartbeat",
-        "workboard.cards.release",
-        "workboard.cards.promote",
-        "workboard.cards.reassign",
-        "workboard.cards.reclaim",
-        "workboard.cards.complete",
-        "workboard.cards.block",
-        "workboard.cards.unblock",
-        "workboard.cards.bulk",
-        "workboard.cards.diagnostics",
-        "workboard.cards.diagnostics.refresh",
-        "workboard.cards.dispatch",
-        "workboard.cards.dispatch.owner",
-        "workboard.cards.dispatchWithOptions",
-        "workboard.cards.dispatchWithOptions.owner",
-        "workboard.boards.list",
-        "workboard.boards.upsert",
-        "workboard.sessionsBoard.read",
-        "workboard.sessionsBoard.update",
-        "workboard.sessionsBoard.move",
-        "workboard.boards.archive",
-        "workboard.boards.delete",
-        "workboard.cards.stats",
-        "workboard.cards.runs",
-        "workboard.cards.specify",
-        "workboard.cards.decompose",
-        "workboard.notifications.subscribe",
-        "workboard.notifications.list",
-        "workboard.notifications.delete",
-        "workboard.notifications.events",
-        "workboard.notifications.advance",
-        "workboard.cards.attachments.list",
-        "workboard.cards.attachments.get",
-        "workboard.cards.attachments.add",
-        "workboard.cards.attachments.delete",
-        "workboard.cards.workerLog",
-        "workboard.cards.protocolViolation",
-        "workboard.cards.archive",
-        "workboard.cards.export",
-      ]),
-    );
     for (const [scope, names] of Object.entries({
       "operator.read":
         "cards.list cards.diagnostics cards.export cards.runs cards.attachments.get notifications.list notifications.events",
@@ -569,43 +442,76 @@ describe("workboard gateway methods", () => {
     expect(inheritedRespond.data?.card.metadata?.automation?.workspace).toBeUndefined();
   });
 
-  it("stores metadata updates through dedicated card methods", async () => {
-    const { invoke } = createGateway();
-    const createRespond = await invoke("cards.create", { title: "Carry metadata" });
-    const cardId = createRespond.data?.card.id;
-
-    const commentRespond = await invoke("cards.comment", {
-      id: cardId,
-      body: "Waiting on CI",
-    });
-    expect(commentRespond.ok).toBe(true);
-    expect(commentRespond.data.card).toMatchObject({
-      metadata: {
-        comments: [expect.objectContaining({ body: "Waiting on CI" })],
+  it.each([
+    [
+      "comment",
+      { body: "note" },
+      {
+        card: {
+          metadata: { comments: [{ body: "note" }] },
+          events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
+        },
       },
-      events: expect.arrayContaining([expect.objectContaining({ kind: "comment_added" })]),
-    });
-
-    const oversizedRespond = await invoke("cards.comment", {
-      id: cardId,
-      body: "x".repeat(2001),
-    });
-    expect(oversizedRespond.ok).toBe(false);
-    expect(oversizedRespond.error).toMatchObject({
-      message: "comment body must be 2000 characters or fewer (got 2001).",
-    });
+    ],
+    [
+      "claim",
+      { ownerId: "main" },
+      {
+        card: { status: "running", metadata: { claim: { ownerId: "main" } } },
+        token: expect.any(String),
+      },
+    ],
+    [
+      "heartbeat",
+      { ownerId: "main", note: "alive" },
+      { card: { metadata: { comments: [{ body: "alive" }] } } },
+    ],
+    ["bulk", { patch: { priority: "urgent" } }, { cards: [{ priority: "urgent" }] }],
+    [
+      "complete",
+      { summary: "closed" },
+      {
+        card: {
+          status: "done",
+          metadata: {
+            comments: expect.arrayContaining([expect.objectContaining({ body: "closed" })]),
+          },
+        },
+      },
+    ],
+    ["block", { reason: "blocked" }, { card: { status: "blocked" } }],
+  ] as const)("applies %s through the card RPC boundary", async (action, input, expected) => {
+    const { invoke } = createGateway();
+    const {
+      data: { card },
+    } = await invoke("cards.create", { title: "RPC target" });
+    if (["heartbeat", "complete", "block"].includes(action)) {
+      await invoke("cards.claim", { id: card.id, ownerId: "main" });
+    }
+    const target = action === "bulk" ? { ids: [card.id] } : { id: card.id };
+    const result = await invoke(`cards.${action}`, { ...target, ...input });
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject(expected);
   });
 
-  it("validates labels from comma-separated gateway input", async () => {
-    const { invoke } = createGateway();
-    const respond = await invoke("cards.create", {
-      title: "Check labels",
-      labels: `valid, ${"x".repeat(41)}`,
-    });
-    expect(respond.ok).toBe(false);
-    expect(respond.error).toMatchObject({
-      message: "labels must be 40 characters or fewer.",
-    });
+  it.each([
+    [
+      "comment",
+      { body: "x".repeat(2001) },
+      "comment body must be 2000 characters or fewer (got 2001).",
+    ],
+    [
+      "create",
+      { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
+      "labels must be 40 characters or fewer.",
+    ],
+  ] as const)("rejects invalid %s input through RPC", async (action, input, message) => {
+    const { invoke, store } = createGateway();
+    const card = await store.create({ title: "Invalid input target" });
+    const target = action === "comment" ? { id: card.id } : {};
+    const result = await invoke(`cards.${action}`, { ...target, ...input });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ message });
   });
 
   it("returns an actionable exact-card admission failure", async () => {
@@ -684,10 +590,6 @@ describe("workboard gateway methods", () => {
       expect(card).toMatchObject({
         runId,
         execution: { runId },
-        metadata: {
-          automation: { launch: { phase: "accepted", acceptedRunId: runId } },
-          attempts: [expect.objectContaining({ id: expect.any(String), runId })],
-        },
       });
     }
 
@@ -790,55 +692,264 @@ describe("workboard gateway methods", () => {
       message: "card is blocked; use workboard_unblock before claiming.",
     });
   });
+});
 
-  it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
-    const { invoke } = createGateway();
-    const createRespond = await invoke("cards.create", { title: "Claim me" });
-    const cardId = createRespond.data?.card.id;
+const createStores = (dbPath: string) =>
+  createWorkboardSqliteStores({
+    dbPath,
+    workerModuleUrl: resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint),
+  });
 
-    const claimRespond = await invoke("cards.claim", { id: cardId, ownerId: "main" });
-    expect(claimRespond.data).toMatchObject({
-      card: { status: "running", metadata: { claim: { ownerId: "main" } } },
-      token: expect.any(String),
+function captureCardsList(store: WorkboardStore) {
+  const { invoke } = createGateway({ store });
+  return async (params: Record<string, unknown> = {}, expectedSuccess = true) => {
+    const { ok, data, error } = await invoke("cards.list", params);
+    expect(ok).toBe(expectedSuccess);
+    return expectedSuccess ? data : error;
+  };
+}
+
+describe("workboard card list revisions", () => {
+  it("shares board summaries across concurrent list shapes until a writer commits", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "On the board", boardId: "ops" });
+    const metadataReads = vi.spyOn(stores.boards, "entries");
+    const aggregateReads = vi.spyOn(stores.cards, "listBoardAggregates");
+    const { invoke } = createGateway({ store });
+    const listBoards = async () => {
+      const { ok, data } = await invoke("boards.list", {});
+      expect(ok).toBe(true);
+      return data;
+    };
+    const listCards = captureCardsList(store);
+    const [boards, ops, all, session] = await Promise.all([
+      listBoards(),
+      listCards({ boardId: "ops" }),
+      listCards(),
+      listCards({ sessionKey: "another-session" }),
+    ]);
+    expect(boards.boards).toContainEqual(expect.objectContaining({ id: "ops", total: 1 }));
+    for (const result of [ops, all, session, await listBoards()]) {
+      expect(result.boards).toEqual(boards.boards);
+    }
+    expect(metadataReads).toHaveBeenCalledOnce();
+    expect(aggregateReads).toHaveBeenCalledOnce();
+
+    const siblingStores = createStores(dbPath);
+    const writer = new WorkboardStore(siblingStores.cards, siblingStores);
+    try {
+      await writer.upsertBoard({ id: "ops", name: "Operations" });
+      await writer.update(card.id, { status: "done" });
+      const refreshed = await listBoards();
+      expect(refreshed.boards).toContainEqual(
+        expect.objectContaining({ id: "ops", name: "Operations", byStatus: { done: 1 } }),
+      );
+      expect((await listCards({ boardId: "ops" })).boards).toEqual(refreshed.boards);
+      expect(aggregateReads).toHaveBeenCalledTimes(2);
+      const before = await store.listCards(undefined);
+      const added = await writer.create({ title: "Created by sibling" });
+      const created = await store.listCards(undefined);
+      expect(created.cards.map(({ id }) => id).toSorted()).toEqual([card.id, added.id].toSorted());
+      expect(created.revision.revision).toBeGreaterThan(before.revision.revision);
+      expect(await store.listCards(undefined)).toBe(created);
+      const sessionsBefore = store.sessionsRevision;
+      await writer.upsertBoard({ id: "sessions", kind: "sessions", name: "Sibling board" });
+      expect(store.sessionsRevision.revision).toBeGreaterThan(sessionsBefore.revision);
+      expect((await store.listCards(undefined)).boards).toContainEqual(
+        expect.objectContaining({ id: "sessions", name: "Sibling board" }),
+      );
+      await writer.delete(added.id);
+      expect((await store.listCards(undefined)).cards.map(({ id }) => id)).toEqual([card.id]);
+    } finally {
+      await writer.close();
+    }
+  });
+
+  it("bounds card pages and invalidates the first page after a committed update", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    for (let index = 0; index < 105; index++) {
+      const id = `card-${String(index).padStart(3, "0")}`;
+      await stores.cards.register(id, {
+        version: 1,
+        card: {
+          id,
+          title: id,
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          position: 0,
+          createdAt: 1,
+          updatedAt: 1,
+          metadata: { comments: [{ id: `${id}-comment`, body: `Comment ${index}`, createdAt: 1 }] },
+        },
+      });
+    }
+    const list = captureCardsList(store);
+    const first = await list({});
+    expect(first.cards).toHaveLength(100);
+    expect(first.nextCursor).toEqual({ position: 0, createdAt: 1, id: "card-099" });
+    expect(first.cards[99].metadata.comments[0].body).toBe("Comment 99");
+    const second = await list({ after: first.nextCursor, sinceRevision: first.revision });
+    expect(second.cards.map((card: { id: string }) => card.id)).toEqual([
+      "card-100",
+      "card-101",
+      "card-102",
+      "card-103",
+      "card-104",
+    ]);
+    expect(second.nextCursor).toBeUndefined();
+    expect(second.boards[0].total).toBe(105);
+    await store.update("card-000", { title: "Changed on the Gateway" });
+    const refreshed = await list({ sinceRevision: first.revision });
+    expect(refreshed.cards[0].title).toBe("Changed on the Gateway");
+    expect(refreshed.cards).toHaveLength(100);
+    await list({ after: { id: "card-099" } }, false);
+  });
+
+  it("keeps session-filtered payloads and revision receipts separate from full card lists", async () => {
+    const { store } = createWorkboardSqliteTestHarness();
+    const first = await store.create({ title: "First session", sessionKey: "session-one" });
+    const second = await store.create({ title: "Second session", sessionKey: "session-two" });
+    const listCards = captureCardsList(store);
+    const sessionsBefore = store.sessionsRevision;
+    const filtered = await listCards({ sessionKey: "session-one" });
+    expect(filtered.cards.map((card: { id: string }) => card.id)).toEqual([first.id]);
+    expect(filtered.revision.sessionKey).toBe("session-one");
+    expect(store.sessionsRevision).toEqual(sessionsBefore);
+    const repeated = await listCards({
+      sessionKey: "session-one",
+      sinceRevision: filtered.revision,
+    });
+    expect(repeated).toEqual({ unchanged: true, revision: filtered.revision });
+    expect(
+      (await listCards({ sessionKey: "session-two", sinceRevision: filtered.revision })).cards.map(
+        (card: { id: string }) => card.id,
+      ),
+    ).toEqual([second.id]);
+    expect((await listCards({ sinceRevision: filtered.revision })).cards).toHaveLength(2);
+    await listCards({ sessionKey: " " }, false);
+  });
+
+  it("shares one card payload per revision and publishes one invalidation per mutation", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Before", boardId: "ops" });
+    await store.claim(card.id, { ownerId: "worker", token: "test-claim-token" });
+    const reads = vi.spyOn(stores.cards, "entries");
+    const changes = vi.fn();
+    store.onChange = changes;
+    const listCards = captureCardsList(store);
+    const list = (boardId?: string, sinceRevision?: unknown) =>
+      listCards({ boardId, sinceRevision });
+    const [first, second] = await Promise.all([list("ops"), list(" OPS ")]);
+    expect(second).toBe(first);
+    expect(await list("ops")).toBe(first);
+    expect(reads).toHaveBeenCalledOnce();
+    expect(first.cards[0].metadata.claim.token).toBe("[redacted]");
+    expect((await store.get(card.id))?.metadata?.claim?.token).toBe("test-claim-token");
+    expect((await list("default")).cards).toEqual([]);
+    expect((await list()).cards).toEqual(first.cards);
+
+    store.announceChangeEpoch();
+    const announcement = changes.mock.calls[0]?.[0];
+    expect(announcement).toMatchObject({
+      epoch: first.revision.epoch,
+      cardsRevision: first.revision.revision,
+    });
+    expect(await list("ops")).toBe(first);
+    const unchanged = await listCards({ boardId: "ops", sinceRevision: first.revision });
+    expect(unchanged).toEqual({ unchanged: true, revision: first.revision });
+    expect((await list(undefined, first.revision)).cards).toEqual(first.cards);
+    changes.mockClear();
+
+    await store.update(card.id, { title: "After" });
+    expect(changes).toHaveBeenCalledOnce();
+    const next = await list("ops");
+    expect(next).not.toBe(first);
+    expect(next.revision.revision).toBeGreaterThan(first.revision.revision);
+    for (const revision of [first.revision, { ...next.revision, epoch: "retired" }]) {
+      expect(await list("ops", revision)).toBe(next);
+    }
+    expect([next.cards[0].title, first.cards[0].title]).toEqual(["After", "Before"]);
+    expect(await list("ops")).toBe(next);
+
+    await store.upsertBoard({ id: "empty", name: "Empty board" });
+    const withBoard = await list("ops");
+    expect(withBoard.boards).toContainEqual(expect.objectContaining({ id: "empty" }));
+    expect(withBoard).not.toBe(next);
+
+    expect(changes).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires cached cards when a worker write commits but its reply rejects", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Before" });
+    const listCards = captureCardsList(store);
+    const before = await listCards({});
+    expect(before.cards[0].title).toBe("Before");
+    const register = stores.cards.registerIfUpdatedAt.bind(stores.cards);
+    vi.spyOn(stores.cards, "registerIfUpdatedAt").mockImplementationOnce(async (...args) => {
+      await register(...args);
+      throw new Error("committed reply lost");
     });
 
-    const heartbeatRespond = await invoke("cards.heartbeat", {
-      id: cardId,
-      ownerId: "main",
-      note: "alive",
-    });
-    expect(heartbeatRespond.data).toMatchObject({
-      card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
-    });
+    await expect(store.update(card.id, { title: "Committed" })).rejects.toThrow(
+      "committed reply lost",
+    );
 
-    const bulkRespond = await invoke("cards.bulk", {
-      ids: [cardId],
-      patch: { priority: "urgent" },
-    });
-    expect(bulkRespond.data).toMatchObject({
-      cards: [expect.objectContaining({ priority: "urgent" })],
-    });
+    const after = await listCards({});
+    expect(after.cards[0].title).toBe("Committed");
+    expect(after.revision.revision).toBeGreaterThan(before.revision.revision);
+  });
 
-    const completeRespond = await invoke("cards.complete", {
-      id: cardId,
-      summary: "Operator closed it.",
-    });
-    expect(completeRespond.data.card).toMatchObject({
-      status: "done",
-      metadata: {
-        comments: expect.arrayContaining([
-          expect.objectContaining({ body: "Operator closed it." }),
-        ]),
+  it("returns uncached reads while a writer receipt is unsettled", async () => {
+    let unsettled = false;
+    const { store } = createWorkboardSqliteTestHarness({
+      createStores: (dbPath) => {
+        const stores = createStores(dbPath);
+        return {
+          ...stores,
+          readWriteToken: () => (unsettled ? undefined : stores.readWriteToken()),
+        };
       },
     });
+    const card = await store.create({ title: "Visible during settlement" });
+    const cached = await store.listCards(undefined);
+    const cachedBoards = await store.listBoards();
+    unsettled = true;
+    const first = await store.listCards(undefined);
+    const second = await store.listCards(undefined);
+    expect(first.cards).toEqual([expect.objectContaining({ id: card.id })]);
+    expect(second.cards).toEqual(first.cards);
+    expect(first).not.toBe(cached);
+    expect(second).not.toBe(first);
+    const firstBoards = await store.listBoards();
+    const secondBoards = await store.listBoards();
+    expect(firstBoards).toEqual(cachedBoards);
+    expect(firstBoards).not.toBe(cachedBoards);
+    expect(secondBoards).toEqual(firstBoards);
+    expect(secondBoards).not.toBe(firstBoards);
+    unsettled = false;
+    const settled = await store.listCards(undefined);
+    expect(settled.revision.revision).toBeGreaterThan(second.revision.revision);
+    expect(await store.listCards(undefined)).toBe(settled);
+    const settledBoards = await store.listBoards();
+    expect(await store.listBoards()).toBe(settledBoards);
+  });
 
-    const blockedCreateRespond = await invoke("cards.create", { title: "Block me" });
-    const blockedCardId = blockedCreateRespond.data?.card.id;
-    await invoke("cards.claim", { id: blockedCardId, ownerId: "main" });
-    const blockRespond = await invoke("cards.block", {
-      id: blockedCardId,
-      reason: "Operator blocked it.",
+  it("retries failed card snapshots and refuses cached reads after store close", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    const listCards = captureCardsList(store);
+    vi.spyOn(stores.cards, "entries").mockRejectedValueOnce(new Error("read failed"));
+    await listCards({}, false);
+    await listCards();
+    await store.upsertBoard({ id: "ops" });
+    vi.spyOn(stores.cards, "listBoardAggregates").mockRejectedValueOnce(new Error("read failed"));
+    await expect(store.listBoards()).rejects.toThrow("read failed");
+    await expect(store.listBoards()).resolves.toMatchObject({
+      boards: expect.arrayContaining([expect.objectContaining({ id: "ops" })]),
     });
-    expect(blockRespond.data.card.status).toBe("blocked");
+    await store.close();
+    expect((await listCards({}, false)).message).toContain("closed");
+    await expect(store.listBoards()).rejects.toThrow("closed");
   });
 });

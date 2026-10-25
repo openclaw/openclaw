@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type * as LanceDB from "@lancedb/lancedb";
 import type * as Arrow from "apache-arrow";
+import type { FileLockHandle } from "openclaw/plugin-sdk/file-lock";
 import type { MemoryCategory } from "./config.js";
+import { acquireMemoryTableUsage, withExclusiveMemoryTable } from "./lancedb-custody.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
   hasAgentScopeColumn,
@@ -70,12 +72,6 @@ function createMemoryTableSchema(vectorDim: number): Arrow.Schema {
 }
 
 function formatQueryFilter(filter: MemoryQueryFilter): string {
-  if (filter.operator === "LIKE" && typeof filter.value !== "string") {
-    throw new Error("LIKE requires a string memory filter value");
-  }
-  if (typeof filter.value === "number" && !Number.isFinite(filter.value)) {
-    throw new Error("Memory filter number must be finite");
-  }
   const value =
     typeof filter.value === "string" ? quoteLanceSqlString(filter.value) : String(filter.value);
   return `${filter.column} ${filter.operator} ${value}`;
@@ -90,12 +86,43 @@ export class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
+  private usage: FileLockHandle | null = null;
+  private closing: Promise<void> | null = null;
+  private closed = false;
+  private pending = new Set<Promise<unknown>>();
 
   constructor(
     private readonly dbPath: string,
     private readonly vectorDim: number,
     private readonly storageOptions?: Record<string, string>,
   ) {}
+
+  start(): void {
+    if (this.closing) {
+      throw new Error("Memory database is still closing");
+    }
+    this.closed = false;
+  }
+
+  private async runOperation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.closed) {
+      throw new Error("Memory database is closed; restart the memory service before using it.");
+    }
+    const operation = run();
+    this.pending.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.pending.delete(operation);
+    }
+  }
+
+  private useTable<T>(run: (table: LanceDB.Table) => Promise<T>): Promise<T> {
+    return this.runOperation(async () => {
+      await this.ensureInitialized();
+      return await run(this.table!);
+    });
+  }
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) {
@@ -115,13 +142,12 @@ export class MemoryDB {
   }
 
   private async doInitialize(): Promise<void> {
-    const lancedb = await loadLanceDbModule();
-    const connectionOptions: LanceDB.ConnectionOptions = this.storageOptions
-      ? { storageOptions: this.storageOptions }
-      : {};
-    const db = await lancedb.connect(this.dbPath, connectionOptions);
+    const usage = await acquireMemoryTableUsage(this.dbPath);
+    let db: LanceDB.Connection | null = null;
     let table: LanceDB.Table | null = null;
     try {
+      const lancedb = await loadLanceDbModule();
+      db = await lancedb.connect(this.dbPath, { storageOptions: this.storageOptions });
       const tables = await db.tableNames();
       // A competing initializer may need to retry startup before its first version is readable.
       table = tables.includes(MEMORY_TABLE_NAME)
@@ -135,25 +161,26 @@ export class MemoryDB {
 
       this.db = db;
       this.table = table;
+      this.usage = usage;
     } catch (error) {
       table?.close();
-      db.close();
+      db?.close();
+      await usage?.release();
       throw error;
     }
   }
 
   async store(agentId: string, entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
-    await this.ensureInitialized();
-
-    const fullEntry: MemoryEntry = {
-      ...entry,
-      id: randomUUID(),
-      createdAt: Date.now(),
-    };
-    const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
-
-    await this.table!.add([storedEntry]);
-    return fullEntry;
+    return await this.useTable(async (table) => {
+      const fullEntry: MemoryEntry = {
+        ...entry,
+        id: randomUUID(),
+        createdAt: Date.now(),
+      };
+      const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
+      await table.add([storedEntry]);
+      return fullEntry;
+    });
   }
 
   async search(
@@ -163,14 +190,15 @@ export class MemoryDB {
     minScore = 0.5,
     executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
   ): Promise<MemorySearchResult[]> {
-    await this.ensureInitialized();
-
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
     // must never enter this agent's candidate set or top-K.
-    const results = await this.table!.vectorSearch(vector)
-      .where(memoryAgentPredicate(agentId))
-      .limit(limit)
-      .toArray(executionOptions);
+    const results = await this.useTable((table) =>
+      table
+        .vectorSearch(vector)
+        .where(memoryAgentPredicate(agentId))
+        .limit(limit)
+        .toArray(executionOptions),
+    );
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;
@@ -215,34 +243,83 @@ export class MemoryDB {
   }
 
   async query(agentId: string, options: MemoryQueryOptions): Promise<Record<string, unknown>[]> {
-    await this.ensureInitialized();
-
-    let query = this.table!.query()
-      // LanceDB 0.30 replaces rather than combines repeated where() calls.
-      // Scope and operator filter stay one predicate so scope cannot be lost.
-      .where(scopedPredicate(agentId, options.filter))
-      .select(options.columns);
-    if (options.limit !== undefined) {
-      query = query.limit(options.limit);
-    }
-    return (await query.toArray()) as Record<string, unknown>[];
+    return await this.useTable(async (table) => {
+      let query = table
+        .query()
+        // LanceDB 0.30 replaces rather than combines repeated where() calls.
+        // Scope and operator filter stay one predicate so scope cannot be lost.
+        .where(scopedPredicate(agentId, options.filter))
+        .select(options.columns);
+      if (options.limit !== undefined) {
+        query = query.limit(options.limit);
+      }
+      return (await query.toArray()) as Record<string, unknown>[];
+    });
   }
 
   async delete(agentId: string, id: string): Promise<boolean> {
-    await this.ensureInitialized();
     if (!UUID_PATTERN.test(id)) {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
-    const result = await this.table!.delete(predicate);
+    const result = await this.useTable((table) => table.delete(predicate));
     return result.numDeletedRows > 0;
   }
 
-  close(): void {
-    this.table?.close();
-    this.db?.close();
-    this.table = null;
-    this.db = null;
-    this.initPromise = null;
+  async optimize(assertCurrent: () => void = () => {}): Promise<{
+    before: { rows: number; fragments: number };
+    after: { rows: number; fragments: number };
+  }> {
+    return await this.runOperation(() =>
+      withExclusiveMemoryTable(this.dbPath, async () => {
+        const lancedb = await loadLanceDbModule();
+        const connection = await lancedb.connect(this.dbPath, {
+          storageOptions: this.storageOptions,
+        });
+        let table: LanceDB.Table | null = null;
+        try {
+          assertCurrent();
+          if (!(await connection.tableNames()).includes(MEMORY_TABLE_NAME)) {
+            return { before: { rows: 0, fragments: 0 }, after: { rows: 0, fragments: 0 } };
+          }
+          table = await connection.openTable(MEMORY_TABLE_NAME);
+          const before = await table.stats();
+          assertCurrent();
+          // The default prunes seven-day-old versions. Preserve all version history.
+          await table.optimize({ cleanupOlderThan: new Date(0), deleteUnverified: false });
+          const after = await table.stats();
+          if (after.numRows !== before.numRows) {
+            throw new Error(
+              `Memory row count changed during optimization: ${before.numRows} -> ${after.numRows}`,
+            );
+          }
+          return {
+            before: { rows: before.numRows, fragments: before.fragmentStats.numFragments },
+            after: { rows: after.numRows, fragments: after.fragmentStats.numFragments },
+          };
+        } finally {
+          table?.close();
+          connection.close();
+        }
+      }),
+    );
+  }
+
+  close(): Promise<void> {
+    this.closed = true;
+    this.closing ??= (async () => {
+      // Native calls are not cancellable; retain custody until accepted work settles.
+      await Promise.allSettled(this.pending);
+      this.table?.close();
+      this.db?.close();
+      this.table = null;
+      this.db = null;
+      this.initPromise = null;
+      await this.usage?.release();
+      this.usage = null;
+    })().finally(() => {
+      this.closing = null;
+    });
+    return this.closing;
   }
 }

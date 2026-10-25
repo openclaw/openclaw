@@ -50,13 +50,14 @@ it.each(["ordinary", "consumer"] as const)(
       callback();
       expect(getScope()).toBe(outer);
     });
-    const frames = vi.spyOn(AsyncLocalStorage.prototype, "run");
+    const frames = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     hook(() => {
       calls++;
       const scope = getScope();
       expect(scope?.pluginId).toBe(instance.pluginId);
       expect(scope).not.toBe(outer);
     });
+    // Each independent view installs one frame carrying invocation and recovery.
     expect(frames).toHaveBeenCalledTimes(2);
     frames.mockRestore();
     expect(getScope()).toBeUndefined();

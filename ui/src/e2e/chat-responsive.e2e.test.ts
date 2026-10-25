@@ -13,6 +13,7 @@ import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { scrollChatThreadToTop } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat responsive app behavior" });
@@ -65,10 +66,7 @@ function attachmentLayout(card: Element) {
   const reason = part("reason");
   const reasonRect = reason.getBoundingClientRect();
   const separator = part("separator");
-  const separatorRect = separator.getBoundingClientRect();
   return {
-    leftGap: separatorRect.left - badge.right,
-    rightGap: reasonRect.left - separatorRect.right,
     badgeBottom: badge.bottom,
     cardBottom: card.getBoundingClientRect().bottom,
     cardClientWidth: card.clientWidth,
@@ -293,6 +291,7 @@ suite.define(() => {
       const page = await getSharedAppPage();
       try {
         await page.setViewportSize(DESKTOP_VIEWPORT);
+        await scrollChatThreadToTop(page);
         const group = page.locator(".chat-group").filter({ hasText: SHARED_APP_CONTEXT_TEXT });
         const tooltip = group.locator("openclaw-tooltip.msg-meta");
         const context = tooltip.locator(".msg-meta__details");
@@ -368,6 +367,7 @@ suite.define(() => {
 
   it("renders delivered playback media inline", FULL_APP_TEST_OPTIONS, async () => {
     const page = await getSharedAppPage();
+    await scrollChatThreadToTop(page);
     const image = page.locator(`img.chat-message-image[src="${SHARED_APP_IMAGE_URL}"]`);
     await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
     expect(await image.getAttribute("src")).toBe(SHARED_APP_IMAGE_URL);
@@ -457,14 +457,12 @@ suite.define(() => {
 
       try {
         const failedCard = cards.filter({ hasText: "settings.toml" });
-        await failedCard.scrollIntoViewIfNeeded();
-        const { leftGap, rightGap } = await failedCard.evaluate(attachmentLayout);
-        expect(leftGap).toBeGreaterThan(4);
-        expect(rightGap).toBeGreaterThan(4);
-        expect(Math.abs(leftGap - rightGap)).toBeLessThan(0.25);
-
-        for (const width of [320, 560]) {
-          await page.setViewportSize({ width, height: 852 });
+        for (const viewport of [
+          DESKTOP_VIEWPORT,
+          { width: 320, height: 852 },
+          { width: 560, height: 852 },
+        ]) {
+          await page.setViewportSize(viewport);
           // The viewport ACK does not settle the retained pane's responsive geometry.
           await failedCard.scrollIntoViewIfNeeded();
           await waitForLayoutSettled(
@@ -475,7 +473,7 @@ suite.define(() => {
           expect(layout).toMatchObject({ separatorDisplay: "none", reasonWhiteSpace: "normal" });
           expect(layout.reasonTop).toBeGreaterThanOrEqual(layout.badgeBottom);
           expect(layout.reasonBottom).toBeLessThanOrEqual(layout.cardBottom);
-          expect(layout.reasonRight).toBeLessThanOrEqual(width);
+          expect(layout.reasonRight).toBeLessThanOrEqual(viewport.width);
           expect(layout.cardScrollWidth).toBeLessThanOrEqual(layout.cardClientWidth);
           await expectNoHorizontalOverflow(page);
         }

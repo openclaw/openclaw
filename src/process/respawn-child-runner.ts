@@ -49,14 +49,6 @@ export function runRespawnChildWithSignalBridge(params: {
       // Best-effort shutdown fallback.
     }
   };
-  const requestChildTermination = (): void => {
-    signalChild("SIGTERM");
-    signalForceKillTimer = setTimeout(() => {
-      hardKillBackstopStarted = true;
-      signalChild("SIGKILL");
-    }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
-    signalForceKillTimer.unref?.();
-  };
   const scheduleParentExit = (signal: NodeJS.Signals): void => {
     if (childExited) {
       return;
@@ -66,7 +58,12 @@ export function runRespawnChildWithSignalBridge(params: {
       return;
     }
     signalExitTimer = setTimeout(() => {
-      requestChildTermination();
+      signalChild("SIGTERM");
+      signalForceKillTimer = setTimeout(() => {
+        hardKillBackstopStarted = true;
+        signalChild("SIGKILL");
+      }, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
+      signalForceKillTimer.unref?.();
     }, RESPAWN_SIGNAL_EXIT_GRACE_MS);
     signalExitTimer.unref?.();
   };

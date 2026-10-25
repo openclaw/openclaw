@@ -47,7 +47,6 @@ export function selectPendingApprovalRequest(params: {
 
   return {
     pending: params.pending.find((entry) => entry.requestId === params.requested),
-    reply: undefined,
   };
 }
 

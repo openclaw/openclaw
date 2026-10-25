@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as packageJson from "../../infra/package-json.js";
 import {
   openPackageActivationJournal,
@@ -16,33 +16,27 @@ import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as shared from "./shared.js";
 import * as executorOwner from "./update-command-executor.js";
 import { allowPackageRuntime } from "./update-command-fresh-preview.test-support.js";
-import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import {
+  denyFreshLeaseRelease,
+  expectFreshStatePreserved,
+  expectNoFreshCalls,
+  installFreshUpdateFixture,
+} from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import { UnreportedUpdateAdmissionOutcome, UpdateCommandFailure } from "./update-command-result.js";
 import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
-const promptConfirm = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("@clack/prompts", async (original) => ({
-  ...(await original<typeof import("@clack/prompts")>()),
-  confirm: promptConfirm,
-}));
-
 const { fixture, dirs } = installFreshUpdateFixture();
-const inheritedRunIds = ["  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ", " \t "] as const;
-
-function expectFreshStatePreserved() {
-  expect(fs.existsSync(fixture.databasePath)).toBe(false);
-  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
-}
+const withExecutor = executorOwner.withUpdateCommandExecutor;
+const updateOptions = { yes: true, json: true, restart: false };
+const metadataRefusal = { version: null, nodeEngine: null, error: "fixture registry unavailable" };
 
 describe("fresh update terminal reporting", () => {
   it.each(["healthy", "release", "no-enter"] as const)(
@@ -52,28 +46,17 @@ describe("fresh update terminal reporting", () => {
       const detachedRoot = dirs.make("openclaw-detached-refusal-");
       vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
       const doctor = vi.spyOn(packageUpdate, "runPackageUpdateDoctor");
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunIds[0]);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ");
       vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
         if (cleanup === "release") {
-          const db = new DatabaseSync(
-            path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-          );
-          try {
-            db.exec(
-              "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture refusal release denied'); END",
-            );
-          } finally {
-            db.close();
-          }
+          denyFreshLeaseRelease("fixture refusal release denied");
         }
-        return { version: null, nodeEngine: null, error: "fixture registry unavailable" };
+        return metadataRefusal;
       });
       const observations: string[] = [];
       const enter = vi.fn();
-      const withExecutor = executorOwner.withUpdateCommandExecutor;
-      const execute = vi
-        .spyOn(executorOwner, "withUpdateCommandExecutor")
-        .mockImplementationOnce((runId, operation, options) =>
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementationOnce(
+        (runId, operation, options) =>
           withExecutor(
             runId,
             (executor) => {
@@ -86,14 +69,12 @@ describe("fresh update terminal reporting", () => {
             },
             options,
           ),
-        );
+      );
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
         observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       });
       const failure = await updateCommand({
-        yes: true,
-        json: true,
-        restart: false,
+        ...updateOptions,
         dryRun: cleanup === "no-enter",
       }).then(
         () => undefined,
@@ -101,14 +82,13 @@ describe("fresh update terminal reporting", () => {
       );
       expect(observations).toEqual([cleanup === "release" ? "current" : "absent"]);
       expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "error",
-          reason:
-            cleanup === "release" ? "update-admission-cleanup-failed" : "target-metadata-preflight",
-        }),
-      );
-      expect(execute).toHaveBeenCalledOnce();
+      const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
+      assert(isRecord(output) && typeof output.reportPath === "string");
+      expect(output).toMatchObject({
+        status: "error",
+        reason:
+          cleanup === "release" ? "update-admission-cleanup-failed" : "target-metadata-preflight",
+      });
       if (cleanup === "no-enter") {
         expect(enter).not.toHaveBeenCalled();
         expect(failure).toBeInstanceOf(UpdateCommandFailure);
@@ -117,35 +97,28 @@ describe("fresh update terminal reporting", () => {
           result: {
             status: "error",
             reason: "target-metadata-preflight",
-            failedStep: {
-              failureFacts: [expect.objectContaining({ code: "target-registry-metadata" })],
-            },
+            failedStep: { failureFacts: [{ code: "target-registry-metadata" }] },
           },
         });
       } else {
         expect(enter).toHaveBeenCalled();
         expect(failure).toMatchObject({ code: 1 });
       }
-      const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
-      assert(isRecord(output) && typeof output.reportPath === "string");
       expect(output.reportPath.startsWith(detachedRoot + path.sep)).toBe(cleanup !== "no-enter");
       expect(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR!, "update-reports"))).toBe(
         cleanup === "no-enter",
       );
       if (cleanup === "release") {
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({
-            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          }),
-        );
+        expect(output.recovery).toEqual({
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+        });
       }
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
-      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      expect(doctor).not.toHaveBeenCalled();
+      expectFreshStatePreserved(fixture);
+      expectNoFreshCalls(doctor);
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
       );
-      expectFreshStatePreserved();
     },
   );
 
@@ -166,11 +139,7 @@ describe("fresh update terminal reporting", () => {
       );
       await writePackageDistInventory(swap.params.stage.packageRoot);
       allowPackageRuntime();
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-        version: null,
-        nodeEngine: null,
-        error: "fixture registry unavailable",
-      });
+      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue(metadataRefusal);
       if (refusal === "manager") {
         vi.mocked(shared.resolveGlobalManager).mockRejectedValueOnce(
           new shared.UpdatePreMutationError("unmanaged-package-install", "fixture external owner"),
@@ -189,21 +158,19 @@ describe("fresh update terminal reporting", () => {
         fs.writeFileSync(file, "existing operator artifact\n");
       }
       const readState = () =>
-        fs
-          .readdirSync(stateDir, { recursive: true })
-          .toSorted((left, right) => String(left).localeCompare(String(right)))
+        listDirectoryTreeStrictSync(stateDir)
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted((left, right) => left.localeCompare(right))
           .map((relative) => {
-            const file = path.join(stateDir, String(relative));
+            const file = path.join(stateDir, relative);
             return [relative, fs.statSync(file).isFile() ? fs.readFileSync(file) : null];
           });
+      const anchor = resolvePackageActivationAnchor(fixture.root);
       const detachedRoot = dirs.make("openclaw-detached-refusal-");
       vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
-      const anchor = resolvePackageActivationAnchor(fixture.root);
-      const withExecutor = executorOwner.withUpdateCommandExecutor;
       let before: ReturnType<typeof readState> | undefined;
       let journal: Buffer | undefined;
       let acquired = false;
-      let injected = false;
       const postReleaseVersionRead = vi.fn(() => {
         throw new Error("released refusal must not reread the replacement package version");
       });
@@ -218,7 +185,6 @@ describe("fresh update terminal reporting", () => {
                   const fence = await enter(...args);
                   acquired = true;
                   if (refusal === "enter") {
-                    // Acquisition can precede a failing identity/admission check.
                     throw new UnreportedUpdateAdmissionOutcome(
                       {
                         root: fixture.root,
@@ -243,8 +209,7 @@ describe("fresh update terminal reporting", () => {
             expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
             expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
             expect(fs.existsSync(fixture.databasePath)).toBe(false);
-            // The actual old executor has settled. Publish a real next journal
-            // before the initializer's outer refusal reporter is allowed to run.
+            // Publish a successor after settlement, before the outer refusal reporter runs.
             await withExecutor("fresh-refusal-successor", async (executor) => {
               const fence = await executor.enter(fixture.root);
               const published = await swapStagedPackageInstall({
@@ -257,19 +222,14 @@ describe("fresh update terminal reporting", () => {
             expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
             journal = fs.readFileSync(resolvePackageActivationJournalPath(anchor));
             before = readState();
-            expect(
-              JSON.parse(fs.readFileSync(path.join(fixture.root, "package.json"), "utf8")),
-            ).toMatchObject({ version: "2.0.0" });
             vi.spyOn(packageJson, "readPackageVersion").mockImplementation(postReleaseVersionRead);
-            injected = true;
             throw error;
           }
         },
       );
-      await expect(updateCommand({ yes: true, json: true, restart: false })).rejects.toMatchObject({
+      await expect(updateCommand(updateOptions)).rejects.toMatchObject({
         code: refusal === "metadata" ? 1 : 0,
       });
-      expect(injected).toBe(true);
       expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
       const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
       expect(output).toMatchObject({

@@ -81,22 +81,22 @@ restart, idle expiry, or the rail's clear button.
 Normal assistant chat uses the Gateway `chat` event. Detached BTW uses a
 separate `chat.side_result` event so clients cannot mistake it for regular
 conversation history. The Control UI does not consume that event; it calls the
-`sessions.companion.*` RPCs and renders their bounded exchange state in the rail.
+`sessions.companion.*` RPCs and renders their bounded exchange state in the Side chat panel.
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                    |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                  |
-| Control UI / web  | Routes `/btw` and `/side` to the expanded Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
+| Surface           | Behavior                                                                                                                                                                                                                                                                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                                                                                            |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                                                                                          |
+| Control UI / web  | Routes `/btw` and `/side` to Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. Hiding the panel preserves its thread and draft. Closing its desktop side-panel tab waits for a confirmed reset; **Clear side chat** remains available in the main panel and on mobile. |
 
 ## Selection popup (Control UI)
 
 Highlighting text inside a chat message in the Control UI opens a small
 selection popup with one action:
 
-- **Ask in side chat** opens the rail and pre-fills its composer with a quoted
+- **Ask in side chat** opens Side chat and pre-fills its composer with a quoted
   draft so you can type your own question about the selection.
 
 The action follows normal `/btw` semantics: the question and answer stay out

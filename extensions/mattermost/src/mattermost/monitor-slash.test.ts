@@ -118,7 +118,10 @@ it("registers deduped default and native skill commands across teams", async () 
     log: expect.any(Function),
   });
   const activation = activateSlashCommands.mock.calls[0]![0];
-  expect(activation?.commandTokens).toStrictEqual(["token-1", "token-2"]);
+  expect(activation?.registeredCommands).toStrictEqual([
+    { token: "token-1", trigger: "ping" },
+    { token: "token-2", trigger: "oc_skill" },
+  ]);
   const triggerMap = new Map([
     ["oc_skill", "skill"],
     ["oc_ping", "oc_ping"],

@@ -7,20 +7,19 @@ import { t } from "../../i18n/index.ts";
 import {
   changedDraftPayload,
   draftPayload,
+  resetDraftState,
   workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
+import { addWorkboardCardComment, saveWorkboardCardDraft } from "../../lib/workboard/mutations.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import {
-  addWorkboardCardComment,
-  getWorkboardState,
-  resetDraftState,
-  saveWorkboardCardDraft,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTemplateId,
   type WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
 import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 import { DraftChoices } from "./view-draft-choices.tsx";
 import {

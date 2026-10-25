@@ -45,9 +45,8 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { write: Promise<void> };
 type PreferenceWrites = {
-  agents: Map<string, PreferenceWriter>;
+  agents: Map<string, { write: Promise<void> }>;
   revision: object;
   listeners: Set<(agentId: string, preference: NewSessionPreference, consumed: boolean) => void>;
 };

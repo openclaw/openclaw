@@ -36,24 +36,12 @@ async function createStateDir() {
   return stateDir;
 }
 
-const syncDefaults = { metadata: identity, legacyMetadata: false, cursor: "other-cursor" };
-async function seedSyncStore(
-  root: string,
-  source: "json" | "sqlite",
-  options: Partial<typeof syncDefaults> = {},
-) {
-  const { metadata, legacyMetadata, cursor } = { ...syncDefaults, ...options };
+const syncDefaults = { metadata: identity, cursor: "other-cursor" };
+async function seedSyncStore(root: string, options: Partial<typeof syncDefaults> = {}) {
+  const { metadata, cursor } = { ...syncDefaults, ...options };
   await mkdir(root, { recursive: true });
-  if (legacyMetadata) {
-    await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(metadata));
-  } else {
-    openStore(root, "storage-meta").register("current", metadata);
-  }
+  openStore(root, "storage-meta").register("current", metadata);
   const savedSync = { nextBatch: cursor };
-  if (source === "json") {
-    await writeFile(path.join(root, "bot-storage.json"), JSON.stringify({ savedSync }));
-    return;
-  }
   // Persist the rows read by the probe; omit metadata it never reads.
   const data = JSON.stringify(savedSync);
   const store = openStore(root, "sync-cache");
@@ -82,19 +70,20 @@ it.each(["accountId", "userId"] as const)(
     const stateDir = await createStateDir();
     const other = path.join(stateDir, "matrix", "accounts", "aa-other");
     const target = path.join(stateDir, "matrix", "accounts", "zz-target");
-    await seedSyncStore(other, "sqlite", { metadata: { ...identity, [field]: "other" } });
-    await seedSyncStore(target, "sqlite", { cursor: "target-cursor" });
+    await seedSyncStore(other, { metadata: { ...identity, [field]: "other" } });
+    await seedSyncStore(target, { cursor: "target-cursor" });
     for (const root of [other, target]) {
       openStore(root, "idb-snapshot").register("sentinel", { preserved: root });
     }
     resetPluginStateStoreForTests();
+    await closeOpenClawStateDatabaseAsync();
 
     const defaults = createMatrixQaE2eeTestContext();
     const selected = await waitCursor(stateDir, { context: defaults, ...identity });
     expect(selected).toMatchObject({
       pathname: path.join(target, "state", "openclaw.sqlite"),
       cursor: "target-cursor",
-      source: "sqlite",
+      stateKey: "current",
     });
     const unrelatedSyncRows = openStore(other, "sync-cache").entries();
     const rewritten = { ...selected, cursor: "rewritten-cursor" };
@@ -110,44 +99,38 @@ it.each(["accountId", "userId"] as const)(
   },
 );
 
-it.each([
-  ["json", false],
-  ["sqlite", false],
-  ["json", true],
-  ["sqlite", true],
-] as const)("rejects mismatched %s identity (stale sidecar: %s)", async (source, stale) => {
-  const stateDir = await createStateDir();
-  const root = path.join(stateDir, "matrix", "accounts", "other");
-  const mismatch = stale ? { userId: "@other:matrix-qa.test" } : { accountId: "other" };
-  await seedSyncStore(root, source, {
-    metadata: { ...identity, ...mismatch },
-    legacyMetadata: !stale && source === "json",
-  });
-  if (stale) {
-    await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(identity));
-  }
-  await expectNoCursor(stateDir);
-});
-
-it.each(["json", "sqlite"] as const)(
-  "finds a boundary-depth %s cursor after deeper subtrees and skips linked state",
-  async (source) => {
+it.each(["accountId", "userId"] as const)(
+  "rejects mismatched %s despite stale sidecar identity",
+  async (field) => {
     const stateDir = await createStateDir();
-    const levels = Array.from({ length: source === "json" ? 7 : 8 }, (_, index) => `d${index}`);
-    const target = path.join(stateDir, "zz-target", ...levels);
-    const linked = await createStateDir();
-    for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
-      await seedSyncStore(root, source, { legacyMetadata: true, cursor: "excluded-cursor" });
-    }
-    await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
-    await seedSyncStore(target, source, { legacyMetadata: true, cursor: "legacy-cursor" });
-    await expect(waitCursor(stateDir)).resolves.toMatchObject({
-      cursor: "legacy-cursor",
-      source,
-      pathname: path.join(target, source === "json" ? "bot-storage.json" : "state/openclaw.sqlite"),
+    const root = path.join(stateDir, "matrix", "accounts", "other");
+    await seedSyncStore(root, {
+      metadata: { ...identity, [field]: "other" },
     });
+    await writeFile(path.join(root, "storage-meta.json"), JSON.stringify(identity));
+    resetPluginStateStoreForTests();
+    await closeOpenClawStateDatabaseAsync();
+    await expectNoCursor(stateDir);
   },
 );
+
+it("finds a boundary-depth cursor after deeper subtrees and skips linked state", async () => {
+  const stateDir = await createStateDir();
+  const levels = Array.from({ length: 8 }, (_, index) => `d${index}`);
+  const target = path.join(stateDir, "zz-target", ...levels);
+  const linked = await createStateDir();
+  for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
+    await seedSyncStore(root, { cursor: "excluded-cursor" });
+  }
+  await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
+  await seedSyncStore(target, { cursor: "target-cursor" });
+  resetPluginStateStoreForTests();
+  await closeOpenClawStateDatabaseAsync();
+  await expect(waitCursor(stateDir)).resolves.toMatchObject({
+    cursor: "target-cursor",
+    pathname: path.join(target, "state/openclaw.sqlite"),
+  });
+});
 
 it("observes only the requested account's completed ingress event", async () => {
   const stateDir = await createStateDir();

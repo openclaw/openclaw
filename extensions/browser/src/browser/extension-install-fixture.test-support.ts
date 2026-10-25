@@ -7,6 +7,10 @@ import { vi } from "vitest";
 import { chromeStoreInstallRequests as readChromeStoreInstallRequests } from "./extension-install-external.js";
 import * as layout from "./extension-install-layout.js";
 import * as registration from "./extension-install-registration.js";
+import {
+  useExtensionInstallFixture,
+  writeChromePreferences,
+} from "./extension-install.test-support.js";
 import type { NativeWindowsContext } from "./extension-windows-contract.js";
 import * as windows from "./extension-windows-host.js";
 import { runWindowsManagement } from "./extension-windows-management.js";
@@ -56,6 +60,17 @@ export type InstallFixture = {
     executable?: string;
   };
 };
+
+export function withAdvancingInstallClock(deps: InstallFixture) {
+  let now = 0;
+  return {
+    ...deps,
+    now: () => now,
+    sleep: async (ms: number) => {
+      now += ms;
+    },
+  };
+}
 
 function selectFixture(fixture: InstallFixture = {}) {
   const restores: Array<() => void> = [];
@@ -139,13 +154,9 @@ function selectFixture(fixture: InstallFixture = {}) {
   }
   if (native?.context) {
     const context = native.context;
-    property("execPath", context.nodePath);
-    property("argv", [
-      context.nodePath,
-      context.cliPath,
-      "--browser-profile",
-      context.browserProfile,
-    ]);
+    const { nodePath, cliPath, browserProfile } = context;
+    property("execPath", nodePath);
+    property("argv", [nodePath, cliPath, "--browser-profile", browserProfile]);
     vi.mocked(resolveStateDir).mockImplementation((selectedEnv) =>
       selectedEnv ? context.stateDir : (fixture.stateDir ?? context.stateDir),
     );
@@ -273,3 +284,39 @@ export const validateWindowsNativeContext = (
   params: Parameters<typeof windows.validateWindowsNativeContext>[0],
   fixture?: InstallFixture,
 ) => inFixture(fixture, () => windows.validateWindowsNativeContext(params));
+
+/** Shared filesystem fixture with operations bound to its selected install context. */
+export function useInstallFixture() {
+  const create = useExtensionInstallFixture();
+  return async (platform?: NodeJS.Platform) => {
+    const value = await create(platform);
+    const productRoot = (product: layout.ChromeProduct = "chrome") => {
+      const root = chromeProductRoots(value.deps).find((entry) => entry.product === product);
+      if (!root) {
+        throw new Error(`missing ${product} fixture root`);
+      }
+      return root;
+    };
+    return {
+      ...value,
+      productRoot,
+      install: (options: Partial<Parameters<typeof installChromeExtensionBootstrap>[0]> = {}) =>
+        installChromeExtensionBootstrap({ ...value, waitMs: 1_000, ...options }),
+      installCopy: () => installStableChromeExtension(value.bundledDir, value.deps),
+      loadPath: () => resolveChromeExtensionLoadPath(value.bundledDir, value.deps),
+      preferences: (
+        entries: Record<string, unknown>,
+        filename: "Preferences" | "Secure Preferences" = "Preferences",
+        profile = "Default",
+      ) =>
+        writeChromePreferences({
+          userDataDir: productRoot().userDataDir,
+          profile,
+          entries,
+          filename,
+        }),
+      discover: (approvedDirs = [value.bundledDir], storeExtensionId?: string) =>
+        discoverChromeExtensionIds({ approvedDirs, storeExtensionId, deps: value.deps }),
+    };
+  };
+}

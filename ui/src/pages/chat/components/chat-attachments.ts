@@ -1,4 +1,5 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
@@ -12,6 +13,8 @@ import { currentAttachments } from "./chat-attachment-draft.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
 import { ChatAttachmentReadLifecycle, readChatAttachmentFile } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
+
+registerChatComposerEnglish();
 
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 
@@ -114,7 +117,6 @@ export function appendChatAttachmentFiles(
     {
       resizeImages: true,
       compressVideos: true,
-      onRejected: (file, message) => reads.reject(file, message),
     },
   );
   if (files.length === 0) {
@@ -170,7 +172,12 @@ export function handleChatAttachmentPaste(
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    if (options.imagesOnly || !text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+    if (
+      options.imagesOnly ||
+      !text ||
+      text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
+      !(props.getDraft?.() ?? props.draft ?? "")
+    ) {
       return;
     }
     e.preventDefault();

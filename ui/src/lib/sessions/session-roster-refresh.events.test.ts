@@ -16,6 +16,7 @@ import {
   listParams,
   ownRoster,
   ownerCountsFixture,
+  rosterPage,
 } from "./session-roster-refresh.test-support.ts";
 
 function changed(payload: Record<string, unknown>) {
@@ -26,14 +27,19 @@ function makeRow(id: string, updatedAt: number, fields: Partial<GatewaySessionRo
   return session("main", updatedAt, { key: `agent:main:${id}`, sessionId: id, ...fields });
 }
 
-function snapshot(row: GatewaySessionRow) {
-  return { reason: "patch", sessionKey: row.key, session: row, ancestorSessions: [] };
+function snapshot(row: GatewaySessionRow, fields: Record<string, unknown> = {}) {
+  return { reason: "patch", sessionKey: row.key, session: row, ancestorSessions: [], ...fields };
 }
 
 function fixture(request: Parameters<typeof createTestGatewayClient>[0]) {
   const client = createTestGatewayClient(request);
   const harness = createGatewayHarness(client);
-  return { ...harness, client, ...ownRoster(harness.gateway) };
+  return {
+    ...harness,
+    client,
+    ...ownRoster(harness.gateway),
+    emit: (payload: Record<string, unknown>) => harness.publishEvent("sessions.changed", payload),
+  };
 }
 
 describe("session roster event traffic", () => {
@@ -84,13 +90,7 @@ describe("session roster event traffic", () => {
       const ownerRows = queryParams.ownerFirst
         ? eligible.filter((row) => row.owner?.actor.id === viewer.id && !page.includes(row))
         : [];
-      const response = {
-        ...sessionsResult([...page, ...ownerRows], Date.now()),
-        totalCount: eligible.length,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      } satisfies SessionsListResult;
+      const response = rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
       reads[scope]++;
       bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
       await delay(200);
@@ -101,13 +101,7 @@ describe("session roster event traffic", () => {
     const { sessions, watch, listRows, settle } = ownRoster(harness.gateway);
     watch(personal);
     const emit = (row: GatewaySessionRow) =>
-      harness.publishEvent("sessions.changed", {
-        reason: "patch",
-        sessionKey: row.key,
-        agentId: "main",
-        session: row,
-        ancestorSessions: [],
-      });
+      harness.publishEvent("sessions.changed", snapshot(row, { agentId: "main" }));
     settle(async () => {
       await advance(200);
       random.mockRestore();
@@ -233,28 +227,20 @@ describe("session roster event traffic", () => {
     async (personal) => {
       const viewer = { type: "profile", id: "profile-ada" } as const;
       const held = Array.from({ length: 200 }, (_, index) =>
-        session("main", 10_000 - index, {
-          key: `agent:main:held-${index}`,
-          sessionId: `held-${index}`,
+        makeRow(`held-${index}`, 10_000 - index, {
           isMain: false,
           participants: [{ identity: viewer }],
           hiddenFromInvolvingMe: false,
         }),
       );
-      const incoming = session("main", 15_000, {
+      const incoming = {
         ...held[0]!,
         key: "agent:main:incoming",
         sessionId: "incoming",
         updatedAt: 15_000,
-      });
+      };
       const promoted = { ...held[199]!, updatedAt: 20_000, unread: true, snapshotAt: 30_000 };
-      const page = (rows: GatewaySessionRow[]) => ({
-        ...sessionsResult(rows, 1),
-        totalCount: 201,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      });
+      const page = (rows: GatewaySessionRow[]) => rosterPage(rows, 201, 200);
       const pending = createDeferred<SessionsListResult>();
       const request = vi.fn().mockResolvedValue(page([promoted, incoming, ...held.slice(0, 198)]));
       request.mockResolvedValueOnce(page(held));
@@ -345,11 +331,8 @@ describe("session roster event traffic", () => {
     const request = vi.fn(async () => sessionsResult([held], 1));
     const { sessions, ...harness } = fixture(request);
     await sessions.refresh({ agentId: "main", excludeDock: true, force: true });
-    harness.publishEvent("sessions.changed", snapshot(dock));
-    harness.publishEvent(
-      "sessions.changed",
-      snapshot({ ...held, updatedAt: 3, label: "Updated title" }),
-    );
+    harness.emit(snapshot(dock));
+    harness.emit(snapshot({ ...held, updatedAt: 3, label: "Updated title" }));
     await advance(5_000);
     expect(request).toHaveBeenCalledOnce();
     expect(sessions.state.result?.sessions).toEqual([
@@ -366,7 +349,7 @@ describe("session roster event traffic", () => {
       let rows = [held];
       let fail = false;
       let reads = 0;
-      const client = createTestGatewayClient(async (_method, params) => {
+      const harness = fixture(async (_method, params) => {
         const selected = (Reflect.get(params ?? {}, "archived") === "all") === managed;
         if (selected) {
           reads += 1;
@@ -376,8 +359,7 @@ describe("session roster event traffic", () => {
         }
         return sessionsResult(rows, 1);
       });
-      const harness = createGatewayHarness(client);
-      const { sessions, watch, listRows } = ownRoster(harness.gateway);
+      const { sessions, watch, listRows } = harness;
       const query = { agentId: "main", ...(managed ? { archivedFilter: "all" as const } : {}) };
       if (managed) {
         watch(query);
@@ -387,12 +369,12 @@ describe("session roster event traffic", () => {
         await sessions.refreshList(query);
       }
       fail = true;
-      harness.publishEvent("sessions.changed", { reason: "stores" });
+      harness.emit({ reason: "stores" });
       await advance(5_000);
       expect(sessions.listSnapshot(query).error).toBe("List unavailable");
       fail = false;
       rows = [added, updated];
-      harness.publishEvent("sessions.changed", { reason: "patch", session: updated });
+      harness.emit({ reason: "patch", session: updated });
       await advance(20_000);
       expect(reads).toBe(3);
       expect(sessions.listSnapshot(query).error).toBeNull();
@@ -419,7 +401,7 @@ describe("session roster event traffic", () => {
         .mockResolvedValue(sessionsResult(finalRows, 2));
       const { sessions, ...harness } = fixture(request);
       await sessions.refresh({ agentId: "main", force: true });
-      harness.publishEvent("sessions.changed", { reason: "patch", session: stopped });
+      harness.emit({ reason: "patch", session: stopped });
       await advance(5_000);
       expect(request).toHaveBeenCalledTimes(2);
       expect(sessions.state.result?.sessions).toEqual(finalRows);
@@ -473,7 +455,7 @@ describe("session roster event traffic", () => {
         force: true,
       });
       for (let index = 0; index < (limited ? 10 : 1); index += 1) {
-        gatewayHarness.publishEvent("sessions.changed", {
+        gatewayHarness.emit({
           reason: limited ? "patch" : change,
           sessionKey: next.key,
           ...(limited ? { pinnedAt: null } : { ancestorSessions: [] }),
@@ -506,7 +488,7 @@ describe("session roster event traffic", () => {
   ])("bounds requests during a continuous %s stream for existing members", async (stream) => {
     const row = session("main", 1, { sessionId: "tracked", hasActiveRun: true, hasBoard: true });
     let reads = 0;
-    const client = createTestGatewayClient(async (method, params) => {
+    const gatewayHarness = fixture(async (method, params) => {
       expect(method).toBe("sessions.list");
       if (stream === "filtered" && !Reflect.get(params ?? {}, "search")) {
         return sessionsResult([], 0);
@@ -517,9 +499,7 @@ describe("session roster event traffic", () => {
       }
       return sessionsResult([row], reads);
     });
-    const gatewayHarness = createGatewayHarness(client);
-    const { gateway } = gatewayHarness;
-    const { sessions, watch, listRows, settle } = ownRoster(gateway);
+    const { sessions, watch, listRows, settle } = gatewayHarness;
     const query = {
       agentId: "main",
       ...(stream === "filtered" ? { search: "tracked" } : {}),
@@ -613,7 +593,7 @@ describe("session roster event traffic", () => {
     async (intent) => {
       let reads = 0;
       const row = session("main", 1);
-      const client = createTestGatewayClient(async (method) => {
+      const gatewayHarness = fixture(async (method) => {
         if (method !== "sessions.list") {
           return {};
         }
@@ -623,11 +603,9 @@ describe("session roster event traffic", () => {
         }
         return sessionsResult([row], reads);
       });
-      const gatewayHarness = createGatewayHarness(client);
-      const { gateway } = gatewayHarness;
-      const { sessions } = ownRoster(gateway);
+      const { sessions } = gatewayHarness;
       await sessions.refresh({ agentId: "main", force: true });
-      gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
+      gatewayHarness.emit({ sessionKey: row.key, reason: "patch" });
       await advance(6_000);
       expect(reads).toBe(2);
       gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
@@ -659,7 +637,7 @@ describe("session roster event traffic", () => {
     });
     let retired = false;
     const reads: Record<string, number> = {};
-    const client = createTestGatewayClient(async (method, params) => {
+    const harness = fixture(async (method, params) => {
       expect(method).toBe("sessions.list");
       const value = Reflect.get(params ?? {}, "spawnedBy");
       const owner = typeof value === "string" ? value : undefined;
@@ -667,8 +645,7 @@ describe("session roster event traffic", () => {
       const rows = !owner ? [parent, child] : owner === parent.key && !retired ? [child] : [];
       return { ...sessionsResult(rows, 1), hasMore: false, totalCount: rows.length };
     });
-    const harness = createGatewayHarness(client);
-    const { sessions, watch, listRows } = ownRoster(harness.gateway);
+    const { sessions, watch, listRows } = harness;
     const children = { spawnedBy: parent.key, includeGlobal: false, includeUnknown: false };
     const empty = { ...children, spawnedBy: child.key };
     [children, empty].forEach(watch);
@@ -715,11 +692,7 @@ describe("session roster event traffic", () => {
       counts.running = index === 0 ? 1 : 0;
       counts.open = index === 2 ? 7 : 8;
       emitEvent(
-        changed({
-          ...snapshot({ ...unseen, ...fields, updatedAt: 11 + index }),
-          agentId: "main",
-          reason: "patch",
-        }),
+        changed(snapshot({ ...unseen, ...fields, updatedAt: 11 + index }, { agentId: "main" })),
       );
       await advance(5_000);
       expect(summaryRequest).toHaveBeenCalledTimes(2 + index);
@@ -728,14 +701,14 @@ describe("session roster event traffic", () => {
   });
 
   it("retains owner counts for title updates but refreshes changed run contributions", async () => {
-    const row = {
+    const row: GatewaySessionRow = {
       key: "agent:main:owned",
       sessionId: "owned-session",
-      kind: "direct" as const,
+      kind: "direct",
       label: "Owned session",
       updatedAt: 1,
       hasActiveRun: false,
-      status: "done" as const,
+      status: "done",
     };
     const other = { ...row, key: "agent:main:off-facet", sessionId: "off-facet" };
     const query = {
@@ -761,11 +734,12 @@ describe("session roster event traffic", () => {
     for (let index = 0; index < 5; index += 1) {
       for (const held of [row, other]) {
         emitEvent(
-          changed({
-            ...snapshot({ ...held, label: `Renamed ${index}`, updatedAt: index + 2 }),
-            agentId: "main",
-            reason: "patch",
-          }),
+          changed(
+            snapshot(
+              { ...held, label: `Renamed ${index}`, updatedAt: index + 2 },
+              { agentId: "main" },
+            ),
+          ),
         );
       }
       await advance(1_000);
@@ -802,11 +776,12 @@ describe("session roster event traffic", () => {
     for (const [index, hasActiveSubagentRun] of [true, false].entries()) {
       counts.running = hasActiveSubagentRun ? 2 : 1;
       emitEvent(
-        changed({
-          ...snapshot({ ...other, updatedAt: 100 + index, hasActiveSubagentRun }),
-          agentId: "main",
-          reason: "subagent",
-        }),
+        changed(
+          snapshot(
+            { ...other, updatedAt: 100 + index, hasActiveSubagentRun },
+            { agentId: "main", reason: "subagent" },
+          ),
+        ),
       );
       await advance(5_000);
       expect(summaryRequest).toHaveBeenCalledTimes(3 + index);

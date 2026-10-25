@@ -9,7 +9,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import type { AgentRunStartedAuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input } from "./audit-event-writer.test-support.js";
 import type { AuditWriterResult } from "./audit-event-writer.types.js";
@@ -53,7 +53,7 @@ afterEach(async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function event(sourceId: string): AuditEventInput {
+function event(sourceId: string): AgentRunStartedAuditEventInput {
   return { ...input(), sourceId, runId: sourceId };
 }
 
@@ -65,10 +65,11 @@ function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterRes
     }
     const results: AuditWriterResult[] = [];
     for (const request of command.input) {
-      if (request.type !== "record-event") {
+      if (request.type !== "record-event" && request.type !== "record-run") {
         throw new Error("Unexpected audit request in event lifecycle test");
       }
-      const sourceId = request.input.sourceId;
+      const sourceId =
+        request.type === "record-run" ? request.start.sourceId : request.input.sourceId;
       requests.push(sourceId);
       const result = await handler(sourceId);
       results.push(result);
@@ -87,6 +88,41 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
+  it("counts both run records against the pending budget and releases them after settlement", async () => {
+    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-pair-budget-"),
+      maxPending: 2,
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await advanceDispatch();
+      await writer.ready;
+      const start = event("pair");
+      expect(
+        writer.recordRun(start, {
+          ...start,
+          sourceId: "pair:end",
+          sourceSequence: 2,
+          action: "agent.run.finished",
+          status: "succeeded",
+        }),
+      ).toBe(true);
+      expect(writer.record(event("full"))).toBe(false);
+      await advanceDispatch();
+      expect(writer.record(event("after"))).toBe(true);
+      await advanceDispatch();
+      expect(requests).toEqual(["pair", "after"]);
+      expect(errors).toEqual(["audit event queue is full (2); dropping metadata"]);
+    } finally {
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
   it("coalesces overdue idle maintenance and cancels it after writer shutdown", async () => {
     vi.useRealTimers();
     const clock = createGatewaySchedulerClock();
@@ -301,7 +337,16 @@ describe("audit writer async settlement", () => {
     try {
       await advanceDispatch();
       await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
+      const start = event("unknown-outcome");
+      expect(
+        writer.recordRun(start, {
+          ...start,
+          sourceId: "unknown-outcome:end",
+          sourceSequence: 2,
+          action: "agent.run.finished",
+          status: "succeeded",
+        }),
+      ).toBe(true);
       expect(writer.record(event("tail"))).toBe(true);
       await advanceDispatch();
       expect(requests).toEqual(["unknown-outcome"]);
@@ -312,7 +357,7 @@ describe("audit writer async settlement", () => {
       const batches = execute.mock.calls.flatMap(([command]) =>
         command.type === "audit.writer.process" ? [command.input] : [],
       );
-      expect(batches[0]?.[0]).toMatchObject({ eventId: expect.any(String) });
+      expect(batches[0]?.[0]).toMatchObject({ eventIds: [expect.any(String), expect.any(String)] });
       expect(batches[1]).toEqual(batches[0]);
       expect(errors).toEqual([failure.message]);
     } finally {

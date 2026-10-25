@@ -9,6 +9,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -29,8 +30,7 @@ it.for(["independent", "preload", "env"] as const)(
       import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
       watchCliRespawnParent();
       const owner = acquireGatewayStateOwner({ databasePath: ${JSON.stringify(databasePath)} });
-      const payload = JSON.parse(fs.readFileSync(owner.path, "utf8"));
-      if (Boolean(payload.parentPid) !== ${bound}) throw new Error("Wrong producer lifetime");
+      if (Boolean(JSON.parse(fs.readFileSync(owner.path, "utf8")).parentPid) !== ${bound}) throw new Error("Wrong producer lifetime");
       const db = new DatabaseSync(${JSON.stringify(databasePath)});
       db.exec("CREATE TABLE witness(value TEXT); BEGIN; INSERT INTO witness VALUES ('complete')");
       let disconnected = false;
@@ -79,37 +79,31 @@ it.for(["independent", "preload", "env"] as const)(
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     const closed = once(launcher, "close");
-    let stdout = "";
-    let stderr = "";
+    const output = { stdout: "", stderr: "" };
     let ownerPid: number | undefined;
-    launcher.stdout?.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    launcher.stderr?.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    for (const stream of ["stdout", "stderr"] as const) {
+      launcher[stream]?.on("data", (chunk) => {
+        output[stream] += chunk;
+      });
+    }
     try {
       [ownerPid] = await withinTest(once(launcher, "message"), signal);
-      expect(await withinTest(closed, signal), stderr).toEqual([0, null]);
-      expect(stdout, stderr).toBe(bound ? "rolled back" : "committed");
+      expect(await withinTest(closed, signal), output.stderr).toEqual([0, null]);
+      expect(output, output.stderr).toMatchObject({ stdout: bound ? "rolled back" : "committed" });
       using db = new DatabaseSync(databasePath);
       expect(db.prepare("SELECT value FROM witness").all()).toEqual(
         bound ? [] : [{ value: "complete" }],
       );
-      const successor = acquireGatewayStateOwner({ databasePath });
-      successor.release();
+      acquireGatewayStateOwner({ databasePath }).release();
     } finally {
-      if (ownerPid !== undefined) {
-        try {
-          process.kill(ownerPid, "SIGKILL");
-        } catch {
-          /* Already exited. */
+      try {
+        killPidIfAlive(ownerPid);
+      } finally {
+        if (launcher.exitCode === null && launcher.signalCode === null) {
+          launcher.kill("SIGKILL");
         }
+        await closed;
       }
-      if (launcher.exitCode === null && launcher.signalCode === null) {
-        launcher.kill("SIGKILL");
-      }
-      await closed;
     }
   },
 );

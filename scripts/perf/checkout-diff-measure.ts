@@ -8,8 +8,12 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs, promisify } from "node:util";
+import type { GitCheckoutDiffInput } from "../../src/infra/git-read-operations.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+
+const operationChannel = channel("openclaw.git.operation");
 
 const { values } = parseArgs({
   options: {
@@ -19,6 +23,9 @@ const { values } = parseArgs({
     untracked: { type: "string", default: "100" },
     tracked: { type: "string", default: "0" },
     boundary: { type: "string", default: "worker" },
+    cold: { type: "boolean" },
+    poll: { type: "boolean" },
+    scope: { type: "string", default: "all" },
     summary: { type: "boolean" },
     port: { type: "string", default: "41473" },
     tabs: { type: "string", default: "3" },
@@ -27,12 +34,17 @@ const { values } = parseArgs({
     maintenance: { type: "string", default: "2" },
     "duration-ms": { type: "string", default: "30000" },
     "observe-git-queues": { type: "boolean" },
+    "read-cache-owner": { type: "string" },
     "heavy-files": { type: "string", default: "16" },
     "heavy-lines": { type: "string", default: "4096" },
     mutate: { type: "boolean" },
     samples: { type: "string", default: "40" },
     "poll-ms": { type: "string", default: "0" },
     "churn-ms": { type: "string", default: "0" },
+    "nested-cwd": { type: "boolean" },
+    "missing-cwd": { type: "boolean" },
+    "nested-repository": { type: "boolean" },
+    "excludes-file": { type: "boolean" },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -55,6 +67,13 @@ summary polls. Combine --tabs 3 with
 checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000.
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
+Use --nested-cwd to launch sessions from the existing new/ subdirectory.
+Use --missing-cwd to remove that subdirectory after session creation and verify
+negative-result reuse, then recreate it and verify recovery after polling.
+At seed time, --nested-repository replaces one untracked file with an opaque
+agent-created Git checkout. --excludes-file adds an external core.excludesFile
+and an ignored file in a >64 KiB branch config; RPC measurement verifies an
+ignore-file edit is visible.
 Add --poll-state-dir <other seeded fixture> to poll multiple checkouts concurrently
 through separate sessions. Extra fixtures are read-only and prohibit --mutate.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
@@ -62,7 +81,15 @@ instrumentation applied identically to both revisions. No production state or mo
 is involved. --churn-ms 1000 periodically saves identical tracked content, runs
 git status on the polling checkout, and rotates an ignored build file. Unchanged
 responses must match warmup. A real post-run edit must reach every tab within
-12 seconds; first-poll visibility and eventual visibility timing are recorded.`);
+12 seconds; first-poll visibility and eventual visibility timing are recorded.
+Use --cold --boundary rpc --tabs 40 --poll-ms 5000 for an unprimed reconnect burst.
+Each cold client polls one checkout, retrying computing responses after 500 ms. No diff
+warmup runs; the first response and first materialized content are timed separately,
+and response contents are verified after measurement. Cold mode prohibits mutation.
+Use --scope uncommitted for working-tree-only diffs (default: all). --poll opts RPC
+requests into nonblocking poll responses on revisions that support that contract.
+Use --read-cache-owner <adjacent baseline.ts> with --boundary rpc to compare a
+previous Git read-cache owner against the candidate in one source checkout.`);
   process.exit(0);
 }
 const integer = (raw: string, label: string, min = 0) =>
@@ -74,6 +101,15 @@ if (values.boundary !== "worker" && values.boundary !== "read" && values.boundar
   throw new Error("--boundary must be worker, read, or rpc");
 }
 assert(
+  values.scope === "all" || values.scope === "uncommitted",
+  "--scope must be all or uncommitted",
+);
+const scope = values.scope;
+assert(
+  !values.poll || (values.cold && values.boundary === "rpc"),
+  "--poll requires --cold --boundary rpc",
+);
+assert(
   !values["poll-state-dir"]?.length || values.boundary === "rpc",
   "--poll-state-dir requires --boundary rpc",
 );
@@ -82,6 +118,7 @@ const repo = path.join(root, "repository");
 const marker = path.join(root, "checkout-diff-fixture.json");
 const trace = path.join(root, "git-trace.jsonl");
 const untracked = integer(values.untracked, "--untracked", 4);
+assert(!values["nested-repository"] || untracked >= 5, "--nested-repository needs --untracked >=5");
 if (untracked > 100) {
   throw new Error("--untracked must not exceed the 100-file diff response cap");
 }
@@ -89,9 +126,44 @@ const samples = integer(values.samples, "--samples", 1);
 const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const pollMs = integer(values["poll-ms"], "--poll-ms");
+assert(!values.cold || pollMs > 0, "--cold requires --poll-ms > 0 (use 5000 for steady stress)");
 const churnMs = integer(values["churn-ms"], "--churn-ms");
+assert(
+  !values["missing-cwd"] ||
+    (values.boundary === "rpc" && !values.mutate && !churnMs && !values["poll-state-dir"]?.length),
+  "--missing-cwd requires RPC polling without mutation or extra fixtures",
+);
 assert(!churnMs || values.boundary === "rpc", "--churn-ms requires --boundary rpc");
 assert(!churnMs || !values["poll-state-dir"]?.length, "--churn-ms requires one owned checkout");
+assert(
+  !values.cold || (values.boundary === "rpc" && !values.mutate && !values["missing-cwd"]),
+  "--cold requires --boundary rpc without --mutate or --missing-cwd",
+);
+const readCacheOwner = values["read-cache-owner"]
+  ? path.resolve(values["read-cache-owner"])
+  : undefined;
+let readCacheOwnerLoads = 0;
+if (readCacheOwner) {
+  assert(values.boundary === "rpc" && !values.seed, "--read-cache-owner requires RPC measurement");
+  const canonical = new URL("../../src/infra/git-read-cache.ts", import.meta.url);
+  assert.equal(
+    path.dirname(readCacheOwner),
+    path.dirname(fileURLToPath(canonical)),
+    "--read-cache-owner must be beside git-read-cache.ts to preserve relative imports",
+  );
+  const override = pathToFileURL(readCacheOwner).href;
+  assert.notEqual(override, canonical.href, "--read-cache-owner must select a different file");
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const result = nextResolve(specifier, context);
+      if (result.url !== canonical.href) {
+        return result;
+      }
+      readCacheOwnerLoads++;
+      return { ...result, url: override };
+    },
+  });
+}
 const gitEnv = {
   ...process.env,
   HOME: path.join(root, "home"),
@@ -166,7 +238,7 @@ async function seed() {
   await git("add", "staged.txt");
   await fs.unlink(path.join(repo, "deleted.txt"));
   await fs.mkdir(path.join(repo, "new"));
-  for (let index = 0; index < untracked - 4; index++) {
+  for (let index = 0; index < untracked - 4 - (values["nested-repository"] ? 1 : 0); index++) {
     await fs.writeFile(
       path.join(repo, "new", `text-${String(index).padStart(3, "0")}.txt`),
       `Synthetic untracked file ${index}\n${"Added content\n".repeat(16)}`,
@@ -178,6 +250,40 @@ async function seed() {
   await fs.symlink("../modified.txt", path.join(repo, "new", "link.txt"));
   await fs.mkdir(path.join(repo, "ignored"));
   await fs.writeFile(path.join(repo, "ignored", "hidden.txt"), "Ignored synthetic content\n");
+  if (values["nested-repository"]) {
+    const nestedRepo = path.join(repo, "agent-clone");
+    await fs.mkdir(nestedRepo);
+    const nestedGit = (...args: string[]) =>
+      promisify(execFile)("git", ["-C", nestedRepo, ...args], { env: gitEnv });
+    await nestedGit("init", "--template=", "--initial-branch=main");
+    await fs.writeFile(path.join(nestedRepo, "README.md"), "Synthetic nested checkout\n");
+    await nestedGit("add", ".");
+    await nestedGit(
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--quiet",
+      "-m",
+      "test: seed agent clone",
+    );
+  }
+  if (values["excludes-file"]) {
+    await fs.writeFile(path.join(root, "git-excludes"), "external-ignored.txt\n");
+    await fs.writeFile(path.join(repo, "external-ignored.txt"), "External ignore control\n");
+    await git("config", "core.excludesFile", path.join(root, "git-excludes"));
+    const commonGitDir = path.resolve(
+      repo,
+      (await git("rev-parse", "--git-common-dir")).stdout.trim(),
+    );
+    await fs.appendFile(
+      path.join(commonGitDir, "config"),
+      Array.from(
+        { length: 1000 },
+        (_, index) =>
+          `[branch "synthetic-agent-task-${index}"]\n\tremote = origin\n\tmerge = refs/heads/synthetic-agent-task-${index}\n`,
+      ).join(""),
+    );
+  }
   const heavyFiles = integer(values["heavy-files"], "--heavy-files", 1);
   const heavyLines = integer(values["heavy-lines"], "--heavy-lines", 1);
   if (values.boundary === "rpc") {
@@ -207,6 +313,8 @@ async function seed() {
     untracked,
     tracked: 3,
     unchangedTracked: tracked + 1,
+    nestedRepository: values["nested-repository"] === true,
+    excludesFile: values["excludes-file"] === true,
   };
   await fs.writeFile(marker, `${JSON.stringify(fixture, null, 2)}\n`);
   console.log(JSON.stringify(fixture));
@@ -258,9 +366,9 @@ async function measure() {
       import("../../src/infra/git-worker.js"),
       import("../../src/shared/global-singleton.js"),
     ]);
-  const input = {
+  const input: GitCheckoutDiffInput = {
     cwd: repo,
-    scope: "all" as const,
+    scope,
     summaryOnly: values.summary === true,
   };
   const request = () =>
@@ -334,6 +442,7 @@ async function measure() {
     const report = {
       revision: values.revision ?? null,
       boundary: values.boundary,
+      scope,
       summaryOnly: values.summary === true,
       mutate: values.mutate === true,
       pollMs,
@@ -365,19 +474,20 @@ function observeGitQueues() {
       assert(result.source !== undefined, "Git worker source is required for queue observations");
       let source =
         typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
-      for (const [pattern, replacement] of [
+      for (const [pattern, replacement, expected] of [
         [
-          /const enqueuedAt\s*=\s*(?:timing|measure)\s*\?\s*performance\.now\(\)\s*:\s*0/g,
-          "const enqueuedAt = performance.now()",
+          /const measure\s*=\s*timing\s*\|\|\s*options\.diffTiming\b/g,
+          "const measure = timing || options.diffTiming || observedAt !== undefined",
+          1,
         ],
-        [/const input\s*=\s*(?:timing|measure)\s*\?/g, "const input = observedAt !== undefined ?"],
+        [/if\s*\(\s*timing\s*\)/g, "if (measure)", 3],
       ] as const) {
         let guards = 0;
         source = source.replace(pattern, () => {
           guards++;
           return replacement;
         });
-        assert.equal(guards, 1, "Expected exactly one Git worker queue measurement guard");
+        assert.equal(guards, expected, "Expected Git worker measurement guards");
       }
       let publications = 0;
       source = source.replace(/elapsedMs:\s*performance\.now\(\)\s*-\s*observedAt/g, (match) => {
@@ -390,7 +500,7 @@ function observeGitQueues() {
   });
 }
 
-async function measureRpc(fixture: object) {
+async function measureRpc(fixture: Awaited<ReturnType<typeof readFixture>>) {
   const { BASE_GATEWAY_BENCH_CONFIG } = await import("../lib/gateway-bench-runtime.ts");
   const extraRoots = (values["poll-state-dir"] ?? []).map((directory) => path.resolve(directory));
   assert(!extraRoots.length || !values.mutate, "--poll-state-dir prohibits --mutate");
@@ -405,6 +515,10 @@ async function measureRpc(fixture: object) {
   const port = integer(values.port, "--port", 40000);
   assert(port <= 65535);
   const tabs = integer(values.tabs, "--tabs", 1);
+  assert(
+    !values.cold || tabs >= checkoutRoots.length,
+    "--cold needs at least one tab per checkout",
+  );
   const background = integer(values.background, "--background");
   const agents = integer(values.agents, "--agents");
   const maintenance = integer(values.maintenance, "--maintenance");
@@ -453,9 +567,10 @@ async function measureRpc(fixture: object) {
   const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
   const peers: InstanceType<typeof GatewayClient>[] = [];
   const operationSamples: Record<string, unknown>[] = [];
-  const operationChannel = channel("openclaw.git.operation");
   let measured = false;
+  let measurementPhase: "cold" | "steady" = values.cold ? "cold" : "steady";
   const phaseSamples: {
+    phase: "cold" | "steady";
     name: string;
     durationMs: number;
     details: import("../../src/infra/diagnostic-events.js").DiagnosticPhaseDetails;
@@ -469,6 +584,7 @@ async function measureRpc(fixture: object) {
         (event.name === "sessions.diff" || event.name === "checkout.diff")
       ) {
         phaseSamples.push({
+          phase: measurementPhase,
           name: event.name,
           durationMs: event.durationMs,
           details: event.details ?? {},
@@ -479,11 +595,12 @@ async function measureRpc(fixture: object) {
   );
   const observe = (event: unknown) => {
     if (measured && event !== null && typeof event === "object") {
-      operationSamples.push({ ...event });
+      operationSamples.push({ ...event, phase: measurementPhase });
     }
   };
   operationChannel.subscribe(observe);
   try {
+    const connections: Promise<void>[] = [];
     for (let tab = 0; tab < tabs; tab++) {
       const ready = Promise.withResolvers<void>();
       const peer = new GatewayClient({
@@ -500,13 +617,19 @@ async function measureRpc(fixture: object) {
       });
       peers.push(peer);
       peer.start();
-      await ready.promise;
+      if (values.cold) {
+        connections.push(ready.promise);
+      } else {
+        await ready.promise;
+      }
     }
+    await Promise.all(connections);
     const targets = checkoutRoots.map((cwd, checkout) => ({
-      cwd,
+      cwd: values["nested-cwd"] || values["missing-cwd"] ? path.join(cwd, "new") : cwd,
       params: {
         sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
-        scope: "all",
+        scope,
+        ...(values.poll ? { poll: true } : {}),
         summaryOnly: values.summary === true,
       },
     }));
@@ -517,6 +640,9 @@ async function measureRpc(fixture: object) {
         visibility: "shared",
       });
     }
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "new"), path.join(repo, "missing-cwd-saved"));
+    }
     const warmupStarted = performance.now();
     const responseHash = (
       result: import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult,
@@ -524,20 +650,64 @@ async function measureRpc(fixture: object) {
       const { root: _root, ...portable } = result;
       return createHash("sha256").update(JSON.stringify(portable)).digest("hex");
     };
-    const warmupResults = await Promise.all(
-      targets.map((target) =>
-        peers[0]!.request<
-          import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
-        >("sessions.diff", target.params),
-      ),
-    );
+    const isComputing = (
+      result: import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult,
+    ) => result.computing === true;
+    const readTargets = () =>
+      Promise.all(
+        targets.map(async (target) => {
+          const deadline = performance.now() + 120_000;
+          for (;;) {
+            const remainingMs = deadline - performance.now();
+            assert(remainingMs > 0, "diff must materialize within 120 seconds");
+            const result = await peers[0]!.request<
+              import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+            >("sessions.diff", target.params, { timeoutMs: remainingMs });
+            if (!isComputing(result)) {
+              return result;
+            }
+            await delay(Math.min(250, Math.max(0, deadline - performance.now())));
+          }
+        }),
+      );
+    const warmupResults = values.cold ? [] : await readTargets();
     const warmupHashes = warmupResults.map(responseHash);
-    const warmupRpcMs = performance.now() - warmupStarted;
-    await Promise.all(
-      Array.from({ length: Math.max(1, background) }, () =>
-        runGitWorkerOperation({ type: "checkout.diff", input: { cwd: heavyRepo, scope: "all" } }),
-      ),
-    );
+    const verifyContent = (
+      result: import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult,
+      index: number,
+    ) => {
+      assert(!isComputing(result), "content verification requires a materialized diff");
+      assert.equal(result.unavailableReason, values["missing-cwd"] ? "not_git" : undefined);
+      const currentFixture = index === 0 ? fixture : extraFixtures[index - 1]!;
+      if ("nestedRepository" in currentFixture && currentFixture.nestedRepository === true) {
+        const nested = result.files.find((file) => file.path === "agent-clone/");
+        assert(
+          nested?.untracked && nested.truncated,
+          "nested checkout must remain an opaque entry",
+        );
+      }
+      assert(!result.files.some((file) => file.path === "external-ignored.txt"));
+      if (values.cold) {
+        assert.equal(result.files.length, currentFixture.untracked + 3);
+        assert.equal(
+          result.files.find((file) => file.path === "modified.txt")?.additions,
+          1,
+          "cold polling must eventually return the seeded tracked edit",
+        );
+        assert(result.files.some((file) => file.path === "new/binary.bin"));
+      }
+    };
+    for (const [index, result] of warmupResults.entries()) {
+      verifyContent(result, index);
+    }
+    const warmupRpcMs = values.cold ? null : performance.now() - warmupStarted;
+    if (!values.cold) {
+      await Promise.all(
+        Array.from({ length: Math.max(1, background) }, () =>
+          runGitWorkerOperation({ type: "checkout.diff", input: { cwd: heavyRepo, scope: "all" } }),
+        ),
+      );
+    }
     console.log(
       JSON.stringify({ ready: true, boundary: "rpc", tabs, background, agents, maintenance }),
     );
@@ -547,13 +717,80 @@ async function measureRpc(fixture: object) {
       await delay(startAt - Date.now());
     }
     const rpcSamples: {
-      round: number;
+      phase: "cold" | "steady";
+      sequence: number;
+      round?: number;
       tab: number;
       checkout: number;
       elapsedMs: number;
       files: number;
       responseSha256: string;
+      computing: boolean;
     }[] = [];
+    const refreshSamples: {
+      phase: "cold" | "steady";
+      tab: number;
+      checkout: number;
+      startedAtMs: number;
+      elapsedMs: number;
+    }[] = [];
+    const firstPollStarted = new Map<string, number>();
+    const firstContentMs = new Map<string, number>();
+    let contentReadyAtMs: number | undefined;
+    let coldToSteady: Promise<void> | undefined;
+    const sampleRpc = async (tab: number, checkout: number, sequence: number) => {
+      const pollStarted = performance.now();
+      const key = `${tab}:${checkout}`;
+      if (values.cold && sequence === 0) {
+        firstPollStarted.set(key, pollStarted);
+      }
+      const result = await peers[tab]!.request<
+        import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+      >("sessions.diff", targets[checkout]!.params);
+      const elapsedMs = performance.now() - pollStarted;
+      const computing = isComputing(result);
+      assert.equal(result.unavailableReason, values["missing-cwd"] ? "not_git" : undefined);
+      if (values.cold && !computing && !firstContentMs.has(key)) {
+        firstContentMs.set(key, performance.now() - firstPollStarted.get(key)!);
+      }
+      if (values.mutate) {
+        const modified = result.files.find((file) => file.path === "modified.txt");
+        assert(modified, "mutated file must reach RPC response");
+        assert.equal(
+          modified.additions,
+          (sequence % 5) + 1,
+          "each round must return its current added-line count",
+        );
+        assert.equal(modified.deletions, 0);
+      }
+      const hash = responseHash(result);
+      if (!values.mutate && !values.cold) {
+        assert.equal(
+          hash,
+          warmupHashes[checkout],
+          "unchanged polling and irrelevant churn must preserve the diff",
+        );
+      }
+      rpcSamples.push({
+        phase: measurementPhase,
+        sequence,
+        ...(values.cold ? {} : { round: sequence }),
+        tab,
+        checkout,
+        elapsedMs,
+        files: result.files.length,
+        responseSha256: hash,
+        computing,
+      });
+      if (values.cold && !coldToSteady && firstContentMs.size === tabs) {
+        contentReadyAtMs = performance.now() - started;
+        // Tag completions consistently and drain their diagnostics before changing phase.
+        coldToSteady = waitForDiagnosticEventsDrained().then(() => {
+          measurementPhase = "steady";
+        });
+      }
+      return computing;
+    };
     const heavyMs: number[] = [];
     const agentMs: number[] = [];
     const maintenanceMs: number[] = [];
@@ -573,6 +810,8 @@ async function measureRpc(fixture: object) {
       }
     };
     measured = true;
+    const cpuStarted = process.cpuUsage();
+    const measurementStartedAtUnixMs = Date.now();
     const started = performance.now();
     deadline = started + durationMs;
     await Promise.all([
@@ -621,6 +860,39 @@ async function measureRpc(fixture: object) {
         }),
       ),
       (async () => {
+        if (values.cold) {
+          await Promise.all(
+            peers.map(async (_peer, tab) => {
+              const checkout = tab % targets.length;
+              let refreshStarted = performance.now();
+              let refreshPhase = measurementPhase;
+              for (let sequence = 0; performance.now() < deadline; sequence++) {
+                const computing = await sampleRpc(tab, checkout, sequence);
+                if (!computing) {
+                  refreshSamples.push({
+                    phase: refreshPhase,
+                    tab,
+                    checkout,
+                    startedAtMs: refreshStarted - started,
+                    elapsedMs: performance.now() - refreshStarted,
+                  });
+                }
+                if (coldToSteady) {
+                  await coldToSteady;
+                }
+                await delay(
+                  Math.max(0, Math.min(computing ? 500 : pollMs, deadline - performance.now())),
+                );
+                if (!computing) {
+                  // Include computing retries and timer delays, but exclude the refresh cadence.
+                  refreshStarted = performance.now();
+                  refreshPhase = measurementPhase;
+                }
+              }
+            }),
+          );
+          return;
+        }
         for (let round = 0; performance.now() < deadline; round++) {
           if (pollMs) {
             await delay(pollMs);
@@ -643,48 +915,54 @@ async function measureRpc(fixture: object) {
             break;
           }
           await Promise.all(
-            peers.flatMap((peer, tab) =>
-              targets.map(async (target, checkout) => {
-                const pollStarted = performance.now();
-                const result = await peer.request<
-                  import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
-                >("sessions.diff", target.params);
-                assert.equal(result.unavailableReason, undefined);
-                if (values.mutate) {
-                  const modified = result.files.find((file) => file.path === "modified.txt");
-                  assert(modified, "mutated file must reach RPC response");
-                  assert.equal(
-                    modified.additions,
-                    expectedAdditions,
-                    "each round must return its current added-line count",
-                  );
-                  assert.equal(modified.deletions, 0);
-                }
-                const hash = responseHash(result);
-                if (churnMs && !values.mutate) {
-                  assert.equal(
-                    hash,
-                    warmupHashes[checkout],
-                    "irrelevant churn must preserve the diff",
-                  );
-                }
-                rpcSamples.push({
-                  round,
-                  tab,
-                  checkout,
-                  elapsedMs: performance.now() - pollStarted,
-                  files: result.files.length,
-                  responseSha256: hash,
-                });
-              }),
+            peers.flatMap((_peer, tab) =>
+              targets.map((_target, checkout) => sampleRpc(tab, checkout, round)),
             ),
           );
         }
       })(),
     ]);
     const elapsedMs = performance.now() - started;
+    const cpuUsed = process.cpuUsage(cpuStarted);
+    const processCpuMs = (cpuUsed.user + cpuUsed.system) / 1_000;
     await waitForDiagnosticEventsDrained();
     measured = false;
+    if (values.cold) {
+      const verifiedResults = await readTargets();
+      const verifiedHashes = verifiedResults.map(responseHash);
+      for (const [index, result] of verifiedResults.entries()) {
+        verifyContent(result, index);
+      }
+      for (const sample of rpcSamples) {
+        if (!sample.computing) {
+          assert.equal(
+            sample.responseSha256,
+            verifiedHashes[sample.checkout],
+            "every materialized cold and steady response must match verified content",
+          );
+        }
+      }
+    }
+    let missingRecoveryMs: number | null = null;
+    if (values["missing-cwd"]) {
+      await fs.rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"));
+      const recoveryStarted = performance.now();
+      for (;;) {
+        const result = await peers[0]!.request<
+          import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+        >("sessions.diff", targets[0]!.params);
+        const recoveryMs = performance.now() - recoveryStarted;
+        assert(recoveryMs < 2_000, "recreated cwd must recover within two seconds");
+        if (
+          !result.unavailableReason &&
+          result.files.some((file) => file.path === "modified.txt")
+        ) {
+          missingRecoveryMs = recoveryMs;
+          break;
+        }
+        await delay(50);
+      }
+    }
     let editControlVerified = false;
     let editFirstPollVisible: boolean[] = [];
     let editVisibilityMs: number[] = [];
@@ -742,6 +1020,27 @@ async function measureRpc(fixture: object) {
         await fs.writeFile(changedFile, originalContent);
       }
     }
+    let excludesFileControlVerified: boolean | null = null;
+    if ("excludesFile" in fixture && fixture.excludesFile === true) {
+      const excludesPath = path.join(root, "git-excludes");
+      const original = await fs.readFile(excludesPath);
+      try {
+        await fs.writeFile(excludesPath, "");
+        const results = await Promise.all(
+          peers.map((peer) =>
+            peer.request<import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult>(
+              "sessions.diff",
+              targets[0]!.params,
+            ),
+          ),
+        );
+        excludesFileControlVerified = results.every((result) =>
+          result.files.some((file) => file.path === "external-ignored.txt" && file.additions === 1),
+        );
+      } finally {
+        await fs.writeFile(excludesPath, original);
+      }
+    }
     assert(
       rpcSamples.length > 0,
       "No RPC polls completed; reduce --poll-ms or extend --duration-ms",
@@ -772,18 +1071,56 @@ async function measureRpc(fixture: object) {
         ];
       }),
     );
-    const roundMaxMs = new Map<number, number>();
+    const sequenceMaxMs = new Map<number, number>();
     for (const sample of rpcSamples) {
-      roundMaxMs.set(sample.round, Math.max(roundMaxMs.get(sample.round) ?? 0, sample.elapsedMs));
+      sequenceMaxMs.set(
+        sample.sequence,
+        Math.max(sequenceMaxMs.get(sample.sequence) ?? 0, sample.elapsedMs),
+      );
     }
     const cacheSamples = phaseSamples.filter((sample) => sample.name === "sessions.diff");
     const cacheHits = cacheSamples.filter(
       (sample) => sample.details.outcome === "cache-hit",
     ).length;
     const cacheMisses = cacheSamples.filter((sample) => sample.details.outcome === "cache-miss");
+    if (readCacheOwner) {
+      assert(readCacheOwnerLoads > 0, "the selected Git read-cache owner was not loaded");
+    }
+    const phases = Object.fromEntries(
+      (["cold", "steady"] as const).map((phase) => {
+        const entries = rpcSamples.filter((sample) => sample.phase === phase);
+        const handlers = cacheSamples.filter((sample) => sample.phase === phase);
+        const refreshes = refreshSamples.filter((sample) => sample.phase === phase);
+        return [
+          phase,
+          {
+            completedRpc: entries.length,
+            computingResponses: entries.filter((sample) => sample.computing).length,
+            rpcLatencyMs: entries.length
+              ? summarize(entries.map((sample) => sample.elapsedMs))
+              : null,
+            handlerCount: handlers.length,
+            handlerSeconds: handlers.reduce((sum, sample) => sum + sample.durationMs, 0) / 1000,
+            ...(values.cold
+              ? {
+                  completedRefreshes: refreshes.length,
+                  refreshLatencyMs: refreshes.length
+                    ? summarize(refreshes.map((sample) => sample.elapsedMs))
+                    : null,
+                }
+              : {}),
+          },
+        ];
+      }),
+    );
     const report = {
       revision: values.revision ?? null,
       boundary: "rpc",
+      coldStart: values.cold === true,
+      readCacheOwner: readCacheOwner ?? null,
+      readCacheOwnerLoads,
+      poll: values.poll === true,
+      scope,
       summaryOnly: values.summary === true,
       fixture,
       extraFixtures,
@@ -793,15 +1130,47 @@ async function measureRpc(fixture: object) {
       agents,
       maintenance,
       churnMs,
+      missingCwd: values["missing-cwd"] === true,
+      missingRecoveryMs,
       completedChurn: churnTimings.length,
       churnLatencyMs: churnTimings.length ? summarize(churnTimings) : null,
       editControlVerified,
       editFirstPollVisible,
       editVisibilityMs,
+      excludesFileControlVerified,
       durationMs,
+      measurementStartedAtUnixMs,
       warmupRpcMs,
+      ...(values.cold
+        ? {
+            firstRequestLatencyMs: summarize(
+              rpcSamples
+                .filter((sample) => sample.sequence === 0)
+                .map((sample) => sample.elapsedMs),
+            ),
+            firstContentLatencyMs: firstContentMs.size
+              ? summarize([...firstContentMs.values()])
+              : null,
+            contentReadyClients: firstContentMs.size,
+            contentReadyAtMs,
+            expectedContentClients: tabs,
+            checkoutByTab: peers.map((_peer, tab) => tab % targets.length),
+            computingRetryMs: 500,
+            contentVerified: true,
+          }
+        : {}),
+      phases,
       completedRpc: rpcSamples.length,
-      completedRounds: roundMaxMs.size,
+      rpcPerMinute: (rpcSamples.length * 60_000) / elapsedMs,
+      ...(values.cold
+        ? {
+            completedPollSequences: sequenceMaxMs.size,
+            rpcPollSequenceMaxLatencyMs: summarize([...sequenceMaxMs.values()]),
+          }
+        : {
+            completedRounds: sequenceMaxMs.size,
+            rpcRoundLatencyMs: summarize([...sequenceMaxMs.values()]),
+          }),
       completedHeavy: heavyMs.length,
       completedAgent: agentMs.length,
       completedMaintenance: maintenanceMs.length,
@@ -812,8 +1181,9 @@ async function measureRpc(fixture: object) {
       pollMs,
       node: process.version,
       elapsedMs,
+      processCpuMs,
+      processCpuMsPerRpc: processCpuMs / rpcSamples.length,
       rpcLatencyMs: summarize(rpcSamples.map((sample) => sample.elapsedMs)),
-      rpcRoundLatencyMs: summarize([...roundMaxMs.values()]),
       heavyContentMs: heavyMs.length ? summarize(heavyMs) : null,
       agentGitMs: agentMs.length ? summarize(agentMs) : null,
       maintenanceGitMs: maintenanceMs.length ? summarize(maintenanceMs) : null,
@@ -864,6 +1234,7 @@ async function measureRpc(fixture: object) {
         ),
       },
       rpcSamples,
+      ...(values.cold ? { refreshSamples } : {}),
       operationSamples,
       phaseSamples,
     };
@@ -874,6 +1245,13 @@ async function measureRpc(fixture: object) {
     console.log(
       JSON.stringify({
         rpcLatencyMs: report.rpcLatencyMs,
+        phases,
+        ...(values.cold
+          ? {
+              firstRequestLatencyMs: report.firstRequestLatencyMs,
+              firstContentLatencyMs: report.firstContentLatencyMs,
+            }
+          : {}),
         agentGitMs: report.agentGitMs,
         byOperation,
         diffPhases: report.diffPhases,
@@ -882,7 +1260,28 @@ async function measureRpc(fixture: object) {
     if (churnMs) {
       assert(editControlVerified, "a real post-churn edit must reach every tab within 12 seconds");
     }
+    if (values.cold) {
+      assert.equal(
+        firstContentMs.size,
+        tabs,
+        "every cold client must receive materialized content during the measurement window",
+      );
+      assert(
+        refreshSamples.some((sample) => sample.phase === "steady"),
+        "extend --duration-ms to include steady polling after all cold clients receive content",
+      );
+    }
+    assert(excludesFileControlVerified !== false, "an external ignore edit must reach every tab");
   } finally {
+    if (values["missing-cwd"]) {
+      await fs
+        .rename(path.join(repo, "missing-cwd-saved"), path.join(repo, "new"))
+        .catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+    }
     stopPhases();
     operationChannel.unsubscribe(observe);
     for (const peer of peers) {

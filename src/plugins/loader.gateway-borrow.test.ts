@@ -1,7 +1,6 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { retainPreparedPluginRegistry } from "../agents/prepared-model-runtime.plugin-lifetime.js";
+import { disposeLoaderFixtures, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { acquirePluginRegistryForInspection, loadOpenClawPlugins } from "./loader.js";
@@ -32,22 +31,17 @@ function writeProbePlugin(id: string, body = "") {
           async execute() { return { content: [{ type: "text", text: String(generation) }] }; } });
       } };`,
   });
-  writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      configSchema: { type: "object", properties: {} },
-      contracts: { tools: [`${id.replaceAll("-", "_")}_probe`] },
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id,
+    configSchema: { type: "object", properties: {} },
+    contracts: { tools: [`${id.replaceAll("-", "_")}_probe`] },
+  });
   return plugin;
 }
 
 const registries: PluginRegistry[] = [];
 afterEach(async () => {
-  for (const registry of registries.splice(0).toReversed()) {
-    await disposePluginRegistryInstances(registry);
-  }
+  await disposeLoaderFixtures(registries);
   await clearActivePluginRegistry();
   Reflect.deleteProperty(globalThis, evaluations);
   resetPluginLoaderTestStateForTest();
@@ -100,6 +94,11 @@ function bindProbe(registry: PluginRegistry, pluginId: string) {
 }
 
 const firstGeneration = { content: [{ type: "text", text: "1" }] };
+const expectFirstGeneration = (registry: PluginRegistry, call: string) =>
+  expect(bindProbe(registry, lenderId).execute(call, {})).resolves.toMatchObject(firstGeneration);
+function expectLenderActive(instance: ReturnType<typeof getPluginInstance>) {
+  expect(instance).toMatchObject({ acceptingCalls: true, disposing: false });
+}
 
 it.each(["prepared", "inspection"] as const)(
   "releases a %s registry without disposing borrowed Gateway instances",
@@ -119,19 +118,14 @@ it.each(["prepared", "inspection"] as const)(
     expect(prepared.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
     expect(freshRecord?.status).toBe("loaded");
     expect(Reflect.get(globalThis, evaluations)).toEqual({ [lenderId]: 1, [freshId]: 1 });
-    await expect(bindProbe(prepared, lenderId).execute("borrowed", {})).resolves.toMatchObject(
-      firstGeneration,
-    );
+    await expectFirstGeneration(prepared, "borrowed");
 
     const release = inspection?.release ?? retainPreparedPluginRegistry(prepared);
     expect(gatewayInstance.owner?.registry).toBe(gateway);
     await release?.();
     expect(freshInstance?.acceptingCalls).toBe(false);
-    expect(gatewayInstance.acceptingCalls).toBe(true);
-    expect(gatewayInstance.disposing).toBe(false);
-    await expect(bindProbe(gateway, lenderId).execute("lender", {})).resolves.toMatchObject(
-      firstGeneration,
-    );
+    expectLenderActive(gatewayInstance);
+    await expectFirstGeneration(gateway, "lender");
   },
 );
 
@@ -142,11 +136,8 @@ it("rolls back a failed borrowing load without retiring borrowed Gateway instanc
   expect(() => loadOpenClawPlugins({ ...borrowOptions, throwOnLoadError: true })).toThrow(
     /fresh plugin failed|failed to load/,
   );
-  expect(gatewayInstance.acceptingCalls).toBe(true);
-  expect(gatewayInstance.disposing).toBe(false);
-  await expect(bindProbe(gateway, lenderId).execute("lender", {})).resolves.toMatchObject(
-    firstGeneration,
-  );
+  expectLenderActive(gatewayInstance);
+  await expectFirstGeneration(gateway, "lender");
 });
 
 it("stops borrowed callbacks when the lending Gateway retires the instance", async () => {
@@ -181,9 +172,7 @@ it.each([true, false])("never adopts a predecessor's loan (lender supplied: %s)"
     });
     await releaseNext?.();
     expect.soft(gatewayInstance.acceptingCalls).toBe(true);
-    await expect(bindProbe(gateway, lenderId).execute("gateway", {})).resolves.toMatchObject(
-      firstGeneration,
-    );
+    await expectFirstGeneration(gateway, "gateway");
   } finally {
     await releaseFirst?.();
     await releaseNext?.();

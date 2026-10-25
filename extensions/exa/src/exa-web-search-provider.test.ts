@@ -9,8 +9,7 @@ import { createExaWebSearchProvider } from "../web-search-contract-api.js";
 type JsonRecord = Record<string, unknown>;
 let fetchMock: MockInstance<typeof fetch>;
 const validationErrors = {
-  invalid_base_url:
-    "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+  invalid_base_url: "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
   invalid_contents: "contents.highlights.numSentences must be a positive integer.",
   conflicting_time_filters:
     "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
@@ -68,6 +67,32 @@ it("caps returned and cached results when Exa exceeds the requested count", asyn
       { url: "https://example.com/first", title: expect.stringMatching(/\n---\nFirst\n<<<END/) },
     ],
   });
+});
+
+it("shares cached answers only with the same resolved credential", async () => {
+  fetchMock.mockImplementation(async (_url, init) =>
+    Response.json({
+      results: [
+        {
+          url:
+            new Headers(init?.headers).get("x-api-key") === "fixture-exa-a"
+              ? "https://example.com/account-a"
+              : "https://example.com/account-b",
+        },
+      ],
+    }),
+  );
+  const args = { query: "Exa credential cache isolation" };
+  const first = await requireExaTool({ apiKey: "fixture-exa-a" }).execute(args);
+  const other = await requireExaTool({ apiKey: "fixture-exa-b" }).execute(args);
+  const repeated = await requireExaTool({ apiKey: "fixture-exa-a" }).execute(args);
+
+  expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
+  expect(other).toMatchObject({ results: [{ url: "https://example.com/account-b" }] });
+  expect(repeated).toEqual({ ...first, cached: true });
+  expect(
+    fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-api-key")),
+  ).toEqual(["fixture-exa-a", "fixture-exa-b"]);
 });
 
 it.each(["before", "during"])("preserves cancellation %s transport", async (timing) => {
@@ -207,6 +232,23 @@ it.each([
   });
 });
 
+it.each([
+  "ftp://fixture-user:fixture-url-password@proxy.example/exa?api_key=fixture-query-token",
+  "fixture-user:fixture-url-password@proxy.example:invalid/exa?api_key=fixture-query-token",
+  "custom://fixture-user:fixture-url-password@proxy.example/exa?api_key=fixture-query-token",
+])("redacts credentials from rejected custom endpoint %s", async (baseUrl) => {
+  const result = await requireExaTool({ baseUrl }).execute({
+    query: "invalid credential-bearing endpoint",
+  });
+  expect(result.message).not.toContain("fixture-url-password");
+  expect(result.message).not.toContain("fixture-query-token");
+  expect(result).toMatchObject({
+    error: "invalid_base_url",
+    message: expect.stringContaining("plugins.entries.exa.config.webSearch.baseUrl"),
+  });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -281,4 +323,26 @@ it("bounds Exa API error bodies without using response.text()", async () => {
   expect(tracked.wasCanceled()).toBe(true);
   expect(textSpy).not.toHaveBeenCalled();
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it.each(["body", "statusText"])("redacts the active credential reflected in %s", async (source) => {
+  const apiKey = "fixture-exa-opaque-credential";
+  const detail = `upstream rejected ${apiKey}`;
+  fetchMock.mockResolvedValue(
+    new Response(source === "body" ? detail : "", {
+      status: 503,
+      statusText: source === "statusText" ? detail : "Unavailable",
+    }),
+  );
+  const failure = requireExaTool({ apiKey }, { cacheTtlMinutes: 0 }).execute({
+    query: `reflected credential ${source}`,
+  });
+
+  await expect(failure).rejects.toMatchObject({
+    status: 503,
+    statusCode: 503,
+    message: expect.stringContaining("upstream rejected"),
+  });
+  await expect(failure).rejects.not.toThrow(apiKey);
+  expect(fetchMock).toHaveBeenCalledOnce();
 });

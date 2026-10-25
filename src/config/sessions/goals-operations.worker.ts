@@ -58,25 +58,22 @@ export function bindSqliteWorkerBackend(
       ensureSessionGoalOperationsSchema(database.db);
       return ({ input: request }) => {
         return writeTransaction("session.goal.mutate", "Goal transaction", (current) => {
-          const assertSources = () => {
-            const validation = readSessionSourceValidation(current, request.sources);
-            const { refusedSource } = validation;
-            if (refusedSource) {
-              const refused: SessionGoalManagementCandidate = {
-                kind: "session-goal-management",
-                refusedSource,
-              };
-              transferSessionEntryWorkerCandidate(current, admit, refused);
-              throw new Error("Goal source refusal was not rejected");
-            }
-            if (validation.conversationMatches.length) {
-              admit("transaction", {
-                kind: "session-entry-patch-validated",
-                sourceValidation: validation,
-              });
-            }
-          };
-          assertSources();
+          const validation = readSessionSourceValidation(current, request.sources);
+          const { refusedSource } = validation;
+          if (refusedSource) {
+            const refused: SessionGoalManagementCandidate = {
+              kind: "session-goal-management",
+              refusedSource,
+            };
+            transferSessionEntryWorkerCandidate(current, admit, refused);
+            throw new Error("Goal source refusal was not rejected");
+          }
+          if (validation.conversationMatches.length) {
+            admit("transaction", {
+              kind: "session-entry-patch-validated",
+              sourceValidation: validation,
+            });
+          }
           const { previous, ...result } = mutateSessionGoalInDatabase(current, request);
           const candidate: SessionGoalManagementCandidate = {
             kind: "session-goal-management",

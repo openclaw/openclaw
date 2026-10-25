@@ -1,6 +1,7 @@
 import path from "node:path";
 import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveAgentRoute as resolveProductionAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -26,7 +27,9 @@ const graph = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(
     async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
   ),
-  fetchChannelMessage: vi.fn<() => Promise<GraphThreadMessage | undefined>>(async () => undefined),
+  fetchChannelMessage: vi.fn<typeof import("../graph-thread.js").fetchChannelMessage>(
+    async () => undefined,
+  ),
   fetchThreadReplies: vi.fn<() => Promise<GraphThreadMessage[]>>(async () => []),
   fetchChatMessageText: vi.fn<() => Promise<string | undefined>>(async () => undefined),
 }));
@@ -276,6 +279,61 @@ describe("msteams message authorization and supplemental context", () => {
     await createMSTeamsMessageHandler(deps)(activity({ conversation: personal("19:shared-dm") }));
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "keeps cached Graph parent access scoped to the bot credential (first can read: %s)",
+    async (firstCanRead) => {
+      const cfg = accountsConfig(
+        { ...openGroup, appId: "support-app" },
+        { ...openGroup, appId: "sales-app" },
+      );
+      setRuntimeConfigSnapshot(cfg);
+      const botHandler = (accountId: "support" | "sales") => {
+        const { deps } = createMessageHandlerDeps(cfg, {
+          accountId,
+          resolveAgentRoute: ({ accountId: routeAccountId = "default", peer }) => ({
+            sessionKey: `agent:main:msteams:${routeAccountId}:${peer.kind}:${peer.id}`,
+            agentId: "main",
+            accountId: routeAccountId,
+          }),
+        });
+        deps.appId = `${accountId}-app`;
+        vi.mocked(deps.tokenProvider.getAccessToken).mockResolvedValue(
+          `fixture-${accountId}-token`,
+        );
+        return createMSTeamsMessageHandler(deps);
+      };
+      const support = botHandler("support");
+      const sales = botHandler("sales");
+      graph.fetchChannelMessage.mockImplementation(async (token) => {
+        if (token === "fixture-support-token") {
+          return firstCanRead ? threadMessage(parentId, "Support-only parent") : undefined;
+        }
+        return firstCanRead ? undefined : threadMessage(parentId, "Sales-only parent");
+      });
+
+      await support(threadActivity());
+      expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("support");
+      for (let attempt = 0; attempt < 2; attempt++) {
+        dispatch.mockClear();
+        const input = threadActivity();
+        input.activity.id = `sales-reply-${attempt}`;
+        await sales(input);
+        expect(dispatch.mock.calls.at(-1)?.[0].ctx.AccountId).toBe("sales");
+        if (firstCanRead) {
+          expect(context().ChannelStructuredContext).toBeUndefined();
+        } else {
+          expectThreadContext([
+            { message_id: parentId, sender: "Alice", body: "Sales-only parent" },
+          ]);
+        }
+      }
+      expect(graph.fetchChannelMessage.mock.calls.map(([token]) => token)).toEqual([
+        "fixture-support-token",
+        "fixture-sales-token",
+      ]);
+    },
+  );
 
   it("does not widen an empty group sender allowlist through pairing or route entries", async () => {
     const { handle, conversationStore, readAllowFromStore } = setup({
@@ -531,15 +589,20 @@ describe("msteams message authorization and supplemental context", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("hydrates the canonical root once across replies from a cached thread-qualified route (#66771)", async () => {
-    const cachedRoute = {
-      sessionKey: `${channelSessionKey}:thread:old:thread:malformed`,
-      agentId: "main",
-      accountId: "default",
-    };
+  it("hydrates the canonical root once across replies through production routing (#66771)", async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const { handler, enqueueSystemEvent } = setup(
       { groupPolicy: "open" },
-      { resolveAgentRoute: () => cachedRoute },
+      {
+        resolveAgentRoute: ({ accountId, peer }) =>
+          resolveProductionAgentRoute({
+            cfg,
+            channel: "msteams",
+            accountId,
+            peer: { kind: "channel", id: peer.id },
+          }),
+      },
+      cfg,
     );
     graph.fetchChannelMessage.mockResolvedValue(
       threadMessage(parentId, "Original question", { displayName: "Alice" }),

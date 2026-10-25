@@ -180,6 +180,55 @@ describe("perplexity web search provider", () => {
     }
   });
 
+  it.each([true, false])(
+    "keeps cached answers scoped to the request credential (native=%s)",
+    async (structured) => {
+      endpointMock.mockImplementation(
+        async (request: { init: RequestInit }, run: (response: Response) => Promise<unknown>) => {
+          const credential = new Headers(request.init.headers).get("authorization");
+          const account =
+            credential === "Bearer perplexity-account-a"
+              ? "account-a"
+              : credential === "Bearer perplexity-account-b"
+                ? "account-b"
+                : undefined;
+          if (!account) {
+            throw new Error("Unexpected synthetic Perplexity credential");
+          }
+          return run(
+            Response.json(
+              structured
+                ? { results: [{ title: account, url: `https://example.com/${account}` }] }
+                : chatResponse(account, [`https://example.com/${account}`]),
+            ),
+          );
+        },
+      );
+      const accountA = createTool(structured, "perplexity-account-a");
+      const accountB = createTool(structured, "perplexity-account-b");
+      const args = { query: `Perplexity credential-scoped answers ${structured}` };
+      const first = await accountA.execute(args);
+      const second = await accountB.execute(args);
+      const repeated = await accountA.execute(args);
+
+      if (structured) {
+        expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
+        expect(second).toMatchObject({ results: [{ url: "https://example.com/account-b" }] });
+      } else {
+        expect(first).toMatchObject({
+          content: expect.stringContaining("account-a"),
+          citations: ["https://example.com/account-a"],
+        });
+        expect(second).toMatchObject({
+          content: expect.stringContaining("account-b"),
+          citations: ["https://example.com/account-b"],
+        });
+      }
+      expect(repeated).toEqual({ ...first, cached: true });
+      expect(endpointMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each([
     { name: "missing choices", response: {} },
     { name: "whitespace content", response: { choices: [{ message: { content: " \n " } }] } },

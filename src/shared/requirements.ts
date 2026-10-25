@@ -22,14 +22,6 @@ export type RequirementRemote = {
   platforms?: string[];
 };
 
-type RequirementsEvaluationContext = {
-  always: boolean;
-  hasLocalBin: (bin: string) => boolean;
-  localPlatform: string;
-  isEnvSatisfied: (envName: string) => boolean;
-  isConfigSatisfied: (pathStr: string) => boolean;
-};
-
 function normalizeOsRequirementPlatform(platform: string): string {
   const normalized = platform.trim().toLowerCase();
   return normalized === "macos" ? "darwin" : normalized;
@@ -49,12 +41,15 @@ export function isOsRequirementSatisfied(
 }
 
 /** Evaluates entry requirements against the current host and optional remote capabilities. */
-export function evaluateRequirementsFromMetadataWithRemote(
-  params: RequirementsEvaluationContext & {
-    metadata?: RequirementsMetadata;
-    remote?: RequirementRemote;
-  },
-) {
+export function evaluateRequirementsFromMetadataWithRemote(params: {
+  always: boolean;
+  hasLocalBin: (bin: string) => boolean;
+  localPlatform: string;
+  isEnvSatisfied: (envName: string) => boolean;
+  isConfigSatisfied: (pathStr: string) => boolean;
+  metadata?: RequirementsMetadata;
+  remote?: RequirementRemote;
+}) {
   const required: Requirements = {
     bins: params.metadata?.requires?.bins ?? [],
     anyBins: params.metadata?.requires?.anyBins ?? [],

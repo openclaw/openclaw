@@ -13,8 +13,9 @@ function collectAppendedEvents(
   before: SessionActorHotState,
   after: SessionActorHotState,
   payloads: ReadonlyMap<number, { event: unknown; serializedBytes: number }> | undefined,
+  rewrittenGeneration = before.transcript.version.generation,
 ): SessionActorReceipt["transcript"]["appendedEvents"] {
-  if (!payloads || before.transcript.version.generation !== after.transcript.version.generation) {
+  if (!payloads || rewrittenGeneration !== after.transcript.version.generation) {
     return undefined;
   }
   const beforeSeq = before.transcript.version.rawSeq ?? -1;
@@ -48,6 +49,7 @@ export function createSessionActorCommittedOutcome<
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
   conversationPublication?: SessionActorReceipt["conversationPublication"];
+  entryMetadata?: SessionActorReceipt["entryMetadata"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -84,7 +86,12 @@ export function createSessionActorCommittedOutcome<
         after: after.transcript.version,
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
-        appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        appendedEvents: collectAppendedEvents(
+          before,
+          after,
+          params.payloads,
+          append?.modelPromptProjection?.after.generation,
+        ),
         authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:
@@ -94,9 +101,9 @@ export function createSessionActorCommittedOutcome<
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
       conversationPublication: params.conversationPublication,
+      entryMetadata: params.entryMetadata,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-      pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
       postimage: after,
     },

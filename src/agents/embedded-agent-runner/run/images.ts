@@ -495,47 +495,6 @@ async function materializeVideoFact(
   return { type: "video", data: loaded.buffer.toString("base64"), mimeType };
 }
 
-async function projectOrderedPromptMedia(params: {
-  content: Array<TextContent | ImageContent>;
-  media: MediaFact[];
-  images: ImageContent[];
-  imageFactIndexes: ImageFactIndex[];
-  options: PromptMediaOptions;
-  budget: { remaining: number };
-}): Promise<ModelInputContent[]> {
-  const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
-  const projected: ModelInputContent[] = params.content.filter(
-    (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
-  );
-  // Hydration already resolved image order, including inline blocks with no managed fact.
-  if (!params.media.some(isVideoMediaFact)) {
-    return [...projected, ...params.images];
-  }
-  const imagesByFact = new Map<number, ImageContent[]>();
-  const factlessImages: ImageContent[] = [];
-  params.images.forEach((image, index) => {
-    const factIndex = params.imageFactIndexes[index];
-    if (factIndex == null) {
-      factlessImages.push(image);
-    } else {
-      imagesByFact.set(factIndex, [...(imagesByFact.get(factIndex) ?? []), image]);
-    }
-  });
-  for (const [factIndex, fact] of params.media.entries()) {
-    if (isImageMediaFact(fact)) {
-      projected.push(...(imagesByFact.get(factIndex) ?? []));
-    } else if (isVideoMediaFact(fact)) {
-      projected.push(
-        params.options.provider
-          ? await materializeVideoFact(fact, params.budget, params.options)
-          : { type: "text", text: VIDEO_OMISSION.unsupported },
-      );
-    }
-  }
-  projected.push(...factlessImages);
-  return projected;
-}
-
 /** Hydrates exact-message media facts for canonical replay or one provider call. */
 async function materializePromptMediaMessages(
   messages: AgentMessage[],
@@ -567,14 +526,40 @@ async function materializePromptMediaMessages(
       existingImageFactIndexes: readPersistedImageBlockFactIndexes(message),
       mediaImageLayout,
     });
-    const projectedContent = await projectOrderedPromptMedia({
-      content,
-      media: resolvedMedia,
-      images: result.images,
-      imageFactIndexes: result.imageFactIndexes,
-      options,
-      budget: videoBudget,
-    });
+    const { images, imageFactIndexes } = result;
+    const projectedContent = await (async (): Promise<ModelInputContent[]> => {
+      const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
+      const projected: ModelInputContent[] = content.filter(
+        (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
+      );
+      // Hydration already resolved image order, including inline blocks with no managed fact.
+      if (!resolvedMedia.some(isVideoMediaFact)) {
+        return [...projected, ...images];
+      }
+      const imagesByFact = new Map<number, ImageContent[]>();
+      const factlessImages: ImageContent[] = [];
+      images.forEach((image, imageIndex) => {
+        const factIndex = imageFactIndexes[imageIndex];
+        if (factIndex == null) {
+          factlessImages.push(image);
+        } else {
+          imagesByFact.set(factIndex, [...(imagesByFact.get(factIndex) ?? []), image]);
+        }
+      });
+      for (const [factIndex, fact] of resolvedMedia.entries()) {
+        if (isImageMediaFact(fact)) {
+          projected.push(...(imagesByFact.get(factIndex) ?? []));
+        } else if (isVideoMediaFact(fact)) {
+          projected.push(
+            options.provider
+              ? await materializeVideoFact(fact, videoBudget, options)
+              : { type: "text", text: VIDEO_OMISSION.unsupported },
+          );
+        }
+      }
+      projected.push(...factlessImages);
+      return projected;
+    })();
     if (
       (options.provider || options.onCurrentTurnImageFailure) &&
       index === activeUserIndex &&

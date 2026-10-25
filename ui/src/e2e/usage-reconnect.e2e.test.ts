@@ -232,7 +232,7 @@ suite.define(() => {
         }
         await expect
           .poll(() => usageBadges(page))
-          .toEqual(["100 Tokens", "$0.01 Cost", "1 session"]);
+          .toEqual(["100 Tokens", "$0.01 Cost", "1 Sessions"]);
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
 
@@ -248,7 +248,7 @@ suite.define(() => {
         expect(await requestCount(gateway, "models.list")).toBe(catalogsBefore);
         await expect
           .poll(() => usageBadges(page))
-          .toEqual(["320 Tokens", "$0.01 Cost", "1 session"]);
+          .toEqual(["320 Tokens", "$0.01 Cost", "1 Sessions"]);
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await page.locator(".usage-callout.danger").count()).toBe(0);
       }
@@ -266,7 +266,9 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequestCount(gateway, "sessions.usage", 1);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
-      await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
+      await expect
+        .poll(() => usageBadges(page))
+        .toEqual(["120 Tokens", "$0.01 Cost", "1 Sessions"]);
 
       for (const socketCount of [2, 3, 4]) {
         await proxyReconnect(page, gateway, socketCount);
@@ -287,7 +289,9 @@ suite.define(() => {
       await proxyReconnect(page, gateway, 6);
       await waitForRequestCount(gateway, "sessions.usage", 4);
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
-      await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
+      await expect
+        .poll(() => usageBadges(page))
+        .toEqual(["120 Tokens", "$0.01 Cost", "1 Sessions"]);
     });
   });
 

@@ -4,12 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { wrapLmstudioInferencePreload } from "./stream.js";
 
 // Keep stream, authentication, discovery, and loading real; replace only HTTP I/O.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
-  fetchWithSsrFGuard: async (request: { url: string; init?: RequestInit; timeoutMs: number }) => ({
-    response: await fetch(request.url, request.init),
-    release: async () => undefined,
-  }),
+vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-transport-runtime")>()),
+  buildGuardedModelFetch: () => (url: string, init?: RequestInit) => fetch(url, init),
 }));
 
 afterEach(() => {

@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import { getEnvApiKey, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -13,6 +14,7 @@ import {
   isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicServerCompactionPlan,
+  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -82,9 +84,9 @@ function parseHeaderList(value: unknown): string[] {
 }
 
 function mergeAnthropicBetaHeader(
-  headers: Record<string, string> | undefined,
+  headers: ModelRequestHeaders | undefined,
   betas: string[],
-): Record<string, string> {
+): ModelRequestHeaders {
   const merged = { ...headers };
   const existingKey = Object.keys(merged).find(
     (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
@@ -245,32 +247,23 @@ export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: AnthropicServiceTier,
 ): StreamFn {
-  return createPayloadPatchStreamWrapper(
-    baseStreamFn,
-    ({ payload, model }) => {
-      const payloadPolicy = resolveAnthropicPayloadPolicy({
-        provider: model.provider,
-        api: model.api,
-        baseUrl: model.baseUrl,
-        serviceTier,
-      });
-      applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
-    },
-    {
-      shouldPatch: ({ model, options }) => {
-        // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
-        if (isAnthropicOAuthApiKey(options?.apiKey) || !supportsAnthropicPriorityTier(model)) {
-          return false;
-        }
-        return resolveAnthropicPayloadPolicy({
-          provider: model.provider,
-          api: model.api,
-          baseUrl: model.baseUrl,
-          serviceTier,
-        }).allowsServiceTier;
-      },
-    },
-  );
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey) || !supportsAnthropicPriorityTier(model)) {
+      return underlying(model, context, options);
+    }
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      serviceTier,
+    });
+    return policy.allowsServiceTier
+      ? streamWithPayloadPatch(underlying, model, context, options, (payload) =>
+          applyAnthropicPayloadPolicyToParams(payload, policy, new Set()),
+        )
+      : underlying(model, context, options);
+  };
 }
 
 function createAnthropicThinkingPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {

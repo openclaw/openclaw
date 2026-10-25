@@ -17,35 +17,36 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+type RegistryTestContext<K extends keyof ReturnType<typeof createSubagentRegistryMockState>> = {
+  getRegistry: () => SubagentRegistryHarness;
+  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, K>;
+};
+type RequesterLookup = {
+  findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
+};
+
 export function registerQueuedCollectorLaunchSettlementTest({
   getRegistry,
   mocks,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "entries">;
-}): void {
+}: RegistryTestContext<"entries">): void {
   it("keeps an in-flight queued collector pending until launch cleanup settles", async () => {
     const mod = getRegistry();
     const runId = "run-collector-launch-kill";
-    mocks.entries["agent:main:subagent:launch-kill"] = createSessionEntry({
+    const childSessionKey = "agent:main:subagent:launch-kill";
+    const identity = {
       sessionId: "session-launch-kill",
       lifecycleRevision: "revision-launch-kill",
-    });
+    };
+    mocks.entries[childSessionKey] = createSessionEntry(identity);
     await mod.addSubagentRunForTests({
       runId,
-      childSessionKey: "agent:main:subagent:launch-kill",
-      childSessionIdentity: {
-        sessionId: "session-launch-kill",
-        lifecycleRevision: "revision-launch-kill",
-      },
-      task: "cancel while gateway launch is unresolved",
-      createdAt: Date.now(),
+      childSessionKey,
+      childSessionIdentity: identity,
       collect: true,
       swarmRunId: runId,
       schedulerSlotId: runId,
       swarmLaunchPending: true,
       execution: { status: "queued" },
-      completion: { required: false },
     });
 
     const launch = createDeferred();
@@ -85,11 +86,7 @@ export function registerRestartDrainCompletionSettlementTest({
   getRegistry,
   mocks,
   findRequesterRun,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "runSubagentAnnounceFlow">;
-  findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
-}): void {
+}: RegistryTestContext<"runSubagentAnnounceFlow"> & RequesterLookup): void {
   it("retries a terminal completion deferred by restart drain", async () => {
     const mod = getRegistry();
     const now = Date.now();
@@ -128,8 +125,7 @@ export function registerRestartDrainCompletionSettlementTest({
       await settleRootWork();
     }
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    const entry = findRequesterRun(runId);
-    expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
+    expect(findRequesterRun(runId)?.cleanupCompletedAt).toBeTypeOf("number");
   });
 }
 
@@ -139,27 +135,17 @@ export function registerForcedCollectorCompletionSettlementTests({
   findRequesterRun,
   getLifecycleHandler,
   mockPendingAgentWait,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "runSubagentAnnounceFlow"
-  >;
-  findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
-  getLifecycleHandler: () => (event: Pick<AgentEventPayload, "runId" | "stream" | "data">) => void;
-  mockPendingAgentWait: () => void;
-}): void {
+}: RegistryTestContext<"entries" | "runSubagentAnnounceFlow"> &
+  RequesterLookup & {
+    getLifecycleHandler: () => (
+      event: Pick<AgentEventPayload, "runId" | "stream" | "data">,
+    ) => void;
+    mockPendingAgentWait: () => void;
+  }): void {
   it("settles forced collector yield through lifecycle with captured structured output", async () => {
     const mod = getRegistry();
     const runId = "forced-collector-yield";
     const childSessionKey = "agent:main:subagent:forced-collector-yield";
-    const terminal = {
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-      yielded: true,
-      livenessState: "paused",
-    };
     mockPendingAgentWait();
     mocks.entries = {
       [childSessionKey]: createSessionEntry({ lifecycleRevision: "forced-yield" }),
@@ -182,7 +168,14 @@ export function registerForcedCollectorCompletionSettlementTests({
       getLifecycleHandler()({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", ...terminal },
+        data: {
+          phase: "end",
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          yielded: true,
+          livenessState: "paused",
+        },
       });
       await vi.advanceTimersByTimeAsync(0);
     } finally {

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { createRoot, createSignal } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -163,6 +164,22 @@ it.each(["session", "client", "draft", "disabled", "run"] as const)(
     expect(f.prediction()).toBeNull();
   },
 );
+
+it("retires a prediction when reactive eligibility changes without a props refresh", async () => {
+  const [active, setActive] = createRoot((dispose) => {
+    onTestFinished(dispose);
+    return createSignal(true);
+  });
+  const f = fixture();
+  Object.defineProperty(f.props.composerPredictions, "active", { get: active });
+  f.paint();
+  await f.show();
+  setActive(false);
+  flush();
+  expect(f.prediction()).toBeNull();
+  f.finish("run-b");
+  expect(f.predictions()).toHaveLength(1);
+});
 
 it("retires the event subscription and pending prediction when the composer unmounts", async () => {
   const f = fixture({ pending: true });

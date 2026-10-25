@@ -173,7 +173,7 @@ export class TelegramPollingSession {
     if (this.opts.abortSignal?.aborted) {
       return "exit";
     }
-    if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+    if (!isRecoverableTelegramNetworkError(err)) {
       throw err;
     }
     return this.#waitBeforeRestart(
@@ -264,7 +264,7 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
-      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+      if (isRecoverableTelegramNetworkError(err)) {
         this.opts.log(
           `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
         );
@@ -518,7 +518,7 @@ export class TelegramPollingSession {
           this.#transportState.markDirty();
         } else if (
           pollState.error &&
-          !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
+          !isRecoverableTelegramNetworkError(new Error(pollState.error))
         ) {
           this.#status.noteError(
             pollState.error,
@@ -541,7 +541,7 @@ export class TelegramPollingSession {
       }
       if (restartRequested) {
         this.opts.log(
-          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields("error")}`,
+          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields()}`,
         );
         return await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress restart requested; restarting in ${delay}.`,

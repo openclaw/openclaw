@@ -1,6 +1,7 @@
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
 const { resolveGeneratedMediaMaxBytesMock } = vi.hoisted(() => ({
   resolveGeneratedMediaMaxBytesMock:
@@ -171,17 +172,42 @@ describe("buildAzureSpeechProvider", () => {
     );
   });
 
+  it.each([
+    {
+      config: { region: "westus" },
+      environment: "AZURE_SPEECH_REGION",
+      value: "eastus",
+      expected: westusUrl,
+    },
+    {
+      config: { endpoint: customUrl },
+      environment: "AZURE_SPEECH_REGION",
+      value: "eastus",
+      expected: customUrl,
+    },
+    {
+      config: { region: "westus" },
+      environment: "AZURE_SPEECH_ENDPOINT",
+      value: customUrl,
+      expected: westusUrl,
+    },
+  ])(
+    "prefers explicit $config routing over $environment",
+    async ({ config, environment, value, expected }) => {
+      vi.stubEnv(environment, value);
+      const providerConfig = { apiKey: "key", ...config };
+      await provider.synthesize({ ...synthesisRequest, providerConfig, target: "audio-file" });
+      fetchMock.mockResolvedValueOnce(Response.json([]));
+      await provider.listVoices?.({ providerConfig, timeoutMs: 30_000 });
+
+      expect(
+        fetchMock.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString())),
+      ).toEqual([`${expected}/cognitiveservices/v1`, `${expected}/cognitiveservices/voices/list`]);
+    },
+  );
+
   it("parses provider-specific TTS directives", () => {
-    const policy = {
-      enabled: true,
-      allowText: true,
-      allowProvider: true,
-      allowVoice: true,
-      allowModelId: true,
-      allowVoiceSettings: true,
-      allowNormalization: true,
-      allowSeed: true,
-    };
+    const policy = createSpeechDirectivePolicy();
 
     const parse = (key: string, value: string) =>
       provider.parseDirectiveToken?.({ key, value, policy });
@@ -218,9 +244,7 @@ describe("buildAzureSpeechProvider", () => {
 
   it("lists voices through config or explicit request auth", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify([{ ShortName: "en-US-JennyNeural", DisplayName: "Jenny" }]), {
-        headers: { "Content-Type": "application/json" },
-      }),
+      Response.json([{ ShortName: "en-US-JennyNeural", DisplayName: "Jenny" }]),
     );
     const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
     const voices = await provider.listVoices?.({

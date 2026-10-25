@@ -1,162 +1,109 @@
-// Anthropic tests cover the plugin-owned Doctor repair for Claude CLI sign-ins.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
-const CLAUDE_CLI = { agentRuntime: { id: "claude-cli" } };
-
-// Shape written by Claude CLI sign-in between native login (#129052) and the
-// `anthropic/*` entry: seeded catalog rows pinned to Claude CLI, no auth profile.
-function signedInConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-opus-5", fallbacks: ["openai/gpt-5.2"] },
-        models: {
-          "anthropic/claude-opus-5": { ...CLAUDE_CLI, alias: "Opus" },
-          "anthropic/claude-sonnet-4-6": CLAUDE_CLI,
-          "openai/gpt-5.2": {},
-        },
-      },
-    },
-    ...overrides,
-  };
+const opus = "anthropic/claude-opus-5";
+const sonnet = "anthropic/claude-sonnet-5";
+const cli = { agentRuntime: { id: "claude-cli" } };
+const pinned = {
+  [opus]: { ...cli, alias: "Opus" },
+  "anthropic/claude-sonnet-4-6": cli,
+  "openai/gpt-5.2": {},
+};
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+// Native login (#129052) seeded pinned rows but no wildcard or auth profile.
+function config(
+  defaults: Partial<Defaults> = {},
+  extra: Partial<OpenClawConfig> = {},
+): OpenClawConfig {
+  const model = { primary: opus, fallbacks: ["openai/gpt-5.2"] };
+  return { agents: { defaults: { model, models: pinned, ...defaults } }, ...extra };
+}
+function provider(apiKey?: string, agentRuntime?: { id: string }): OpenClawConfig {
+  return config(
+    {},
+    { models: { providers: { anthropic: { baseUrl: "", models: [], apiKey, agentRuntime } } } },
+  );
 }
 
 beforeEach(() => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
 });
+afterEach(() => vi.unstubAllEnvs());
 
-afterEach(() => {
-  vi.unstubAllEnvs();
+it("adds the Claude CLI wildcard to an earlier sign-in, idempotently", () => {
+  const cfg = config();
+  const result = normalizeCompatibilityConfig({ cfg });
+  expect(result.changes).toEqual([
+    'agents.defaults.models["anthropic/*"]: added the claude-cli runtime so Claude models not seeded at Claude CLI sign-in run through Claude Code instead of failing without an Anthropic API key.',
+  ]);
+  expect(result.config.agents?.defaults).toEqual({
+    ...cfg.agents?.defaults,
+    models: { ...pinned, "anthropic/*": cli },
+  });
+  expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+    config: result.config,
+    changes: [],
+  });
 });
 
-describe("Anthropic Doctor contract", () => {
-  it("adds the Claude CLI wildcard to an earlier Claude CLI sign-in", () => {
-    const cfg = signedInConfig();
-    const result = normalizeCompatibilityConfig({ cfg });
+it.each<[string, OpenClawConfig]>([
+  ["retired provider marker", provider("anthropic:claude-cli")],
+  ["string default model", config({ model: opus })],
+])("repairs a %s", (_name, cfg) => {
+  expect(normalizeCompatibilityConfig({ cfg }).changes).toHaveLength(1);
+});
 
-    expect(result.changes).toEqual([
-      'agents.defaults.models["anthropic/*"]: added the claude-cli runtime so Claude models not seeded at Claude CLI sign-in run through Claude Code instead of failing without an Anthropic API key.',
-    ]);
-    expect(result.config.agents?.defaults).toEqual({
-      ...cfg.agents?.defaults,
-      models: { ...cfg.agents?.defaults?.models, "anthropic/*": CLAUDE_CLI },
-    });
-    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
-      config: result.config,
-      changes: [],
-    });
-  });
-
-  it("keeps a retired Claude CLI provider marker eligible", () => {
-    const cfg = signedInConfig({
+it.each<[string, OpenClawConfig]>([
+  [
+    "authored wildcard runtime",
+    config({ models: { ...pinned, "anthropic/*": { agentRuntime: { id: "openclaw" } } } }),
+  ],
+  [
+    "authored wildcard alias",
+    config({ models: { ...pinned, "anthropic/*": { alias: "Claude" } } }),
+  ],
+  ["empty config", {}],
+  [
+    "non-CLI entries",
+    config({
+      model: opus,
       models: {
-        providers: { anthropic: { baseUrl: "", apiKey: "anthropic:claude-cli", models: [] } },
+        [opus]: {},
+        [sonnet]: { agentRuntime: { id: "openclaw" } },
+        "claude-cli/claude-opus-5": {},
       },
-    });
-    expect(normalizeCompatibilityConfig({ cfg }).changes).toHaveLength(1);
-  });
+    }),
+  ],
+  // The API primary's credential may live only in the auth store, invisible to repair.
+  [
+    "API primary with CLI fallback",
+    config({
+      model: { primary: "anthropic/claude-opus-4-6", fallbacks: [sonnet] },
+      models: { "anthropic/claude-opus-4-6": { alias: "Opus" }, [sonnet]: cli },
+    }),
+  ],
+  [
+    "non-Anthropic primary",
+    config({ model: "openai/gpt-5.2", models: { [opus]: cli, "openai/gpt-5.2": {} } }),
+  ],
+  [
+    "auth profile",
+    config(
+      {},
+      { auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } } },
+    ),
+  ],
+  ["provider API key", provider("sk-ant-placeholder")],
+  ["config env key", config({}, { env: { vars: { ANTHROPIC_API_KEY: "placeholder" } } })],
+  ["provider runtime", provider(undefined, { id: "openclaw" })],
+])("leaves %s unchanged", (_name, cfg) => {
+  expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
+});
 
-  it("accepts a string default model", () => {
-    const cfg = signedInConfig();
-    cfg.agents!.defaults!.model = "anthropic/claude-opus-5";
-    expect(normalizeCompatibilityConfig({ cfg }).changes).toHaveLength(1);
-  });
-
-  it.each([
-    [
-      "an existing wildcard naming another runtime",
-      { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
-    ],
-    ["an existing wildcard without a runtime", { "anthropic/*": { alias: "Claude" } }],
-  ])("leaves %s unchanged", (_name, extra) => {
-    const cfg = signedInConfig();
-    cfg.agents!.defaults!.models = { ...cfg.agents?.defaults?.models, ...extra };
-    expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
-  });
-
-  it.each<[string, OpenClawConfig]>([
-    ["an empty config", {}],
-    [
-      "Anthropic entries without the Claude CLI runtime",
-      {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-5",
-            models: {
-              "anthropic/claude-opus-5": {},
-              "anthropic/claude-sonnet-5": { agentRuntime: { id: "openclaw" } },
-              "claude-cli/claude-opus-5": {},
-            },
-          },
-        },
-      },
-    ],
-    [
-      // Documented API primary with a Claude CLI fallback; its credential may
-      // live only in the auth store, which config repair cannot see.
-      "an API default model with a Claude CLI fallback",
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/claude-opus-4-6",
-              fallbacks: ["anthropic/claude-sonnet-5"],
-            },
-            models: {
-              "anthropic/claude-opus-4-6": { alias: "Opus" },
-              "anthropic/claude-sonnet-5": CLAUDE_CLI,
-            },
-          },
-        },
-      },
-    ],
-    [
-      "a non-Anthropic default model",
-      signedInConfig({
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.2",
-            models: { "anthropic/claude-opus-5": CLAUDE_CLI, "openai/gpt-5.2": {} },
-          },
-        },
-      }),
-    ],
-    [
-      "an Anthropic auth profile",
-      signedInConfig({
-        auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } },
-      }),
-    ],
-    [
-      "an Anthropic provider API key",
-      signedInConfig({
-        models: {
-          providers: { anthropic: { baseUrl: "", apiKey: "sk-ant-placeholder", models: [] } },
-        },
-      }),
-    ],
-    [
-      "an Anthropic key in config env",
-      signedInConfig({ env: { vars: { ANTHROPIC_API_KEY: "placeholder" } } }),
-    ],
-    [
-      "a provider-level runtime",
-      signedInConfig({
-        models: {
-          providers: { anthropic: { baseUrl: "", models: [], agentRuntime: { id: "openclaw" } } },
-        },
-      }),
-    ],
-  ])("leaves %s unchanged", (_name, cfg) => {
-    expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
-  });
-
-  it("leaves a sign-in unchanged when the process has an Anthropic API key", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "placeholder");
-    const cfg = signedInConfig();
-    expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
-  });
+it("preserves a sign-in when the process has an Anthropic API key", () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "placeholder");
+  const cfg = config();
+  expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
 });

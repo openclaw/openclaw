@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { turnCompleted } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createNativeRunParams as createParams,
@@ -54,6 +54,19 @@ function multiplexedClientFactory(
     multiplexCodexTestClientHandlers(client);
     return client;
   });
+}
+
+async function allowNativeToolPreflight(
+  harness: ReturnType<typeof createInferenceReadyClientHarness>,
+  since = 0,
+) {
+  // Hook admission and native tool policy each read managed requirements.
+  let nextRequest = since;
+  for (let read = 0; read < 2; read += 1) {
+    const request = await waitForHarnessRequest(harness, "configRequirements/read", nextRequest);
+    nextRequest = harness.writes.length;
+    harness.send({ id: request.id, result: { requirements: null } });
+  }
 }
 
 setupRunAttemptTestHooks();
@@ -106,12 +119,7 @@ describe("Codex app-server main thread cleanup", () => {
           result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         });
       }
-      const requirements = await waitForHarnessRequest(
-        harness,
-        "configRequirements/read",
-        requestStart,
-      );
-      harness.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(harness, requestStart);
       const threadId = `thread-${label}`;
       if (index < 2) {
         const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
@@ -141,20 +149,24 @@ describe("Codex app-server main thread cleanup", () => {
         .map((write) => (JSON.parse(write) as { method: string }).method)
         .filter((method) => !["initialize", "initialized", "skills/list"].includes(method));
     expect(userRequestMethods()).toEqual([
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "thread/start",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
       "turn/start",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -191,12 +203,7 @@ describe("Codex app-server main thread cleanup", () => {
     const siblingRun = runCodexAppServerAttempt(siblingParams, {
       bindingStore: testCodexAppServerBindingStore,
     });
-    const siblingRequirements = await waitForHarnessRequest(
-      harness,
-      "configRequirements/read",
-      siblingRequestStart,
-    );
-    harness.send({ id: siblingRequirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(harness, siblingRequestStart);
     const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
     harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
     harness.send({
@@ -208,8 +215,9 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-5)).toEqual([
+    expect(userRequestMethods().slice(-6)).toEqual([
       "thread/unsubscribe",
+      "configRequirements/read",
       "config/read",
       "configRequirements/read",
       "account/read",
@@ -250,19 +258,14 @@ describe("Codex app-server main thread cleanup", () => {
     const firstTurnStart = await waitForHarnessRequest(physical, "turn/start");
     physical.send({ id: firstTurnStart.id, result: turnStartResult("turn-1") });
 
-    physical.send({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "cmd-silent",
-          type: "commandExecution",
-          command: "sleep 1",
-          status: "inProgress",
-        },
-      },
-    });
+    physical.send(
+      itemNotification("item/started", {
+        id: "cmd-silent",
+        type: "commandExecution",
+        command: "sleep 1",
+        status: "inProgress",
+      }),
+    );
 
     const secondRequestStart = physical.writes.length;
     const secondRun = runCodexAppServerAttempt(secondParams, {
@@ -337,21 +340,16 @@ describe("Codex app-server main thread cleanup", () => {
     });
     expect(firstSettled).toBe(false);
 
-    physical.send({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "cmd-silent",
-          type: "commandExecution",
-          command: "sleep 1",
-          status: "completed",
-          aggregatedOutput: "silent command finished\n",
-          exitCode: 0,
-        },
-      },
-    });
+    physical.send(
+      itemNotification("item/completed", {
+        id: "cmd-silent",
+        type: "commandExecution",
+        command: "sleep 1",
+        status: "completed",
+        aggregatedOutput: "silent command finished\n",
+        exitCode: 0,
+      }),
+    );
     physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const firstResult = await firstRun;
@@ -385,15 +383,12 @@ describe("Codex app-server main thread cleanup", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
-      const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(physical);
       const thread = await waitForHarnessRequest(physical, "thread/start");
       physical.send({ id: thread.id, result: threadStartResult() });
       const turn = await waitForHarnessRequest(physical, "turn/start");
       physical.send({ id: turn.id, result: turnStartResult() });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
 
       vi.useFakeTimers();
       for (const item of [
@@ -436,14 +431,7 @@ describe("Codex app-server main thread cleanup", () => {
       expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
         "turn/interrupt",
       );
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed", items: [] },
-        },
-      });
+      physical.send(turnCompleted({ id: "turn-1", status: "completed" }));
       vi.useRealTimers();
       expect(readAttemptTerminal(await run)).toMatchObject({
         aborted: false,
@@ -477,21 +465,13 @@ describe("Codex app-server main thread cleanup", () => {
     });
     const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
     harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-    harness.send({ id: requirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(harness);
     const start = await waitForHarnessRequest(harness, "thread/start");
     expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
     harness.send({ id: start.id, result: threadStartResult() });
     const turn = await waitForHarnessRequest(harness, "turn/start");
     harness.send({ id: turn.id, result: turnStartResult() });
-    harness.send({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed", items: [] },
-      },
-    });
+    harness.send(turnCompleted({ id: "turn-1", status: "completed" }));
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
@@ -582,6 +562,7 @@ describe("Codex app-server main thread cleanup", () => {
       ).rejects.toThrow(error.message);
       expect(withoutCodexSkillDiscovery(request.mock.calls.map(([method]) => method))).toEqual([
         "modelProvider/capabilities/read",
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -757,8 +738,7 @@ describe("Codex app-server main thread cleanup", () => {
       });
       const capabilities = await waitForHarnessRequest(harness, "modelProvider/capabilities/read");
       harness.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-      const requirements = await waitForHarnessRequest(harness, "configRequirements/read");
-      harness.send({ id: requirements.id, result: { requirements: null } });
+      await allowNativeToolPreflight(harness);
       const threadStart = await waitForHarnessRequest(harness, "thread/start");
       harness.send({ id: threadStart.id, result: threadStartResult() });
       const turnStart = await waitForHarnessRequest(harness, "turn/start");
@@ -785,9 +765,7 @@ describe("Codex app-server main thread cleanup", () => {
           turn: { id: "turn-unrelated", status: "interrupted", items: [] },
         },
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
 
       harness.send({
@@ -805,9 +783,7 @@ describe("Codex app-server main thread cleanup", () => {
         "thread/backgroundTerminals/terminate",
       );
       expect(terminate.params).toEqual({ threadId: "thread-1", processId: "42" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldEventLoop();
       expect(settled).toBe(false);
       expect(harness.writes.map((entry) => JSON.parse(entry).method)).not.toContain(
         "thread/unsubscribe",
@@ -916,8 +892,7 @@ describe("Codex app-server main thread cleanup", () => {
       "modelProvider/capabilities/read",
     );
     contaminated.send({ id: capabilities.id, result: { imageGeneration: false, webSearch: true } });
-    const requirements = await waitForHarnessRequest(contaminated, "configRequirements/read");
-    contaminated.send({ id: requirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(contaminated);
     const threadStart = await waitForHarnessRequest(contaminated, "thread/start");
     contaminated.send({ id: threadStart.id, result: threadStartResult() });
 
@@ -960,11 +935,7 @@ describe("Codex app-server main thread cleanup", () => {
       id: replacementCapabilities.id,
       result: { imageGeneration: false, webSearch: true },
     });
-    const replacementRequirements = await waitForHarnessRequest(
-      replacement,
-      "configRequirements/read",
-    );
-    replacement.send({ id: replacementRequirements.id, result: { requirements: null } });
+    await allowNativeToolPreflight(replacement);
     const replacementThread = await waitForHarnessRequest(replacement, "thread/start");
     replacement.send({ id: replacementThread.id, result: threadStartResult("thread-2") });
     const replacementTurn = await waitForHarnessRequest(replacement, "turn/start");

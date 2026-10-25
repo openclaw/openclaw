@@ -397,8 +397,6 @@ export class NodeRegistry {
     replaceConnectedNodePluginTools({
       nodeId: node.nodeId,
       displayName: node.displayName,
-      platform: node.platform,
-      remoteIp: node.remoteIp,
       tools: normalized,
     });
     node.nodeSkills = cfg?.gateway?.nodes?.allowSkills === false ? [] : policy.skills;

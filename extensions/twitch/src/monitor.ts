@@ -78,22 +78,18 @@ function mentionsBot(message: string, botUsername: string): boolean {
   return false;
 }
 
-type TwitchRuntimeEnv = {
-  log?: (message: string) => void;
-  error?: (message: string) => void;
-};
-
-type TwitchMonitorOptions = {
+export async function monitorTwitchProvider(options: {
   account: TwitchAccountConfig;
   accountId: string;
   channelRuntime: ReturnType<typeof getTwitchRuntime>["channel"];
   config: OpenClawConfig;
-  runtime: TwitchRuntimeEnv;
+  runtime: {
+    log?: (message: string) => void;
+    error?: (message: string) => void;
+  };
   abortSignal: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-};
-
-export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
+}) {
   const { account, accountId, channelRuntime, config, runtime, abortSignal, statusSink } = options;
 
   const core = getTwitchRuntime();
@@ -145,10 +141,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
             event: { mayPair: false },
             mentionFacts: {
               canDetectMention: true,
-              wasMentioned: mentionsBot(
-                message.message,
-                normalizeLowercaseStringOrEmpty(account.username),
-              ),
+              wasMentioned: mentionsBot(message.message, account.username),
             },
             dmPolicy: "open",
             groupPolicy: policyKind === "open" ? "open" : "allowlist",

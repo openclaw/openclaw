@@ -58,15 +58,6 @@ function prepareColdBuildGate() {
   return { started, release };
 }
 
-function dynamicInput(label: string): PreparedModelRuntimeInput {
-  return {
-    agentId: "default",
-    agentDir: fixture.state.agentDir("default"),
-    config: {},
-    workspaceDir: `/tmp/${label}`,
-  };
-}
-
 function cancellableRun(input: PreparedModelRuntimeInput) {
   const controller = new AbortController();
   const pending = acquireRun(input, { abortSignal: controller.signal });
@@ -83,10 +74,10 @@ function holdModelBuild() {
   const entered = createDeferred();
   const release = createDeferred();
   pendingBuildReleases.push(release);
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     entered.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return { entered, release };
 }
@@ -116,7 +107,12 @@ describe("prepared model runtime cancelled admission ownership", () => {
     ["does not let an abandoned publication satisfy or delete its same-key replacement", "replace"],
     ["skips workspace preparation for a cancelled queued replacement", "skip"],
   ] as const)("%s", async (_name, outcome) => {
-    const input = dynamicInput("coalesced-admissions");
+    const input = {
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      config: {},
+      workspaceDir: "/tmp/coalesced-admissions",
+    };
     const build = prepareColdBuildGate();
     const first = cancellableRun(input);
     await build.started.promise;
@@ -272,10 +268,7 @@ describe("prepared model runtime automatic selections", () => {
         },
       },
     };
-    await refresh(config, {
-      catalogMode: "static",
-      gatewayLifecycle: true,
-    });
+    await refresh(config, { catalogMode: "static", gatewayLifecycle: true });
     const dispatch = await loadPublishedDispatch({ agentId: "worker" });
     expect(dispatch).toBeDefined();
     const input = {
@@ -285,11 +278,10 @@ describe("prepared model runtime automatic selections", () => {
     };
     const options = { pluginGeneration: dispatch!.pluginGeneration };
     await using outer = await acquireRun(input, options);
-    expect(fixture.mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0]).toMatchObject(
-      {
-        selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
-      },
-    );
+    const registryInput = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0];
+    expect(registryInput).toMatchObject({
+      selections: [{ provider: "xai", modelId: "grok-4.6", runtime: "openclaw" }],
+    });
     const resolveConfiguredOwner = owners.resolveConfiguredOwner;
     let iterations = 0;
     // Bound the pre-fix microtask livelock; a timer cannot interrupt it.

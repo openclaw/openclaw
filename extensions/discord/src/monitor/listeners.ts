@@ -1,11 +1,9 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
   GatewayDispatchEvents,
@@ -14,6 +12,7 @@ import {
   GuildCreateListener,
   ReadyListener,
 } from "../internal/discord.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
@@ -271,6 +270,13 @@ export class DiscordPresenceListener {
       return;
     }
 
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: this.params.accountId,
+      guildId: data.guild_id,
+      peer: { kind: "channel", id: config.channelId },
+    });
     const lastEmittedAtMs = await this.cooldownStore.lookup(presenceKey);
     const nowMs = this.params.nowMs?.() ?? Date.now();
     const presenceScope = data.guild_id;
@@ -332,6 +338,18 @@ export class DiscordPresenceListener {
     let burstCommitted = false;
     let cooldownReserved = false;
     try {
+      const system = getDiscordRuntime().system;
+      const expectedTarget = await system.captureSessionEventTarget(
+        route.agentId,
+        route.sessionKey,
+      );
+      if (
+        this.stopped ||
+        policy?.isCurrent() === false ||
+        !(this.guildPresenceState.get(data.guild_id)?.available ?? !this.hasGatewayReset)
+      ) {
+        return;
+      }
       const fetchedUserIsBot =
         data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
       if (fetchedUserIsBot) {
@@ -354,14 +372,6 @@ export class DiscordPresenceListener {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-      const route = resolveAgentRoute({
-        cfg,
-        channel: "discord",
-        accountId: this.params.accountId,
-        guildId: data.guild_id,
-        peer: { kind: "channel", id: presenceEvent.channelId },
-      });
-
       try {
         cooldownReserved = await this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
           ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
@@ -394,7 +404,11 @@ export class DiscordPresenceListener {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-      const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
+      const receipt = system.enqueueSessionEvent(presenceEvent.text, {
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        expectedTarget,
+        createIfMissing: true,
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
           channel: "discord",
@@ -402,23 +416,24 @@ export class DiscordPresenceListener {
           accountId: this.params.accountId,
         },
       });
-      if (!queued) {
+      const accepted = await receipt.accepted;
+      if (!accepted.ok) {
+        (this.params.logger ?? discordEventQueueLog).warn(
+          danger(`discord presence admission failed: ${accepted.error}`),
+        );
         return;
       }
       this.emissionGate.commitBurst(burstReservation, this.params.nowMs?.() ?? Date.now());
       burstCommitted = true;
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      requestHeartbeat({
-        source: "notifications-event",
-        intent: "immediate",
-        reason: "wake",
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        heartbeat: {
-          target: "discord",
-          to: `channel:${presenceEvent.channelId}`,
-          accountId: this.params.accountId,
-        },
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          (this.params.logger ?? discordEventQueueLog).warn(
+            danger(
+              `discord presence follow-up ${outcome.status}: ${outcome.error ?? outcome.status}`,
+            ),
+          );
+        }
       });
     } finally {
       if (!burstCommitted) {

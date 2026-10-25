@@ -5,6 +5,7 @@ import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import type { SandboxPersistentExecWorkspaceBinding } from "./persistent-exec-store.types.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
 
@@ -21,6 +22,7 @@ export type SandboxRegistryOperations = {
       entry: SandboxRegistryEntry;
       reserveRuntime?: boolean;
       prune?: SandboxRegistryPrune;
+      preservePersistentExecs?: boolean;
     };
     output: SandboxRegistryEntry | null;
   };
@@ -165,6 +167,41 @@ export function assertSandboxRegistryGenerationCurrent(
   }
 }
 
+/** Persistent admission and retirement consume the same durable removal fence. */
+export function assertSandboxRegistryPersistentExecCurrentInDatabase(
+  db: EngineConnection,
+  containerName: string,
+): SandboxRegistryEntry {
+  const current = readSandboxRegistryEntryInDatabase(db, containerName);
+  if (
+    !current ||
+    (current.backendId ?? "docker") !== "docker" ||
+    current.runtimeState === "pending"
+  ) {
+    throw new Error(
+      "Persistent execution requires the current ready Docker sandbox registry owner.",
+    );
+  }
+  assertSandboxRegistryReservationCurrent(current, current);
+  return current;
+}
+
+export function assertSandboxRegistryWorkspaceBinding(
+  current: SandboxRegistryEntry | null,
+  expected: SandboxPersistentExecWorkspaceBinding,
+): asserts current is SandboxRegistryEntry {
+  if (
+    !current ||
+    current.workspaceDir !== expected.workspaceDir ||
+    (current.workspaceSource ?? null) !== expected.workspaceSource ||
+    current.createdAtMs !== expected.registryCreatedAtMs
+  ) {
+    throw new Error(
+      "The original sandbox workspace binding changed; stopped custody must be retained.",
+    );
+  }
+}
+
 function removeRegistryRowInDatabase(
   db: EngineConnection,
   kind: "container" | "browser",
@@ -247,7 +284,7 @@ export function writeSandboxRegistryInDatabase(
 }
 
 // Activity stamps can advance without changing custody; all allocation facts must match.
-function sameSandboxRegistryGeneration(
+export function sameSandboxRegistryGeneration(
   current: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
   expected: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
 ): boolean {
@@ -268,6 +305,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     configHash: entry.configHash ?? existing?.configHash,
     runtimeState: entry.runtimeState ?? existing?.runtimeState,
     workspaceDir: existing?.workspaceDir ?? entry.workspaceDir,
+    workspaceSource: existing?.workspaceSource ?? entry.workspaceSource,
   };
   return registryEntryToRow({ kind: "container", next });
 }
@@ -382,6 +420,9 @@ export function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegist
 }
 
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
+  if (entry.workspaceSource !== undefined && entry.workspaceSource !== "managed-worktree") {
+    throw new Error("Invalid sandbox workspace ownership marker; runtime custody retained.");
+  }
   return {
     ...entry,
     backendId: entry.backendId?.trim() || "docker",
@@ -407,7 +448,9 @@ function readRegistryRows(
   return executeSqliteQuerySync(
     db,
     filter
-      ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+      ? query
+          .orderBy("last_used_at_ms", (order) => order.desc().nullsLast())
+          .orderBy("container_name", "asc")
       : query.orderBy("container_name", "asc"),
   ).rows;
 }

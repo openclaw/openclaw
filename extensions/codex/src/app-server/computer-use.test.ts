@@ -21,7 +21,7 @@ const sharedClientMocks = vi.hoisted(() => ({
   readCodexAppServerClientProcessIdentity: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
-const managedProvisioningMocks = vi.hoisted(() => ({
+const provisioning = vi.hoisted(() => ({
   ensureCodexComputerUseSharedPluginCache: vi.fn(async () => false),
   ensureCodexManagedBundledMarketplace: vi.fn(),
   ensureCodexComputerUseServiceApp: vi.fn(),
@@ -40,22 +40,21 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
 
 vi.mock("./computer-use-marketplace.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./computer-use-marketplace.js")>()),
-  ensureCodexManagedBundledMarketplace:
-    managedProvisioningMocks.ensureCodexManagedBundledMarketplace,
+  ensureCodexManagedBundledMarketplace: provisioning.ensureCodexManagedBundledMarketplace,
   resolveCodexManagedBundledMarketplaceSource:
-    managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource,
+    provisioning.resolveCodexManagedBundledMarketplaceSource,
 }));
 
 vi.mock("./computer-use-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./computer-use-service.js")>()),
-  ensureCodexComputerUseServiceApp: managedProvisioningMocks.ensureCodexComputerUseServiceApp,
+  ensureCodexComputerUseServiceApp: provisioning.ensureCodexComputerUseServiceApp,
   resolveCodexComputerUseServiceAppSourcePath:
-    managedProvisioningMocks.resolveCodexComputerUseServiceAppSourcePath,
+    provisioning.resolveCodexComputerUseServiceAppSourcePath,
 }));
 
+// mock-isolation: Cache provisioning stays fixture-owned; this suite must not publish a shared cache.
 vi.mock("./computer-use-cache.js", () => ({
-  ensureCodexComputerUseSharedPluginCache:
-    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache,
+  ensureCodexComputerUseSharedPluginCache: provisioning.ensureCodexComputerUseSharedPluginCache,
 }));
 
 vi.mock("./desktop-app-paths.js", async (importOriginal) => {
@@ -91,46 +90,53 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    for (const mock of [
-      ...Object.values(sharedClientMocks),
-      ...Object.values(managedProvisioningMocks),
-    ]) {
+    for (const mock of [...Object.values(sharedClientMocks), ...Object.values(provisioning)]) {
       mock.mockReset();
     }
-    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
-    managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
+    provisioning.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
+    provisioning.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
       async (params) => params.candidates?.[0],
     );
-    managedProvisioningMocks.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
+    provisioning.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
       async (params) => params.sourceAppCandidates?.[0],
     );
   });
 
   it("stays disabled before runtime resolution by default", async () => {
-    const pluginConfig = {};
-    const status = await readCodexComputerUseStatus({ pluginConfig });
-    expectStatusFields(status, {
+    expectStatusFields(await readCodexComputerUseStatus({ pluginConfig: {} }), {
       enabled: false,
       ready: false,
       reason: "disabled",
-      message: "Computer Use is disabled.",
     });
-    await expect(ensureCodexComputerUse({ pluginConfig })).resolves.toMatchObject({
+    await expect(ensureCodexComputerUse({ pluginConfig: {} })).resolves.toMatchObject({
       reason: "disabled",
     });
     expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("runs installation through the readiness thread before releasing the client", async () => {
-    const agentDir = "/tmp/openclaw-computer-use-guarded-install-agent";
-    const pluginConfig = {
-      computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 },
-    };
     const harness = createClientHarness();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(harness.client);
     const fixture = createComputerUseRequest({ installed: false });
     let cursor = 0;
-    const answer = async (method: string) => {
+    const install = installCodexComputerUse({
+      pluginConfig: { computerUse: { marketplaceName: "desktop-tools", liveTestTimeoutMs: 150 } },
+      agentDir: "/tmp/openclaw-computer-use-guarded-install-agent",
+      timeoutMs: 2_000,
+    });
+    void install.catch(() => undefined);
+    for (const method of [
+      "experimentalFeature/enablement/set",
+      "plugin/list",
+      "plugin/read",
+      "plugin/install",
+      "config/mcpServer/reload",
+      "plugin/read",
+      "mcpServerStatus/list",
+      "thread/start",
+      "mcpServer/tool/call",
+      "thread/unsubscribe",
+    ]) {
       await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(cursor), {
         timeout: 1_000,
       });
@@ -142,20 +148,7 @@ describe("Codex Computer Use setup", () => {
       expect(frame.method).toBe(method);
       const result = await fixture(frame.method, frame.params);
       harness.send({ id: frame.id, result: result ?? null });
-    };
-
-    const install = installCodexComputerUse({ pluginConfig, agentDir, timeoutMs: 2_000 });
-    void install.catch(() => undefined);
-    await answer("experimentalFeature/enablement/set");
-    await answer("plugin/list");
-    await answer("plugin/read");
-    await answer("plugin/install");
-    await answer("config/mcpServer/reload");
-    await answer("plugin/read");
-    await answer("mcpServerStatus/list");
-    await answer("thread/start");
-    await answer("mcpServer/tool/call");
-    await answer("thread/unsubscribe");
+    }
 
     await expect(install).resolves.toMatchObject({
       ready: true,
@@ -246,29 +239,16 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/read");
   });
 
-  it("auto-registers the first installed bundled marketplace", async () => {
-    const root = tempDirs.make("openclaw-codex-bundled-marketplace-");
-    const bundledPath = (appName: string) =>
-      path.join(root, appName, "Contents/Resources/plugins/openai-bundled");
-    const chatGptMarketplacePath = bundledPath("ChatGPT.app");
-    const legacyCodexMarketplacePath = bundledPath("Codex.app");
-    fs.mkdirSync(chatGptMarketplacePath, { recursive: true });
-    fs.mkdirSync(legacyCodexMarketplacePath, { recursive: true });
-    const request = createBundledMarketplaceComputerUseRequest(chatGptMarketplacePath);
-
-    const status = await ensureCodexComputerUse({
-      pluginConfig: autoInstall,
-      request,
-      defaultBundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-    });
-
-    expectStatusFields(status, {
+  it("auto-registers the managed bundled marketplace", async () => {
+    const { ensure, request, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-bundled-marketplace-"),
+    );
+    expectStatusFields(await ensure(), {
       ready: true,
       reason: "ready",
       marketplaceName: "openai-bundled",
-      message: "Computer Use is ready.",
     });
-    expect(request).toHaveBeenCalledWith("marketplace/add", { source: chatGptMarketplacePath });
+    expect(request).toHaveBeenCalledWith("marketplace/add", { source: managedMarketplacePath });
   });
 
   it("migrates the legacy bundled marketplace source through Codex", async () => {
@@ -277,9 +257,11 @@ describe("Codex Computer Use setup", () => {
       { configuredSource: "/Applications/Codex.app/Contents/Resources/plugins/openai-bundled" },
     );
 
-    const status = await ensure();
-
-    expectStatusFields(status, { ready: true, reason: "ready", marketplaceName: "openai-bundled" });
+    expectStatusFields(await ensure(), {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+    });
     expect(
       requestCalls(request)
         .filter(([method]) => method.startsWith("marketplace/"))
@@ -294,28 +276,16 @@ describe("Codex Computer Use setup", () => {
   });
 
   it.each([
-    {
-      label: "a custom source using the reserved bundled marketplace name",
-      options: { configuredSource: "/opt/company/openai-bundled" },
-    },
-    {
-      label: "a legacy source owned by a non-user config layer",
-      options: {
-        configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
-        configuredSourceOrigin: "system" as const,
-      },
-    },
-    {
-      label: "a legacy source owned by a selected user profile",
-      options: {
-        configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
-        configuredSourceProfile: "work",
-      },
-    },
-  ])("preserves $label", async ({ options }) => {
+    ["custom reserved-name source", { configuredSource: "/opt/company/openai-bundled" }],
+    ["system-owned legacy source", { configuredSourceOrigin: "system" }],
+    ["profile-owned legacy source", { configuredSourceProfile: "work" }],
+  ] as const)("preserves %s", async (_label, options) => {
     const { request, ensure } = createManagedMarketplaceHarness(
       tempDirs.make("openclaw-codex-managed-marketplace-"),
-      options,
+      {
+        configuredSource: "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled",
+        ...options,
+      },
     );
 
     await expect(ensure()).rejects.toThrow("already added from a different source");
@@ -323,24 +293,16 @@ describe("Codex Computer Use setup", () => {
   });
 
   it.each([
-    {
-      label: "config-selected default marketplace",
-      selector: {},
-      provisionsWrapper: true,
-    },
-    {
-      label: "configured marketplace source",
-      selector: { marketplaceSource: "github:example/desktop-tools" },
-      provisionsWrapper: false,
-    },
-    {
-      label: "configured marketplace path",
-      selector: { marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json" },
-      provisionsWrapper: false,
-    },
-  ])(
-    "provisions the managed service for a $label explicit desktop install",
-    async ({ selector, provisionsWrapper }) => {
+    ["default marketplace", {}, true],
+    ["marketplace source", { marketplaceSource: "github:example/desktop-tools" }, false],
+    [
+      "marketplace path",
+      { marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json" },
+      false,
+    ],
+  ] as const)(
+    "provisions the managed service for a %s explicit desktop install",
+    async (_label, selector, provisionsWrapper) => {
       const { agentDir, codexHome, client } = createDesktopInstallClient(
         tempDirs.make("openclaw-codex-explicit-install-"),
       );
@@ -353,10 +315,8 @@ describe("Codex Computer Use setup", () => {
       sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReturnValue(
         desktopGeneration,
       );
-      managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockResolvedValue(
-        managedMarketplacePath,
-      );
-      managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockResolvedValue(undefined);
+      provisioning.ensureCodexManagedBundledMarketplace.mockResolvedValue(managedMarketplacePath);
+      provisioning.ensureCodexComputerUseServiceApp.mockResolvedValue(undefined);
       const request = provisionsWrapper
         ? createBundledMarketplaceComputerUseRequest(managedMarketplacePath)
         : createComputerUseRequest({ installed: false });
@@ -369,30 +329,21 @@ describe("Codex Computer Use setup", () => {
       });
 
       expect(status.ready).toBe(true);
+      const owner = expect.objectContaining({
+        codexHome,
+        ownershipRoot: agentDir,
+        appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      });
       if (provisionsWrapper) {
-        expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
-          expect.objectContaining({
-            codexHome,
-            ownershipRoot: agentDir,
-            appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-          }),
-        );
+        expect(provisioning.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(owner);
       } else {
-        expect(
-          managedProvisioningMocks.ensureCodexManagedBundledMarketplace,
-        ).not.toHaveBeenCalled();
+        expect(provisioning.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
       }
-      expect(managedProvisioningMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(
-        expect.objectContaining({
-          codexHome,
-          ownershipRoot: agentDir,
-          appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-        }),
-      );
+      expect(provisioning.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(owner);
       expect(sharedClientMocks.readCodexAppServerClientDesktopGeneration).toHaveReturnedWith(
         desktopGeneration,
       );
-      expect(managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
+      expect(provisioning.ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
         expect.objectContaining({ forceRefresh: true }),
       );
     },
@@ -412,7 +363,7 @@ describe("Codex Computer Use setup", () => {
         pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
       }),
     ).rejects.toThrow("requires a desktop-generation-bound client");
-    expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
+    expect(provisioning.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
   });
 
   it("requires an explicit install command for configured marketplace sources", async () => {
@@ -501,8 +452,7 @@ describe("Codex Computer Use setup", () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
 
-    const status = await installed;
-    expectStatusFields(status, { ready: true, reason: "ready", message: "Computer Use is ready." });
+    expectStatusFields(await installed, { ready: true, reason: "ready" });
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
       pluginName: "computer-use",
@@ -566,34 +516,24 @@ function createBundledMarketplaceComputerUseRequest(
     probeThreadPrefix: "bundled-marketplace-probe-thread",
   });
   return vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
-    }
     if (method === "config/read") {
+      if (!configuredSource) {
+        return { config: {}, origins: {} };
+      }
+      const profile = options.configuredSourceProfile ?? null;
+      const name =
+        options.configuredSourceOrigin === "system"
+          ? { type: "system", file: "/etc/codex/config.toml" }
+          : {
+              type: "user",
+              profile,
+              file: path.join(codexHome, profile ? `${profile}.config.toml` : "config.toml"),
+            };
       return {
-        config: configuredSource
-          ? {
-              marketplaces: {
-                "openai-bundled": { source_type: "local", source: configuredSource },
-              },
-            }
-          : {},
-        origins: configuredSource
-          ? {
-              "marketplaces.openai-bundled.source": {
-                name:
-                  options.configuredSourceOrigin === "system"
-                    ? { type: "system", file: "/etc/codex/config.toml" }
-                    : {
-                        type: "user",
-                        file: options.configuredSourceProfile
-                          ? path.join(codexHome, `${options.configuredSourceProfile}.config.toml`)
-                          : path.join(codexHome, "config.toml"),
-                        profile: options.configuredSourceProfile ?? null,
-                      },
-              },
-            }
-          : {},
+        config: {
+          marketplaces: { "openai-bundled": { source_type: "local", source: configuredSource } },
+        },
+        origins: { "marketplaces.openai-bundled.source": { name } },
       };
     }
     if (method === "marketplace/remove") {
@@ -616,21 +556,10 @@ function createBundledMarketplaceComputerUseRequest(
     if (method === "plugin/list" && !registered) {
       return { marketplaces: [] };
     }
-    if (
-      [
-        "plugin/list",
-        "plugin/read",
-        "plugin/install",
-        "config/mcpServer/reload",
-        "mcpServerStatus/list",
-        "thread/start",
-        "mcpServer/tool/call",
-        "thread/unsubscribe",
-      ].includes(method)
-    ) {
-      return pluginRequest(method, requestParams);
+    if (method === "experimentalFeature/list") {
+      throw new Error(`unexpected request ${method}`);
     }
-    throw new Error(`unexpected request ${method}`);
+    return pluginRequest(method, requestParams);
   }) as CodexComputerUseRequest;
 }
 

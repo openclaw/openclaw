@@ -6,6 +6,7 @@ import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
+  protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { RetainedLiveThread } from "./client-thread-owner.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
@@ -36,11 +37,18 @@ setupRunAttemptTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetThreadLifecycleTestFixtures);
 
-async function fixture() {
+async function fixture(withProjection = false) {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
   params.disableTools = false;
   params.agentId = "main";
+  if (withProjection) {
+    params.contextEngine = {
+      info: { id: "test", name: "Test", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+  }
   const identity = {
     kind: "session" as const,
     agentId: "main",
@@ -83,6 +91,15 @@ async function fixture() {
     appServer: createAppServerOptions(),
     nativeCodeModeEnabled: true,
     userMcpServersEnabled: false,
+    ...(withProjection
+      ? {
+          contextEngineProjection: {
+            mode: "thread_bootstrap" as const,
+            epoch: "before",
+            fingerprint: "before",
+          },
+        }
+      : {}),
     mcpServersFingerprint: "mcp-before",
     mcpServersFingerprintEvaluated: true,
     appServerRuntimeFingerprint: "connection-A",
@@ -307,6 +324,30 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(methods.filter((method) => method === "thread/start")).toHaveLength(1);
     expect(f.readState()).toEqual(before);
     expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+  });
+
+  it("refreshes context while background cleanup retains the predecessor", async () => {
+    const f = await fixture(true);
+    const claim = await claimCodexAppServerLiveThread(f.client, f.parent.threadId);
+    assert(claim);
+    const releaseProtection = protectCodexAppServerLiveThread(f.client, f.parent.threadId);
+    await claim.release(f.parent.threadId);
+    try {
+      const next = await f.rotate({
+        mcpServersFingerprint: "mcp-before",
+        contextEngineProjection: { mode: "thread_bootstrap", epoch: "after", fingerprint: "after" },
+      });
+      expect(next.threadId).toBe("parent-2");
+      const stored = f.readState();
+      assert(stored?.state === "active");
+      expect(stored.binding.threadId).toBe(next.threadId);
+      expect(next.contextEngine?.projection?.epoch).toBe("after");
+      expect(f.releasePredecessor).not.toHaveBeenCalled();
+      expect(await f.readAssignments(next.threadId)).toEqual(f.assignments);
+    } finally {
+      releaseProtection();
+    }
+    await vi.waitFor(() => expect(f.releasePredecessor).toHaveBeenCalledTimes(1));
   });
 
   it("refuses a claimed predecessor before starting or committing a successor", async () => {

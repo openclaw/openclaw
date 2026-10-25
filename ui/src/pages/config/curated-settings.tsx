@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Match, onCleanup, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, onSettled, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
   curatedSettingsConfigPath,
   type CuratedSettingsDefault,
@@ -97,7 +98,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       ? value
       : props.spec.kind === "toggle" && props.spec.displayDefault;
   };
-  const text = () => {
+  const text = createMemo(() => {
     const value = field().value;
     return props.spec.kind === "number"
       ? typeof value === "number"
@@ -106,7 +107,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       : typeof value === "string"
         ? value
         : "";
-  };
+  });
   const bounds = () => (props.spec.kind === "number" ? props.spec.bounds : null);
   return (
     <Switch>
@@ -188,7 +189,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               spellcheck="false"
               aria-label={t(props.spec.labelKey)}
               disabled={props.settings.disabled}
-              value={text()}
+              ref={liveValue(text)}
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
@@ -227,9 +228,12 @@ function CuratedSections(props: {
 }) {
   // A retained handler belongs to this mounted config target, not a later owner.
   const initialSectionPath = untrack(() => props.path);
-  let active = true;
-  onCleanup(() => {
-    active = false;
+  let active = false;
+  onSettled(() => {
+    active = true;
+    return () => {
+      active = false;
+    };
   });
   const settings: CuratedSettingsProps = {
     get document() {
@@ -270,7 +274,7 @@ export function CuratedSettingsPanel(props: {
   disabled: boolean;
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
-  const path = createMemo(() => curatedSettingsConfigPath(props.presentation, props.parameters));
+  const path = () => curatedSettingsConfigPath(props.presentation, props.parameters);
   return (
     <>
       <p class="settings-page__intro">

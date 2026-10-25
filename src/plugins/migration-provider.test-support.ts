@@ -23,6 +23,7 @@ export function createMigrationResourceFixture(
 ) {
   useNoBundledPlugins();
   const id = `migration-resource-${fixtureId++}`;
+  const providerIds = options.secondProvider ? [id, `${id}-second`] : [id];
   const key = `__openclaw_${id}`;
   const root = fs.realpathSync(makePluginLoaderTempDir());
   const state = {
@@ -60,10 +61,7 @@ export function createMigrationResourceFixture(
   const plugin = writePlugin({
     id,
     dir: path.join(root, "plugin"),
-    body: `const { DatabaseSync } = require("node:sqlite");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
+    registration: `const { DatabaseSync } = require("node:sqlite");
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(${JSON.stringify(path.join(root, "source.sqlite"))});
     database.exec("CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY)");
@@ -75,7 +73,7 @@ module.exports = {
       if (state.failCleanup || state.failCleanupOnConnection === connectionNumber) throw new Error("Synthetic migration cleanup failed");
     }});
     const metadata = { read: () => database.prepare("SELECT 42 AS value").get().value };
-    for (const providerId of ${JSON.stringify(options.secondProvider ? [id, id + "-second"] : [id])}) {
+    for (const providerId of ${JSON.stringify(providerIds)}) {
     api.registerMigrationProvider({
       id: providerId,
       get label() { if (state.failLabel) throw state.labelError; return "Native migration fixture"; },
@@ -146,15 +144,13 @@ module.exports = {
         };
       },
     });
-    }
-  },
-};`,
+    }`,
   });
   fs.writeFileSync(
     path.join(plugin.dir, "openclaw.plugin.json"),
     JSON.stringify({
       id,
-      contracts: { migrationProviders: options.secondProvider ? [id, `${id}-second`] : [id] },
+      contracts: { migrationProviders: providerIds },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );

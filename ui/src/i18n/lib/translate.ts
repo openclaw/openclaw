@@ -9,6 +9,7 @@ import {
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
+import { getLazyLocaleCatalog } from "./locale-catalog.ts";
 import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -28,7 +29,6 @@ type LocaleLoadRecovery = {
   isUnrecoverableError: (error: unknown) => boolean;
   onUnrecoverableLocaleLoad?: (locale: Locale) => void;
 };
-type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null>;
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
@@ -55,10 +55,9 @@ class I18nManager {
   // disconnected/failed load remains retryable on the next connected transition.
   private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
   private localeLoadRecovery: LocaleLoadRecovery | undefined;
+  private observedNamespaceLoads = new WeakSet<Promise<void>>();
 
-  constructor(
-    private readonly loadLocaleTranslation: LocaleTranslationLoader = loadLazyLocaleTranslation,
-  ) {
+  constructor() {
     this.loadLocale();
   }
 
@@ -109,6 +108,20 @@ class I18nManager {
     return this.pendingLocale ?? this.locale;
   }
 
+  public async prepareLocale(): Promise<void> {
+    let locale;
+    do {
+      locale = this.locale;
+      await this.prepareCatalog(locale);
+    } while (locale !== this.locale);
+  }
+
+  private prepareCatalog(locale: Locale): Promise<void> | undefined {
+    return getLazyLocaleCatalog(this.translations[locale]!)?.prepare(
+      this.translations[DEFAULT_LOCALE]!,
+    );
+  }
+
   public getSystemLocale(): Locale {
     const language =
       typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;
@@ -139,20 +152,23 @@ class I18nManager {
       return;
     }
 
-    if (needsTranslationLoad) {
+    if (locale !== DEFAULT_LOCALE) {
       this.pendingLocale = locale;
       this.pendingLocaleShouldPersist = shouldPersist;
       try {
-        const translation = await getOrCreatePromise(
-          this.inFlightLocaleLoads,
-          locale,
-          () => this.loadLocaleTranslation(locale),
-          { evictOnSettled: true },
-        );
-        if (!translation) {
-          return;
+        if (needsTranslationLoad) {
+          const translation = await getOrCreatePromise(
+            this.inFlightLocaleLoads,
+            locale,
+            () => loadLazyLocaleTranslation(locale),
+            { evictOnSettled: true },
+          );
+          if (!translation) {
+            return;
+          }
+          this.translations[locale] = translation;
         }
-        this.translations[locale] = translation;
+        await this.prepareCatalog(locale);
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
         if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
@@ -207,14 +223,36 @@ class I18nManager {
     this.subscribers.forEach((sub) => sub(this.locale));
   }
 
+  private lookupActive(keys: readonly string[]): unknown {
+    const catalog = this.translations[this.locale];
+    const value = lookupTranslation(catalog, keys);
+    if (value !== undefined || !catalog) {
+      return value;
+    }
+    const namespace = keys[0]!;
+    const load = getLazyLocaleCatalog(catalog)?.load(namespace);
+    if (load && !this.observedNamespaceLoads.has(load)) {
+      this.observedNamespaceLoads.add(load);
+      void load.then(
+        () => {
+          if (this.translations[this.locale] === catalog) {
+            this.notify();
+          }
+        },
+        (error: unknown) => console.error(`Failed to load locale namespace: ${namespace}`, error),
+      );
+    }
+    return value;
+  }
+
   public translateActive(key: string): string | undefined {
-    const value = lookupTranslation(this.translations[this.locale], key.split("."));
+    const value = this.lookupActive(key.split("."));
     return typeof value === "string" ? value : undefined;
   }
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value = lookupTranslation(this.translations[this.locale], keys);
+    let value = this.lookupActive(keys);
     if (value === undefined && this.locale !== DEFAULT_LOCALE) {
       value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
     }
@@ -239,8 +277,8 @@ export const translateActive = (key: string) => i18n.translateActive(key);
 
 if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {
-    createI18nManager(loadLocaleTranslation: LocaleTranslationLoader) {
-      return new I18nManager(loadLocaleTranslation);
+    createI18nManager() {
+      return new I18nManager();
     },
   };
 }

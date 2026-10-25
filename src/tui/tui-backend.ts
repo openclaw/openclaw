@@ -160,7 +160,7 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
-  cancelPendingRequests?: (scope: TuiRequestScope) => boolean;
+  cancelPendingRequests?: (scope: TuiRequestScope) => void;
   subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   /** runId optional: omit for session-scoped abort (queued turns then active). */

@@ -9,13 +9,18 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, tryResolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { getAuthoredConfigSecretRef, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import {
+  getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
 import {
   type PersistedSessionStoreOwner,
   resolvePersistedSessionStoreOwnerForKey,
 } from "../config/sessions/session-store-owner.js";
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
   normalizeAgentId,
@@ -40,6 +45,8 @@ const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 export type HooksConfigResolved = {
   basePath: string;
   token: string;
+  /** Env name `hooks.token` was substituted from; host exec children must not inherit it. */
+  tokenEnvKey?: string;
   maxBodyBytes: number;
   /** Producer-derived per-path body bounds (mapping-owned), keyed by normalized match path. */
   maxBodyBytesByPath: ReadonlyMap<string, number>;
@@ -70,6 +77,14 @@ export class UnresolvedHooksTokenError extends Error {
     );
     this.name = "UnresolvedHooksTokenError";
   }
+}
+
+/** Keep the active hook token's env source out of host exec children. */
+export function publishHooksTokenEnvKey(hooksConfig: HooksConfigResolved | null): void {
+  setGatewayCredentialEnvKeys(
+    "hooks.token",
+    hooksConfig?.tokenEnvKey ? [hooksConfig.tokenEnvKey] : [],
+  );
 }
 
 export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | null {
@@ -131,9 +146,11 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
     );
   }
+  const tokenEnvKey = getResolvedConfigEnvSecretRef(cfg, "hooks.token")?.id;
   return {
     basePath: trimmed,
     token,
+    ...(tokenEnvKey ? { tokenEnvKey } : {}),
     maxBodyBytes: DEFAULT_HOOKS_MAX_BODY_BYTES,
     maxBodyBytesByPath: resolveHookBodyLimitsByPath(mappings),
     mappings,

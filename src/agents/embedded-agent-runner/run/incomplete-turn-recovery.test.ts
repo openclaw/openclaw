@@ -5,11 +5,11 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
-  resolveEmptyResponseRetryInstruction,
-  resolveReasoningOnlyRetryInstruction,
+  resolveNonVisibleTurnRetryInstructions,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
@@ -32,6 +32,34 @@ function emptyAttempt(assistant = emptyAssistant()) {
   });
 }
 
+function turnState(
+  attempt: Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]["attempt"] = emptyAttempt(),
+) {
+  return { payloadCount: 0, aborted: false, timedOut: false, attempt };
+}
+
+function retryInstructions(
+  overrides: Partial<Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]> = {},
+) {
+  return resolveNonVisibleTurnRetryInstructions({
+    ...turnState(overrides.attempt),
+    settledToolPayloadCount: 0,
+    replyDeliveryState: "missing",
+    ...overrides,
+  });
+}
+
+function isSilent(
+  attempt: EmbeddedRunAttemptResult,
+  terminalReplyExpectation: "required" | "optional" = "optional",
+) {
+  return shouldTreatEmptyAssistantReplyAsSilent({
+    ...turnState(attempt),
+    allowEmptyAssistantReplyAsSilent: true,
+    terminalReplyExpectation,
+  });
+}
+
 describe("incomplete-turn recovery policy", () => {
   it("does not request a visible continuation for an authored speech-only answer", () => {
     const assistant = emptyAssistant({
@@ -43,12 +71,10 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      retryInstructions({
         modelApi: "openai-completions",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBeNull();
   });
 
@@ -76,19 +102,11 @@ describe("incomplete-turn recovery policy", () => {
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       });
-      const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
+      const state = turnState(attempt);
       // Outward silence does not prove delivery or authorize replaying pending work.
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent({
-          ...state,
-          allowEmptyAssistantReplyAsSilent: true,
-          terminalReplyExpectation,
-        }),
-      ).toBe(true);
-      expect(
-        resolveEmptyResponseRetryInstruction({ ...state, replyDeliveryState: "missing" }),
-      ).toBeNull();
-      expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
+      expect(isSilent(attempt, terminalReplyExpectation)).toBe(true);
+      expect(retryInstructions(state)[1]).toBeNull();
+      expect(payloadText(attempt)).toBeNull();
     },
   );
 
@@ -101,26 +119,9 @@ describe("incomplete-turn recovery policy", () => {
     const assistant = emptyAssistant({ content: [{ type: "text", text }], stopReason });
     const attempt = emptyAttempt(assistant);
     attempt.assistantTexts = ["NO_REPLY"];
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
+    expect(isSilent(attempt)).toBe(false);
     if (stopReason === "error") {
-      expect(
-        resolveIncompleteTurnPayloadText({
-          payloadCount: 0,
-          aborted: false,
-          externalAbort: false,
-          timedOut: false,
-          attempt,
-        }),
-      ).toBe("No answer was returned. Ask again if you still need one.");
+      expect(payloadText(attempt)).toBe("No answer was returned. Ask again if you still need one.");
     }
   });
 
@@ -134,53 +135,31 @@ describe("incomplete-turn recovery policy", () => {
     });
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
+        ...turnState(emptyAttempt(assistant)),
         terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt: emptyAttempt(assistant),
       }),
     ).toBe(false);
   });
 
   it.each([
-    {
-      name: "zero-token Anthropic stop",
-      provider: "anthropic",
-      modelId: "claude-opus-4.7",
-      modelApi: "messages",
-      assistant: buildEmbeddedRunnerAssistant({
-        provider: "anthropic",
-        model: "claude-opus-4.7",
-        content: [],
+    ["anthropic", "claude-opus-4.7", "messages"],
+    ["google-vertex", "google/gemini-3.1-flash", undefined],
+  ] as const)(
+    "returns the visible-answer prompt for an empty %s turn",
+    (provider, modelId, modelApi) => {
+      const assistant = emptyAssistant({
+        provider,
+        model: provider === "google-vertex" ? "gemini-3.1-flash" : modelId,
+        content: provider === "anthropic" ? [] : [{ type: "text", text: "" }],
         usage: createZeroUsageFixture(),
-      }),
-    },
-    {
-      name: "generic empty Gemini turn",
-      provider: "google-vertex",
-      modelId: "google/gemini-3.1-flash",
-      modelApi: undefined,
-      assistant: emptyAssistant({
-        stopReason: "stop",
-        provider: "google-vertex",
-        model: "gemini-3.1-flash",
-      }),
-    },
-  ])(
-    "returns the visible-answer prompt for $name",
-    ({ provider, modelId, modelApi, assistant }) => {
+      });
       expect(
-        resolveEmptyResponseRetryInstruction({
+        retryInstructions({
           provider,
           modelId,
           modelApi,
-          replyDeliveryState: "missing",
-          payloadCount: 0,
-          aborted: false,
-          timedOut: false,
           attempt: emptyAttempt(assistant),
-        }),
+        })[1],
       ).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     },
   );
@@ -190,17 +169,7 @@ describe("incomplete-turn recovery policy", () => {
     const attempt = emptyAttempt(assistant);
     attempt.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
 
-    expect(
-      resolveEmptyResponseRetryInstruction({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        replyDeliveryState: "missing",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    expect(retryInstructions({ provider: "openai", modelId: "gpt-5.4", attempt })[1]).toBeNull();
   });
 
   it("returns the reasoning continuation for Kimi Anthropic reasoning-only output", () => {
@@ -212,14 +181,20 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      retryInstructions({
         provider: "kimi",
         modelId: "kimi-for-coding",
         modelApi: "anthropic-messages",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 });
+
+function payloadText(attempt: EmbeddedRunAttemptResult, payloadCount = 0) {
+  return resolveIncompleteTurnPayloadText({
+    ...turnState(attempt),
+    payloadCount,
+    externalAbort: false,
+  });
+}

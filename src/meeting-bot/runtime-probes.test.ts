@@ -10,10 +10,6 @@ type Session = {
     health?: MeetingPluginProbeHealth;
   };
 };
-type CreateProbeOptions = {
-  invalidRequest?: (message: string) => Error;
-  shouldWaitForListening?: (session: Session) => boolean;
-};
 
 const URL = "https://example.test/meeting";
 const config = { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 30_000 }, chromeNode: {} };
@@ -24,7 +20,7 @@ function createSession(id: string, health: MeetingPluginProbeHealth = {}): Sessi
   return { id, chrome: { launched: true, health } };
 }
 
-function createProbes(options: CreateProbeOptions = {}) {
+function createProbes(invalidRequest = (message: string) => new Error(message)) {
   return createMeetingRuntimeProbes<
     typeof config,
     "agent" | "bidi" | "transcribe",
@@ -34,9 +30,9 @@ function createProbes(options: CreateProbeOptions = {}) {
     { url: string; mode?: "agent" | "bidi" | "transcribe"; timeoutMs?: number }
   >({
     defaultSpeechMessage: "Say exactly: meeting speech test complete.",
-    invalidRequest: options.invalidRequest ?? ((message) => new Error(message)),
+    invalidRequest,
     resolveTimeoutMs: resolveMeetingProbeTimeoutMs,
-    shouldWaitForListening: options.shouldWaitForListening ?? (() => true),
+    shouldWaitForListening: () => true,
     talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
   });
 }
@@ -66,10 +62,9 @@ afterEach(() => vi.useRealTimers());
 
 describe("meeting runtime probes", () => {
   it("uses the supplied invalid-request factory", async () => {
-    const probes = createProbes({
-      invalidRequest: (message) =>
-        Object.assign(new Error(message), { name: "ProbeInvalidRequest" }),
-    });
+    const probes = createProbes((message) =>
+      Object.assign(new Error(message), { name: "ProbeInvalidRequest" }),
+    );
 
     await expect(
       probes.testSpeech(createContext({ session: { id: "unused" } }), listenRequest),
@@ -79,44 +74,37 @@ describe("meeting runtime probes", () => {
     });
   });
 
-  it("uses the per-request speech verification timeout", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const session = createSession("speech-timeout", { inCall: true, lastOutputBytes: 0 });
-    const refreshHealth = vi.fn();
-    const probes = createProbes();
-
-    const pending = probes.testSpeech(
-      createContext({ session, spoken: true, hasHealthHandle: true, refreshHealth }),
-      { ...speechRequest, timeoutMs: 150 },
-    );
-    await vi.advanceTimersByTimeAsync(200);
-
-    await expect(pending).resolves.toMatchObject({ speechOutputTimedOut: true });
-    expect(refreshHealth).toHaveBeenCalled();
-  });
-
-  it("requires a fresh verified output generation", async () => {
-    const probes = createProbes();
-    for (const [verifiedOutputGeneration, expected] of [
-      [undefined, false],
-      [1, true],
-    ] as const) {
-      const session = createSession(`speech-generation-${String(verifiedOutputGeneration)}`, {
+  it.each([
+    [undefined, false, false],
+    [1, true, false],
+    [undefined, false, true],
+  ] as const)(
+    "verifies generation=%s, verified=%s, timeout=%s",
+    async (generation, verified, timeout) => {
+      if (timeout) {
+        vi.useFakeTimers();
+        vi.setSystemTime(0);
+      }
+      const session = createSession("speech", {
         inCall: true,
-        lastOutputBytes: 4,
-        outputGeneration: 1,
-        verifiedOutputGeneration,
+        lastOutputBytes: timeout ? 0 : 4,
+        ...(timeout ? {} : { outputGeneration: 1, verifiedOutputGeneration: generation }),
       });
-
-      const result = await probes.testSpeech(
-        createContext({ session, spoken: true }),
-        speechRequest,
+      const refreshHealth = vi.fn();
+      const pending = createProbes().testSpeech(
+        createContext({ session, spoken: true, hasHealthHandle: timeout, refreshHealth }),
+        { ...speechRequest, ...(timeout ? { timeoutMs: 150 } : {}) },
       );
-
-      expect(result.speechOutputVerified).toBe(expected);
-    }
-  });
+      if (timeout) {
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      expect((await pending).speechOutputVerified).toBe(verified);
+      if (timeout) {
+        await expect(pending).resolves.toMatchObject({ speechOutputTimedOut: true });
+        expect(refreshHealth).toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([false, true])(
     "returns manual action with caption progress=%s before the deadline",
@@ -131,7 +119,7 @@ describe("meeting runtime probes", () => {
           ...(captions ? { lastCaptionText: "Caption already waiting", transcriptLines: 1 } : {}),
         };
       });
-      const probes = createProbes({ shouldWaitForListening: () => true });
+      const probes = createProbes();
       const result = await probes.testListening(
         createContext({ session, refreshCaptionHealth }),
         listenRequest,

@@ -557,6 +557,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
@@ -588,6 +589,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
         workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
         // Vector enrichment runs last, so its facts win for paths in both sets.
         sessionSourceMtimes: this.loadSourceMtimes("sessions", [
           ...keywordResults,

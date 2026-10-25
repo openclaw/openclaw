@@ -40,6 +40,7 @@ import {
   LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
   withSqliteWritableSchema,
 } from "./openclaw-state-db-doctor-schema.js";
+import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
 import {
   classifySqliteTableReadError,
@@ -48,7 +49,7 @@ import {
   tableHasColumn,
 } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
-import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
+import { statePredicateColumnMigration } from "./openclaw-state-db-schema-v21-columns.js";
 import {
   migratePortableIdentityColumnsV22,
   STATE_CURSOR_TABLES_V22,
@@ -63,6 +64,10 @@ import {
   withLegacyStateWriteIndexes,
 } from "./openclaw-state-db-schema-v27-indexes.js";
 import { statePublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import {
+  stateLocalWorkspaceManifestMigration,
+  withLegacyLocalWorkspaceManifests,
+} from "./openclaw-state-db-schema-v31-workspace-manifests.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -331,7 +336,9 @@ export function markCurrentStateSchemaVersion(
     return;
   }
   const version = resolveStateSchemaVersionToPublish(db);
-  db.exec(`PRAGMA user_version = ${version};`);
+  if (readSqliteUserVersion(db) !== version) {
+    db.exec(`PRAGMA user_version = ${version};`);
+  }
   publishStateSchemaVersionAdmission(db, {
     userVersion: version,
     contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -353,13 +360,14 @@ export function markCurrentStateSchemaVersion(
          ) VALUES ('primary', 'global', ?, NULL, NULL, ?, ?)
          ON CONFLICT(meta_key) DO UPDATE SET
            schema_version = excluded.schema_version,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         WHERE schema_meta.schema_version IS NOT excluded.schema_version`,
       ).run(version, now, now);
       return;
     }
     db.prepare(
-      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
-    ).run(version, now);
+      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary' AND schema_version IS NOT ?",
+    ).run(version, now, version);
   }
 }
 
@@ -442,27 +450,6 @@ function migrateGitHubPublicationRequesterAuthority(
   return changed;
 }
 
-const statePredicateColumnMigration = {
-  version: 21,
-  tables: ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"],
-  columns: [
-    ...[
-      "source_account_id",
-      "source_guild_id",
-      "source_channel_id",
-      "source_meeting_url",
-      "source_thread_ts",
-      "source_file_id",
-      "metadata_agent_id",
-    ].map((column) => `meeting_transcript_sessions.${column}`),
-    "meeting_transcript_summaries.overview",
-    "delivery_queue_entries.retention_id_prefix",
-    "delivery_queue_entries.retention_max_age_ms",
-    "delivery_queue_entries.retention_max_entries",
-  ],
-  migrate: migratePredicateColumnsV21,
-  applied: "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
-};
 const statePortableIdentityMigration = {
   version: 22,
   tables: ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
@@ -521,6 +508,15 @@ const stateClientCredentialMigration = {
   applied: "Moved client credentials and native socket material to the local owner (v29)",
 };
 
+const stateAutomationPolicyMigration = {
+  version: 30,
+  tables: [],
+  columns: [],
+  // Only the version fence changes; Doctor owns the subsequent job conversion.
+  migrate: () => false,
+  applied: "Fenced ordinary automation timing and delivery policies from older schedulers (v30)",
+};
+
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
@@ -553,6 +549,7 @@ export const versionedStateMigrations: ReadonlyArray<{
   stateHeadLayoutMigration,
   stateWriteIndexMigration,
   statePublicationDraftMigration,
+  stateLocalWorkspaceManifestMigration,
 ];
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -571,6 +568,9 @@ export function migrateBoundedStateSchema(
     stateWriteIndexMigration,
     statePublicationDraftMigration,
     stateClientCredentialMigration,
+    stateAutomationPolicyMigration,
+    stateLocalWorkspaceManifestMigration,
+    ...stateIndexOrderingMigrations,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -584,10 +584,12 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const indexSourceSchema =
-    previousVersion < 27
-      ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+  const manifestSourceSchema =
+    previousVersion < 31
+      ? withLegacyLocalWorkspaceManifests(OPENCLAW_STATE_SCHEMA_SQL)
       : OPENCLAW_STATE_SCHEMA_SQL;
+  const indexSourceSchema =
+    previousVersion < 27 ? withLegacyStateWriteIndexes(manifestSourceSchema) : manifestSourceSchema;
   const sourceSchema =
     previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
   // Older binaries can leave same-version repairs pending alongside a version change.
@@ -695,7 +697,9 @@ export function runStateSchemaMigrationTransaction<T>(
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
-  db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  if (readSqliteUserVersion(db) !== schemaVersion) {
+    db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  }
   publishStateSchemaVersionAdmission(db, {
     userVersion: schemaVersion,
     contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,

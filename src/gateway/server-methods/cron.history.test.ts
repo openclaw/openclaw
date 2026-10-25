@@ -53,6 +53,8 @@ import {
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+type ReaderOptions = Pick<GatewayRequestHandlerOptions, "client">;
+
 const limitedConfig = (): OpenClawConfig => ({
   gateway: {
     roles: {
@@ -68,12 +70,11 @@ async function callCron(
   context: GatewayRequestHandlerOptions["context"],
   method: string,
   params: Record<string, unknown>,
-  options: Partial<Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">> = {},
+  options: Partial<ReaderOptions> = {},
 ) {
   const respond = await invokeCron(context, method, params, options);
   const calls = respond.mock.calls;
   return {
-    respond,
     calls,
     ok: calls[0]?.[0],
     payload: calls[0]?.[1] as CronHistoryResult | undefined,
@@ -98,7 +99,7 @@ async function limitedReader(
   const client = sharingPolicyClient({ scopes: ["operator.read"], user });
   prepareGatewayRecipientProfile(client);
   expect(operatorSessionCap(client, cfg)).toBe("none");
-  return { cfg, context, client };
+  return { context, client };
 }
 
 function expectMessages(page: { payload?: CronHistoryResult }, ...contents: string[]) {
@@ -114,14 +115,12 @@ async function withCronTranscript(
       setRuntimeConfigSnapshot({});
       registry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(createEmptyPluginRegistry());
+      let fixture: Awaited<ReturnType<typeof setup>> | undefined;
       try {
-        const fixture = await setup();
-        try {
-          await run(fixture);
-        } finally {
-          fixture.cron.stop();
-        }
+        fixture = await setup();
+        await run(fixture);
       } finally {
+        fixture?.cron.stop();
         await disposeSessionReadContexts();
       }
     });
@@ -178,7 +177,6 @@ async function setup() {
     defaultAgentId: "main",
     cronEnabled: false,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
   const created = await cron.add(createHistoryJob("main", baseKey, "History job"), {
@@ -213,9 +211,7 @@ async function setup() {
   const context = await createHistoryReadContext({ cron, cronStorePath: storePath });
   const query = async (
     params: Record<string, unknown>,
-    options: Partial<
-      Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">
-    > = {},
+    options: Partial<ReaderOptions> = {},
     readContext = context,
   ) => {
     return callCron(readContext, "cron.history", { id: job.id, ...params }, options);
@@ -323,9 +319,9 @@ it("pages the exact archived Cron generation for a limited caller without main-t
           ["cron.runs", { id: job.id }, { entries: [], total: 0 }],
           ["cron.runs", { scope: "all" }, { entries: [], total: 0 }],
         ] as const) {
-          const { respond } = await callCron(context, method, params, options);
-          expect(respond.mock.calls[0]?.[0], method).toBe(true);
-          expect(respond.mock.calls[0]?.[1], method).toMatchObject(expected);
+          const { calls } = await callCron(context, method, params, options);
+          expect(calls[0]?.[0], method).toBe(true);
+          expect(calls[0]?.[1], method).toMatchObject(expected);
         }
         observation.expectIdle();
       } finally {
@@ -359,7 +355,7 @@ it("preserves shared custom-session conversation history across recorded runs", 
   }));
 
 it("does not disclose hidden session keys in cron.history errors", () =>
-  withCronTranscript(async ({ cron, storePath, baseKey, alias, query }) => {
+  withCronTranscript(async ({ cron, storePath, baseKey, query }) => {
     await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
       visibility: "draft",
     }));
@@ -371,8 +367,8 @@ it("does not disclose hidden session keys in cron.history errors", () =>
       { runId: "missing-run" },
       { runId: "public-old-run", cursor: "invalid" },
     ]) {
-      const { respond } = await query({ ...selector }, { client }, context);
-      expect(respond.mock.calls).toEqual([
+      const { calls } = await query(selector, { client }, context);
+      expect(calls).toEqual([
         [
           false,
           undefined,
@@ -382,8 +378,6 @@ it("does not disclose hidden session keys in cron.history errors", () =>
           },
         ],
       ]);
-      expect(JSON.stringify(respond.mock.calls)).not.toContain(baseKey);
-      expect(JSON.stringify(respond.mock.calls)).not.toContain(alias);
     }
   }));
 
@@ -485,7 +479,6 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
                 return applyCronRunHistoryMaintenanceInDatabase(
                   db,
                   plan,
-                  now,
                   prepareCronRunReceiptWriteSchema(db),
                 ).pruned;
               }) === 1;

@@ -241,7 +241,7 @@ function cooldown(cooldownUntil: number, cooldownModel: string) {
     cooldownUntil,
     cooldownModel,
     cooldownReason: "rate_limit" as const,
-    failureCounts: { rate_limit: 1 },
+    lastRateLimitAt: 1,
   };
 }
 
@@ -650,7 +650,7 @@ describe("runWithModelFallback", () => {
         "openai:default": {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
-          failureCounts: { rate_limit: 1 },
+          lastRateLimitAt: Date.now(),
         },
       }),
     );
@@ -681,7 +681,7 @@ describe("runWithModelFallback", () => {
           [`${provider}:default`]: {
             disabledUntil: Date.now() + 60_000,
             disabledReason: "billing",
-            failureCounts: { rate_limit: 4 },
+            failureCounts: { billing: 4 },
           },
         }),
       );
@@ -1161,8 +1161,8 @@ describe("runWithModelFallback", () => {
     const dir = installAuthStore(
       apiKeyStore(["anthropic"], {
         "anthropic:default": {
-          cooldownUntil: Date.now() + 300_000,
-          failureCounts: { rate_limit: 1 },
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
         },
       }),
     );

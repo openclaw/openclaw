@@ -494,7 +494,10 @@ export function handleAgentEvent(
   if (!acceptActivityEvent(host, payload)) {
     return false;
   }
-  if (payload.stream === "lifecycle" || payload.stream === "tool") {
+  if ((payload.stream === "tool" || payload.stream === "item") && payload.data.display === false) {
+    return false;
+  }
+  if (payload.stream === "lifecycle" || payload.stream === "tool" || payload.stream === "item") {
     const runId = toTrimmedString(payload.runId);
     if (runId) {
       (host.knownAgentRunIds ??= new Set()).add(runId);
@@ -551,7 +554,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -629,7 +631,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,

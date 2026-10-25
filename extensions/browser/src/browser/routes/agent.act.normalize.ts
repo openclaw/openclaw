@@ -124,13 +124,9 @@ function readBoundedActionDurationMs(
 }
 
 function readResizeDimension(body: Record<string, unknown>, key: "width" | "height") {
-  const value = readRouteInteger(body[key], key, {
+  return readRouteInteger(body[key], key, {
     invalidMessage: "resize requires positive width and height",
   });
-  if (value === undefined && Object.hasOwn(body, key)) {
-    throw new Error("resize requires positive width and height");
-  }
-  return value;
 }
 
 export function normalizeActRequest(body: Record<string, unknown>, depth = 0): BrowserActRequest {

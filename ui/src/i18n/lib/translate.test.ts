@@ -9,6 +9,7 @@ import {
   installSafeLocalStorageForTesting,
 } from "../../test-helpers/storage.ts";
 import { registerCommandPaletteEnglish } from "../locales/en-command-palette.ts";
+import { createLazyLocaleCatalog } from "./lazy-catalog.ts";
 import { createI18nManagerForTesting } from "./translate.test-support.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -76,6 +77,61 @@ it("uses lazy English as fallback without replacing the active language", async 
   expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
   await manager.setLocale("en");
   expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+});
+
+it("prepares registered English namespaces before publishing a locale without loading unopened ones", async () => {
+  registerCommandPaletteEnglish();
+  const page = deferred<{ default: TranslationMap }>();
+  const loadPage = vi.fn(() => page.promise);
+  const loadHints = vi.fn();
+  const catalog = createLazyLocaleCatalog(
+    { common: { health: "Gesundheit" }, commandPalette: { newSessionSettings: "Neue Sitzung" } },
+    { commandPalette: loadPage, configHints: loadHints },
+  );
+  manager.registerTranslation("de", catalog);
+  const subscriber = vi.fn();
+  manager.subscribe(subscriber);
+  const changing = manager.setLocale("de");
+  expect(manager.getLocale()).toBe("en");
+  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
+  expect(loadPage).toHaveBeenCalledOnce();
+  expect(loadHints).not.toHaveBeenCalled();
+  page.resolve({
+    default: { commandPalette: { rememberUnavailable: "Zum Speichern erneut verbinden." } },
+  });
+  await changing;
+  expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
+  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Zum Speichern erneut verbinden.");
+  expect(manager.t("commandPalette.newSessionSettings")).toBe("Neue Sitzung");
+  expect(manager.t("common.health")).toBe("Gesundheit");
+  expect(loadPage).toHaveBeenCalledOnce();
+});
+
+it("keeps late namespace results scoped to their locale and retries a failed namespace", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const page = deferred<{ default: TranslationMap }>();
+  const loadPage = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockReturnValueOnce(page.promise);
+  manager.registerTranslation("de", createLazyLocaleCatalog(german, { configHints: loadPage }));
+  manager.registerTranslation("es", spanish);
+  await manager.setLocale("de");
+  expect(manager.translateActive("configHints.label")).toBeUndefined();
+  await vi.waitFor(() => expect(console.error).toHaveBeenCalledOnce());
+  expect(manager.translateActive("configHints.label")).toBeUndefined();
+  expect(loadPage).toHaveBeenCalledTimes(2);
+  await manager.setLocale("es");
+  const subscriber = vi.fn();
+  manager.subscribe(subscriber);
+  page.resolve({ default: { configHints: { label: "Einstellung" } } });
+  await page.promise;
+  await Promise.resolve();
+  expect(subscriber).not.toHaveBeenCalled();
+  expect(manager.translateActive("configHints.label")).toBeUndefined();
+  await manager.setLocale("de");
+  expect(manager.translateActive("configHints.label")).toBe("Einstellung");
+  expect(loadPage).toHaveBeenCalledTimes(2);
 });
 
 it("deduplicates an in-flight target and permits retry after the shared load settles", async () => {

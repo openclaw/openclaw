@@ -46,6 +46,8 @@ export async function runWithLocalStateOwner<T>(params: {
   params: Record<string, unknown> | ((signal: AbortSignal) => Promise<Record<string, unknown>>);
   target: string;
   recoveryCommand?: string;
+  /** Caller-owned guidance for commands that cannot route to a running owner. */
+  onlineAlternative?: string;
   /** Internal manifest-bound recovery; never routed to or borrowed from a running owner. */
   databasePortRecovery?: DatabasePortRecoveryIntent;
   /** Engine transitions retire native handles while retaining exclusive schema custody. */
@@ -107,10 +109,12 @@ export async function runWithLocalStateOwner<T>(params: {
     params.assertTargetCurrent?.();
   };
   const guidance =
-    "Update the Gateway or fix authentication and retry. " +
-    (params.requireLocalBackendSharedAuth
-      ? "Provide the Gateway's shared secret through OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD in this CLI process; device pairing is not a substitute. "
-      : "") +
+    (params.onForeignOwner === "refuse"
+      ? `This command is offline-only. ${params.onlineAlternative ? `${params.onlineAlternative} ` : ""}`
+      : "Update the Gateway or fix authentication and retry. " +
+        (params.requireLocalBackendSharedAuth
+          ? "Provide the Gateway's shared secret through OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD in this CLI process; device pairing is not a substitute. "
+          : "")) +
     "To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command.";
   const refuse = (cause: unknown): never => {
     throw new LocalStateOwnerError(

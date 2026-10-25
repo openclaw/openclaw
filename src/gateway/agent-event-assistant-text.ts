@@ -20,11 +20,6 @@ export type AssistantTextSnapshot = {
   };
 };
 
-type AssistantTextMerge = AssistantTextSnapshot & {
-  /** Present only when this merge proves an append to its input snapshot. */
-  appendedText?: string;
-};
-
 /** A text-bearing empty result clears output; a missing text payload does not. */
 export function resolveAssistantResultText(result: unknown): string | undefined {
   const payloads = asOptionalObjectRecord(result)?.payloads;
@@ -135,7 +130,10 @@ export function mergeAssistantText(
   previous: AssistantTextSnapshot,
   input: AssistantTextInput,
   unkeyed: "live" | "append-only",
-): AssistantTextMerge {
+): AssistantTextSnapshot & {
+  /** Present only when this merge proves an append to its input snapshot. */
+  appendedText?: string;
+} {
   let scope = previous.scope;
   if (!input.itemId) {
     scope = undefined;

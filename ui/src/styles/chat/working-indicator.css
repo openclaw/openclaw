@@ -28,6 +28,10 @@
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-working-indicator--continued {
+  animation: none;
+}
+
 .chat-reading-indicator--brand {
   animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
 }
@@ -100,17 +104,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   gap: 6px;
   min-height: 0;
   margin-top: 4px;
-}
-
-/* Child tasks lead; the parent's totals support them without a second glyph. */
-.chat-working-indicator--supporting {
-  min-height: 0;
-  margin-top: 4px;
-  margin-inline-start: 26px;
-}
-
-.chat-working-indicator--supporting .chat-working-indicator__status {
-  font-size: var(--control-ui-text-xs);
 }
 
 .chat-turn-recap {

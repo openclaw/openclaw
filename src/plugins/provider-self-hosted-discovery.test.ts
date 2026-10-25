@@ -517,6 +517,8 @@ describe("discoverOpenAICompatibleLocalModels context metadata", () => {
         { id: "context-length", context_length: 4_096 },
         { id: "context-window", context_window: 8_192 },
         { id: "context-size", context_size: 12_288 },
+        { id: "invalid-first", context_length: "invalid", context_window: 8_192 },
+        { id: "floored-zero-first", context_length: 0.5, context_window: 8_192 },
         { id: " Base/Model ", max_model_len: 32_768 },
         {
           id: "metadata",
@@ -532,6 +534,8 @@ describe("discoverOpenAICompatibleLocalModels context metadata", () => {
       "context-length": 4_096,
       "context-window": 8_192,
       "context-size": 12_288,
+      "invalid-first": 8_192,
+      "floored-zero-first": 0,
       "Base/Model": 32_768,
       metadata: 24_576,
       own: 16_384,

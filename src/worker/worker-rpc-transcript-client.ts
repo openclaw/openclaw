@@ -52,6 +52,10 @@ export class WorkerTranscriptCommitClient {
     return this.nextSeqValue;
   }
 
+  admitInput(baseLeafId: string | null): void {
+    this.baseLeafIdValue = baseLeafId;
+  }
+
   async commit(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
@@ -61,7 +65,9 @@ export class WorkerTranscriptCommitClient {
     const entryIds: string[] = [];
     let offset = 0;
     while (offset < messages.length) {
-      const batch = this.takeFittingBatch(messages.slice(offset));
+      const batch = this.takeFittingBatch(
+        messages.slice(offset, offset + WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES),
+      );
       const result = await this.commitBatch(batch);
       entryIds.push(...result.entryIds);
       offset += batch.length;
@@ -76,9 +82,9 @@ export class WorkerTranscriptCommitClient {
   private takeFittingBatch(
     messages: readonly WorkerTranscriptMessage[],
   ): WorkerTranscriptMessage[] {
-    let batch: WorkerTranscriptMessage[] = [];
-    for (const message of messages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES)) {
-      const candidate = [...batch, message];
+    const batch: WorkerTranscriptMessage[] = [];
+    for (const message of messages) {
+      batch.push(message);
       const frame: WorkerTranscriptCommitRequestFrame = {
         type: "req",
         id: TRANSCRIPT_SIZE_FRAME_ID,
@@ -87,22 +93,22 @@ export class WorkerTranscriptCommitClient {
           runEpoch: this.options.runEpoch,
           seq: this.nextSeqValue,
           baseLeafId: this.baseLeafIdValue,
-          messages: candidate,
+          messages: batch,
         },
       };
       if (!isWorkerTranscriptFrameWithinBudget(frame)) {
+        batch.pop();
         if (batch.length === 0) {
           throw new Error("worker transcript message exceeds the protocol payload limit");
         }
         break;
       }
-      batch = candidate;
     }
     return batch;
   }
 
   private async commitBatch(
-    messages: readonly WorkerTranscriptMessage[],
+    messages: WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
     if (this.terminalFailure) {
       throw this.terminalFailure;
@@ -111,7 +117,7 @@ export class WorkerTranscriptCommitClient {
       runEpoch: this.options.runEpoch,
       seq: this.nextSeqValue,
       baseLeafId: this.baseLeafIdValue,
-      messages: [...messages],
+      messages,
     };
     while (true) {
       await this.connection.waitForReady();

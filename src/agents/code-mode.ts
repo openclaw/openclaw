@@ -67,13 +67,14 @@ const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 const CODE_MODE_CATALOG_INDEX_HEADING = [
   "Enabled async tool globals (descriptions are intentionally deferred):",
   "Each line is `callableName input -> output`; `-> ?` means unknown output.",
+  "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()` for the full description and schema before calling.",
 ].join("\n");
 
 function codeModeCatalogIndexFooter(included: number, total: number): string {
   const omitted = total - included;
   return omitted > 0
     ? `${omitted} additional tools omitted from this prompt index. Use catalog.search(query); results are callable.`
-    : "Call these globals directly; use catalog.search(query) when lookup is ambiguous.";
+    : "Call globals directly when their input contract is clear; use catalog.search(query) when lookup is ambiguous.";
 }
 
 function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {

@@ -464,7 +464,7 @@ async function runGatewayUpdateCheckOwned(
   if (!shouldRunAutoUpdate) {
     updateCampaign.clear();
   }
-  const telemetryUpdate = await checkTelemetryUpdate(params.getConfig, { surface: "gateway" });
+  const telemetryUpdate = await checkTelemetryUpdate(params.getConfig);
   params.signal?.throwIfAborted();
   const state = await readState();
   if (!isCurrent()) {

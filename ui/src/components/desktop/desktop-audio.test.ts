@@ -56,6 +56,70 @@ function expectPlayback(context: AudioContextMock, state: string, sources: numbe
   expect([audio.state(), context.sources.length]).toEqual([state, sources]);
 }
 
+it("drops old PCM sources at 250ms and trims oversized chunks to their freshest frames", async () => {
+  const socket = await start();
+  feed(socket, "started");
+  const context = AudioContextMock.instances.at(-1)!;
+  feed(socket, new ArrayBuffer(4800 * 4), new ArrayBuffer(4800 * 4), new ArrayBuffer(4800 * 4));
+  expect(context.sources.slice(0, 2).every((s) => s.stop.mock.calls.length === 1)).toBe(true);
+  expect(context.sources[2]!.start).toHaveBeenCalledWith(0);
+  expect(context.sources[0]!.listenerCount).toBe(0);
+  expect(context.sources[0]!.disconnect).toHaveBeenCalledOnce();
+  expect(context.sources[2]!.stop).not.toHaveBeenCalled();
+  const large = new Uint8Array(24000 * 4 + 1);
+  large[12000 * 4 + 1] = 64;
+  large[large.length - 1] = 255;
+  feed(socket, large.buffer);
+  const newest = context.sources.at(-1)!;
+  expect(newest.buffer!.duration).toBe(0.25);
+  expect(newest.buffer!.getChannelData(0)[0]).toBe(0.5);
+  feed(socket, new Uint8Array([127, 0, 128]).buffer);
+  expect(context.sources.at(-1)!.buffer!.getChannelData(0)[0]).toBe(32767 / 32768);
+  expect(context.sources.at(-1)!.buffer!.getChannelData(1)[0]).toBe(-1);
+  audio.toggle();
+  expect(context.close).toHaveBeenCalledOnce();
+});
+
+it("releases a naturally ended PCM source and its listener without stopping it again", async () => {
+  const socket = await start();
+  feed(socket, "started", new ArrayBuffer(4));
+  const context = AudioContextMock.instances.at(-1)!;
+  const source = context.sources[0]!;
+  expect(source.listenerCount).toBe(1);
+  source.dispatchEvent(new Event("ended"));
+  expect(source.listenerCount).toBe(0);
+  expect(source.disconnect).toHaveBeenCalledOnce();
+  audio.toggle();
+  expect(source.stop).not.toHaveBeenCalled();
+  expect(source.disconnect).toHaveBeenCalledOnce();
+  expect(context.close).toHaveBeenCalledOnce();
+});
+
+it("bounds tiny PCM sources and starts a fresh capture after stop", async () => {
+  const socket = await start();
+  feed(socket, "started");
+  const context = AudioContextMock.instances.at(-1)!;
+  for (let i = 0; i < 100; i += 1) {
+    feed(socket, new ArrayBuffer(4));
+    expect(
+      context.sources.filter((s) => s.stop.mock.calls.length === 0).length,
+    ).toBeLessThanOrEqual(32);
+  }
+  feed(socket, new Uint8Array([255, 127, 0]).buffer);
+  audio.toggle();
+  expect(context.sources.every((s) => s.disconnect.mock.calls.length > 0)).toBe(true);
+  expect(context.sources.every((s) => s.listenerCount === 0)).toBe(true);
+  expect(context.close).toHaveBeenCalledOnce();
+  await toggle();
+  feed(socket, "stopped", "started", new Uint8Array([0, 128, 0, 64]).buffer);
+  const fresh = AudioContextMock.instances.at(-1)!;
+  expect(fresh).not.toBe(context);
+  expect(fresh.sources.at(-1)!.buffer!.getChannelData(0)[0]).toBe(-1);
+  expect(fresh.sources.at(-1)!.buffer!.getChannelData(1)[0]).toBe(0.5);
+  expect(context.sources).toHaveLength(100);
+  audio.toggle();
+});
+
 it.each(["mute", "replace"])("rejects late resume completion after %s", async (action) => {
   const deferred = createDeferred();
   resumeWith(deferred.promise);

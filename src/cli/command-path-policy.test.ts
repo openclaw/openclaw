@@ -175,13 +175,16 @@ describe("command-path-policy", () => {
     expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--state-sqlite=compact"]))).toBe(
       "bypass",
     );
+    expect(doctorPolicy.networkProxy(commandContext(["doctor"], ["--client-credentials"]))).toBe(
+      "bypass",
+    );
     expectResolvedPolicy(["config schema"], {
       configGuard: "skip",
       ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["plugins update"], { hideBanner: true });
-    expectResolvedPolicy(["plugins list"], {
+    expectResolvedPolicy(["plugins list", "plugins lint"], {
       configGuard: "skip",
       ensureCliPath: false,
       networkProxy: "bypass",

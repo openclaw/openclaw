@@ -1,12 +1,126 @@
-import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { createMemo, createSignal } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { projectMutableSource } from "../../../lib/reactive/projection.ts";
+import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import { ComposerSkillCatalog } from "../composer-capability-catalog.ts";
+import {
+  docsServer,
+  docsTools,
+  makeCapabilities,
+  makeMenu,
+} from "./chat-composer-menu.test-support.ts";
+import {
+  ComposerMenuLoadingRows,
+  renderComposerMenuOption as ComposerMenuOption,
+} from "./chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
+import { createSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
+import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 
-it("retains the slash viewport during selection changes and resets it when switching mode", () => {
+it("keeps loading suggestions named, selected and actionable", () => {
+  const select = vi.fn();
+  const [activeId, setActiveId] = createSignal("pending-status");
+  const view = mountSolid(() => (
+    <div role="listbox" aria-label="Suggestions">
+      <ComposerMenuLoadingRows
+        activeId={activeId()}
+        rows={[
+          {
+            id: "pending-status",
+            name: "/status",
+            description: "Show status",
+            select,
+            hover: () => setActiveId("pending-status"),
+          },
+          {
+            id: "pending-help",
+            name: "/help",
+            description: "Show help",
+            select,
+            hover: () => setActiveId("pending-help"),
+          },
+        ]}
+      />
+    </div>
+  ));
+  const status = view.getByRole("option", { name: "/status Show status", selected: true });
+  const help = view.getByRole("option", { name: "/help Show help", selected: false });
+  help.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+  flush();
+  expect(view.getByRole("option", { selected: true })).toBe(help);
+  expect(status.getAttribute("aria-selected")).toBe("false");
+  help.click();
+  expect(select).toHaveBeenCalledOnce();
+});
+
+it("keeps current editing state when suggestion rows load after dismissal", async () => {
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const host: SlashMenuHost = {
+    paneId: "lazy-menu-dismissal",
+    getDraft: () => "/",
+    commitDraft: vi.fn(),
+    getTextarea: () => null,
+    resolveArgOptions: () => [],
+    runCommand: vi.fn(),
+    canRun: () => true,
+  };
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return <SlashMenu menu={menu} host={host} draft="/" />;
+  });
+  menu.update("/", host);
+  flush();
+  expect(view.getByRole("listbox")).toBeTruthy();
+  expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
+    menu.state.slashMenuItems.length,
+  );
+  menu.reset();
+  await import("./chat-composer-slash-menu-options.tsx");
+  flush();
+  expect(view.queryByRole("listbox")).toBeNull();
+
+  menu.update("/", host);
+  flush();
+  menu.hover(menu.state.slashMenuItems.findIndex((entry) => entry.key === "status"));
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
+  expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
+});
+
+it("uses the current focus policy on a retained suggestion option", () => {
+  let setPreserveFocus!: (value: boolean) => void;
+  const view = mountSolid(() => {
+    const [preserveFocus, update] = createSignal(true);
+    setPreserveFocus = update;
+    return (
+      <ComposerMenuOption
+        id="retained-option"
+        active={false}
+        preserveFocus={preserveFocus()}
+        select={vi.fn()}
+        hover={vi.fn()}
+        icon={undefined}
+        name="Suggestion"
+        description=""
+      />
+    );
+  });
+  const option = view.getByRole("option");
+  for (const preserve of [true, false, true]) {
+    setPreserveFocus(preserve);
+    flush();
+    expect(view.getByRole("option")).toBe(option);
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    option.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(preserve);
+  }
+});
+
+it("retains the slash viewport through row loading and selection changes, and resets it for a new mode", async () => {
   const command = { key: "status", name: "status", description: "Show status" };
   const host: SlashMenuHost = {
     paneId: "menu-retention",
@@ -26,6 +140,8 @@ it("retains the slash viewport during selection changes and resets it when switc
   flush();
   const viewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   viewport.scrollTop = 120;
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
+  expect(view.container.querySelector(".slash-menu__scroll")).toBe(viewport);
   menu.hover(menu.state.slashMenuItems.findIndex((entry) => entry.key === "status"));
   flush();
   expect(view.container.querySelector(".slash-menu__scroll")).toBe(viewport);
@@ -35,6 +151,7 @@ it("retains the slash viewport during selection changes and resets it when switc
   host.resolveArgOptions = () => ["on", "off"];
   menu.selectCommand(command, host);
   flush();
+  await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
   const argumentsViewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   expect(argumentsViewport).not.toBe(viewport);
   expect(argumentsViewport.scrollTop).toBe(0);
@@ -46,53 +163,36 @@ it("retains the slash viewport during selection changes and resets it when switc
 });
 
 it("retains the focused capability row and management link through catalog refreshes", async () => {
-  type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
   const onNavigate = vi.fn();
-  const inputHandle = createChatAttachmentInputHandle();
-  const [menu, setMenu] = createSignal<Menu>({
-    attachments: {},
-    inputHandle,
-    disabled: false,
-    open: true,
-    view: "skills",
-    toolOverrides: null,
-    onOpenChange: vi.fn(),
-    onViewChange: vi.fn(),
-    capabilityMenu: {
-      basePath: "/control",
-      skills: [
-        { key: "focused", name: "Focused skill", enabled: true, baseEnabled: true },
-        { key: "broken", name: "Broken", enabled: false, baseEnabled: false, missingDeps: true },
-        { key: "private", name: "Private", enabled: false, baseEnabled: false, blocked: true },
-      ],
-      skillsLoading: false,
-      skillsError: false,
-      mcpServers: [],
-      toolsEffectiveResult: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveError: false,
-      toolAccessMutationBlockedReason: null,
-      webSearchBaseEnabled: true,
-      mutationBlockedReason: null,
-      canAdmin: true,
-      adminBlockedReason: null,
-      onLoadSkills: vi.fn(),
-      onPatchToolOverrides: vi.fn(),
-      onNavigate,
-    },
-  });
-  const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
-  await waitForSolid(() =>
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true }),
-    ).toBeTruthy(),
+  const [menu, setMenu] = createSignal<Menu>(
+    makeMenu({
+      open: true,
+      view: "skills",
+      capabilityMenu: makeCapabilities({
+        skills: [
+          { key: "focused", name: "Focused skill", enabled: true, baseEnabled: true },
+          { key: "broken", name: "Broken", enabled: false, baseEnabled: false, missingDeps: true },
+          { key: "private", name: "Private", enabled: false, baseEnabled: false, blocked: true },
+        ],
+        onNavigate,
+      }),
+    }),
   );
+  const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  const checkbox = (name: string) => view.getByRole("menuitemcheckbox", { name, hidden: true });
+  const update = (
+    changes: Partial<Menu>,
+    capability: Partial<NonNullable<Menu["capabilityMenu"]>> = {},
+  ) =>
+    setMenu((previous) => ({
+      ...previous,
+      ...changes,
+      capabilityMenu: { ...previous.capabilityMenu!, ...capability },
+    }));
+  await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const name of ["Broken deps missing", "Private not available for this agent"]) {
-    expect(
-      view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
-    ).toBe(true);
+    expect(checkbox(name).hasAttribute("disabled")).toBe(true);
   }
-  expect(view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true })).toBeTruthy();
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
   await waitForSolid(() =>
     expect(row.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
@@ -101,30 +201,27 @@ it("retains the focused capability row and management link through catalog refre
   row.focus();
   expect(document.activeElement).toBe(row);
 
-  setMenu((previous) => ({
-    ...previous,
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      skillsLoading: true,
+  update(
+    { toolOverrides: { skills: { focused: false } } },
+    {
       skills: [{ key: "focused", name: "Focused skill", enabled: false, baseEnabled: true }],
     },
-  }));
+  );
   flush();
   expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
   expect(document.activeElement).toBe(row);
   await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("false"));
 
-  setMenu((previous) => ({
-    ...previous,
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      skillsLoading: false,
+  update(
+    {},
+    {
+      skillsRead: null,
       skills: [
         { key: "new", name: "New skill", enabled: true, baseEnabled: true },
         { key: "focused", name: "Refreshed skill", enabled: false, baseEnabled: true },
       ],
     },
-  }));
+  );
   await waitForSolid(() => {
     expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
     expect(row.textContent).toContain("Refreshed skill");
@@ -145,91 +242,27 @@ it("retains the focused capability row and management link through catalog refre
   manage.click();
   await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
 
-  setMenu((previous) => ({
-    ...previous,
-    view: "connectors",
-    toolOverrides: { mcpServers: { docs: true } },
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      mcpServers: [
-        {
-          name: "docs",
-          enabled: false,
-          transport: "stdio",
-          target: "docs-server",
-          auth: null,
-          signIn: null,
-          toolFilter: false,
-          parallel: false,
-          tls: null,
-        },
-      ],
+  update(
+    {
+      view: "connectors",
+      toolOverrides: { mcpServers: { docs: true } },
     },
-  }));
-  await waitForSolid(() =>
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "docs Enabled session", hidden: true }),
-    ).toBeTruthy(),
+    { mcpServers: [docsServer(false)] },
   );
-  const connector = view.getByRole("menuitemcheckbox", {
-    name: "docs Enabled session",
-    hidden: true,
-  });
+  await waitForSolid(() => expect(checkbox("docs Enabled session")).toBeTruthy());
+  const connector = checkbox("docs Enabled session");
   setMenu((previous) => ({ ...previous, toolOverrides: null }));
-  await waitForSolid(() =>
-    expect(view.getByRole("menuitemcheckbox", { name: "docs Disabled", hidden: true })).toBe(
-      connector,
-    ),
-  );
+  await waitForSolid(() => expect(checkbox("docs Disabled")).toBe(connector));
 
-  setMenu((previous) => ({
-    ...previous,
-    view: "tools:docs",
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      toolsEffectiveResult: {
-        agentId: "main",
-        profile: "full",
-        groups: [
-          {
-            id: "mcp",
-            label: "MCP",
-            source: "mcp",
-            tools: [
-              {
-                id: "docs_search",
-                label: "Search documents",
-                description: "Search",
-                rawDescription: "Search",
-                source: "mcp",
-                mcpServer: "docs",
-                mcpToolName: "search",
-              },
-              {
-                id: "docs_list",
-                label: "list",
-                description: "List",
-                rawDescription: "List",
-                source: "mcp",
-                mcpServer: "docs",
-                mcpToolName: "list",
-              },
-            ],
-          },
-        ],
-      },
-    },
-  }));
+  update({ view: "tools:docs" }, { toolsEffectiveResult: docsTools(true) });
   await waitForSolid(() => {
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "search Search documents", hidden: true }),
-    ).toBeTruthy();
-    expect(view.getByRole("menuitemcheckbox", { name: "list", hidden: true })).toBeTruthy();
+    expect(checkbox("search Search documents")).toBeTruthy();
+    expect(checkbox("list")).toBeTruthy();
   });
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {
-  const inputHandle = createChatAttachmentInputHandle();
+  const base = makeMenu();
   const [open, setOpen] = createSignal(false);
   const toggle = {
     value: "test-toggle",
@@ -241,12 +274,8 @@ it("retains attachment choices while the native menu closes and reopens", async 
   const view = mountSolid(() => (
     <ChatComposerPlusMenu
       menu={{
-        attachments: {},
-        inputHandle,
-        disabled: false,
+        ...base,
         open: open(),
-        view: "root",
-        toolOverrides: null,
         rootToggles: [{ ...toggle, icon: "pencil" }],
         onOpenChange: setOpen,
         onViewChange: vi.fn(),
@@ -273,8 +302,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
 it.each(["item", "external", "closed"] as const)(
   "preserves newer %s focus after changing capability views",
   async (target) => {
-    const inputHandle = createChatAttachmentInputHandle();
-    type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+    const base = makeMenu();
     const [currentView, setView] = createSignal<Menu["view"]>(
       target === "closed" ? "connectors" : "tools:docs",
     );
@@ -284,44 +312,12 @@ it.each(["item", "external", "closed"] as const)(
         <input aria-label="Newer focus" />
         <ChatComposerPlusMenu
           menu={{
-            attachments: {},
-            inputHandle,
-            disabled: false,
+            ...base,
             open: open(),
             view: currentView(),
-            toolOverrides: null,
             onOpenChange: setOpen,
             onViewChange: setView,
-            capabilityMenu: {
-              basePath: "/control",
-              skills: [],
-              skillsLoading: false,
-              skillsError: false,
-              mcpServers: [
-                {
-                  name: "docs",
-                  enabled: true,
-                  transport: "stdio",
-                  target: "docs-server",
-                  auth: null,
-                  signIn: null,
-                  toolFilter: false,
-                  parallel: false,
-                  tls: null,
-                },
-              ],
-              toolsEffectiveResult: null,
-              toolsEffectiveLoading: false,
-              toolsEffectiveError: false,
-              toolAccessMutationBlockedReason: null,
-              webSearchBaseEnabled: true,
-              mutationBlockedReason: null,
-              canAdmin: true,
-              adminBlockedReason: null,
-              onLoadSkills: vi.fn(),
-              onPatchToolOverrides: vi.fn(),
-              onNavigate: vi.fn(),
-            },
+            capabilityMenu: makeCapabilities({ mcpServers: [docsServer(true)] }),
           }}
         />
       </>
@@ -374,3 +370,133 @@ it.each(["item", "external", "closed"] as const)(
     }
   },
 );
+
+it("keeps skill navigation live through failure, retry and a retired connection read", async () => {
+  const failed = createDeferred<unknown>();
+  const retired = createDeferred<unknown>();
+  const current = createDeferred<unknown>();
+  for (const request of [failed, retired, current]) {
+    onTestFinished(() => request.resolve({ skills: [] }));
+  }
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(failed.promise)
+    .mockReturnValueOnce(retired.promise)
+    .mockReturnValueOnce(current.promise);
+  // SAFETY: the catalog only consumes the Gateway request contract in this fixture.
+  const client = { request } as unknown as GatewayBrowserClient;
+  let epoch = 1;
+  let overrides: SessionToolOverrides | null = null;
+  let publish = () => {};
+  const catalog = new ComposerSkillCatalog(() => publish());
+  const load = () => {
+    const admittedEpoch = epoch;
+    catalog.load(client, admittedEpoch, "main", () => admittedEpoch === epoch);
+  };
+  const view = mountSolid(() => {
+    const projection = projectMutableSource(catalog, (owner) => ({
+      skills: owner.rows("main", overrides),
+      skillsRead: owner.read("main"),
+    }));
+    publish = projection.publish;
+    const [open, setOpen] = createSignal(false);
+    const [selected, setSelected] = createSignal<Menu["view"]>("root");
+    const menu = createMemo(() =>
+      makeMenu({
+        open: open(),
+        view: selected(),
+        toolOverrides: overrides,
+        onOpenChange: setOpen,
+        onViewChange: setSelected,
+        capabilityMenu: makeCapabilities({
+          ...projection.read(),
+          onLoadSkills: load,
+          onPatchToolOverrides: (next) => {
+            overrides = next;
+            publish();
+          },
+        }),
+      }),
+    );
+    return <ChatComposerPlusMenu menu={menu()} />;
+  });
+  const trigger = view.container.querySelector<HTMLButtonElement>(
+    ".agent-chat__input-btn--attach",
+  )!;
+  const panel = view.container.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
+  expect(request).not.toHaveBeenCalled();
+  trigger.click();
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitem", { name: "Skills", hidden: true })).toBeTruthy(),
+  );
+  view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
+  await waitForSolid(() =>
+    expect(view.getByRole("status").textContent).toContain("Loading skills"),
+  );
+  const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+  const manage = view.getByRole("menuitem", { name: "Manage skills", hidden: true });
+  back.focus();
+  back.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  await waitForSolid(() => expect(document.activeElement).toBe(manage));
+  failed.reject(new Error("Synthetic skill read failure"));
+  await waitForSolid(() =>
+    expect(view.getByRole("alert").textContent).toContain("Couldn’t load skills"),
+  );
+  expect(panel.matches(":popover-open")).toBe(true);
+  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
+  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  trigger.click();
+  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  trigger.click();
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getByRole("status").textContent).toContain("Loading skills");
+  });
+  trigger.click();
+  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  epoch = 2;
+  catalog.synchronize(client, epoch);
+  publish();
+  trigger.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+  const skill = (name: string) => ({
+    name,
+    skillKey: name,
+    disabled: false,
+    blockedByAllowlist: false,
+    missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
+  });
+  retired.resolve({ skills: [skill("Retired skill")] });
+  overrides = { skills: { Current: false } };
+  publish();
+  await Promise.resolve();
+  flush();
+  expect(view.queryByRole("menuitemcheckbox", { name: "Retired skill", hidden: true })).toBeNull();
+  expect(view.getByRole("status").textContent).toContain("Loading skills");
+  current.resolve({ skills: [skill("Current")] });
+  await waitForSolid(() =>
+    expect(
+      view
+        .getByRole("menuitemcheckbox", { name: "Current", hidden: true })
+        .getAttribute("aria-checked"),
+    ).toBe("false"),
+  );
+  expect(view.container.querySelector(".agent-chat__input-btn--attach")).toBe(trigger);
+  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
+  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  back.focus();
+  back.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  const row = view.getByRole("menuitemcheckbox", { name: "Current", hidden: true });
+  await waitForSolid(() => expect(document.activeElement).toBe(row));
+  row.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+  );
+  await waitForSolid(() => expect(catalog.rows("main", overrides)?.[0]?.enabled).toBe(true));
+  await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("true"));
+  expect(panel.matches(":popover-open")).toBe(true);
+});

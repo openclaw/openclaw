@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -8,21 +7,27 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
 import { clearDeviceAuthToken } from "./device-auth-store.js";
+import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { invalidatePairedCardRendererCache } from "./device-pairing-card-renderer.js";
+import type { devicePairingOperations } from "./device-pairing-core.worker.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import type { nodePairingOperations } from "./device-pairing-node.worker.js";
 import { captureDevicePairingPublication } from "./device-pairing-publication.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { listDevicePairingStoreRecordsReadOnly } from "./device-pairing-store-readonly.js";
-import type { DevicePairingWorkerOperations } from "./device-pairing-worker-contract.js";
 import type { PairedDevice } from "./device-pairing.types.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
-const pairingDiagnostics = channel("openclaw.device-pairing.operation");
+type DevicePairingWorkerOperations = WorkerOperations<typeof devicePairingOperations> &
+  WorkerOperations<typeof nodePairingOperations> &
+  DeviceBootstrapOperations;
+
 const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
 export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
@@ -97,13 +102,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     );
   const captured = structuredClone(command);
   const credentialEnvironment = { ...process.env, ...context.environment };
-  const startedAt = pairingDiagnostics.hasSubscribers ? performance.now() : undefined;
-  let admittedAt = startedAt;
-  let publicationMs = 0;
   const operation = withDevicePairingLock(async () => {
-    if (startedAt !== undefined) {
-      admittedAt = performance.now();
-    }
     context.admission.assertCurrent();
     options.assertCurrent?.();
     // Join codes and retained setup cleanup cannot change paired-device authority.
@@ -124,7 +123,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       }
       const committed = admission?.committed;
       if (committed && !published) {
-        const publishingAt = startedAt === undefined ? undefined : performance.now();
         const receipt = commitReceipt(committed.facts);
         if (receipt.retiredNodeToken) {
           cacheCleanup = clearDeviceAuthToken({
@@ -158,9 +156,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
         if (receipt.tokensReplaced) {
           options.onTokensReplaced?.(receipt.tokensReplaced.deviceId, receipt.tokensReplaced.roles);
-        }
-        if (publishingAt !== undefined) {
-          publicationMs += performance.now() - publishingAt;
         }
       }
     };
@@ -222,16 +217,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       }
     }
   });
-  if (startedAt !== undefined) {
-    const report = () =>
-      pairingDiagnostics.publish({
-        operation: captured.type,
-        queueMs: admittedAt! - startedAt,
-        durationMs: performance.now() - admittedAt!,
-        publicationMs,
-      });
-    void operation.then(report, report);
-  }
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {
