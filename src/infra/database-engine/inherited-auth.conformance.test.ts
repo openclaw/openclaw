@@ -67,7 +67,7 @@ import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
-import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -87,7 +87,7 @@ function currentAgentSnapshot(agentId = "main") {
 }
 
 async function closeDatabases() {
-  withEngineStoreAdmission(() => closeOpenClawAgentDatabasesForTest());
+  admit(() => closeOpenClawAgentDatabasesForTest());
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
 }
@@ -97,23 +97,6 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
   it("serves admitted agents and replays a deferred owner's saved input before fresh input", async ({
     signal,
   }) => {
-    const startedAt = performance.now();
-    let phase = "fixture";
-    let phaseStartedAt = startedAt;
-    const reportPhase = (event: "start" | "complete" | "aborted") => {
-      const now = performance.now();
-      console.info(
-        `[inherited-auth] ${event} phase=${phase} elapsedMs=${Math.round(now - phaseStartedAt)} totalMs=${Math.round(now - startedAt)}`,
-      );
-    };
-    const enterPhase = (next: string) => {
-      reportPhase("complete");
-      phase = next;
-      phaseStartedAt = performance.now();
-    };
-    const reportAbort = () => reportPhase("aborted");
-    reportPhase("start");
-    signal.addEventListener("abort", reportAbort, { once: true });
     const prefix = `inheritauth_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const database = new Client({ connectionString: connection });
     await database.connect();
@@ -131,7 +114,6 @@ describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
     signal.addEventListener("abort", releaseInspection, { once: true });
     onTestFinished(() => {
       signal.removeEventListener("abort", releaseInspection);
-      signal.removeEventListener("abort", reportAbort);
       vi.unstubAllEnvs();
     });
     // Delay delivery, not inspection results: the child reads PostgreSQL after release.
@@ -277,7 +259,7 @@ process.emit = function(event, ...args) {
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       await installGatewayDatabaseEngine();
-      withEngineStoreAdmission(() => {
+      admit(() => {
         const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(state.env));
         try {
           lease.run(() => {
@@ -296,9 +278,7 @@ process.emit = function(event, ...args) {
           lease.release();
         }
       });
-      const profile = withEngineStoreAdmission(() =>
-        ensureProfileForEmail("inherited-auth-recovery@example.test"),
-      );
+      const profile = admit(() => ensureProfileForEmail("inherited-auth-recovery@example.test"));
       const fixture = await createOperatorRecoveryFixture({
         stateDir: state.stateDir,
         context: createContext(),
@@ -384,19 +364,16 @@ process.emit = function(event, ...args) {
       await resetPreparedModelCatalogStateForTest();
 
       await withAgentDatabaseStartupAdmission(async (admission) => {
-        enterPhase("database-preparation");
         await assertOpenClawDatabasesReady({
           env: state.env,
           operation: "gateway-startup",
           config: cfg,
         });
         await expect.poll(() => fs.existsSync(inspectionEntered), { timeout: 30_000 }).toBe(true);
-        enterPhase("gateway-startup");
         gateway = await startModelsGateway(state, cfg, "inheritauth-token");
         await gateway.server.startupSettled;
         await admission.waitForAgentPreparation("main", { env: state.env, signal });
         const rpc = catalogSessionRpc(gateway.client);
-        enterPhase("healthy-agent");
         // Session creation waits for ordinary startup methods, independently of chat recovery.
         const session = await rpc.create(`${localProvider}/fixture`, "agent:main:pending-owner");
         const pendingOwner = expectDefined(
@@ -477,7 +454,6 @@ process.emit = function(event, ...args) {
           code: "agent-database-inspection-pending",
         });
 
-        enterPhase("owner-admission");
         const inheritedPublished = createDeferredCore();
         unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
           const snapshot = currentAgentSnapshot();
@@ -514,17 +490,14 @@ process.emit = function(event, ...args) {
         await expect(
           recoveredStores.modelRegistry.getApiKeyAndHeaders(inheritedModel!),
         ).resolves.toMatchObject({ apiKey: inheritedKey });
-        enterPhase("saved-input");
         releaseRecovery.resolve();
         await withinTest(savedInputStarted.promise, signal);
-        enterPhase("fresh-input");
         const fresh = await gateway.client.request<{ runId: string }>("chat.send", ownerFreshInput);
         expect(ownerInputOrder).toEqual(["SAVED_OWNER"]);
         releaseSavedInput.resolve();
         expect(await rpc.wait(owner.sourceRunId)).toMatchObject({ status: "ok" });
         await withinTest(freshInputStarted.promise, signal);
         expect(await rpc.wait(fresh.runId)).toMatchObject({ status: "ok" });
-        enterPhase("final-assertions");
         expect(ownerInputOrder).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
         expect(ownerAuthorizations).toEqual([`Bearer ${inheritedKey}`, `Bearer ${inheritedKey}`]);
         const history = await rpc.history(owner.sessionKey);
@@ -559,10 +532,8 @@ process.emit = function(event, ...args) {
         expect(providerErrors).toEqual([]);
       });
     } finally {
-      enterPhase("cleanup");
       unsubscribe?.();
       signal.removeEventListener("abort", releaseInspection);
-      signal.removeEventListener("abort", reportAbort);
       releaseInspection();
       releaseRecovery.resolve();
       releaseSavedInput.resolve();
@@ -584,7 +555,6 @@ process.emit = function(event, ...args) {
       resetDatabaseEngineSelectionForTest();
       resetConfigRuntimeState();
       vi.restoreAllMocks();
-      reportPhase("complete");
     }
   }, 270_000);
 });
