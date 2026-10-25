@@ -1373,6 +1373,7 @@ src/logging/console.ts
 src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
 src/logging/diagnostic-profile.ts
+src/logging/diagnostic-support-key-check.ts
 src/logging/diagnostic-support-redaction.ts
 src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts

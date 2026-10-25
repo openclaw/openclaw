@@ -568,13 +568,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     color var(--duration-fast) ease;
 }
 
-.settings-save-indicator__apply {
-  border-radius: 999px;
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: var(--accent-subtle);
-  color: var(--text);
-}
-
 /* Hidden by default: on desktop the sidebar owns navigation, so no topbar row
    renders. Narrow viewports show it as the drawer/search header
    (layout.mobile.css), and desktop chat split view brings it back as the
@@ -757,10 +750,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* Keep the full resize target on the content side of the boundary so it
-   cannot intercept the sidebar scrollbar. The shell owns the resting line. */
+/* Keep the native-width target on the content side so it clears the sidebar
+   scrollbar without covering controls at the content edge. The shell owns the line. */
 .sidebar-resizer {
-  --resize-handle-size: 14px;
   --resize-handle-rest-color: transparent;
   --resize-handle-line-inline: 0%;
   grid-area: nav;
@@ -1122,7 +1114,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 /* Pointer hover shares the session-row fill so the whole header reads as one
    grabbable row; keyboard focus keeps the label lift and its own focus ring. */
 .sidebar-recent-sessions__head:hover {
-  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  background: var(--surface-hover);
 }
 
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)),
@@ -1686,10 +1678,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-recent-session:hover {
-  --session-row-bg: var(
-    --session-row-hover-tint,
-    color-mix(in srgb, var(--bg-hover) 78%, transparent)
-  );
+  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   color: var(--text);
 }
@@ -1700,7 +1689,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    Doubled class outranks .sidebar-recent-session:hover so the selection fill
    does not degrade to the weaker hover fill while the row is under pointer. */
 .sidebar-recent-session.sidebar-recent-session--active {
-  --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
+  --session-row-bg: var(--surface-selected);
 
   color: var(--text-strong);
 }
@@ -1835,6 +1824,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   justify-content: center;
   width: 18px;
   height: 18px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
   overflow: hidden;
   border: 1.5px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
@@ -1906,7 +1897,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .viewer-avatar--profile {
   width: 40px;
   height: 40px;
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  border: 0;
+
   font-size: var(--control-ui-text-sm);
 }
 
@@ -2445,7 +2437,7 @@ a:is(
 .settings-sidebar__item:hover,
 .nav-item:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--surface-hover);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
 }
 
@@ -2457,8 +2449,14 @@ a:is(
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--surface-selected);
+  border-color: var(--navigation-selected-border);
+}
+
+.settings-sidebar__item--active:hover,
+.nav-item--active:hover,
+.nav-item.active:hover {
+  background: var(--surface-selected-hover);
 }
 
 .nav-item.active .nav-item__icon,
@@ -2519,10 +2517,7 @@ a:is(
 }
 
 .sidebar-zone-entry .sidebar-recent-session:hover {
-  --session-row-bg: var(
-    --session-row-hover-tint,
-    color-mix(in srgb, var(--bg-hover) 84%, transparent)
-  );
+  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
 
   --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
 
@@ -2530,15 +2525,20 @@ a:is(
 }
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
-  --session-row-bg: color-mix(in srgb, var(--text) 10%, transparent);
+  --session-row-bg: var(--surface-selected);
 
-  --session-row-border: color-mix(in srgb, var(--accent) 16%, transparent);
+  --session-row-border: var(--navigation-selected-border);
 
   color: var(--text-strong);
 }
 
+.sidebar-recent-session.sidebar-recent-session--active:hover {
+  --session-row-bg: var(--surface-selected-hover);
+}
+
 /* Multi-select overrides both tag and active fills, including pinned rows. */
 .sidebar-recent-session.sidebar-recent-session--selected,
+.sidebar-recent-session.sidebar-recent-session--selected:hover,
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--selected {
   --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 
@@ -3282,6 +3282,12 @@ openclaw-tooltip.sidebar-hover-tooltip {
   gap: 2px;
   padding-top: 0;
   padding-bottom: 0;
+}
+
+/* Session routes reserve the final frame before their lazy styles load. */
+.content--chat.content--workbench {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .content--chat > :where(:not(:first-child)),

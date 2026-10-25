@@ -136,7 +136,6 @@
   min-width: 0;
   max-width: calc(100dvw - 20px);
   padding: 4px;
-  border: 1px solid var(--border-strong);
   border-radius: 16px;
   background: var(--popover);
   corner-shape: round;
