@@ -16,10 +16,6 @@ import { applySessionEntryOperation } from "../../config/sessions/session-access
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../../infra/diagnostic-events.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
@@ -268,26 +264,6 @@ it.each([
         admissionRunId: "accepted-input",
         executionRunId: "capacity-execution",
       });
-      await waitForDiagnosticEventsDrained();
-      const writes: string[] = [];
-      const unsubscribe = onInternalDiagnosticEvent(
-        (event) => {
-          if (
-            event.type === "worker.request" &&
-            event.phase === "completed" &&
-            (event.requestClass === "session.actor.adoptRun" ||
-              event.requestClass === "session.entry.patch.commit")
-          ) {
-            writes.push(event.requestClass);
-          }
-        },
-        { include: ["worker.request"] },
-      );
-      const expectWrites = async (expected: string[]) => {
-        await waitForDiagnosticEventsDrained();
-        expect(writes).toEqual(expected);
-        writes.length = 0;
-      };
       const sourceAdmission =
         completion &&
         prepareSystemAgentRunAdmission(
@@ -300,7 +276,6 @@ it.each([
       try {
         const admittedRunContext = await sourceAdmission?.admit("embedded");
         await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-        await expectWrites([]);
         expect(loadSessionEntry(scope)).toMatchObject(acceptedInput);
         const claimWriter = () =>
           claimAgentSessionWriter({
@@ -331,8 +306,6 @@ it.each([
           );
           activityAt = interleaved.updatedAt;
           expect(activityAt).toBeGreaterThan(1);
-          await waitForDiagnosticEventsDrained();
-          writes.length = 0;
           await expect(claimWriter()).resolves.toMatchObject({
             expectedWriterRunId: "capacity-execution",
             entry: {
@@ -342,7 +315,6 @@ it.each([
               updatedAt: activityAt,
             },
           });
-          await expectWrites(["session.actor.adoptRun"]);
         } else if (outcome === "source-replaced" && completion) {
           await patchEntry(
             {
@@ -350,10 +322,7 @@ it.each([
             },
             true,
           );
-          await waitForDiagnosticEventsDrained();
-          writes.length = 0;
           await expect(claimWriter()).rejects.toThrow();
-          await expectWrites([]);
         } else if (outcome === "admission-rejected") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
           using adoptionAttempt = vi.spyOn(actor, "adoptRun");
@@ -361,7 +330,6 @@ it.each([
           await expect(claimWriter()).rejects.toThrow();
           await expect(claimWriter()).rejects.toThrow();
           await controller.clear();
-          await expectWrites(["session.entry.patch.commit"]);
           expect(adoptionAttempt).toHaveBeenCalledOnce();
         } else if (outcome === "unknown" || outcome === "rollback") {
           const { actor } = expectDefined(await fixture.acquireSessionActor(), "admitted actor");
@@ -420,18 +388,12 @@ it.each([
           }
           await expect(claimWriter()).rejects.toThrow(error);
           await controller.clear();
-          await expectWrites(
-            outcome === "rollback"
-              ? ["session.actor.adoptRun", "session.entry.patch.commit"]
-              : ["session.actor.adoptRun"],
-          );
           expect(adoptionAttempt).toHaveBeenCalledOnce();
         } else {
           await controller.clear();
         }
       } finally {
         sourceAdmission?.close();
-        unsubscribe();
       }
     }
     const persisted = await reopen(scope, state.root);

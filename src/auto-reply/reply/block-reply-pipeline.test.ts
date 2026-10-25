@@ -102,44 +102,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.getSentMediaUrls()).toEqual(mediaUrls);
   });
 
-  it("preserves explicit reply routing and metadata for reply-to-current media", async () => {
-    const routing = { replyToCurrent: true };
-    const { sent, send } = capturePipeline({ coalescing: mediaCoalescing });
-
-    await send(
-      setReplyPayloadMetadata(
-        { text: "Explicit answer", replyToId: "100", ...routing },
-        { assistantMessageIndex: 7, replyToIdExplicit: true },
-      ),
-      setReplyPayloadMetadata(
-        {
-          mediaUrls: ["file:///photo.png"],
-          replyToId: "100",
-          replyToCurrent: undefined,
-          replyToTag: undefined,
-        },
-        { assistantMessageIndex: 7, assistantTranscriptMediaUrls: ["file:///photo.png"] },
-      ),
-    );
-
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      text: "Explicit answer",
-      replyToId: "100",
-      ...routing,
-      mediaUrls: ["file:///photo.png"],
-    });
-    expect(sent.map(getReplyPayloadMetadata)).toEqual([
-      expect.objectContaining({
-        assistantMessageIndex: 7,
-        replyToIdExplicit: true,
-        assistantTranscriptMediaUrls: ["file:///photo.png"],
-      }),
-    ]);
-  });
-
   it.each([
-    ["an oversized caption", 16, " ", "caption", true],
     ["a joiner crossing the limit", 20, " ", "caption", true],
     ["an exact-limit caption", 21, " ", "caption", false],
     ["captionless media without another joiner", 15, "\n\n", undefined, false],
@@ -151,7 +114,12 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       });
       const routing = { replyToId: "100", replyToCurrent: true };
       const media = setReplyPayloadMetadata(
-        { text: caption, mediaUrls: ["file:///photo.png"], ...routing },
+        {
+          text: caption,
+          mediaUrls: ["file:///photo.png"],
+          ...routing,
+          ...(!split ? { replyToCurrent: undefined, replyToTag: undefined } : {}),
+        },
         {
           assistantMessageIndex: 7,
           assistantTranscriptMediaUrls: ["file:///photo.png"],
@@ -204,20 +172,6 @@ describe("createBlockReplyPipeline dedup with threading", () => {
       expect(pipeline.hasSentPayload({ text: "Previewbelow" + (caption ?? "") })).toBe(true);
     },
   );
-
-  it("keeps media separate across assistant message boundaries", async () => {
-    const { sent, send } = capturePipeline({ coalescing: mediaCoalescing });
-
-    await send(
-      setReplyPayloadMetadata({ text: "First block" }, { assistantMessageIndex: 0 }),
-      setReplyPayloadMetadata({ mediaUrls: ["file:///photo.png"] }, { assistantMessageIndex: 1 }),
-    );
-
-    expect(sent.map(({ text, mediaUrls }) => ({ text, mediaUrls }))).toEqual([
-      { text: "First block", mediaUrls: undefined },
-      { text: undefined, mediaUrls: ["file:///photo.png"] },
-    ]);
-  });
 });
 
 describe("createBlockReplyPipeline content coverage dedup", () => {

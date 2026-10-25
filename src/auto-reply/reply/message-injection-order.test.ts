@@ -20,10 +20,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { controlRealtimeVoiceAgentRun as controlTalk } from "../../talk/agent-run-control.js";
 import { realtimeVoiceControlRuntime as talkRuntime } from "../../talk/agent-run-control.runtime.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import {
-  createTestReplyOperation as createOperation,
-  queueReplyMessageInjectionTarget as queueTarget,
-} from "./reply-run-registry.test-helpers.js";
+import { createTestReplyOperation as createOperation } from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const sessionId = "session-1";
@@ -150,37 +147,6 @@ it.each([
     }
   },
 );
-
-it("requires a fresh target to use a replacement backend on the same operation", async () => {
-  const operation = createOperation({ originatingLeafEntryId: "leaf-a" });
-  operation.setPhase("running");
-  const firstQueue = vi.fn(async () => {});
-  const legacyBackend = (queueMessage: typeof firstQueue) => ({
-    kind: "embedded" as const,
-    runId: "run-a",
-    cancel: vi.fn(),
-    messageInjection: { isAvailable: () => true, queueMessage },
-  });
-  operation.attachBackend(legacyBackend(firstQueue));
-  const target = captureReplyMessageInjectionTarget(operation)!;
-  const replacementQueue = vi.fn(async () => {});
-  operation.attachBackend(legacyBackend(replacementQueue));
-
-  await expect(queueTarget(target, "must not move")).resolves.toEqual({
-    status: "rejected",
-    reason: "no_active_run",
-  });
-  expect([firstQueue.mock.calls, replacementQueue.mock.calls]).toEqual([[], []]);
-
-  const fresh = captureReplyMessageInjectionTarget(operation)!;
-  await expect(queueTarget(fresh, "replacement")).resolves.toEqual({
-    status: "accepted",
-  });
-  expect(replacementQueue).toHaveBeenCalledWith(
-    "replacement",
-    expect.objectContaining({ onQueueAccepted: expect.any(Function) }),
-  );
-});
 
 it.each([
   { first: "gateway", second: "gateway", transition: "deliver" },

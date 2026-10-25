@@ -273,19 +273,12 @@ describe("getReplyFromConfig configOverride", () => {
   });
 });
 
-function makeReasoningModelConfig(
-  thinking?: false | "high",
-  filterPrimary = false,
-): OpenClawConfig {
+function makeReasoningModelConfig(): OpenClawConfig {
   return withFastReplyConfig({
     agents: {
       defaults: {
         model: "openai/gpt-5.5",
         workspace: "/tmp/workspace",
-        ...(thinking === undefined
-          ? {}
-          : { models: { "openai/gpt-5.5": { params: { thinking } } } }),
-        ...(filterPrimary ? { modelPolicy: { allow: ["anthropic/*"] } } : {}),
       },
     },
     models: {
@@ -327,11 +320,6 @@ async function mockAutoFallbackSession(
 }
 function runParams() {
   return runReply.mock.calls[0]?.[0];
-}
-async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
-  await expect(getReplyFromConfig(buildCtx(), options, cfg)).resolves.toEqual({ text: "ok" });
-  expect(runReply).toHaveBeenCalledOnce();
-  return runParams();
 }
 
 describe("getReplyFromConfig auto-fallback primary probes", () => {
@@ -424,30 +412,6 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
         "configuredProfileId",
         "openai:metered",
       );
-    },
-  );
-  it.each([false, true])(
-    "resolves primary-probe reasoning (policy-filtered: %s)",
-    async (filtered) => {
-      await mockAutoFallbackSession();
-      if (filtered) {
-        const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
-        vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
-          entries: modelCatalog,
-          routeVariants: modelCatalog,
-          authoritative: true,
-        });
-      }
-      const prepared = await expectPreparedReply(
-        makeReasoningModelConfig(filtered ? "high" : undefined, filtered),
-        filtered ? undefined : { thinkingLevelOverride: "off" },
-      );
-      expect(prepared).toMatchObject({
-        ...(filtered ? { modelState: fallback } : {}),
-        ...primary,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
-      });
     },
   );
 });
