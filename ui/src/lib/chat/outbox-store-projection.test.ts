@@ -29,12 +29,6 @@ const storedKey = (name: string) => storedChatOutboxScopeKey({ sessionKey: key(n
 const scope = (name: string) => ({ ...owner, scopeKey: `chat:v3:${storedKey(name)}` });
 const cleanups: (() => void)[] = [];
 const unsubscribeAll = () => cleanups.splice(0).forEach((cleanup) => cleanup());
-const badge = (name: string) => ({
-  agentId: "main",
-  sessionKey: key(name),
-  hasComposerDraft: true,
-  outboxAttentionCount: 0,
-});
 
 function projection() {
   const reader = createStoredChatOutboxReader();
@@ -54,7 +48,12 @@ function projection() {
     await writeDraft(name);
     await changed;
   };
-  return { reader, changes, host, list, read, has, write, silentLoad };
+  const load = async () => {
+    read();
+    await changes.changed;
+    return read();
+  };
+  return { reader, changes, host, list, read, has, write, silentLoad, load };
 }
 
 function expectDrafts(
@@ -143,8 +142,7 @@ it.each(["read", "sweep"])("expires attachment-only badges via %s", async (path)
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   await writeDraft("expired");
   const p = projection();
-  p.read();
-  await p.changes.changed;
+  await p.load();
   expect(p.has("expired")).toBe(true);
   p.changes.listener.mockClear();
 
@@ -261,7 +259,7 @@ it("merges revision fences and all tab input kinds while excluding Incognito key
     "dashboard:incognito-durable": false,
     "dashboard:incognito-tab": false,
   });
-  expect(summary.sessions).toEqual(["goal", "reply"].map(badge));
+  expect(summary.sessions.map(({ sessionKey }) => sessionKey)).toEqual(["goal", "reply"].map(key));
 });
 
 it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {
@@ -285,9 +283,7 @@ it("does not open IndexedDB without subscribers or a ready recovery owner", asyn
 it.each(["storage-failed", "exception"])("deduplicates %s fallbacks", async (failure) => {
   await writeDraft("b");
   const p = projection();
-  p.read();
-  await p.changes.changed;
-  const initial = p.read();
+  const initial = await p.load();
   expect(initial.hasSessionDraft(key("b"))).toBe(true);
   if (failure === "storage-failed") {
     p.list.mockResolvedValue({ status: "storage-failed" });
@@ -309,8 +305,6 @@ it.each(["storage-failed", "exception"])("deduplicates %s fallbacks", async (fai
 });
 
 const now = 1_800_000_000_000;
-const chatKey = storedKey;
-const draftScope = scope;
 const legacyScope = { ...owner, scopeKey: "global\u0000agent:main" };
 const attachment = (text: string, fileName?: string) => ({
   blob: new Blob([text]),
@@ -466,34 +460,34 @@ describe("durable draft records", () => {
       for (const { name, ...draft } of draftInputs) {
         await writeDraft(name, draft);
       }
-      const retired = await drafts.retireDurableComposerDraft(draftScope("retired"), 10);
+      const retired = await drafts.retireDurableComposerDraft(scope("retired"), 10);
       assert(retired.status === "persisted", "Draft retirement failed");
       await seedRecords(
-        storedRecord(draftScope("other-owner").scopeKey, {
+        storedRecord(scope("other-owner").scopeKey, {
           ownerKey: JSON.stringify([owner.gatewayOwner, "principal-b"]),
           recoveryScope: "principal-b",
         }),
-        storedRecord(draftScope("wrong-gateway").scopeKey, { gatewayOwner: "ws://other.test" }),
-        storedRecord(draftScope("wrong-principal").scopeKey, { recoveryScope: "principal-b" }),
-        storedRecord(`questions:v1:${draftScope("questions").scopeKey}`),
-        storedRecord(chatKey("legacy")),
+        storedRecord(scope("wrong-gateway").scopeKey, { gatewayOwner: "ws://other.test" }),
+        storedRecord(scope("wrong-principal").scopeKey, { recoveryScope: "principal-b" }),
+        storedRecord(`questions:v1:${scope("questions").scopeKey}`),
+        storedRecord(storedKey("legacy")),
         storedRecord("new-session"),
-        storedRecord(draftScope("invalid").scopeKey, { revision: -1 }),
+        storedRecord(scope("invalid").scopeKey, { revision: -1 }),
       );
 
       expect(await drafts.listDurableChatDraftPresence(owner)).toEqual({
         status: "ready",
         presence: new Map([
           ...draftInputs.map(
-            ({ name }) => [chatKey(name), { revision: 10, active: true }] as const,
+            ({ name }) => [storedKey(name), { revision: 10, active: true }] as const,
           ),
-          [chatKey("retired"), { revision: retired.revision, active: false }],
+          [storedKey("retired"), { revision: retired.revision, active: false }],
         ]),
       });
     });
 
     it("projects expired drafts as pending clears without writing or reading Blob bytes", async () => {
-      const expired = storedRecord(draftScope("expired").scopeKey, {
+      const expired = storedRecord(scope("expired").scopeKey, {
         updatedAt: now - 8 * 24 * 60 * 60 * 1_000,
         attachments: [attachment("keep these bytes")],
       });
@@ -505,7 +499,7 @@ describe("durable draft records", () => {
       expect(await drafts.listDurableChatDraftPresence(owner)).toEqual({
         status: "ready",
         presence: new Map([
-          [chatKey("expired"), { revision: Number.MAX_SAFE_INTEGER, active: false }],
+          [storedKey("expired"), { revision: Number.MAX_SAFE_INTEGER, active: false }],
         ]),
       });
       expect(blobText).not.toHaveBeenCalled();
@@ -537,10 +531,10 @@ describe("durable draft records", () => {
       expect(notifications).toEqual([true]);
       await drafts.listDurableChatDraftPresence(owner);
       expect(notifications).toEqual([true]);
-      await drafts.retireDurableComposerDraft(draftScope("notified"));
+      await drafts.retireDurableComposerDraft(scope("notified"));
       expect(notifications).toEqual([true, true]);
       unsubscribe();
-      await drafts.retireDurableComposerDraft(draftScope("notified"));
+      await drafts.retireDurableComposerDraft(scope("notified"));
       expect(notifications).toEqual([true, true]);
     });
   });

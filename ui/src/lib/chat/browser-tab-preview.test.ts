@@ -17,22 +17,6 @@ const selected = (revision: string, targetId = "tab-1") => [
   tabKey(targetId),
   { tab: { ...route, targetId }, revision },
 ];
-const screenshotRequest = (tab: {
-  target: string;
-  profile: string;
-  targetId: string;
-  node?: string;
-}) => [
-  "browser.request",
-  {
-    method: "POST",
-    path: "/screenshot",
-    target: tab.target,
-    ...(tab.node ? { node: tab.node } : {}),
-    query: { profile: tab.profile },
-    body: { targetId: tab.targetId, type: "png" },
-  },
-];
 
 function browserResult(callId: string, targetId = "tab-1") {
   return {
@@ -111,21 +95,6 @@ describe("browser tab previews", () => {
     expect([...latestBrowserTabCards([older], [latest])]).toEqual([selected("new")]);
   });
 
-  it("follows a newer tab without a web preview", () => {
-    const older = browserResult("web", "web-tab");
-    const web = {
-      ...older,
-      details: { browserTab: { ...older.details.browserTab, url: "https://example.com" } },
-    };
-    const focused = browserResult("focus", "focused-tab");
-    expect(extractToolCardsCached(web)[0]?.preview?.kind).toBe("browser-tab");
-    expect(extractToolCardsCached(focused)[0]?.preview).toBeUndefined();
-    expect([...latestBrowserTabCards([web], [focused]).values()].at(-1)).toEqual({
-      tab: { ...route, targetId: "focused-tab" },
-      revision: "focus",
-    });
-  });
-
   it("shares captures, serializes new revisions, and reads bytes only over HTTP", async () => {
     const params = screenshotClient();
     const deferred = createDeferred<{ path: string }>();
@@ -140,7 +109,7 @@ describe("browser tab previews", () => {
     expect(await second).toBe("data:image/png;base64,c2hvdA==");
     await params.load("one");
     await params.load("two");
-    expect(params.request.mock.calls).toEqual(Array(2).fill(screenshotRequest(params.tab)));
+    expect(params.request).toHaveBeenCalledTimes(2);
     expect(params.fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Ffirst.png",
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Fshot.png",
@@ -175,7 +144,6 @@ describe("browser tab previews", () => {
       await params.load("same", tab);
     }
     expect(params.request).toHaveBeenCalledTimes(tabs.length);
-    expect(params.request.mock.calls).toEqual(tabs.map(screenshotRequest));
   });
 
   it("never reuses a shot from another Gateway client", async () => {

@@ -153,16 +153,6 @@ it("keeps non-reasoning Off-only metadata distinct from an empty profile", () =>
   expect(isThinkingLevelOptionForSession(session, undefined, "high", [entry])).toBe(false);
 });
 
-const lunaModel = model({
-  id: "gpt-5.6-luna",
-  provider: "openai",
-  thinkingLevels: [
-    { id: "max", label: "max" },
-    { id: "ultra", label: "ultra" },
-  ],
-  thinkingDefault: "ultra",
-});
-
 it("normalizes canonical Ultra command input", () => {
   const session = { thinkingLevels: [{ id: "ultra", label: "Ultra" }] };
   expect(resolveThinkingLevelInput("ultra", session, undefined)).toBe("ultra");
@@ -188,18 +178,19 @@ it("does not promote an unsupported persisted Ultra override into a slider stop"
 it.each([true, false])(
   "inherits thinking metadata only without a runtime conflict (%s)",
   (conflict) => {
-    const entry = { ...lunaModel, agentRuntime: conflict ? lunaModel.agentRuntime : undefined };
+    const profile = {
+      thinkingLevels: ["max", "ultra"].map((id) => ({ id, label: id })),
+      thinkingDefault: "ultra",
+    };
+    const defaults = model(profile);
+    const entry = { ...defaults, agentRuntime: conflict ? defaults.agentRuntime : undefined };
     const session = {
       ...sessionFor(entry),
       agentRuntime: { id: "codex", source: "session-key" as const },
     };
     const state = select({
       catalog: [entry],
-      sessionsResult: roster(session, {
-        ...sessionFor(lunaModel),
-        thinkingLevels: lunaModel.thinkingLevels,
-        thinkingDefault: lunaModel.thinkingDefault,
-      }),
+      sessionsResult: roster(session, { ...sessionFor(defaults), ...profile }),
     });
     expect(state.options.map((option) => option.value)).toEqual(conflict ? [] : ["max", "ultra"]);
     expect(state.inherited.value).toBe(conflict ? "" : "ultra");

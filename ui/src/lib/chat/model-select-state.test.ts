@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -49,23 +48,22 @@ function modelState(params: Partial<Omit<ModelInput, "sessionKey">> = {}): Model
 
 type FastInput = Parameters<typeof resolveChatFastModeSelectState>[0];
 
-function selectFast(input: Pick<FastInput, "sessionsResult"> & Partial<FastInput>) {
-  return resolveChatFastModeSelectState({
-    catalog: [],
-    connected: true,
-    currentModelOverride: "",
-    fastModeTarget: input.sessionsResult?.sessions[0],
-    gatewayAvailable: true,
-    loading: false,
-    ...input,
-  });
-}
-
+type FastState = ReturnType<typeof resolveChatFastModeSelectState>;
 function expectFast(
-  input: Parameters<typeof selectFast>[0],
-  expected: Partial<ReturnType<typeof selectFast>>,
+  input: Pick<FastInput, "sessionsResult"> & Partial<FastInput>,
+  expected: Partial<FastState>,
 ) {
-  expect(selectFast(input)).toMatchObject(expected);
+  expect(
+    resolveChatFastModeSelectState({
+      catalog: [],
+      connected: true,
+      currentModelOverride: "",
+      fastModeTarget: input.sessionsResult?.sessions[0],
+      gatewayAvailable: true,
+      loading: false,
+      ...input,
+    }),
+  ).toMatchObject(expected);
 }
 
 function fastRoute(fields: Partial<ModelCatalogEntry>, target: FastInput["fastModeTarget"] = {}) {
@@ -90,15 +88,6 @@ function fastRoute(fields: Partial<ModelCatalogEntry>, target: FastInput["fastMo
 
 function runtime(id = "openclaw", source: "model" | "session" = "model") {
   return { id, source };
-}
-
-function runtimeChoice(serviceTiers?: string[]) {
-  return {
-    agentRuntime: runtime("codex"),
-    available: true,
-    supportsFastMode: true,
-    serviceTiers,
-  };
 }
 
 function expectModel(
@@ -220,12 +209,11 @@ it.each([
 );
 it("keeps a saved off preference clearable on a no-op route", () => {
   const sessionsResult = session("claude-sonnet-5", "anthropic");
-  const activeSession = expectDefined(sessionsResult.sessions[0], "Fast applicability session");
   expectFast(
     {
       currentModelOverride: "anthropic/claude-sonnet-5",
       sessionsResult,
-      fastModeTarget: { ...activeSession, fastMode: false },
+      fastModeTarget: { ...sessionsResult.sessions[0], fastMode: false },
       catalog: [
         model("claude-sonnet-5", "Sonnet 5", "anthropic", { supportsFastMode: false }),
         model("claude-opus-5", "Opus 5", "anthropic", { supportsFastMode: true }),
@@ -263,55 +251,47 @@ it("retains current Fast support without offering a denied model", () => {
   );
 });
 
-it("requires current runtime access before showing Ultrafast", () => {
-  const input = fastRoute({
-    agentRuntime: runtime(),
-    serviceTiers: ["priority", "ultrafast"],
-  });
-  const entry = expectDefined(input.catalog[0], "Runtime entry");
-  const selectRuntime = (id: string, catalog: ModelCatalogEntry[]) =>
-    selectFast({
-      ...input,
-      catalog,
-      fastModeTarget: { ...input.fastModeTarget, agentRuntime: runtime(id, "session") },
+const alternative = { agentRuntime: runtime("codex"), available: true, supportsFastMode: true };
+it.each<[Partial<ModelCatalogEntry> | null, string, boolean | undefined]>([
+  [{}, "openclaw", true],
+  [null, "openclaw", undefined],
+  [{ supportsFastMode: false }, "openclaw", undefined],
+  [{ serviceTiers: undefined }, "openclaw", undefined],
+  [{ available: undefined }, "openclaw", undefined],
+  [{ available: false }, "openclaw", undefined],
+  [{ id: "another-entry" }, "openclaw", undefined],
+  [{ agentRuntime: runtime("codex") }, "openclaw", undefined],
+  [{ runtimeChoices: [alternative] }, "codex", undefined],
+  [
+    {
+      serviceTiers: undefined,
+      runtimeChoices: [{ ...alternative, serviceTiers: ["priority", "ultrafast"] }],
+    },
+    "codex",
+    true,
+  ],
+])(
+  "requires current runtime access before showing Ultrafast (%j, %s)",
+  (fields, id, ultrafastSupported) => {
+    // Runtime alternatives are complete projections, not overlays on the base route.
+    const input = fastRoute({
+      agentRuntime: runtime(),
+      serviceTiers: ["priority", "ultrafast"],
+      ...fields,
     });
-  expect(normalizeChatFastModeInput("ultrafast")).toBe("ultrafast");
-  expect(normalizeChatFastModeInput("ultra")).toBe("ultrafast");
-  expect(selectRuntime("openclaw", [entry])).toMatchObject({
-    ultrafastSupported: true,
-    currentOverride: "ultrafast",
-    label: "Ultrafast",
-    active: true,
-  });
-  for (const catalog of [
-    [],
-    [{ ...entry, supportsFastMode: false }],
-    [{ ...entry, serviceTiers: undefined }],
-    [{ ...entry, available: undefined }],
-    [{ ...entry, available: false }],
-    [{ ...entry, id: "another-entry" }],
-    [{ ...entry, agentRuntime: runtime("codex") }],
-  ]) {
-    expect(selectRuntime("openclaw", catalog)).toMatchObject({
-      ultrafastSupported: undefined,
-      currentOverride: "ultrafast",
-      label: "Ultrafast",
-    });
-  }
-  // Runtime alternatives are complete projections, not overlays on the base route.
-  expect(selectRuntime("codex", [{ ...entry, runtimeChoices: [runtimeChoice()] }])).toMatchObject({
-    ultrafastSupported: undefined,
-    label: "Ultrafast",
-  });
-  expect(
-    selectRuntime("codex", [
+    expectFast(
       {
-        ...entry,
-        serviceTiers: undefined,
-        runtimeChoices: [runtimeChoice(["priority", "ultrafast"])],
+        ...input,
+        catalog: fields === null ? [] : input.catalog,
+        fastModeTarget: { ...input.fastModeTarget, agentRuntime: runtime(id, "session") },
       },
-    ]),
-  ).toMatchObject({ ultrafastSupported: true, label: "Ultrafast" });
+      { ultrafastSupported, currentOverride: "ultrafast", label: "Ultrafast", active: true },
+    );
+  },
+);
+
+it.each(["ultra", "ultrafast"])("normalizes %s to Ultrafast", (value) => {
+  expect(normalizeChatFastModeInput(value)).toBe("ultrafast");
 });
 
 it("uses Standard for a model's authoritative Standard-only capability without confusing configured tiers", () => {
@@ -326,18 +306,13 @@ it("uses Standard for a model's authoritative Standard-only capability without c
       ultrafastSupported: false,
     });
     expectFast(
-      {
-        ...input,
-        catalog: input.catalog.map((entry) =>
-          Object.assign({}, entry, { serviceTiers: ["priority", "ultrafast"] }),
-        ),
-      },
+      fastRoute({ supportsFastMode: false, serviceTiers: ["priority", "ultrafast"] }, { fastMode }),
       { disabled: !fastMode },
     );
   }
 });
 
-it.each<[string[], Partial<ReturnType<typeof selectFast>>]>([
+it.each<[string[], Partial<FastState>]>([
   [
     ["default", "priority"],
     { active: true, currentOverride: "on", label: "Fast", disabled: false },

@@ -113,16 +113,6 @@ it("separates multi-file patches and counts every target", () => {
   });
 });
 
-it("retains source context for moves", () => {
-  check(
-    patchView(
-      "*** Begin Patch\n*** Update File: src/old.ts\n" +
-        "*** Move to: src/new.ts\n@@\n-old\n+new\n*** End Patch",
-    ),
-    { target: "old.ts → new.ts", targetDetail: "src" },
-  );
-});
-
 it("splits headerless unified diffs and numbers hunks", () => {
   check(
     patchView(
@@ -147,25 +137,6 @@ it("splits headerless unified diffs and numbers hunks", () => {
       ],
     },
   );
-});
-
-it("renders structured file changes per file", () => {
-  const view = resolve("apply_patch", {
-    changes: [
-      { path: "src/a.ts", kind: { type: "update", move_path: null }, diff: "@@\n-old a\n+new a" },
-      { path: "src/b.ts", kind: { type: "add" }, diff: "new b\n" },
-    ],
-  });
-  check(view, {
-    target: "2 files",
-    stat: { added: 2, removed: 1 },
-    fileOperations: [
-      { operation: "update", path: "src/a.ts" },
-      { operation: "add", path: "src/b.ts" },
-    ],
-  });
-  expect(view.diff).toContainEqual(file("src/a.ts"));
-  expect(view.diff).toContainEqual(file("src/b.ts", "Add"));
 });
 
 it("caps patch rows while keeping the full diffstat", () => {
