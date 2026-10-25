@@ -15,7 +15,12 @@ export async function invokeRemoteNativeHookRelay(
   params: InvokeNativeHookRelayParams,
   signal: AbortSignal,
 ): Promise<NativeHookRelayProcessResponse> {
-  const file = await open(credentialPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // Classify the opened descriptor without letting a FIFO wait for a writer;
+  // the request AbortSignal cannot cancel a blocking filesystem open.
+  const file = await open(
+    credentialPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   let credential: { url: string; token: string };
   try {
     const stat = await file.stat();
