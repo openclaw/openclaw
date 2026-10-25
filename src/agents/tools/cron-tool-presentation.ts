@@ -117,9 +117,11 @@ export function formatCronTerminalPresentation(
 export function buildCronSelfDescription(params: {
   activeRun: boolean;
   nextCheckEnabled: boolean;
+  parentWake?: boolean;
 }): string {
-  const inspection =
-    "Inspect or remove only the current automation. Actions: status; list [includeDisabled] (enabled only by default); get/runs/remove jobId. Use get with the current job ID to inspect its saved state. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.";
+  const inspection = params.parentWake
+    ? 'Inspect or remove only the current automation. Actions: status; list [includeDisabled] (enabled only by default); get/runs/remove jobId; wake text [mode:"now"|"next-heartbeat"] sends a system event to the conversation that created this automation. Use get with the current job ID to inspect its saved state. To stop a finished job, remove it; creating/updating/running jobs and waking other sessions are unavailable. Return the task result; the scheduler owns delivery.'
+    : "Inspect or remove only the current automation. Actions: status; list [includeDisabled] (enabled only by default); get/runs/remove jobId. Use get with the current job ID to inspect its saved state. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.";
   if (!params.activeRun) {
     return inspection;
   }

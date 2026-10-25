@@ -510,6 +510,7 @@ function* createOpenClawToolsSteps(
             resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
+            parentWake: scheduledTargets?.parentWake,
           }),
           createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
           createSessionsTool({

@@ -1,0 +1,165 @@
+title: Cron child runs wake the conversation that created them
+
+scenario:
+  id: cron-child-parent-wake
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.manual-cron-runs
+  gatewayConfigPatch:
+    tools:
+      # Keep tools directly declared so the scheduled turn's scripted automations call resolves.
+      toolSearch: false
+  objective: Verify a scheduled run created from a conversation can wake that conversation with automations wake, while a run with no parent conversation stays limited to its own job.
+  successCriteria:
+    - A job created for an existing conversation runs, calls automations wake, and the conversation's own turn receives and answers the woken event.
+    - A job with no parent conversation runs the same wake call, which its self-scoped automations tool does not offer.
+    - The refused wake never reaches the conversation.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/cron/execution-context.ts
+    - src/cron/execution-context-registry.ts
+    - src/agents/tools/cron-tool-wake.ts
+    - src/gateway/server-methods/cron-wake.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-parent-wake.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Wakes the job's parent conversation, which then answers in its channel.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 300000
+    summary: Create a conversation and two isolated jobs, one bound to the conversation and one unbound, run both, and prove only the bound job's wake reaches the conversation.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-parent-wake
+      readyMarker: QA-CRON-PARENT-WAKE-READY
+      promptSnippet: Cron parent wake QA check
+      scopeError: Automations tool is restricted to the current automation.
+      # An unbound run's tool schema does not offer wake, so validation refuses the call.
+      unofferedAction: "action: must be equal to one of the allowed values"
+
+flow:
+  steps:
+    - name: a scheduled child wakes its parent and an unbound job cannot
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: parent wake proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: parentSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Cron parent wake QA ready check. Reply exactly \\`${config.readyMarker}\\`.`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.some((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.text.includes(config.readyMarker)) || undefined"
+            - 60000
+            - 100
+        - set: childMarker
+          value:
+            expr: "`child-${randomUUID().slice(0, 8)}`"
+        - set: unboundMarker
+          value:
+            expr: "`unbound-${randomUUID().slice(0, 8)}`"
+        - set: parentHistory
+          value:
+            expr: "async () => JSON.stringify((await env.gateway.call('chat.history', { sessionKey: parentSessionKey, limit: 100 }, { timeoutMs: 30000 })).messages ?? [])"
+        - set: answeredInParent
+          value:
+            expr: "async (marker) => { const history = await parentHistory(); return history.includes(`Cron parent wake QA event: marker=${marker}`) && history.includes(`QA-CRON-PARENT-WAKE-ACK ${marker}`); }"
+        - set: runJob
+          value:
+            expr: |-
+              async (job, marker) => {
+                const added = await env.gateway.call("cron.add", {
+                  agentId: "qa",
+                  name: `qa-cron-parent-wake-${randomUUID()}`,
+                  enabled: true,
+                  deleteAfterRun: false,
+                  schedule: { kind: "every", everyMs: 3600000 },
+                  sessionTarget: "isolated",
+                  wakeMode: "now",
+                  payload: {
+                    kind: "agentTurn",
+                    message: `${config.promptSnippet}: marker=${marker}`,
+                    toolsAllow: ["automations"],
+                  },
+                  delivery: { mode: "none" },
+                  ...job,
+                }, { timeoutMs: 30000 });
+                const cursor = (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor;
+                const startedAt = Date.now();
+                await env.gateway.call("cron.run", { id: added.id, mode: "force" }, { timeoutMs: 30000 });
+                const run = await waitForCronRunCompletion({
+                  callGateway: env.gateway.call.bind(env.gateway),
+                  jobId: added.id,
+                  afterTs: startedAt,
+                });
+                const requests = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`))
+                  .filter((request) => String(request.allInputText ?? "").includes(`marker=${marker}`));
+                const toolOutput = requests.map((request) => String(request.toolOutput ?? "")).find((output) => output.length > 0) ?? "";
+                await env.gateway.call("cron.remove", { id: added.id }, { timeoutMs: 30000 });
+                return { jobId: added.id, run, toolOutput };
+              }
+        - set: child
+          value:
+            expr: "await runJob({ sessionKey: parentSessionKey }, childMarker)"
+        - assert:
+            expr: "child.run.status === 'ok' && !child.toolOutput.includes(config.scopeError) && !child.toolOutput.includes(config.unofferedAction)"
+            message:
+              expr: "`the bound child's wake did not succeed: ${JSON.stringify(child)}`"
+        - set: childAnswered
+          value:
+            expr: |-
+              await (async () => {
+                const deadline = Date.now() + 90000;
+                while (Date.now() < deadline) {
+                  if (await answeredInParent(childMarker)) {
+                    return true;
+                  }
+                  await sleep(500);
+                }
+                return false;
+              })()
+        - assert:
+            expr: childAnswered
+            message:
+              expr: "`the parent conversation did not receive and answer the woken event: wakeOutput=${child.toolOutput.slice(0, 300)} history=${(await parentHistory()).slice(-1500)}`"
+        - set: unbound
+          value:
+            expr: "await runJob({ owner: { agentId: 'qa' } }, unboundMarker)"
+        - assert:
+            expr: "unbound.run.status === 'ok' && unbound.toolOutput.includes(config.unofferedAction)"
+            message:
+              expr: "`expected the unbound job's wake to be refused by the automations scope: ${JSON.stringify(unbound)}`"
+        - call: sleep
+          args:
+            - 5000
+        - set: unboundInParent
+          value:
+            expr: "(await parentHistory()).includes(`marker=${unboundMarker}`)"
+        - assert:
+            expr: "!unboundInParent"
+            message: the unbound job's refused wake reached the conversation
+      detailsExpr: "`child=${child.jobId} run=${child.run.status} output=${JSON.stringify(child.toolOutput.slice(0, 200))} parentAnswered=true; unbound=${unbound.jobId} run=${unbound.run.status} output=${JSON.stringify(unbound.toolOutput.slice(0, 200))} inParent=false`"

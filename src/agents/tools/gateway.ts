@@ -625,6 +625,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     signal?: AbortSignal;
     onHelloOk?: CallGatewayOptions["onHelloOk"];
     dispatchAuthority?: Parameters<typeof prepareQuestionGatewayDispatch>[0];
+    /** Target check the in-process handler runs at its commit point; refused over transport. */
+    sessionMutationCommitGuard?: () => void;
   },
 ) {
   const dispatchAuthority = extra?.dispatchAuthority;
@@ -635,6 +637,9 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     throw new Error("Gateway dispatch authority requires version 2 and a synchronous assertion");
   }
   const inProcess = shouldUseInProcessGatewayTool(opts);
+  if (extra?.sessionMutationCommitGuard && !inProcess) {
+    throw new Error(`${method} with a session commit guard must run on this Gateway`);
+  }
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
@@ -666,6 +671,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
           expectFinal: extra?.expectFinal,
           ...prepareQuestionGatewayDispatch(dispatchAuthority, true),
           ...(Array.isArray(extra?.scopes) ? { scopes } : {}),
+          sessionMutationCommitGuard: extra?.sessionMutationCommitGuard,
         },
         runtimeIdentity,
       ),
