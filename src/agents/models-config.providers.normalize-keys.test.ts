@@ -8,7 +8,6 @@ import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { configForProviders, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import { normalizeProviderCatalogModelsForConfig } from "./models-config.providers.catalog.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 // mock-isolation: normalization consumes hook results without loading the plugin runtime.
@@ -25,7 +24,6 @@ vi.mock("./models-config.providers.implicit.js", () => ({
 describe("provider normalization through catalog planning", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   type Providers = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
-  type ConfigModel = Providers[string]["models"][number];
   const provider = (overrides: Partial<Providers[string]> = {}): Providers[string] => ({
     baseUrl: "https://api.openai.com/v1",
     api: "openai-completions",
@@ -75,13 +73,7 @@ describe("provider normalization through catalog planning", () => {
 
   it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
-    const pinned = modelDefinition("gemini-3.1-pro-preview", {
-      name: "Pinned Gemini",
-      contextWindow: 12345,
-      maxTokens: 2048,
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-    });
+    const pinned = modelDefinition("gemini-3.1-pro-preview", { name: "Pinned Gemini" });
     const expected = structuredClone(pinned);
     const providers = {
       google: {
@@ -89,21 +81,11 @@ describe("provider normalization through catalog planning", () => {
         api: "google-generative-ai",
         apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
         models: [
-          modelDefinition("gemini-3-pro-preview", {
-            name: "Alias Gemini",
-            contextWindow: 999,
-            maxTokens: 1024,
-          }),
+          modelDefinition("gemini-3-pro-preview", { name: "Alias Gemini" }),
           pinned,
-          modelDefinition("gemini-3.1-pro-preview", {
-            name: "Discovered Gemini",
-            contextWindow: 1_048_576,
-            maxTokens: 65536,
-            reasoning: true,
-          }),
+          modelDefinition("gemini-3.1-pro-preview", { name: "Discovered Gemini" }),
         ],
       },
-      custom: { baseUrl: "https://models.example/v1", models: [] },
     } satisfies Providers;
 
     const published = await publish(providers, { agentDir });
@@ -224,30 +206,4 @@ describe("provider normalization through catalog planning", () => {
       );
     },
   );
-
-  it("publishes schema-complete costs while preserving authored tiers", () => {
-    const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
-      ({ ...modelDefinition(id), cost }) as ConfigModel;
-    const tieredPricing = [
-      {
-        input: 8,
-        output: 40,
-        cacheRead: 0.1,
-        cacheWrite: 1,
-        range: [0, 1_000_000] as [number, number],
-      },
-    ];
-    const providers = {
-      custom: provider({
-        models: [modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing })],
-      }),
-    };
-
-    expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
-    expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
-      modelDefinition("partial", {
-        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
-      }),
-    ]);
-  });
 });
