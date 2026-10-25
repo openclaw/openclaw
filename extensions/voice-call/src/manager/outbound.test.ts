@@ -15,7 +15,9 @@ const timers = vi.hoisted(() => ({
   waitForFinalTranscript: vi.fn(),
 }));
 const { persist } = vi.hoisted(() => ({ persist: vi.fn() }));
+// mock-isolation: Observe outbound persistence without opening the call database.
 vi.mock("./store.js", () => ({ persistCallRecord: persist }));
+// mock-isolation: Observe call timer lifecycle without starting real deadlines or transcript waits.
 vi.mock("./timers.js", () => timers);
 
 import {

@@ -17,6 +17,7 @@ vi.mock(import("openclaw/plugin-sdk/ssrf-runtime"), async (original) => ({
 vi.mock("@aws-sdk/s3-request-presigner", () => ({ getSignedUrl: mocks.sign }));
 // mock-isolation: supply ship authentication and storage without a live transport.
 vi.mock("./urbit/auth.js", () => ({ authenticate: mocks.authenticate }));
+// mock-isolation: Serve synthetic storage configuration instead of contacting a ship.
 vi.mock("./urbit/channel-ops.js", () => ({ scryUrbitPath: mocks.scry }));
 
 const ENDPOINT = "https://memex.tlon.network/v1/zod/upload";
