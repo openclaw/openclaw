@@ -183,7 +183,7 @@ describe("workboard gateway methods", () => {
       "operator.read":
         "cards.list cards.diagnostics cards.export cards.runs cards.attachments.get notifications.list notifications.events",
       "operator.write":
-        "cards.diagnostics.refresh cards.create cards.attachments.add boards.upsert notifications.advance",
+        "cards.diagnostics.refresh cards.create cards.attachments.add cards.dispatchExact cards.dispatchExact.owner boards.upsert notifications.advance",
     })) {
       for (const name of names.split(" ")) {
         expect(methods.get(`workboard.${name}`)?.opts).toEqual({ scope });

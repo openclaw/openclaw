@@ -38,8 +38,20 @@ export function workboardCardMatchesLifecycleLink(
   );
   const linkedRunId = cardRunId(card);
   if (linkedRunId && source.runId) {
-    if (source.runId !== linkedRunId && !linkedRunId.startsWith(`workboard:${card.id}:`)) {
-      return false;
+    if (source.runId !== linkedRunId) {
+      const launch = card.metadata?.automation?.launch;
+      const sourceBelongsToPriorAttempt = card.metadata?.attempts?.some(
+        (attempt) => attempt.runId === source.runId && attempt.runId !== linkedRunId,
+      );
+      const mayBackfillProvisionalRun =
+        !sourceBelongsToPriorAttempt &&
+        ((launch?.provisionalRunId === linkedRunId &&
+          (launch.phase === "prepared" ||
+            (launch.phase === "accepted" && launch.acceptedRunId === undefined))) ||
+          (!launch && linkedRunId.startsWith(`workboard:${card.id}:`)));
+      if (!mayBackfillProvisionalRun) {
+        return false;
+      }
     }
     return linkedSessionKey && source.sessionKey ? sessionMatches : true;
   }

@@ -108,6 +108,65 @@ describe("registerWorkboardCli", () => {
     });
   });
 
+  it("forwards one exact --card target through the fail-safe exact RPC", async () => {
+    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ started: [], startFailures: [] });
+
+    await program.parseAsync(
+      ["workboard", "dispatch", "--board", "ops", "--card", "card-exact-1"],
+      { from: "user" },
+    );
+
+    expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+      "workboard.cards.dispatchExact",
+      expect.anything(),
+      { boardId: "ops", cardId: "card-exact-1" },
+      expect.anything(),
+    );
+  });
+
+  it("rejects a blank exact card before contacting the Gateway", async () => {
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--card", "   "], { from: "user" }),
+    ).rejects.toThrow("--card must be a non-empty string.");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("rejects a multi-start cap for an exact card before contacting the Gateway", async () => {
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--card", "card-exact-1", "--max-starts", "2"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-starts must be 1 when --card is provided.");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an older Gateway lacks the exact-card RPC", async () => {
+    const card = await store.create({ title: "Exact mixed-version target", status: "ready" });
+    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
+      new Error("unknown method: workboard.cards.dispatchExact"),
+    );
+
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--card", card.id], { from: "user" }),
+    ).rejects.toThrow("unknown method: workboard.cards.dispatchExact");
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[0]).toBe(
+      "workboard.cards.dispatchExact",
+    );
+    await expect(store.get(card.id)).resolves.toEqual(card);
+  });
+
+  it("never falls back to local data-only dispatch for an exact card", async () => {
+    const card = await store.create({ title: "Exact remote target", status: "ready" });
+    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
+      new Error("connect ECONNREFUSED 127.0.0.1:18789"),
+    );
+
+    await expect(
+      program.parseAsync(["workboard", "dispatch", "--card", card.id], { from: "user" }),
+    ).rejects.toThrow("ECONNREFUSED");
+    await expect(store.get(card.id)).resolves.toEqual(card);
+  });
+
   it("requests minimum scopes unless full-host access is explicit", async () => {
     gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
     await parse("dispatch");

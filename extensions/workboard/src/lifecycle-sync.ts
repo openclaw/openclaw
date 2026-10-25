@@ -49,6 +49,7 @@ type WorkboardLifecycleSession = {
   status?: "running" | "done" | "failed" | "killed" | "timeout";
   hasActiveRun?: boolean;
   abortedLastRun?: boolean;
+  lastRunId?: string;
 };
 
 type WorkboardLifecycleSessionSnapshot = {
@@ -241,6 +242,15 @@ export async function syncWorkboardAgentEnded(params: {
   ).count;
 }
 
+function terminalRunIdFromSession(session: WorkboardLifecycleSession): string | undefined {
+  return session.status === "done" ||
+    session.status === "failed" ||
+    session.status === "killed" ||
+    session.status === "timeout"
+    ? session.lastRunId
+    : undefined;
+}
+
 function lifecycleFromSession(
   session: WorkboardLifecycleSession,
   now: number,
@@ -299,6 +309,9 @@ function normalizeSession(value: unknown): WorkboardLifecycleSession | undefined
     ...(status ? { status } : {}),
     ...(typeof value.hasActiveRun === "boolean" ? { hasActiveRun: value.hasActiveRun } : {}),
     ...(value.abortedLastRun === true ? { abortedLastRun: true } : {}),
+    ...(typeof value.lastRunId === "string" && value.lastRunId.trim()
+      ? { lastRunId: value.lastRunId.trim() }
+      : {}),
   };
 }
 
@@ -549,6 +562,16 @@ export function createWorkboardLifecycleService(params: {
                     continue;
                   }
                   const observation = lifecycleFromSession(session, now);
+                  const terminalRunId = terminalRunIdFromSession(session);
+                  if (
+                    terminalRunId &&
+                    !workboardCardMatchesLifecycleLink(card, {
+                      sessionKey: session.key,
+                      runId: terminalRunId,
+                    })
+                  ) {
+                    continue;
+                  }
                   if (
                     await store.syncLifecycle(card.id, {
                       ...LIFECYCLE_TARGETS[observation.state],
@@ -561,6 +584,7 @@ export function createWorkboardLifecycleService(params: {
                           : {}),
                         ...(cardRunId(card) ? { expectedRunId: cardRunId(card) } : {}),
                         sessionKey: session.key,
+                        ...(terminalRunId ? { runId: terminalRunId } : {}),
                         ...(preparedAcceptanceAt === undefined
                           ? {}
                           : { acceptedAt: preparedAcceptanceAt }),

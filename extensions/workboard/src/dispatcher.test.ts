@@ -81,9 +81,14 @@ describe("dispatchAndStartWorkboardCards", () => {
     expectRejected(await dispatch(options, worktrees), card.id, error, run);
     return card;
   };
-  it.each(["assigned", "unassigned"] as const)(
-    "rejects an archived %s worker before claim without spending retries",
-    async (assignment) => {
+  it.each([
+    ["assigned", false],
+    ["unassigned", false],
+    ["assigned", true],
+    ["unassigned", true],
+  ] as const)(
+    "rejects an archived %s worker before claim without spending retries (exact=%s)",
+    async (assignment, exact) => {
       const previousConfig = getRuntimeConfigSnapshot();
       setRuntimeConfigSnapshot({ agents: { entries: { worker: {} } } });
       try {
@@ -103,7 +108,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         run = vi.fn().mockResolvedValue({ runId: "recovered-worker" });
         const recovery = `openclaw sessions delete ${sessionKey}`;
         for (let attempt = 0; attempt < 2; attempt++) {
-          const result = await dispatch();
+          const result = await dispatch(exact ? { cardId: card.id, targetMode: "dispatch" } : {});
           expectRejected(result, card.id, expect.stringContaining(recovery), run);
         }
         expect(claim).not.toHaveBeenCalled();

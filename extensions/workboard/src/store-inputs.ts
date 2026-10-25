@@ -133,6 +133,7 @@ export type WorkboardListOptions = {
   boardId?: unknown;
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
+  cardId?: unknown;
   now?: unknown;
   assertOwnerCurrent?: () => void;
 };

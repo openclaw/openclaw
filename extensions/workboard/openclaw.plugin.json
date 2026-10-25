@@ -58,13 +58,37 @@
     "actionVerbs": [
       {
         "id": "dispatch",
-        "method": "workboard.cards.dispatch",
+        "method": "workboard.cards.dispatchWithOptions",
         "description": "Dispatch ready Workboard cards.",
         "paramShape": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "boardId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxStarts": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      },
+      {
+        "id": "dispatch-exact",
+        "method": "workboard.cards.dispatchExact",
+        "description": "Dispatch one exact Workboard card without scanning unrelated cards.",
+        "paramShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cardId"],
+          "properties": {
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cardId": {
               "type": "string",
               "minLength": 1
             }

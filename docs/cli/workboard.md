@@ -23,7 +23,7 @@ openclaw workboard list [--board <id>] [--status <status>] [--include-archived] 
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard move <id> --status <status> [--json]
-openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
+openclaw workboard dispatch [--board <id>] [--card <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
 The command uses the same plugin-owned SQLite database as the dashboard and Workboard agent tools. When a local Gateway owns the state directory, commands route through that Gateway before opening the store. With the Gateway stopped, commands acquire exclusive offline ownership and close the store before releasing it. An unavailable, older, or rejecting live Gateway never triggers a local write fallback; fix its connection or stop it through its service owner and retry. Card ids are UUIDs. Commands that accept a card id also accept an unambiguous id prefix. The compact text output shows the first 8 characters.
@@ -107,11 +107,14 @@ the Gateway is running and exclusive offline ownership when it is stopped.
 openclaw workboard dispatch
 openclaw workboard dispatch --json
 openclaw workboard dispatch --max-starts 10
+openclaw workboard dispatch --board ops --card f0a268f4-82f5-47c7-9c13-a9145c356752
 openclaw workboard dispatch --admin
 openclaw workboard dispatch --url http://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-`dispatch` selects the active Gateway before opening local Workboard state. Implicit local requests use the owner-bound `workboard.cards.dispatch.owner` RPC. That method uses the same subagent runtime as the dashboard dispatch action. Ready cards therefore become task-tracked worker runs with linked session keys. `--max-starts` uses `workboard.cards.dispatchWithOptions.owner` for the implicit local Gateway. Older Gateways or Workboard plugins without owner routing refuse before starting workers; explicit remote targets retain the existing `workboard.cards.dispatch` and `workboard.cards.dispatchWithOptions` contracts. Restart the Gateway after upgrading, before you use the flag. Cards with an assigned agent use agent-scoped subagent session keys. Unassigned cards keep an unscoped subagent key, so the Gateway's configured default agent is preserved.
+`dispatch` selects the active Gateway before opening local Workboard state. Implicit local requests use the owner-bound `workboard.cards.dispatch.owner` RPC. That method uses the same subagent runtime as the dashboard dispatch action. Ready cards therefore become task-tracked worker runs with linked session keys. `--max-starts` uses `workboard.cards.dispatchWithOptions.owner` for the implicit local Gateway. `--card` uses the distinct `workboard.cards.dispatchExact.owner` RPC so an older Gateway rejects the unsupported target before starting any worker. Older Gateways or Workboard plugins without owner routing refuse before starting workers; explicit remote targets use the corresponding non-owner RPCs. Restart the Gateway after upgrading, before you use either flag. Cards with an assigned agent use agent-scoped subagent session keys. Unassigned cards keep an unscoped subagent key, so the Gateway's configured default agent is preserved.
+
+Pass `--card <id>` with the full persisted card id to dispatch only that card. The Gateway performs dependency and schedule promotion for the target, applies stale-claim and retry handling only to the target, and still enforces its workspace, permission, claim, and global owner-slot gates. It does not enumerate or mutate unrelated queued or stale cards. When `--board` is also present, the target must belong to that board. `--max-starts` may be omitted or set to `1`; larger values are rejected. Exact-card dispatch never falls back to local data-only dispatch when the Gateway is unavailable, and its dedicated RPC prevents mixed-version clients from degrading into a board-wide sweep.
 
 The dispatch loop:
 
@@ -130,15 +133,18 @@ Selection is conservative. One dispatch starts at most three workers by default.
 
 If worker start fails after a card is claimed, Workboard blocks that card and clears the claim. It records the failure in card execution and worker-log metadata. Failed starts stay visible instead of returning the card to the queue silently.
 
+When an accepted worker run reports an exact terminal run id, Workboard releases that run's claim in the same fenced lifecycle update that moves the card to `review` or `blocked`. Restart recovery uses the session's exact last run id for the same reconciliation. Missing, mismatched, or nonterminal run evidence leaves the claim intact for ordinary expiry or explicit operator recovery instead of risking another live worker's lease.
+
 If the card's fixed worker session is archived, dispatch refuses before claiming
 the card, leaves its retry budget unchanged, and records recovery guidance in the
 card's worker log and dispatch result. Run `openclaw sessions delete <worker key>`
 so the next dispatch starts a fresh worker, or restore the session to continue it.
 The diagnostic includes the exact worker key. Dispatch does not change the session.
 
-The CLI falls back to data-only dispatch against local Workboard state when both of these are true:
+The CLI falls back to data-only dispatch against local Workboard state when all of these are true:
 
 - You give no explicit Gateway target.
+- You do not use `--card`.
 - The local Gateway is stopped and the CLI can acquire exclusive offline state ownership.
 
 Data-only dispatch can still promote dependencies, clean stale claims, and block timed-out runs, but it does not start workers. A live owner that cannot be reached, lacks the required method, or rejects the request never triggers local fallback. Auth, permission, validation, and explicit-target failures are reported directly. After an uncertain reply, inspect the board before retrying.

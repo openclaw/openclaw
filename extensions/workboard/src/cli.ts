@@ -34,17 +34,22 @@ type GatewayOptions = JsonOptions & {
 };
 
 type DispatchOptions = GatewayOptions & {
+  card?: string;
   maxStarts?: number;
 };
+
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  return Object.assign(new Error(message), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
+}
 
 function parseMaxStarts(value: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw Object.assign(new Error("--max-starts must be a positive integer."), {
-      name: "InvalidArgumentError",
-      code: "commander.invalidArgument",
-      exitCode: 1,
-    });
+    throw invalidCliArgument("--max-starts must be a positive integer.");
   }
   return parsed;
 }
@@ -257,6 +262,7 @@ export function registerWorkboardCli(params: {
       .command("dispatch")
       .description("Promote ready cards and start worker runs through the Gateway")
       .option("--board <id>", "Dispatch a single board")
+      .option("--card <id>", "Dispatch one exact card id without scanning other queued cards")
       .option(
         "--max-starts <count>",
         "Maximum new worker runs to start in this pass (default 3)",
@@ -265,31 +271,47 @@ export function registerWorkboardCli(params: {
       .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
   ).action(async (options: DispatchOptions) => {
-    const method =
-      options.maxStarts === undefined
+    const cardId = options.card?.trim();
+    if (options.card !== undefined && !cardId) {
+      throw invalidCliArgument("--card must be a non-empty string.");
+    }
+    if (cardId && options.maxStarts !== undefined && options.maxStarts !== 1) {
+      throw invalidCliArgument("--max-starts must be 1 when --card is provided.");
+    }
+    const method = cardId
+      ? "workboard.cards.dispatchExact"
+      : options.maxStarts === undefined
         ? "workboard.cards.dispatch"
         : "workboard.cards.dispatchWithOptions";
     const input = {
       boardId: options.board,
+      ...(cardId ? { cardId } : {}),
       ...(options.maxStarts !== undefined ? { maxStarts: options.maxStarts } : {}),
     };
     const scopes: NonNullable<Parameters<typeof callGatewayFromCli>[3]>["scopes"] = options.admin
       ? ["operator.admin", "operator.write", "operator.read"]
       : ["operator.write", "operator.read"];
-    const result = await (!options.token?.trim() &&
-    !options.password?.trim() &&
-    (await isImplicitLocalGatewayTargetFromCli(options))
+    const implicitLocal =
+      !options.token?.trim() &&
+      !options.password?.trim() &&
+      (await isImplicitLocalGatewayTargetFromCli(options));
+    const result = await (implicitLocal
       ? local(
           method,
           input,
-          async (store, assertCurrent) => ({
-            ...redactDispatchResult(
-              await store.dispatch({ boardId: options.board, assertOwnerCurrent: assertCurrent }),
-            ),
-            gatewayUnavailable: true,
-            started: [],
-            startFailures: [],
-          }),
+          async (store, assertCurrent) => {
+            if (cardId) {
+              throw new Error("Exact-card dispatch requires a running Gateway.");
+            }
+            return {
+              ...redactDispatchResult(
+                await store.dispatch({ boardId: options.board, assertOwnerCurrent: assertCurrent }),
+              ),
+              gatewayUnavailable: true,
+              started: [],
+              startFailures: [],
+            };
+          },
           {
             scopes,
             timeoutMs: parseTimeoutMsWithFallback(options.timeout, 30_000, {
