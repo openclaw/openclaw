@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
@@ -22,6 +21,7 @@ import {
 import {
   captureManifest,
   nodeWorkspaceManifestCapture,
+  readWorkspaceManifest,
   runNodeWorkspaceManifestCapture,
 } from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -152,18 +152,14 @@ describe("resident node manifest capture", () => {
       baseCommit,
     });
     const digest = await writeManifest(homeDir, rawManifest);
-    const manifestDir = path.join(homeDir, ".openclaw-worker", "manifests");
     const args = [baseCommit, "eligible", digest];
     const child = await runStandalone(args, homeDir);
     expect(child.code, child.stderr).toBe(0);
     rejectChild();
     const native = await capture(args);
     expect(native.stdout).toBe(child.stdout);
-    const captured = parseWorkerWorkspaceManifest(
-      await fs.readFile(path.join(manifestDir, `${native.stdout.trim().slice(7)}.json`), "utf8"),
-      native.stdout.trim(),
-    );
-    expect(captured.entries.map((entry) => entry.path)).toEqual([
+    const { manifest } = await readWorkspaceManifest(homeDir, native.stdout.trim());
+    expect(manifest.entries.map((entry) => entry.path)).toEqual([
       ".gitignore",
       "keep.ignored",
       "new.txt",

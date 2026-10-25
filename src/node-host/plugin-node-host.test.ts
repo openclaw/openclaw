@@ -1,10 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { registerCommands } from "./node-host-command.fixture.test-support.js";
 import {
   hasRegisteredNodeHostCommandActiveWork as hasActiveWork,
   invokeRegisteredNodeHostCommand as invoke,
@@ -16,28 +15,6 @@ import {
 
 const availabilityContext = { config: {}, env: {} };
 type Command = PluginNodeHostCommandRegistration["command"];
-function registerCommands(
-  ...commands: (Omit<Command, "handle"> & Partial<Pick<Command, "handle">>)[]
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeHostCommands = commands.map((command) => ({
-    pluginId: command.command.split(".")[0]!,
-    source: "test",
-    command: { handle: async () => "{}", ...command },
-  }));
-  registry.plugins = [...new Set(registry.nodeHostCommands.map(({ pluginId }) => pluginId))].map(
-    (id) =>
-      createPluginRecord({
-        id,
-        source: "test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: true,
-      }),
-  );
-  setActivePluginRegistry(registry);
-  return registry;
-}
 afterEach(resetPluginRuntimeStateForTest);
 
 it.each([undefined, "optional", true] as const)(
@@ -111,9 +88,11 @@ it.each([true, false])(
   },
 );
 
-it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifications", async () => {
+it("scopes watcher callbacks, fences late notifications, and retries only failed cleanup", async () => {
   const retiring = createDeferred();
   const entered = createDeferred();
+  const failure = new Error("watcher retirement failed");
+  const successful = vi.fn(async () => {});
   const onChange = vi.fn();
   const assertScope = () =>
     expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
@@ -125,55 +104,43 @@ it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifica
     // Do not await the completion whose cleanup is currently executing.
     if (cleanup.mock.calls.length === 1) {
       reentrant = stop();
+      return retiring.promise;
     }
-    return retiring.promise;
+    return Promise.resolve();
   });
-  const registry = registerCommands({
-    command: "fixture.observe",
-    watchAvailability: (_context, callback) => {
-      assertScope();
-      notify = callback;
-      return cleanup;
+  const registry = registerCommands(
+    { command: "fixture.idle", watchAvailability: () => successful },
+    {
+      command: "fixture.observe",
+      watchAvailability: (_context, callback) => {
+        assertScope();
+        notify = callback;
+        return cleanup;
+      },
     },
-  });
+  );
   const stop = watchAvailability(availabilityContext, () => {
     assertScope();
     onChange();
   });
   notify?.();
   const closing = stop();
+  const rejected = expect(closing).rejects.toBe(failure);
   try {
     notify?.();
     await entered.promise;
     expect(reentrant).toBe(closing);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledOnce();
-    retiring.resolve();
-    await closing;
+    retiring.reject(failure);
+    await rejected;
+    await stop();
+    expect(successful).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledTimes(2);
   } finally {
     retiring.resolve();
-    await Promise.allSettled([closing, reentrant]);
+    await Promise.allSettled([closing, reentrant, rejected]);
   }
-});
-
-it("retries failed watcher cleanup without replaying successful siblings", async () => {
-  const failure = new Error("watcher retirement failed");
-  const successful = vi.fn(async () => {});
-  const retryable = vi
-    .fn<() => Promise<void>>()
-    .mockRejectedValueOnce(failure)
-    .mockResolvedValue(undefined);
-  registerCommands(
-    ...[successful, retryable].map((cleanup, index) => ({
-      command: `fixture.observe-${index}`,
-      watchAvailability: () => cleanup,
-    })),
-  );
-  const stop = watchAvailability(availabilityContext, vi.fn());
-  await expect(Promise.resolve(stop())).rejects.toBe(failure);
-  await stop();
-  expect(successful).toHaveBeenCalledOnce();
-  expect(retryable).toHaveBeenCalledTimes(2);
 });
 
 it("retains unavailable plugin work until its shared disconnect owner cleans up once", async () => {

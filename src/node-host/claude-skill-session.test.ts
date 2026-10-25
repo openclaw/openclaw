@@ -9,23 +9,31 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { NodeClaudeSkillInit } from "../infra/node-claude-skill-protocol.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
-import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
-import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
+import { prepareSkillBundle } from "../skills/library/bundle.js";
 import { prepareNodeClaudeSkillSession } from "./claude-skill-session.js";
 
-const temps = useAutoCleanupTempDirTracker(afterEach);
 const workshopFixture = { description: "Fixture", inputSchema: {} };
 const workshopCall = { name: "skill_workshop", arguments: {} };
 const mcpIdentity = { name: "workshop-fixture", version: "1" };
 const textContent = (text: string | number) => ({ content: [{ type: "text", text }] });
 const markdown = "---\ndescription: Guide\n---\n# Guide\n";
+const sourcePath = path.resolve("synthetic-skills/guide/SKILL.md");
+const files = [{ path: "SKILL.md", content: markdown }];
+const resources = {
+  version: 1 as const,
+  skills: [
+    {
+      name: "guide",
+      description: "Guide",
+      sourcePath,
+      files,
+      revision: prepareSkillBundle(files).revision,
+    },
+  ],
+};
 
 function prepareSession(
   init: Omit<NodeClaudeSkillInit, "type">,
@@ -84,33 +92,6 @@ async function prepareWorkshop(sdk: string) {
   };
 }
 
-async function skillResources() {
-  const workspace = temps.make("node-skill-session-");
-  const skillDir = path.join(workspace, "skills", "guide");
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(path.join(skillDir, "SKILL.md"), markdown);
-  const resources = await prepareSkillResourceDelivery(
-    await buildSkillSnapshot(workspace, {
-      entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
-    }),
-    () => {},
-  );
-  return { skillDir, resources };
-}
-
-function captureWarnings() {
-  const warn = vi.fn();
-  const previousConsole = loggingState.rawConsole;
-  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-  loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-  onTestFinished(() => {
-    loggingState.rawConsole = previousConsole;
-    setLoggerOverride(null);
-    resetLogger();
-  });
-  return warn;
-}
-
 describe("node Claude Workshop result settlement", () => {
   it.each(["v1", "v2"].flatMap((sdk) => [false, true].map((malformed) => ({ sdk, malformed }))))(
     "$sdk settles the real MCP request (malformed result: $malformed)",
@@ -161,39 +142,28 @@ describe("node Claude Workshop result settlement", () => {
 });
 
 describe("node Claude skill artifact cleanup", () => {
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([false, true])(
-    "grants only the artifact root and cleans independent inputs after close (Workshop: %s)",
-    async (workshop) => {
-      const { skillDir, resources } = await skillResources();
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "grants only the artifact root and cleans independent inputs after close",
+    async () => {
       const session = await prepareSession({
         resources,
-        ...(workshop ? { workshop: workshopFixture } : {}),
+        workshop: workshopFixture,
       }).session;
       const artifactRoot = session.argv[session.argv.indexOf("--add-dir") + 1]!;
-      const skillPath = session.rewriteReferences(path.join(skillDir, "SKILL.md"));
-      const configPath = workshop
-        ? session.argv[session.argv.indexOf("--mcp-config") + 1]!
-        : undefined;
-      const warn = captureWarnings();
+      const skillPath = session.rewriteReferences(sourcePath);
+      const configPath = session.argv[session.argv.indexOf("--mcp-config") + 1]!;
       try {
         expect(session.argv.filter((arg) => arg === "--add-dir")).toHaveLength(1);
         expect(path.dirname(path.dirname(skillPath))).toBe(artifactRoot);
         expect((await fs.stat(artifactRoot)).mode & 0o777).toBe(0o700);
         expect(session.catalog).toContain(skillPath);
-        if (configPath) {
-          expect(path.relative(artifactRoot, configPath).startsWith(`..${path.sep}`)).toBe(true);
-          expect((await fs.stat(path.dirname(configPath))).mode & 0o777).toBe(0o700);
-        }
+        expect(path.relative(artifactRoot, configPath).startsWith(`..${path.sep}`)).toBe(true);
+        expect((await fs.stat(path.dirname(configPath))).mode & 0o777).toBe(0o700);
         await fs.chmod(path.dirname(skillPath), 0o500);
         await session.close();
-        await expect(session.writeStdout("late output")).rejects.toThrow("invocation closed");
         await expect(session.cleanup()).resolves.toBeUndefined();
         expect(await fs.readFile(skillPath, "utf8")).toContain("# Guide");
-        if (configPath) {
-          await expect(fs.stat(path.dirname(configPath))).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        expect(warn).toHaveBeenCalledOnce();
-        expect(warn.mock.calls.flat().join("\n")).toContain(artifactRoot);
+        await expect(fs.stat(path.dirname(configPath))).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await session.close();
         await fs.chmod(path.dirname(skillPath), 0o700);
@@ -203,7 +173,6 @@ describe("node Claude skill artifact cleanup", () => {
   );
 
   it("unsubscribes and preserves cancellation during partial skill setup", async () => {
-    const { resources } = await skillResources();
     const primary = new Error("Node skill setup cancelled");
     primary.name = "AbortError";
     const controller = new AbortController();

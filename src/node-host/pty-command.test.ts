@@ -45,7 +45,6 @@ function createPtyFixture() {
       input({ kind: "data", data: "keys" });
       input(resize);
     },
-    ready: () => vi.waitFor(() => expect(io.onInput).toHaveBeenCalled()),
     run: (
       params: Partial<Parameters<typeof runNodePtyCommand>[0]> = {},
       spawn?: Parameters<typeof runNodePtyCommand>[2],
@@ -125,7 +124,7 @@ it.each(["source", "abort"] as const)(
   },
 );
 
-it("relays output, data, resize, abort, and exit", async () => {
+it.each(["abort", "dead PTY exit"])("relays PTY I/O and ignores input after %s", async (mode) => {
   const { pty, io, controller, data, input, sendInputs, exit, run } = createPtyFixture();
   const spawn = vi.fn<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>(async () => pty);
   const result = run(
@@ -155,37 +154,26 @@ it("relays output, data, resize, abort, and exit", async () => {
   input({ kind: "resize", cols: 0, rows: 30 });
   input({ kind: "resize", cols: 80, rows: 2001 });
   expect(pty.resize).not.toHaveBeenCalled();
-  sendInputs();
+  if (mode === "dead PTY exit") {
+    for (const operation of [pty.write, pty.resize]) {
+      operation.mockImplementation(() => {
+        throw new Error("dead PTY");
+      });
+    }
+  }
+  expect(sendInputs).not.toThrow();
   expect(pty.write).toHaveBeenCalledWith("keys");
   expect(pty.resize).toHaveBeenCalledWith(100, 30);
 
-  controller.abort();
-  expect(pty.kill).toHaveBeenCalledOnce();
-  sendInputs();
+  const event = mode === "abort" ? { exitCode: 130, signal: 15 } : { exitCode: 0 };
+  if (mode === "abort") {
+    controller.abort();
+    expect(pty.kill).toHaveBeenCalledOnce();
+    sendInputs();
+  }
+  exit(event);
+  expect(sendInputs).not.toThrow();
   expect(pty.write).toHaveBeenCalledTimes(1);
   expect(pty.resize).toHaveBeenCalledTimes(1);
-  exit({ exitCode: 130, signal: 15 });
-  await expect(result).resolves.toEqual({ exitCode: 130, signal: 15 });
-});
-
-it("ignores input after exit without touching a dead PTY", async () => {
-  const { pty, sendInputs, exit, ready, run } = createPtyFixture();
-  for (const operation of [pty.write, pty.resize]) {
-    operation.mockImplementation(() => {
-      throw new Error("dead PTY");
-    });
-  }
-  const result = run({}, async () => pty);
-  await ready();
-  expect(sendInputs).not.toThrow();
-  expect(pty.write).toHaveBeenCalledOnce();
-  expect(pty.resize).toHaveBeenCalledOnce();
-  pty.write.mockClear();
-  pty.resize.mockClear();
-
-  exit({ exitCode: 0 });
-  expect(sendInputs).not.toThrow();
-  await expect(result).resolves.toEqual({ exitCode: 0 });
-  expect(pty.write).not.toHaveBeenCalled();
-  expect(pty.resize).not.toHaveBeenCalled();
+  await expect(result).resolves.toEqual(event);
 });

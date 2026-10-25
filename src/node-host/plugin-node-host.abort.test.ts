@@ -6,12 +6,10 @@ import {
 } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.node-host.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { handleInvoke } from "./invoke.js";
+import { registerCommands } from "./node-host-command.fixture.test-support.js";
 
 afterEach(resetPluginRuntimeStateForTest);
 
@@ -19,21 +17,10 @@ function startInvocation(
   command: PluginNodeHostCommandRegistration["command"],
   runtime: Parameters<typeof handleInvoke>[4],
 ) {
-  const pluginId = command.command.split(".")[0]!;
-  const registry = createEmptyPluginRegistry();
-  registry.plugins = runtime?.pluginCommandContext
-    ? [
-        createPluginRecord({
-          id: pluginId,
-          source: "test",
-          origin: "bundled",
-          enabled: true,
-          configSchema: true,
-        }),
-      ]
-    : [];
-  registry.nodeHostCommands = [{ pluginId, command, source: "test" }];
-  setActivePluginRegistry(registry);
+  const registry = registerCommands(command);
+  if (!runtime?.pluginCommandContext) {
+    registry.plugins = [];
+  }
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   const invocation = handleInvoke(
     { id: "invocation", nodeId: "paired-node", command: command.command },
@@ -48,25 +35,20 @@ function startInvocation(
 it("passes the actual invocation signal into the non-duplex plugin context", async ({ signal }) => {
   const controller = new AbortController();
   const handlerReady = createDeferred();
-  const handle = vi.fn<PluginNodeHostCommandRegistration["command"]["handle"]>(
-    async (_paramsJSON, _io, context) => {
-      expect(context?.signal).toBe(controller.signal);
-      await new Promise<void>((_resolve, reject) => {
-        context?.signal?.addEventListener(
-          "abort",
-          () =>
-            reject(
-              context.signal?.reason instanceof Error
-                ? context.signal.reason
-                : new Error("node plugin invocation aborted", { cause: context.signal?.reason }),
-            ),
-          { once: true },
-        );
-        handlerReady.resolve();
-      });
-      return '{"stale":true}';
-    },
-  );
+  const handle: PluginNodeHostCommandRegistration["command"]["handle"] = async (
+    _params,
+    _io,
+    context,
+  ) => {
+    expect(context?.signal).toBe(controller.signal);
+    const aborted = createDeferred();
+    context?.signal?.addEventListener("abort", () => aborted.reject(context.signal?.reason), {
+      once: true,
+    });
+    handlerReady.resolve();
+    await aborted.promise;
+    return '{"stale":true}';
+  };
   const { request, invocation } = startInvocation(
     { command: "ollama.chat", handle },
     { signal: controller.signal, pluginCommandContext: {} },
@@ -102,12 +84,6 @@ it.each(["success", "failure", "cancellation", "supersession", "different-error"
       },
     });
     controller.signal.addEventListener("abort", () => frames.close(), { once: true });
-    const io: OpenClawPluginNodeHostCommandIo = {
-      signal: controller.signal,
-      emitChunk: vi.fn(async (_chunk: string) => undefined),
-      onInput: vi.fn(),
-      frames,
-    };
     const handle = vi.fn<PluginNodeHostCommandRegistration["command"]["handle"]>(
       async (_params, commandIo) => {
         commandIo?.frames?.onMessage(async () => await listener.promise);
@@ -130,7 +106,12 @@ it.each(["success", "failure", "cancellation", "supersession", "different-error"
       { command: "fixture.duplex", duplex: true, handle },
       {
         signal: controller.signal,
-        pluginCommandIo: io,
+        pluginCommandIo: {
+          signal: controller.signal,
+          emitChunk: async () => {},
+          onInput: () => {},
+          frames,
+        },
         flushPluginCommandIo: frames.drain,
         canReportAbortedFailure: (error) =>
           currentInvocation && error === framedFailure && error === controller.signal.reason,
