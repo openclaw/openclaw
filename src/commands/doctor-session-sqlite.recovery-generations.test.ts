@@ -220,13 +220,9 @@ describe("runDoctorSessionSqlite", () => {
       expect(injected).toBe(true);
       expect(fs.existsSync(source)).toBe(true);
       expectFiles(replacement, source);
-      expect(
-        imported.targets[0]?.issues.some(
-          (issue) =>
-            issue.code ===
-            (kind === "transcript" ? "transcript_archive_failed" : "legacy_store_archive_failed"),
-        ),
-      ).toBe(true);
+      containsObjects(imported.targets[0]?.issues, {
+        code: kind === "transcript" ? "transcript_archive_failed" : "legacy_store_archive_failed",
+      });
       closeDatabases();
       const cleanup = await retireRecovery(store);
       expect(cleanup.artifacts.filter((item) => item.outcome === "removed")).toEqual([]);
@@ -271,9 +267,7 @@ describe("runDoctorSessionSqlite", () => {
     const originals = snapshotFiles([indexMove.archivePath, archivePath, siblingArchive]);
     const result = await retireRecovery(store);
     for (const original of originals) {
-      expect(result.artifacts.find((item) => item.path === original.file)?.outcome).toBe(
-        "protected",
-      );
+      expectOutcome(result, original.file, "protected");
       expectFiles(original.bytes, original.file);
     }
     expect(result.totals.removedFiles).toBe(0);
@@ -388,10 +382,7 @@ describe("runDoctorSessionSqlite", () => {
       await drainDatabases();
       closeDatabases();
       await cleanReport(restoreStore(store));
-      const originals = [store.storePath, store.transcriptPath].map((sourcePath) => ({
-        sourcePath,
-        bytes: fs.readFileSync(sourcePath),
-      }));
+      const originals = snapshotFiles([store.storePath, store.transcriptPath]);
       const manifestPath = requireManifest(imported.migrationRun?.manifestPath);
       if (receiptFailure === "unreadable manifest") {
         fs.writeFileSync(manifestPath, "{");
@@ -419,9 +410,9 @@ describe("runDoctorSessionSqlite", () => {
       expect(stateFor(store)).toEqual(current);
       for (const original of originals) {
         const archived = manifest.targets[0]?.completedMoves.find(
-          (move) => move.sourcePath === original.sourcePath,
+          (move) => move.sourcePath === original.file,
         );
-        expectFiles(original.bytes, archived?.archivePath ?? original.sourcePath);
+        expectFiles(original.bytes, archived?.archivePath ?? original.file);
       }
     },
   );
@@ -506,11 +497,9 @@ describe("runDoctorSessionSqlite", () => {
         ).toMatchObject({ status: "claimed" });
       }
       const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-      expect(preview.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(
-        "verification-required",
-      );
+      expectOutcome(preview, archivePath, "verification-required");
       const result = await retireRecovery(store, undefined, preview);
-      expect(result.artifacts.find((item) => item.path === archivePath)?.outcome).toBe("removed");
+      expectOutcome(result, archivePath, "removed");
       expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
       if (issue) {
         expect(readManifest(manifestPath)).toMatchObject({
