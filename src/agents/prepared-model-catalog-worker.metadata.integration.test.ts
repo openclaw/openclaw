@@ -182,13 +182,7 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
         undefined,
         metadata,
       );
-      const [prepared] = await (async () => {
-        try {
-          return await build.pending;
-        } finally {
-          await build.completion;
-        }
-      })();
+      const [prepared] = await build.pending.finally(() => build.completion);
       if (!prepared) {
         throw new Error("prepared runtime produced no snapshot");
       }

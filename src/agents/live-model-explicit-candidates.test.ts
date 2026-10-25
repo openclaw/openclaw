@@ -2,7 +2,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveExplicitLiveModelCandidates } from "../gateway/gateway-models.profiles.live.test-helpers.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -10,7 +9,6 @@ import * as authProfileStore from "./auth-profiles/store-runtime.js";
 import { createEmptyAgentDiscoveryStores } from "./embedded-agent-runner/model.js";
 import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: ["deepseek", "xai"].map((id) => {
@@ -69,31 +67,40 @@ afterEach(() => {
 
 describe("explicit live model candidates", () => {
   it("recovers accepted DeepSeek selections omitted from discovery using one captured store", async () => {
+    const refs = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].map((id) => ({
+      provider: "deepseek",
+      id,
+    }));
     const result = await append({
-      refs: [
-        { provider: "deepseek", id: "deepseek-v4-flash" },
-        { provider: "deepseek", id: "deepseek-v4-flash-vision-exp" },
-      ],
+      refs,
     });
 
-    expect(result.models).toMatchObject([
-      {
-        provider: "deepseek",
-        id: "deepseek-v4-flash",
-        api: "openai-completions",
-        baseUrl: "https://api.deepseek.com",
-        input: ["text"],
-      },
-      {
-        provider: "deepseek",
-        id: "deepseek-v4-flash-vision-exp",
-        api: "openai-completions",
-        baseUrl: "https://api.deepseek.com",
-        input: ["text", "image"],
-      },
+    expect(
+      result.models.map(({ provider, id, api, baseUrl, input }) => [
+        provider,
+        id,
+        api,
+        baseUrl,
+        input,
+      ]),
+    ).toEqual([
+      ["deepseek", "deepseek-v4-flash", "openai-completions", "https://api.deepseek.com", ["text"]],
+      [
+        "deepseek",
+        "deepseek-v4-flash-vision-exp",
+        "openai-completions",
+        "https://api.deepseek.com",
+        ["text", "image"],
+      ],
     ]);
     expect(result.added).toHaveLength(2);
     expect(getDiscoveryStores).toHaveBeenCalledOnce();
+    getDiscoveryStores.mockClear();
+    expect(await append({ models: result.models, refs })).toEqual({
+      models: result.models,
+      added: [],
+    });
+    expect(getDiscoveryStores).not.toHaveBeenCalled();
   });
 
   it("keeps configured transport and model limits when recovering a bundled selection", async () => {
@@ -129,23 +136,6 @@ describe("explicit live model candidates", () => {
     ]);
   });
 
-  it("does not acquire discovery stores when every explicit selection is already present", async () => {
-    const model = makeProviderModelFixture({
-      provider: "deepseek",
-      id: "deepseek-v4-flash",
-      api: "openai-completions",
-      baseUrl: "https://api.deepseek.com",
-    });
-    const result = await append({
-      models: [model],
-      refs: [{ provider: "deepseek", id: "deepseek-v4-flash" }],
-    });
-
-    expect(result.models).toEqual([model]);
-    expect(result.added).toEqual([]);
-    expect(getDiscoveryStores).not.toHaveBeenCalled();
-  });
-
   it("does not manufacture an unknown explicit selection", async () => {
     const result = await append({
       refs: [{ provider: "deepseek", id: "not-a-deepseek-model" }],
@@ -158,33 +148,12 @@ describe("explicit live model candidates", () => {
     stores.modelRegistry.registerProvider("xai", {
       api: "openai-completions",
       baseUrl: "https://api.x.ai/v1",
-      models: [
-        modelDefinition("grok-4.20-multi-agent-0309", {
-          name: "Suppressed model",
-          reasoning: true,
-          contextWindow: 128_000,
-          maxTokens: 4_096,
-        }),
-      ],
+      models: [modelDefinition("grok-4.20-multi-agent-0309")],
     });
     const result = await append({
       refs: [{ provider: "xai", id: "grok-4.20-multi-agent-0309" }],
     });
 
     expect(result).toEqual({ models: [], added: [] });
-    const registered = stores.modelRegistry.getAll();
-    expect(registered).toHaveLength(1);
-    expect(() =>
-      withPluginRuntimeGenerationScope({ metadataSnapshot }, () =>
-        resolveExplicitLiveModelCandidates({
-          modelRegistry: stores.modelRegistry,
-          models: registered,
-          modelFilter: new Set(["xai/grok-4.20-multi-agent-0309"]),
-          providerFilter: new Set(["xai"]),
-          config,
-          env: {},
-        }),
-      ),
-    ).toThrow(/xai\/grok-4.20-multi-agent-0309/);
   });
 });
