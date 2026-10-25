@@ -118,6 +118,13 @@ if (values.mode === "seed") {
           requiredHeaders: ["x-forwarded-proto"],
           allowUsers: ["synthetic-pg-footprint"],
         },
+        identityScopes: { "synthetic-pg-footprint": ["operator.read"] },
+      },
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { agents: "*", sessions: { others: "view" }, scopes: ["operator.read"] },
+        },
       },
     },
     logging: { file: path.join(root, "gateway-file.log") },
@@ -398,6 +405,10 @@ if (values.mode === "seed") {
     });
     if (!connect.ok) {
       throw new Error(`Connect refused: ${JSON.stringify(connect.error)}`);
+    }
+    const hello = connect.payload as { auth?: { scopes?: string[] } };
+    if (!hello.auth?.scopes?.includes("operator.read")) {
+      throw new Error("Synthetic reader was not granted operator.read");
     }
     const history = async (label: string) => {
       phase(label);
