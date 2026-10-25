@@ -29,7 +29,7 @@ export function buildSkillsSection(params: {
         ]
       : []),
     "Several: most specific. No relevant skill: read none.",
-    "Up-front max one. Never invent paths.",
+    "Up-front max one; read another applicable skill when the active workflow requires it. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
     ...(trimmed ? [trimmed] : []),
     "",
