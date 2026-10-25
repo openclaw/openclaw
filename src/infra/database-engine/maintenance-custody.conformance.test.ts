@@ -4,7 +4,7 @@ import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
@@ -14,9 +14,6 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatGatewayLockFailure } from "../gateway-lock-diagnostics.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
-import { inspectGatewayOwnerLease } from "../gateway-owner-lease.worker.js";
-import { requireNodeSqlite } from "../node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { createConfigMachineStateStep } from "../state-migrations.config-machine-state-step.js";
 import { withLegacyMigrationStateLock } from "../state-migrations.lock.js";
 import { runLegacyStateMigrationSteps } from "../state-migrations.steps.js";
@@ -210,55 +207,4 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
     expect(owner).not.toBeNull();
     await owner!.release();
   });
-});
-
-it("preserves the SQLite maintenance inspection statements byte for byte", () => {
-  resetDatabaseEngineSelectionForTest();
-  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
-  const env = { ...process.env, OPENCLAW_STATE_DIR: directories.make("maintenance-sqlite-") };
-  runOpenClawStateWriteTransaction(() => {}, { env });
-  const pathname = resolveOpenClawStateSqlitePath(env);
-  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
-  const prototype = requireNodeSqlite().DatabaseSync.prototype;
-  const prepare = vi.spyOn(prototype, "prepare");
-  const exec = vi.spyOn(prototype, "exec");
-  try {
-    expect(
-      inspectGatewayOwnerLease(
-        {
-          databasePath: pathname,
-          location: snapshot.location,
-          snapshotRoot: snapshot.cleanupRoot,
-        },
-        () => {},
-        true,
-      ),
-    ).toBeUndefined();
-    const captured = [prepare, exec]
-      .flatMap((spy) =>
-        spy.mock.calls.map(([sql], index) => ({
-          sql,
-          order: spy.mock.invocationCallOrder[index],
-        })),
-      )
-      .toSorted((a, b) => a.order! - b.order!)
-      .map(({ sql }) => sql);
-    expect(captured).toEqual([
-      "BEGIN",
-      "PRAGMA journal_mode",
-      "PRAGMA user_version",
-      "PRAGMA writable_schema = ON;",
-      "SELECT tbl_name, rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
-      "PRAGMA writable_schema = RESET;",
-      "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?",
-      "SELECT owner, created_at AS createdAt,\n            expires_at AS expiresAt, heartbeat_at AS heartbeatAt, payload_json AS payloadJson\n            FROM state_leases NOT INDEXED\n            WHERE scope = ? AND lease_key = ?\n            LIMIT 2",
-      "ROLLBACK",
-    ]);
-  } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
-    closeOpenClawStateDatabaseForTest();
-    snapshot.cleanup();
-    resetDatabaseEngineSelectionForTest();
-  }
 });

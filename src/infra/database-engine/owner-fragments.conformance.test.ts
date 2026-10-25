@@ -54,6 +54,19 @@ function rows(sql: string) {
   return admit(() => openOpenClawStateDatabase().db.prepare(sql).all());
 }
 
+function launchClaim(prefix: string) {
+  return {
+    launchId: `${prefix}-launch`,
+    planHash: "a".repeat(64),
+    gatewayNamespace: `${prefix}-gateway`,
+    environmentId: `${prefix}-environment`,
+    sessionId: `${prefix}-session`,
+    ownerEpoch: 1,
+    placementGeneration: 1,
+    runId: `${prefix}-run`,
+  };
+}
+
 describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   "%s first-use owner schema admission",
   (engine) => {
@@ -64,16 +77,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const launches = new NodeWorkerLaunchStore(journal);
       const turns = new NodeWorkerTurnStore(journal);
       const supervisor = requireNodeWorkerProcessIdentity(process.pid);
-      const claim = {
-        launchId: "pgfacts-launch",
-        planHash: "a".repeat(64),
-        gatewayNamespace: "pgfacts-gateway",
-        environmentId: "pgfacts-environment",
-        sessionId: "pgfacts-session",
-        ownerEpoch: 1,
-        placementGeneration: 1,
-        runId: "pgfacts-run",
-      };
+      const claim = launchClaim("pgfacts");
       try {
         expect(await launches.claim(claim, supervisor, 1)).toMatchObject({
           action: "start",
@@ -163,16 +167,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const launches = new NodeWorkerLaunchStore(journal);
       const supervisor = requireNodeWorkerProcessIdentity(process.pid);
       const predecessor = { pid: 2_147_483_647, startTime: 1 };
-      const claim = {
-        launchId: "postimage-launch",
-        planHash: "a".repeat(64),
-        gatewayNamespace: "postimage-gateway",
-        environmentId: "postimage-environment",
-        sessionId: "postimage-session",
-        ownerEpoch: 1,
-        placementGeneration: 1,
-        runId: "postimage-run",
-      };
+      const claim = launchClaim("postimage");
       const now = Date.now();
       try {
         const created = await launches.claim(claim, predecessor, 1, now + 7);
