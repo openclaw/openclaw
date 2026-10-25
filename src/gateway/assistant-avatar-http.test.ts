@@ -23,6 +23,7 @@ import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { handleControlUiAvatarRequest } from "./control-ui.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
+import { projectSessionParticipant } from "./session-identity-projection.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
@@ -373,3 +374,32 @@ it.each(["local", "data"])(
     expect(stale.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
   },
 );
+
+it.each(["GET", "HEAD"] as const)(
+  "serves a data URL avatar at its projected bare %s URL",
+  async (method) => {
+    const { cfg, setAvatar, request } = avatarFixture("/control");
+    setAvatar(encodeDataUrl(png(32, Buffer.alloc(32 * 32 * 4, 80))));
+    const bare = projectSessionParticipant({ type: "agent", id: "main" }, new Map(), cfg).avatarUrl;
+    expect(bare).toBe("/control/avatar/main");
+
+    expect((await request(bare!, method, undefined, false)).res.statusCode).toBe(401);
+    const response = await request(bare!, method);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
+    expect(response.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+    expect(response.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+    if (method === "HEAD") {
+      expect(response.end.mock.calls[0]?.[0]).toBeUndefined();
+    } else {
+      expect(Buffer.isBuffer(response.end.mock.calls[0]?.[0])).toBe(true);
+    }
+  },
+);
+
+it("keeps an unsupported data URL avatar unavailable at its bare URL", async () => {
+  const { setAvatar, request } = avatarFixture("/control");
+  setAvatar("data:text/plain,avatar");
+
+  expect((await request("/control/avatar/main")).res.statusCode).toBe(404);
+});
