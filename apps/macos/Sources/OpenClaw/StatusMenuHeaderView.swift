@@ -347,27 +347,31 @@ final class BrowserControlSetting {
 
     private func save() async {
         defer { self.isSaving = false }
-        var intent: Int
-        repeat {
+        while true {
             var config = await ConfigStore.load()
-            intent = self.intent
-            // A Gateway other than the one the newest click was made on shows its own value
-            // instead of receiving that choice. A click after this reload starts the next pass.
-            guard config.selection == self.intentSelection else {
+            let intent = self.intent
+            if config.selection != self.intentSelection {
+                // The read started before a Gateway switch and the newest click was made on the
+                // Gateway selected now: read again for it.
+                if self.intentSelection == .current() { continue }
+                // The newest click was made on a Gateway that is no longer selected; this one
+                // shows its own value instead of receiving that choice.
                 await self.load()
-                continue
+            } else {
+                var browser = config.root["browser"] as? [String: Any] ?? [:]
+                browser["enabled"] = self.enabled
+                config.root["browser"] = browser
+                do {
+                    try await ConfigStore.save(config)
+                } catch {
+                    // Show the saved value only when this was the newest choice; a newer click
+                    // is written by the next pass from a fresh read instead.
+                    if intent == self.intent { await self.load() }
+                }
             }
-            var browser = config.root["browser"] as? [String: Any] ?? [:]
-            browser["enabled"] = self.enabled
-            config.root["browser"] = browser
-            do {
-                try await ConfigStore.save(config)
-            } catch {
-                // Show the saved value only when this was the newest choice; a newer click
-                // is written by the next pass from a fresh read instead.
-                if intent == self.intent { await self.load() }
-            }
-        } while intent != self.intent
+            // A click during this pass is written by the next one.
+            if intent == self.intent { return }
+        }
     }
 }
 
