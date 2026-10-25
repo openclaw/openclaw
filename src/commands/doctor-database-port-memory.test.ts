@@ -6,7 +6,10 @@ import { getScopedDatabaseEngineSelection } from "../infra/database-engine/conte
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import type { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { rebuildPortedAgentMemory } from "./doctor-database-port-memory.js";
 
 const plugin = vi.hoisted(() => ({
@@ -34,12 +37,30 @@ function manager(overrides: Partial<MemorySearchManager> = {}): MemorySearchMana
   };
 }
 
+async function agentStores(state: OpenClawTestState, agents: string[]) {
+  const stores = agents.map((id) => path.join(state.agentDir(id), "openclaw-agent.sqlite"));
+  await Promise.all(stores.map((store) => fs.mkdir(path.dirname(store), { recursive: true })));
+  return stores;
+}
+
+function expectStatuses(
+  results: Awaited<ReturnType<typeof rebuildPortedAgentMemory>>,
+  expected: Record<string, "rebuilt" | "failed">,
+) {
+  expect(results.map(({ agentId, status }) => [agentId, status]).toSorted()).toEqual(
+    Object.entries(expected).toSorted(),
+  );
+}
+
+const fail = (message: string) => async () => {
+  throw new Error(message);
+};
+
 it("rebuilds under fresh configured custody and keeps that custody through plugin close", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", prefix: "port-memory-owner-" },
     async (state) => {
-      const store = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
-      await fs.mkdir(path.dirname(store), { recursive: true });
+      const stores = await agentStores(state, ["main"]);
       const originalWorkspace = state.path("before-port");
       const publishedWorkspace = state.path("after-port");
       await state.writeConfig({ agents: { entries: { main: { workspace: originalWorkspace } } } });
@@ -76,14 +97,14 @@ it("rebuilds under fresh configured custody and keeps that custody through plugi
       });
       plugin.open.mockResolvedValue({ manager: selected, searchRuntimeRegistered: true });
 
-      const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores: [store] });
+      const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
       expect(plugin.open.mock.calls[0]?.[0].cfg.agents?.entries?.main?.workspace).toBe(
         publishedWorkspace,
       );
       expect(results).toEqual([
         {
           agentId: "main",
-          path: store,
+          path: stores[0],
           status: "rebuilt",
           elapsedMs: expect.any(Number),
           files: 2,
@@ -108,29 +129,14 @@ it("reports one result per agent and continues after sync, dirty-state, and clos
           entries: Object.fromEntries(agents.map((id) => [id, {}])),
         },
       });
-      const stores = agents.map((id) => path.join(state.agentDir(id), "openclaw-agent.sqlite"));
-      await Promise.all(stores.map((store) => fs.mkdir(path.dirname(store), { recursive: true })));
+      const stores = await agentStores(state, agents);
       const selected = new Map([
-        [
-          "bad-sync",
-          manager({
-            sync: async () => {
-              throw new Error("private provider response");
-            },
-          }),
-        ],
+        ["bad-sync", manager({ sync: fail("private provider response") })],
         [
           "dirty",
           manager({ status: () => ({ backend: "builtin", provider: "fixture", dirty: true }) }),
         ],
-        [
-          "bad-close",
-          manager({
-            close: vi.fn(async () => {
-              throw new Error("private close response");
-            }),
-          }),
-        ],
+        ["bad-close", manager({ close: vi.fn(fail("private close response")) })],
         ["healthy", manager()],
       ]);
       plugin.open.mockImplementation(async ({ agentId }) => ({
@@ -142,16 +148,12 @@ it("reports one result per agent and continues after sync, dirty-state, and clos
       );
 
       const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
-      expect(
-        results
-          .map(({ agentId, status }) => ({ agentId, status }))
-          .toSorted((a, b) => a.agentId.localeCompare(b.agentId)),
-      ).toEqual([
-        { agentId: "bad-close", status: "failed" },
-        { agentId: "bad-sync", status: "failed" },
-        { agentId: "dirty", status: "failed" },
-        { agentId: "healthy", status: "rebuilt" },
-      ]);
+      expectStatuses(results, {
+        "bad-close": "failed",
+        "bad-sync": "failed",
+        dirty: "failed",
+        healthy: "rebuilt",
+      });
       for (const [agentId, close] of closeSpies) {
         expect(close, agentId).toHaveBeenCalledTimes(1);
       }
@@ -193,15 +195,7 @@ it("does not open unrelated, unconfigured, or retained custom-path memory stores
         stateDir: state.stateDir,
         stores: [current, current, retained, custom],
       });
-      expect(
-        results
-          .map(({ agentId, status }) => ({ agentId, status }))
-          .toSorted((a, b) => a.agentId.localeCompare(b.agentId)),
-      ).toEqual([
-        { agentId: "custom", status: "failed" },
-        { agentId: "main", status: "rebuilt" },
-        { agentId: "retired", status: "failed" },
-      ]);
+      expectStatuses(results, { custom: "failed", main: "rebuilt", retired: "failed" });
       expect(plugin.open).toHaveBeenCalledTimes(1);
       expect(plugin.open.mock.calls[0]?.[0].agentId).toBe("main");
       expect(sync).toHaveBeenCalledTimes(1);
@@ -250,21 +244,11 @@ it("resolves each agent's embedding SecretRef without a peer's missing key block
           ),
         },
       });
-      const stores = agents.map((agentId) =>
-        path.join(state.agentDir(agentId), "openclaw-agent.sqlite"),
-      );
-      await Promise.all(stores.map((store) => fs.mkdir(path.dirname(store), { recursive: true })));
+      const stores = await agentStores(state, agents);
       plugin.open.mockResolvedValue({ manager: manager(), searchRuntimeRegistered: true });
 
       const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
-      expect(
-        results
-          .map(({ agentId, status }) => ({ agentId, status }))
-          .toSorted((a, b) => a.agentId.localeCompare(b.agentId)),
-      ).toEqual([
-        { agentId: "missing", status: "failed" },
-        { agentId: "ready", status: "rebuilt" },
-      ]);
+      expectStatuses(results, { missing: "failed", ready: "rebuilt" });
       expect(plugin.open).toHaveBeenCalledTimes(1);
       const acquired = plugin.open.mock.calls[0]?.[0];
       expect(acquired?.agentId).toBe("ready");
