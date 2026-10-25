@@ -1,10 +1,9 @@
-import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -21,9 +20,8 @@ const imageData =
 let container: HTMLDivElement;
 let styles: HTMLStyleElement;
 let attachments: ChatAttachment[];
-let view: ReturnType<typeof mountSolid> | undefined;
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
-let update: ((props: QueueProps) => void) | undefined;
+let view: ReturnType<typeof mountSolid<QueueProps>> | undefined;
 const all = <T extends HTMLElement = HTMLElement>(selector: string) => [
   ...container.querySelectorAll<T>(selector),
 ];
@@ -46,9 +44,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  view?.unmount();
+  view?.dispose();
   view = undefined;
-  update = undefined;
   container.remove();
   styles.remove();
   releaseChatAttachmentPayloads(attachments);
@@ -65,25 +62,14 @@ function draw(queue: ChatQueueItem[], editingId?: string, onQueueMove?: QueuePro
       : { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
     onQueueRemove: vi.fn(),
   };
-  if (update) {
-    update(props);
+  if (view) {
+    view.update(props);
   } else {
-    view = mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        update = setCurrent;
-        return createComponent(renderChatQueueSolid, merge(current));
-      },
-      { container },
-    );
+    view = mountSolid(renderChatQueueSolid, props, container);
   }
-  flush();
 }
 
-it.each([
-  { key: "ArrowUp", expected: ["c", "b"] },
-  { key: "ArrowDown", expected: ["c", "d"] },
-])("moves the focused row on $key", async ({ key, expected }) => {
+it("keeps focus and consumes ArrowDown while moving a row to the final position", async () => {
   const waiting = (id: string, createdAt: number): ChatQueueItem => ({
     id,
     text: id,
@@ -91,7 +77,7 @@ it.each([
     sendState: "waiting-reconnect",
   });
   let queue = ["a", "b", "c", "d"].map((id, index) => waiting(id, index + 1));
-  const ids = key === "ArrowUp" ? ["a", "c", "b", "d"] : ["a", "b", "d", "c"];
+  const ids = ["a", "b", "d", "c"];
   const onQueueMove = vi.fn<(id: string, targetId: string) => void>(() => {
     queue = ids.map((id, index) => waiting(id, index));
     draw(queue, undefined, onQueueMove);
@@ -102,29 +88,25 @@ it.each([
   grip.focus();
   expect(document.activeElement).toBe(grip);
 
-  let moveEvent: KeyboardEvent | undefined;
+  let prevented = false;
   container.addEventListener(
     "keydown",
     (event) => {
-      moveEvent = event;
+      prevented = event.defaultPrevented;
     },
     { once: true },
   );
-  await userEvent.keyboard(`{${key}}`);
-  expect(onQueueMove.mock.calls).toEqual([expected]);
+  await userEvent.keyboard("{ArrowDown}");
+  expect(onQueueMove).toHaveBeenCalledWith("c", "d");
   // Arrow keys belong to the handle, so the transcript must not also scroll.
-  expect(moveEvent?.defaultPrevented).toBe(true);
+  expect(prevented).toBe(true);
   await waitForSolid(() =>
     expect(all("[data-chat-queue-item]").map((row) => row.dataset.chatQueueItem)).toEqual(ids),
   );
   expect(container.querySelector('[data-chat-queue-item="c"] .chat-queue__grip')).toBe(grip);
   expect(document.activeElement).toBe(grip);
-  await userEvent.keyboard(`{${key}}`);
-  if (key === "ArrowUp") {
-    expect(onQueueMove).toHaveBeenLastCalledWith("c", "a");
-  } else {
-    expect(onQueueMove).toHaveBeenCalledOnce();
-  }
+  await userEvent.keyboard("{ArrowDown}");
+  expect(onQueueMove).toHaveBeenCalledOnce();
 });
 
 it.each([

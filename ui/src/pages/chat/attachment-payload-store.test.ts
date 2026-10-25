@@ -21,6 +21,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
+import { stubObjectUrls } from "./components/chat-message-media.test-helpers.ts";
 import { projectMessageMedia } from "./components/chat-message-media.ts";
 import { hydrateDurableComposerAttachments } from "./durable-composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -41,19 +42,14 @@ beforeEach(() => {
   created = new Map();
   revoked = [];
   owned = [];
-  const NativeURL = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeURL {
-      static override createObjectURL(blob: Blob) {
-        const value = `blob:http://localhost/preview-${created.size}`;
-        created.set(value, blob);
-        return value;
-      }
-      static override revokeObjectURL(value: string) {
-        revoked.push(value);
-      }
+  stubObjectUrls(
+    (blob) => {
+      assert(blob instanceof Blob);
+      const value = `blob:http://localhost/preview-${created.size}`;
+      created.set(value, blob);
+      return value;
     },
+    vi.fn((value: string) => revoked.push(value)),
   );
 });
 afterEach(() => {

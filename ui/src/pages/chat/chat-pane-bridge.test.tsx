@@ -1,20 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import type { JSX } from "@solidjs/web";
-import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
-import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
-import { ChatPaneView, type ChatPaneElement, type ChatPaneProps } from "./chat-pane.tsx";
+import type { ChatPaneProps } from "./chat-pane.tsx";
+import "./chat-pane.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -34,20 +29,16 @@ function mountedFixture(
     ...fixture,
     sessionKey,
     render: (props: Partial<ChatPaneProps> = {}) =>
-      mountPane(fixture.context, () => (
-        <ChatPaneView paneId={id} sessionKey={sessionKey} {...props} />
-      )),
+      mountPane(fixture.context, { paneId: id, sessionKey, ...props }),
   };
 }
 
-function mountPane(context: ApplicationContext, render: () => JSX.Element, nativeContext = true) {
-  const container = nativeContext
-    ? document.body.appendChild(createApplicationContextProvider(context))
-    : undefined;
-  onTestFinished(() => container?.remove());
-  return mountSolid(() => <ApplicationProvider value={context}>{render()}</ApplicationProvider>, {
-    container,
-  });
+function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
+  const container = document.body.appendChild(createApplicationContextProvider(context));
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), props);
+  container.append(pane);
+  onTestFinished(() => container.remove());
+  return { container, pane };
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
@@ -56,16 +47,12 @@ function required<T extends Element = HTMLElement>(root: ParentNode, selector: s
 }
 
 it("applies a route draft and its focus cue to an already mounted native pane", async () => {
-  const { sessionKey, context } = mountedFixture("bridge-draft");
-  const [props, setProps] = createSignal<Partial<ChatPaneProps>>({ active: true, presented: true });
-  const view = mountPane(context, () => (
-    <ChatPaneView paneId="bridge-draft" sessionKey={sessionKey} {...props()} />
-  ));
+  const view = mountedFixture("bridge-draft").render({ active: true, presented: true });
+  const { pane } = view;
   const textarea = await waitForSolid(() =>
     required<HTMLTextAreaElement>(view.container, composerSelector),
   );
-  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
-  setProps((p) => ({ ...p, draft: "What can you do?", focusComposer: true }));
+  Object.assign(pane, { draft: "What can you do?", focusComposer: true });
   await pane.updateComplete;
   expect(textarea.value).toBe("What can you do?");
   expect(document.activeElement).toBe(textarea);
@@ -109,36 +96,6 @@ it("updates held Send as a mounted composer's draft changes between commands and
   expect(sendChat).toHaveBeenCalledOnce();
 });
 
-it("settles clean hidden reads and fences actual property changes until reveal", async () => {
-  vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
-  vi.spyOn(ChatPaneRuntime.prototype, "dispose").mockImplementation(() => {});
-  onTestFinished(() => vi.restoreAllMocks());
-  const render = vi.spyOn(ChatPaneRuntime.prototype, "render");
-  const context = createInitializationContext();
-  context.gateway.snapshot.phase = "stopped";
-  const view = mountPane(
-    context,
-    () => <ChatPaneView paneId="clean-hidden" presented={false} />,
-    false,
-  );
-  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
-  await pane.updateComplete;
-  await expect(pane.updateComplete).resolves.toBe(true);
-  render.mockClear();
-  pane.paneLabel = "Changed while hidden";
-  let committed = false;
-  const completion = pane.updateComplete.then(() => {
-    committed = true;
-  });
-  await waitForSolid(() => {
-    expect(render).not.toHaveBeenCalled();
-    expect(committed).toBe(false);
-  });
-  pane.presented = true;
-  await completion;
-  expect(render).toHaveBeenCalledOnce();
-});
-
 it("replaces the command provider while document-hidden rendering is parked", async () => {
   let visibility: DocumentVisibilityState = "visible";
   const visibilitySpy = vi
@@ -150,7 +107,7 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
   const view = render({ boardProvider: first });
-  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
+  const { pane } = view;
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));

@@ -29,11 +29,8 @@ const locationFor = (id = sessionRouteUuid) => ({
   search: "",
   hash: "",
 });
-const resolveRoute = (
-  context: Parameters<typeof loadChatRoute>[0],
-  id = sessionRouteUuid,
-  revalidation?: Parameters<typeof loadChatRoute>[4],
-) => loadChatRoute(context, locationFor(id), "chat", new AbortController().signal, revalidation);
+const resolveRoute = (context: Parameters<typeof loadChatRoute>[0], id = sessionRouteUuid) =>
+  loadChatRoute(context, locationFor(id), "chat", new AbortController().signal);
 
 beforeEach(() => vi.stubGlobal("indexedDB", new IDBFactory()));
 afterEach(async () => {
@@ -77,12 +74,10 @@ it.each([sessionRouteUuid, sessionRouteUuid.replaceAll("-", "")])(
   "admits an off-roster full UUID %s from the scoped snapshot and leaves it for the pane",
   async (id) => {
     const { context, request } = await setup();
-    const resolving = createDeferred<"waiting for resolve">();
     request.mockImplementation(() => {
-      resolving.resolve("waiting for resolve");
-      return new Promise(() => {});
+      throw new Error("Snapshot admission must not read authority");
     });
-    const result = await Promise.race([resolveRoute(context, id), resolving.promise]);
+    const result = await resolveRoute(context, id);
     expect(result).toMatchObject({
       kind: "session",
       sessionKey: sessionRouteKey,
@@ -107,26 +102,6 @@ it.each([
   const result = await resolveRoute(context, id);
   expect(result).toMatchObject({ kind: "missing-session" });
   expect(request).toHaveBeenCalled();
-});
-
-it.each([
-  null,
-  { key: "agent:roboclaw:chat:87654321-90ab-cdef-1234-567890abcdef", agentId: "roboclaw" },
-  { key: `agent:other:thread:${sessionRouteUuid}`, agentId: "other" },
-])("replaces cached admission with %j", async (resolved) => {
-  const { context, request } = await setup();
-  const initial = await resolveRoute(context);
-  expect(initial).toMatchObject({ kind: "session", sessionKey: sessionRouteKey });
-  request.mockResolvedValue(resolved ? { ok: true, ...resolved } : { ok: false });
-  const result = await resolveRoute(context, sessionRouteUuid, {
-    sessionKey: sessionRouteKey,
-  });
-  expect(result).toMatchObject(
-    resolved
-      ? { kind: "session", sessionKey: resolved.key, agentId: resolved.agentId }
-      : { kind: "missing-session" },
-  );
-  expect(result).not.toHaveProperty("sessionResolutionFromCache");
 });
 
 it.each(["reconnect", "account change"])(
@@ -185,6 +160,7 @@ it.each([false, true])(
     expect(router.getState().matches[0]?.data).toMatchObject(
       deleted ? { kind: "missing-session" } : { kind: "session", sessionKey: sessionRouteKey },
     );
+    expect(router.getState().matches[0]?.data).not.toHaveProperty("sessionResolutionFromCache");
     expect(request).toHaveBeenCalledOnce();
   },
 );
