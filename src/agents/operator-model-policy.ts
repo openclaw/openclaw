@@ -1,7 +1,8 @@
 import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
@@ -84,9 +85,45 @@ function identity(ref: ModelRef): string {
   return JSON.stringify([normalizeProviderId(ref.provider), ref.model]);
 }
 
+type PreparedAgentModels = {
+  models: ModelRef[];
+  resolve: (raw: string) => ModelRef | undefined;
+};
+const agentModelsByConfig = new WeakMap<
+  OpenClawConfig,
+  {
+    publication: object | undefined;
+    byMetadata: WeakMap<object, Map<string | undefined, PreparedAgentModels>>;
+  }
+>();
+
 function prepareAgentModels(
   params: { cfg: OpenClawConfig; agentId?: string } & ModelManifestNormalizationContext,
-) {
+): PreparedAgentModels {
+  const { cfg, agentId, manifestPlugins } = params;
+  let byAgent: Map<string | undefined, PreparedAgentModels> | undefined;
+  // Owned metadata and published/frozen config identify stable selection facts.
+  // Caller-owned manifest arrays and unbound mutable configs remain live inputs.
+  if (manifestPlugins && "owners" in manifestPlugins) {
+    const current = runtimeConfigPublication.current;
+    const publication = current?.config === cfg ? current.revision : undefined;
+    if (publication || isDeeplyFrozenPlainData(cfg)) {
+      let cached = agentModelsByConfig.get(cfg);
+      if (!cached || cached.publication !== publication) {
+        cached = { publication, byMetadata: new WeakMap() };
+        agentModelsByConfig.set(cfg, cached);
+      }
+      byAgent = cached.byMetadata.get(manifestPlugins);
+      if (!byAgent) {
+        byAgent = new Map();
+        cached.byMetadata.set(manifestPlugins, byAgent);
+      }
+      const prepared = byAgent.get(agentId);
+      if (prepared) {
+        return prepared;
+      }
+    }
+  }
   const normalization = {
     cfg: params.cfg,
     agentId: params.agentId,
@@ -105,7 +142,9 @@ function prepareAgentModels(
       models.push(ref);
     }
   }
-  return { models, resolve };
+  const prepared = { models, resolve };
+  byAgent?.set(agentId, prepared);
+  return prepared;
 }
 
 function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef | undefined) {
